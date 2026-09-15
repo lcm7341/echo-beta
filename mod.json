@@ -1,0 +1,30 @@
+{
+	"geode": "5.8.2",
+	"gd": {
+		"win": "2.2081"
+	},
+	"id": "decks.echo",
+	"name": "Echo",
+	"version": "v1.0.0",
+	"developer": "decks",
+	"description": "Echo is a replay tool with many features, all for free :)",
+	"links": {
+		"source": "https://github.com/lcm7341/Echo/"
+	},
+	"issues": {
+		"info": "Echo for 2.2 is not open sourced yet but you can still report issues",
+		"url": "https://github.com/lcm7341/Echo/issues"
+	},
+	"tags": [
+		"gameplay",
+		"utility",
+		"cheat",
+		"offline"
+	],
+	"resources": {
+		"files": [
+			"resources/*.ttf"
+		]
+	},
+	"settings": {}
+}
