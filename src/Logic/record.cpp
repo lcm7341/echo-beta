@@ -1,4 +1,6 @@
 // recording
+//
+// record_input is called from gds button handler. the input is stored for step_frame + 1 bc gd counts a step BEFORE it reads the button
 #include "Logic/logic.hpp"
 #include "Hooks/rotation.hpp"
 #include <Geode/utils/async.hpp>
@@ -24,8 +26,16 @@
 using namespace geode::prelude;
 
 FramePose Logic::capture_pose(PlayerObject* player) {
-    // TODO
-    return {};
+    FramePose pose;
+    if (!player) {
+        return pose;
+    }
+    pose.x = player->getPositionX();
+    pose.y = player->getPositionY();
+    pose.rotation = player->getRotation();
+    pose.yVelocity = player->m_yVelocity;
+    pose.x_velocity = static_cast<double>(player->m_playerSpeed);
+    return pose;
 }
 
 bool Logic::flip_controls() {
@@ -34,15 +44,41 @@ bool Logic::flip_controls() {
 }
 
 void Logic::set_replay_pos(PlayLayer* play) {
-    // TODO
+    auto& logic = Logic::get();
+    int frame = play ? Logic::get().get_frame(play) : 0;
+    auto later = logic.inputs_in_order
+                     ? std::lower_bound(logic.inputs.begin(), logic.inputs.end(), frame,
+                           [](Frame const& input, int key) {
+                               return input.number < key;
+                           })
+                     : std::find_if(logic.inputs.begin(), logic.inputs.end(), [frame](Frame const& input) {
+                           return input.number >= frame;
+                       });
+    logic.replay_pos = static_cast<size_t>(std::distance(logic.inputs.begin(), later));
+    logic.hold_sync = true;
 }
 
 void Logic::trim_recorded_inputs(Session& value, int frame) {
-    // TODO
+    bool record1 = value.records_player(false), record2 = value.records_player(true);
+    if (!record1 && !record2)
+        return;
+    replay::compact(value.inputs, value.poses, value.input_ids, [&](Frame const& input) {
+        bool matches = input.player2 ? record2 : record1;
+        bool later = frame <= 0 ? input.number >= frame : input.number > frame;
+        return !(matches && later);
+    });
+    value.touch_inputs();
+    Logic::get().refresh_live_hold();
 }
 
 void Logic::trim_fresh_attempt(PlayLayer* play, Session& value) {
-    // TODO
+    (void)play;
+    Logic::get().trim_recorded_inputs(value, 0);
+    if (!value.is_playing()) {
+        Logic::get().trim_rates(0);
+    }
+    value.removed_frames = 0;
+    value.replay_pos = 0;
 }
 
 void Logic::trim_from_checkpoint(PlayLayer* play, Session& value, Checkpoint const& checkpoint) {
@@ -50,7 +86,17 @@ void Logic::trim_from_checkpoint(PlayLayer* play, Session& value, Checkpoint con
 }
 
 void Logic::clear_physical_holds() {
-    // todo
+    auto& logic = Logic::get();
+    logic.key_jump_p1 = logic.key_jump_p2 = false;
+    logic.steered_keys.clear();
+    logic.key_left_p1 = logic.key_right_p1 = false;
+    logic.key_left_p2 = logic.key_right_p2 = false;
+    logic.death_jump_p1 = logic.death_jump_p2 = false;
+    logic.death_left_p1 = logic.death_right_p1 = false;
+    logic.death_left_p2 = logic.death_right_p2 = false;
+    logic.physical_jump_p1 = logic.physical_jump_p2 = false;
+    logic.physical_left_p1 = logic.physical_right_p1 = false;
+    logic.physical_left_p2 = logic.physical_right_p2 = false;
 }
 
 namespace {
