@@ -1,4 +1,7 @@
 // playback & everything around an attempt
+//
+// play_macro runs at the start of every physics step: the inputs stored for that step go into gds button queue,
+//   so gd applies them exactly like a real press
 #include "Logic/logic.hpp"
 #include "Hooks/step.hpp"
 #include "Hack/trajectory.hpp"
@@ -510,7 +513,24 @@ void Logic::retain_playback_hold(PlayLayer* play) {
 }
 
 void Logic::on_focus_change() {
-    // TODO
+    auto& logic = Logic::get();
+    logic.carry = 0.f;
+    logic.present = true;
+    if (auto* director = CCDirector::sharedDirector()) {
+        director->setNextDeltaTimeZero(true);
+    }
+    if (auto* play = PlayLayer::get()) {
+        play->m_extraDelta = 0.0;
+        if (!play->m_playerDied) {
+            if (play->m_player1) {
+                play->m_player1->m_isDead = false;
+            }
+            if (play->m_player2) {
+                play->m_player2->m_isDead = false;
+            }
+        }
+    }
+    Logic::get().sync_time_scale();
 }
 
 namespace {
@@ -615,11 +635,80 @@ void Logic::hide_icon(PlayerObject* player, bool hide) {
 }
 
 void Logic::after_frame(PlayLayer* play, float dt) {
-    // TODO
+    auto& logic = Logic::get();
+    if (!play || logic.resetting)
+        return;
+    Logic::get().hide_icon(play->m_player1, logic.hide_p1);
+    Logic::get().hide_icon(play->m_player2, logic.hide_p2);
+    if ((logic).is_recording()) {
+        logic.recording_seconds += static_cast<double>(dt);
+    }
+    if (play->m_hasCompletedLevel && (logic).is_recording()) {
+        logic.state = (logic).is_playing() ? RunState::Playing : RunState::Idle;
+    }
+    if (play->m_endPortal) {
+        logic.end_x = play->m_endPortal->getPositionX();
+    }
+    if (!logic.present)
+        return;
 }
 
 void Logic::on_play_init(PlayLayer* play) {
-    // later
+    held_looks()[0] = {};
+    held_looks()[1] = {};
+    auto& logic = Logic::get();
+    logic.replay_pos = 0;
+    logic.replay_index = 0;
+    logic.sequence_order.clear();
+    logic.step_frame = 0;
+    logic.progress_base_set = false;
+    logic.removed_frames = 0;
+    logic.carry = 0.f;
+    logic.respawn_frames = 0;
+    logic.ignore_record_frames = 0;
+    logic.refresh_only = false;
+    logic.refresh_queued = false;
+    logic.in_scheduler = false;
+    logic.buttons_prepared = false;
+    logic.replay_clicks_left = 0;
+    Logic::get().apply_rate(0);
+    logic.present = true;
+    logic.layout_styled = false;
+    Logic::get().clear_stuck_death(play);
+    Logic::get().clear_physical_holds();
+    logic.checkpoints.clear();
+    logic.restored_checkpoint = nullptr;
+    logic.clicks_p1.clear();
+    logic.clicks_p2.clear();
+    ++logic.clicks_revision;
+    logic.attempts = 1;
+    logic.trail_p1.clear();
+    logic.trail_p2.clear();
+    logic.hidden_decorations.clear();
+    logic.last_click_p1 = 0.0;
+    logic.last_click_p2 = 0.0;
+    if (play->m_level) {
+        logic.macro_name = play->m_level->m_levelName;
+        if (logic.macro_name.empty()) {
+            logic.macro_name = "Replay";
+        }
+        logic.macro_name_typed = false;
+    }
+    if (logic.lock_display_fps) {
+        CCDirector::sharedDirector()->setAnimationInterval(1.f / std::max(logic.fps, 1.f));
+        logic.display_fps_locked = true;
+    }
+    Logic::get().sync_time_scale();
+    if (logic.seed_override) {
+        logic.lvl_seed = logic.seed_override_value;
+        logic.lvl_seed_known = true;
+        logic.lvl_seed_from_file = false;
+    }
+    else if (!logic.is_playing() && !logic.lvl_seed_from_file) {
+        logic.lvl_seed = 0;
+        logic.lvl_seed_known = false;
+    }
+    logic.arm_immediate_restart = logic.immediate_restart;
 }
 
 namespace {
@@ -677,11 +766,22 @@ void Logic::roll_live_seed(PlayLayer* play) {
 }
 
 void Logic::apply_attempt_variance(PlayLayer* play, uint64_t seed) {
-    // port this
+    if (!play)
+        return;
+    fill_variance(play, seed);
+    auto& lock = variance_lock();
+    lock.held = true;
+    std::copy(play->m_varianceValues.begin(), play->m_varianceValues.end(), lock.values.begin());
 }
 
 void Logic::keep_variance(PlayLayer* play) {
-    // port this
+    auto& lock = variance_lock();
+    auto const& logic = Logic::get();
+    if (!play || !lock.held)
+        return;
+    if (!logic.seed_override && !logic.is_playing())
+        return;
+    replay::restore_variance(play->m_varianceValues, lock.values);
 }
 
 void Logic::plant_lvl_seed(PlayLayer* play) {
@@ -689,15 +789,152 @@ void Logic::plant_lvl_seed(PlayLayer* play) {
 }
 
 void Logic::restore_checkpoint_random(PlayLayer* play) {
-    // todo
+    auto& logic = Logic::get();
+    auto* saved = Logic::get().get_latest_checkpoint(play);
+    if (!saved)
+        return;
+    auto const& checkpoint = *saved;
+    Logic::get().set_game_random_state(checkpoint.random_state);
+    logic.shake_state = checkpoint.shake_state;
+    logic.tp_state = checkpoint.tp_state;
+    if (checkpoint.variance.size() == play->m_varianceValues.size()) {
+        std::copy(checkpoint.variance.begin(), checkpoint.variance.end(), play->m_varianceValues.begin());
+        auto& lock = variance_lock();
+        lock.held = true;
+        std::copy(play->m_varianceValues.begin(), play->m_varianceValues.end(), lock.values.begin());
+    }
+    for (auto const& saved : checkpoint.rand_states) {
+        for (auto& trigger : live_rand()) {
+            if (trigger.unique_id == saved.first && trigger.state) {
+                *trigger.state = saved.second;
+            }
+        }
+    }
 }
 
 void reshuffle_sequence(Session& value) {
-    // port this
+    value.sequence_order.resize(value.sequence.size());
+    std::iota(value.sequence_order.begin(), value.sequence_order.end(), size_t{ 0 });
+    std::mt19937 rng{ std::random_device{}() };
+    std::shuffle(value.sequence_order.begin(), value.sequence_order.end(), rng);
+    value.replay_index = 0;
 }
 
 void Logic::onReset(PlayLayer* play) {
-    // TODO
+    auto& logic = Logic::get();
+    logic.trail_p1.clear();
+    logic.trail_p2.clear();
+    logic.currently_pressing = false;
+    logic.death_next_p1 = false;
+    logic.death_next_p2 = false;
+    logic.noclip_dead_p1 = false;
+    logic.noclip_dead_p2 = false;
+    logic.showed_new_best = false;
+    logic.over_max_cps = false;
+    logic.cps_breaking = false;
+    if (play->m_endPortal) {
+        logic.end_x = play->m_endPortal->getPositionX();
+    }
+    if ((logic).is_recording() && !logic.backstepping) {
+        ++logic.attempts;
+    }
+
+    if (logic.sequence_enabled && !(logic).is_recording() && !logic.backstepping) {
+        auto use_clip = [&](Replay const& clip) {
+            logic.inputs = clip.actions;
+            logic.clear_sides();
+            logic.macro_name = clip.name;
+            logic.macro_name_typed = false;
+            logic.macro_fps = clip.fps;
+            logic.rates = clip.rates;
+            logic.lvl_seed = clip.lvl_seed;
+            logic.lvl_seed_known = clip.lvl_seed_known;
+            logic.lvl_seed_from_file = clip.lvl_seed_known;
+            logic.macro_unrounded = clip.unrounded;
+            logic.macro_silicate_variance = clip.silicate_variance;
+            Logic::get().apply_rate(logic.step_frame);
+        };
+        if (logic.sequence_random && !logic.sequence.empty()) {
+            if (logic.sequence_order.size() != logic.sequence.size() || logic.replay_index >= logic.sequence_order.size()) {
+                reshuffle_sequence(logic);
+            }
+            size_t pick = logic.sequence_order[logic.replay_index];
+            use_clip(logic.sequence[pick]);
+            ++logic.replay_index;
+            Logic::get().sort_inputs();
+        }
+        else if (logic.replay_index < logic.sequence.size()) {
+            use_clip(logic.sequence[logic.replay_index]);
+            ++logic.replay_index;
+            Logic::get().sort_inputs();
+        }
+        else {
+            logic.replay_index = 0;
+        }
+    }
+
+    bool const practice = play->m_isPracticeMode || logic.backstepping;
+    auto* saved = Logic::get().get_latest_checkpoint(play);
+    bool const from_checkpoint = practice && saved;
+    if (from_checkpoint) {
+        logic.step_frame = saved->frame;
+    }
+    else {
+        logic.step_frame = 0;
+        logic.progress_base_set = false;
+        logic.removed_frames = 0;
+        logic.same_gravity_seen = false;
+    }
+    Logic::get().apply_rate(logic.step_frame);
+    auto replayed = [&logic](int frame) {
+        return frame >= logic.step_frame;
+    };
+    std::erase_if(logic.clicks_p1, replayed);
+    std::erase_if(logic.clicks_p2, replayed);
+    Logic::get().rewind_follow(play);
+    ++logic.clicks_revision;
+    play->m_extraDelta = 0.0;
+    play->m_resumeTimer = 0;
+    if (auto* director = CCDirector::sharedDirector()) {
+        director->setNextDeltaTimeZero(false);
+    }
+    Logic::get().clear_stuck_death(play);
+    logic.present = true;
+
+    if (logic.sort_automatically && (logic).is_recording() && (logic).is_playing()) {
+        Logic::get().sort_inputs();
+    }
+    if (from_checkpoint) {
+        if (!logic.backstepping) {
+            logic.object_restore = saved->object;
+        }
+        Logic::get().trim_from_checkpoint(play, logic, *saved);
+        play->m_queuedButtons.clear();
+    }
+    else if ((logic).is_recording()) {
+        Logic::get().trim_fresh_attempt(play, logic);
+    }
+    if (from_checkpoint) {
+        play->m_extraDelta = 0.0;
+        logic.refresh_queued = true;
+    }
+    if (!practice) {
+        logic.checkpoints.clear();
+    }
+    if ((logic).is_playing()) {
+        Logic::get().set_replay_pos(play);
+    }
+    Logic::get().restore_holds(play);
+    if (from_checkpoint) {
+        logic.resume_pending = false;
+        play->m_extraDelta = 0.0;
+        play->m_resumeTimer = 0;
+        Logic::get().clear_stuck_death(play);
+        Logic::get().sync_time_scale();
+    }
+    else {
+        Logic::get().resume_attempt(play);
+    }
 }
 
 void Logic::restore_holds(PlayLayer* play) {
@@ -723,35 +960,108 @@ Checkpoint const* Logic::get_latest_checkpoint(PlayLayer* play) {
 }
 
 void Logic::on_complete(PlayLayer* play) {
-    // TODO
+    auto& logic = Logic::get();
+    bool was_recording = (logic).is_recording();
+    if (was_recording) {
+        logic.state = (logic).is_playing() ? RunState::Playing : RunState::Idle;
+    }
+    if (play->m_player1) {
+        logic.end_x = play->m_player1->getPositionX();
+    }
+    logic.message = "Level complete";
 }
 
 void Logic::onQuit(PlayLayer*) {
-    // TODO
+    auto& logic = Logic::get();
+    logic.holding_back = false;
+    logic.frame_advance = false;
+    logic.advance_queued = false;
+    logic.holding_advance = false;
+    for (auto* obj : logic.hidden_decorations) {
+        if (obj) {
+            obj->m_isHide = false;
+        }
+    }
+    logic.hidden_decorations.clear();
+    Logic::get().clear_physical_holds();
+    Input::clear_keys();
+    if (logic.display_fps_locked) {
+        CCDirector::sharedDirector()->setAnimationInterval(1.f / 60.f);
+        logic.display_fps_locked = false;
+    }
+    if (auto* scheduler = CCDirector::sharedDirector()->getScheduler()) {
+        scheduler->setTimeScale(1.f);
+    }
+    Logic::get().save_settings_file();
 }
 
 void Logic::clear_stuck_death(PlayLayer* play) {
-    // TODO
+    if (!play)
+        return;
+    play->m_playerDied = false;
+    Logic::get().noclip_dead_p1 = false;
+    Logic::get().noclip_dead_p2 = false;
+    if (play->m_player1) {
+        play->m_player1->m_isDead = false;
+    }
+    if (play->m_player2) {
+        play->m_player2->m_isDead = false;
+    }
+    Logic::get().present = true;
 }
 
 bool Logic::should_noclip(PlayLayer* play, PlayerObject* player) {
-    // port this
-    return {};
+    auto const& logic = Logic::get();
+    if (player == play->m_player1) {
+        return logic.noclip_p1;
+    }
+    if (player == play->m_player2) {
+        return logic.noclip_p2;
+    }
+    return false;
 }
 
 bool Logic::cbf_enabled() const {
-    // TODO
-    return {};
+    log::debug("cbf enabled");
+    char const* ids[] = { "syzzi.click_between_frames", "zmx.cbf-lite" };
+    for (char const* id : ids) {
+        auto* mod = Loader::get()->getLoadedMod(id);
+        if (!mod) {
+            continue;
+        }
+        if (mod->hasSetting("soft-toggle") && mod->getSettingValue<bool>("soft-toggle")) {
+            continue;
+        }
+        return true;
+    }
+    return false;
 }
 
 bool Logic::vanilla_click_physics() const {
-    // TODO
-    return {};
+    log::debug("vanilla click physics");
+    if (auto* play = PlayLayer::get()) {
+        if (play->m_clickBetweenSteps || play->m_clickOnSteps) {
+            return true;
+        }
+    }
+    else if (auto* gm = GameManager::get()) {
+        if (gm->getGameVariable("0177") || gm->getGameVariable("0176")) {
+            return true;
+        }
+    }
+    return Logic::get().cbf_enabled();
 }
 
 bool Logic::defer_physics() const {
-    // TODO
-    return {};
+    log::debug("defer physics");
+    auto const& logic = Logic::get();
+    if (logic.refresh_only) {
+        return false;
+    }
+    if (logic.physics_locked()) {
+        return false;
+    }
+    return Logic::get().vanilla_click_physics();
 }
 
 double Logic::click_stamp() const {
