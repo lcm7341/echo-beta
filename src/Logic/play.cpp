@@ -2,6 +2,7 @@
 //
 // play_macro runs at the start of every physics step: the inputs stored for that step go into gds button queue,
 //   so gd applies them exactly like a real press
+// resets: held buttons, the queue, the seed, click counters & labels all go back to a known state. a key still down from
 #include "Logic/logic.hpp"
 #include "Hooks/step.hpp"
 #include "Hack/trajectory.hpp"
@@ -1084,11 +1085,136 @@ namespace {
 }
 
 void Logic::prepare_buttons(GJBaseGameLayer* play) {
-    // TODO
+    auto& logic = Logic::get();
+    bool paused = Logic::get().editor_paused;
+    if (!play || logic.buttons_prepared || logic.resetting || logic.refresh_only || paused || !(logic).physics_locked())
+        return;
+    logic.buttons_prepared = true;
+
+    auto& user = play->m_queuedButtons;
+    for (auto const& cmd : user)
+        Logic::get().remember_move(cmd);
+
+    bool playing = (logic).is_playing();
+    bool recording = (logic).is_recording();
+    if (recording && !logic.restoring_holds) {
+        auto steer = [&](PlayerButtonCommand& cmd) {
+            bool isPlayer1 = !cmd.m_isPlayer2;
+            if (Logic::get().steer_player(isPlayer1)) {
+                cmd.m_isPlayer2 = !isPlayer1;
+            }
+        };
+        for (auto& cmd : user)
+            steer(cmd);
+    }
+    if (!logic.restoring_holds && playing && logic.ignore_inputs) {
+        drop_ignored_inputs(play);
+    }
+    else if (!logic.restoring_holds && recording && logic.ignore_record_frames > 0) {
+        user.clear();
+    }
+
+    logic.replay_clicks_left = 0;
+    if (!playing)
+        return;
+    int frame = Logic::get().step_frame + 1;
+    std::array<char, 6> queued{};
+    auto queue = [&](bool holding, int button, bool player2) {
+        int jump = static_cast<int>(PlayerButton::Jump);
+        int left = static_cast<int>(PlayerButton::Left), right = static_cast<int>(PlayerButton::Right);
+        int slot = button == 0 || button == jump ? 0 : button == left ? 1
+                                                   : button == right  ? 2
+                                                                      : -1;
+        if (slot >= 0) {
+            queued[static_cast<size_t>((player2 ? 3 : 0) + slot)] = 1;
+        }
+        PlayerButtonCommand cmd;
+        cmd.m_button = static_cast<PlayerButton>(button == 0 ? jump : button);
+        cmd.m_isPush = holding;
+        cmd.m_isPlayer2 = player2;
+        cmd.m_step = frame;
+        cmd.m_timestamp = 0.0;
+        play->m_queuedButtons.push_back(cmd);
+        ++logic.replay_clicks_left;
+        echo::step::trace_button('Q', holding, static_cast<int>(play->m_queuedButtons.size()));
+    };
+    while (logic.replay_pos < logic.inputs.size() && logic.inputs[logic.replay_pos].number < frame)
+        ++logic.replay_pos;
+    while (logic.replay_pos < logic.inputs.size() && logic.inputs[logic.replay_pos].number == frame) {
+        Frame input = logic.inputs[logic.replay_pos];
+        ++logic.replay_pos;
+        int button = input.button == 0 ? static_cast<int>(PlayerButton::Jump) : input.button;
+        if (!logic.plays_player(input.player2)) {
+            continue;
+        }
+        queue(input.holding, button, input.player2);
+    }
+
+    static struct {
+        uint64_t revision = ~0ull;
+        Frame const* data = nullptr;
+        size_t size = 0;
+        int first[2] = { -1, -1 }, last[2] = { -1, -1 };
+    } ends;
+
+    if (ends.revision != logic.inputs_revision || ends.data != logic.inputs.data() || ends.size != logic.inputs.size()) {
+        ends.revision = logic.inputs_revision;
+        ends.data = logic.inputs.data();
+        ends.size = logic.inputs.size();
+        ends.first[0] = ends.first[1] = std::numeric_limits<int>::max();
+        ends.last[0] = ends.last[1] = -1;
+        for (auto const& input : logic.inputs) {
+            int side = input.player2 ? 1 : 0;
+            ends.first[side] = std::min(ends.first[side], input.number);
+            ends.last[side] = std::max(ends.last[side], input.number);
+        }
+    }
+    auto ensure = [&](bool stored2, int button) {
+        int side = stored2 ? 1 : 0;
+        if (!logic.ignore_inputs && frame > ends.last[side])
+            return;
+        int jump = static_cast<int>(PlayerButton::Jump);
+        int left = static_cast<int>(PlayerButton::Left), right = static_cast<int>(PlayerButton::Right);
+        int slot = button == jump ? 0 : button == left ? 1
+                                    : button == right  ? 2
+                                                       : -1;
+        if (slot >= 0 && queued[static_cast<size_t>((stored2 ? 3 : 0) + slot)])
+            return;
+        auto* body = Logic::get().icon_body(play, stored2);
+        if (!body || !logic.plays_player(stored2))
+            return;
+        if (slot > 0 && body->m_controlsDisabled)
+            return;
+        bool want = Logic::get().held_at(logic, stored2, frame, button);
+        if (Logic::button_held(body, button) == want)
+            return;
+        queue(want, button, stored2);
+    };
+    int jump = static_cast<int>(PlayerButton::Jump);
+    int left = static_cast<int>(PlayerButton::Left), right = static_cast<int>(PlayerButton::Right);
+    ensure(false, jump);
+    if (play->m_isPlatformer) {
+        ensure(false, left);
+        ensure(false, right);
+    }
+    if (play->m_gameState.m_isDualMode) {
+        ensure(true, jump);
+        if (play->m_isPlatformer) {
+            ensure(true, left);
+            ensure(true, right);
+        }
+    }
 }
 
 void Logic::remember_move(PlayerButtonCommand const& cmd) {
-    // TODO
+    auto& logic = Logic::get();
+    bool player2 = cmd.m_isPlayer2;
+    if (cmd.m_button == PlayerButton::Left) {
+        (player2 ? logic.physical_left_p2 : logic.physical_left_p1) = cmd.m_isPush;
+    }
+    else if (cmd.m_button == PlayerButton::Right) {
+        (player2 ? logic.physical_right_p2 : logic.physical_right_p1) = cmd.m_isPush;
+    }
 }
 
 void run_orb_clicks(GJBaseGameLayer* play, GJBaseGameLayer* layer, float dt) {
@@ -1096,31 +1222,230 @@ void run_orb_clicks(GJBaseGameLayer* play, GJBaseGameLayer* layer, float dt) {
 }
 
 void Logic::play_macro(GJBaseGameLayer* play, GJBaseGameLayer* layer, float dt, bool clearInputQueue) {
-    // TODO
+    log::debug("play macro");
+    auto& logic = Logic::get();
+    bool paused = Logic::get().editor_paused;
+    if (!play || !layer || logic.resetting || logic.refresh_only || paused || !(logic).physics_locked()) {
+        if (layer) {
+            drop_ignored_inputs(play);
+            gd::vector<PlayerButtonCommand> orbs;
+            layer->GJBaseGameLayer::processQueuedButtons(dt, clearInputQueue);
+            if (!orbs.empty()) {
+                logic.suppress_click_hitbox = true;
+                if (logic.is_recording() && !logic.restoring_holds) {
+                    for (auto const& cmd : orbs) {
+                        Logic::get().record_input(play, cmd.m_isPush, !cmd.m_isPlayer2, static_cast<int>(cmd.m_button));
+                    }
+                }
+                play->m_queuedButtons = orbs;
+                logic.injecting = true;
+                layer->GJBaseGameLayer::processQueuedButtons(dt, true);
+                logic.injecting = false;
+                logic.suppress_click_hitbox = false;
+            }
+            if (logic.is_recording() && logic.maintain_gravity && logic.same_gravity && !logic.restoring_holds && !logic.resetting) {
+                Logic::get().sync_same_gravity(play);
+            }
+        }
+        return;
+    }
+    Logic::get().prepare_buttons(play);
+    int replay = logic.replay_clicks_left;
+    if (play->m_queuedButtons.empty()) {
+        logic.applying_playback = false;
+        if (logic.is_recording() && logic.maintain_gravity && !logic.restoring_holds) {
+            Logic::get().apply_maintain_gravity(play);
+        }
+        run_orb_clicks(play, layer, dt);
+        logic.applying_playback = false;
+        if (logic.is_recording() && logic.maintain_gravity && logic.same_gravity && !logic.restoring_holds) {
+            Logic::get().sync_same_gravity(play);
+        }
+        if (!clearInputQueue && replay == 0) {
+            play->m_queuedButtons.clear();
+        }
+        logic.buttons_prepared = false;
+        return;
+    }
+    bool correct_gravity = logic.is_recording() && logic.maintain_gravity && !logic.restoring_holds;
+    bool single_dual = play->m_gameState.m_isDualMode && !(play->m_levelSettings && play->m_levelSettings->m_twoPlayerMode);
+    replay::SmallSnapshot<PlayerButtonCommand, 8> queued(play->m_queuedButtons);
+    if (logic.is_recording() && logic.maintain_gravity && !logic.restoring_holds) {
+        int jump = static_cast<int>(PlayerButton::Jump);
+        queued.removeIf([&](PlayerButtonCommand const& cmd) {
+            int button = static_cast<int>(cmd.m_button);
+            bool jump_button = button == 0 || button == jump;
+            return jump_button && logic.records_player(cmd.m_isPlayer2) && !logic.plays_player(cmd.m_isPlayer2);
+        });
+    }
+    int user_count = std::max(0, static_cast<int>(queued.size()) - replay);
+    auto run_queue = [&](int from, int to, bool playback) {
+        play->m_queuedButtons.clear();
+        for (int i = from; i < to; ++i)
+            play->m_queuedButtons.push_back(queued[i]);
+        logic.applying_playback = playback;
+        if (!play->m_queuedButtons.empty()) {
+            layer->GJBaseGameLayer::processQueuedButtons(dt, true);
+        }
+    };
+    run_queue(0, user_count, false);
+    if (logic.is_recording() && logic.maintain_gravity && !logic.restoring_holds) {
+        Logic::get().apply_maintain_gravity(play);
+    }
+    bool one_dual = play->m_gameState.m_isDualMode && !(play->m_levelSettings && play->m_levelSettings->m_twoPlayerMode);
+    logic.applying_playback = true;
+    for (int i = user_count; i < static_cast<int>(queued.size()); ++i) {
+        auto const& cmd = queued[static_cast<size_t>(i)];
+        auto apply = [&](bool player2) {
+            PlayerButtonCommand next = cmd;
+            next.m_isPlayer2 = player2;
+            play->m_queuedButtons.clear();
+            play->m_queuedButtons.push_back(next);
+            layer->GJBaseGameLayer::processQueuedButtons(dt, true);
+        };
+        uint32_t partner_before = logic.partner_presses;
+        apply(cmd.m_isPlayer2);
+        bool partner_clicked = logic.partner_presses != partner_before;
+        if (one_dual && !cmd.m_isPlayer2 && !partner_clicked && play->m_player2 && !play->m_player2->m_isDead && !play->m_player2->m_controlsDisabled) {
+            apply(true);
+        }
+    }
+    logic.applying_playback = false;
+    if (logic.is_recording() && logic.maintain_gravity && logic.same_gravity && !logic.restoring_holds) {
+        Logic::get().sync_same_gravity(play);
+    }
+    if (!clearInputQueue && replay == 0) {
+        play->m_queuedButtons.assign(queued.begin(), queued.end());
+    }
+    logic.buttons_prepared = false;
 }
 
 void Logic::offset_frames(int delta, int first, int last) {
-    // TODO
+    auto& logic = Logic::get();
+    int n = static_cast<int>(logic.inputs.size());
+    bool all = first < 0 || last < 0;
+    if (all) {
+        first = 0;
+        last = n - 1;
+    }
+    if (first > last) {
+        std::swap(first, last);
+    }
+    first = std::max(first, 0);
+    last = std::min(last, n - 1);
+    for (int i = first; i <= last; ++i) {
+        if (logic.inputs[static_cast<size_t>(i)].number + delta >= 0) {
+            logic.inputs[static_cast<size_t>(i)].number += delta;
+        }
+    }
+    if (all) {
+        for (auto& change : logic.rates)
+            change.frame = std::max(change.frame + delta, 0);
+        Logic::get().normalize_rates();
+    }
+    logic.touch_inputs();
+    Logic::get().sort_inputs();
+    Logic::get().message = fmt::format("Shifted inputs by {}", delta);
 }
 
 void Logic::offset_inputs(int magnitude, int first, int last) {
-    // TODO
+    log::debug("offset inputs");
+    if (magnitude < 0) {
+        magnitude = -magnitude;
+    }
+    auto& logic = Logic::get();
+    int n = static_cast<int>(logic.inputs.size());
+    bool all = first < 0 || last < 0;
+    if (all) {
+        first = 0;
+        last = n - 1;
+    }
+    if (first > last) {
+        std::swap(first, last);
+    }
+    first = std::max(first, 0);
+    last = std::min(last, n - 1);
+    std::mt19937 rng{ std::random_device{}() };
+    std::uniform_int_distribution<int> dist(-magnitude, magnitude);
+    for (int i = first; i <= last; ++i) {
+        int next = logic.inputs[static_cast<size_t>(i)].number + dist(rng);
+        logic.inputs[static_cast<size_t>(i)].number = std::max(next, 0);
+    }
+    logic.touch_inputs();
+    Logic::get().sort_inputs();
+    Logic::get().message = fmt::format("Randomly offset inputs by +/- {}", magnitude);
 }
 
 void Logic::remove_player_inputs(bool player2) {
-    // TODO
+    auto& logic = Logic::get();
+    replay::compact(logic.inputs, logic.poses, logic.input_ids,
+        [player2](Frame const& input) {
+            return input.player2 != player2;
+        });
+    logic.inputs.shrink_to_fit();
+    logic.poses.shrink_to_fit();
+    logic.input_ids.shrink_to_fit();
+    logic.touch_inputs();
+    Logic::get().refresh_live_hold();
+    Logic::get().recompute_cps(Logic::get());
+    Logic::get().message = player2 ? "Removed player 2 inputs" : "Removed player 1 inputs";
 }
 
 void Logic::flip_input_holds() {
-    // TODO
+    for (auto& input : Logic::get().inputs)
+        input.holding = !input.holding;
+    Logic::get().refresh_live_hold();
+    Logic::get().recompute_cps(Logic::get());
+    Logic::get().message = "Flipped presses and releases";
 }
 
 void Logic::flip_input_players() {
-    // TODO
+    for (auto& input : Logic::get().inputs)
+        input.player2 = !input.player2;
+    Logic::get().refresh_live_hold();
+    Logic::get().recompute_cps(Logic::get());
+    Logic::get().message = "Flipped player 1 and 2";
 }
 
 void Logic::sort_inputs() {
-    // TODO
+    auto& logic = Logic::get();
+    auto& inputs = logic.inputs;
+    if (std::is_sorted(inputs.begin(), inputs.end(), [](Frame const& a, Frame const& b) {
+            return a.number < b.number || (a.number == b.number && !a.player2 && b.player2);
+        })) {
+        logic.touch_inputs();
+        Logic::get().refresh_live_hold();
+        Logic::get().recompute_cps(logic);
+        return;
+    }
+    std::vector<size_t> order(inputs.size());
+    std::iota(order.begin(), order.end(), 0);
+    std::stable_sort(order.begin(), order.end(), [&](size_t a, size_t b) {
+        return inputs[a].number < inputs[b].number || (inputs[a].number == inputs[b].number && !inputs[a].player2 && inputs[b].player2);
+    });
+    bool moved = false;
+    for (size_t i = 0; i < order.size(); ++i)
+        if (order[i] != i) {
+            moved = true;
+        }
+    if (moved) {
+        auto permute = [&](auto& side) {
+            if (side.size() != order.size())
+                return;
+            using Value = typename std::decay_t<decltype(side)>::value_type;
+            std::vector<Value> next;
+            next.reserve(order.size());
+            for (size_t i : order)
+                next.push_back(side[i]);
+            side.swap(next);
+        };
+        permute(inputs);
+        permute(logic.poses);
+        permute(logic.input_ids);
+        logic.touch_inputs();
+        Logic::get().refresh_live_hold();
+    }
+    Logic::get().recompute_cps(Logic::get());
 }
 
 uint64_t Logic::mint_input_id() {
@@ -1128,19 +1453,114 @@ uint64_t Logic::mint_input_id() {
 }
 
 void Logic::identify_inputs(bool force) {
-    // TODO
+    log::debug("identify inputs");
+    auto& logic = Logic::get();
+    if (!force && logic.is_recording() && logic.input_ids.empty())
+        return;
+
+    struct Seen {
+        std::vector<Frame> const* owner = nullptr;
+        Frame const* data = nullptr;
+        size_t count = 0;
+        uint64_t revision = 0;
+        uint64_t next = 0;
+        uint64_t last_id = 0;
+    };
+
+    thread_local Seen seen;
+    auto& inputs = logic.inputs;
+    bool kept = seen.owner == &inputs && seen.revision == logic.inputs_revision && seen.count <= inputs.size() && logic.next_input_id >= seen.next;
+    if (kept && seen.count > 0) {
+        kept = logic.input_id(seen.count - 1) == seen.last_id;
+    }
+    if (kept && seen.count == inputs.size()) {
+        kept = seen.data == inputs.data();
+    }
+    size_t from = kept ? seen.count : 0;
+    uint64_t highest = logic.next_input_id;
+    for (size_t i = from; i < inputs.size(); ++i) {
+        uint64_t id = logic.input_id(i);
+        if (id > highest) {
+            highest = id;
+        }
+    }
+    logic.next_input_id = highest;
+    for (size_t i = from; i < inputs.size(); ++i) {
+        if (logic.input_id(i) != 0) {
+            continue;
+        }
+        logic.set_input_id(i, ++logic.next_input_id);
+    }
+    seen = { &inputs, inputs.data(), inputs.size(), logic.inputs_revision, logic.next_input_id, inputs.empty() ? 0 : logic.input_id(inputs.size() - 1) };
 }
 
 void Logic::clear_inputs() {
-    // todo
+    auto& logic = Logic::get();
+    logic.inputs.clear();
+    logic.clear_sides();
+    logic.macro_unrounded = logic.velocity_unrounding;
+    logic.macro_silicate_variance = false;
+    std::vector<Frame>().swap(logic.inputs);
+    std::vector<FramePose>().swap(logic.poses);
+    std::vector<uint64_t>().swap(logic.input_ids);
+    Logic::get().release_replay_index();
+    logic.touch_inputs();
+    logic.rates.clear();
+    logic.replay_pos = 0;
+    logic.lvl_seed_from_file = false;
+    if (logic.seed_override) {
+        logic.lvl_seed = logic.seed_override_value;
+        logic.lvl_seed_known = true;
+    }
+    else {
+        logic.lvl_seed = 0;
+        logic.lvl_seed_known = false;
+    }
+    logic.message = "Cleared inputs";
 }
 
 void Logic::notify(std::string const& text, bool success) {
-    // TODO
+    Logic::get().message = text;
 }
 
 void Logic::note_click(PlayLayer* play, bool down, bool player1, int button) {
-    // port this
+    auto& logic = Logic::get();
+    if (!down || !play)
+        return;
+    if (logic.resetting || logic.refresh_only || logic.ignore_record_frames > 0)
+        return;
+    int jump = static_cast<int>(PlayerButton::Jump);
+    int left = static_cast<int>(PlayerButton::Left), right = static_cast<int>(PlayerButton::Right);
+    if (button != 0 && button != jump && button != left && button != right)
+        return;
+    if (button == 0) {
+        button = jump;
+    }
+    PlayerObject* body = player1 ? play->m_player1 : play->m_player2;
+    if (body) {
+        if (Logic::button_held(body, button) || (button == jump && Logic::button_held(body, 0)))
+            return;
+    }
+    bool two = play->m_levelSettings && play->m_levelSettings->m_twoPlayerMode;
+    bool dual = play->m_gameState.m_isDualMode, one_dual = dual && !two;
+    if (one_dual) {
+        player1 = true;
+    }
+    bool player2 = !player1;
+    if (player2 && !(two && dual))
+        return;
+    auto& clicks = player2 ? logic.clicks_p2 : logic.clicks_p1;
+    int now = Logic::get().step_frame + 1;
+    clicks.push_back(now);
+    double now_t = logic.seconds_at(now);
+    size_t before = clicks.size();
+    while (clicks.size() > 1 && now_t - logic.seconds_at(clicks.front()) > 2.0)
+        clicks.pop_front();
+    while (clicks.size() > 4096)
+        clicks.pop_front();
+    if (clicks.size() != before) {
+        ++logic.clicks_revision;
+    }
 }
 
 namespace {
@@ -1201,8 +1621,10 @@ namespace {
 }
 
 unsigned Logic::count_presses_in_last_second(bool player2) {
-    // todo
-    return {};
+    auto const& logic = Logic::get();
+    int now = PlayLayer::get() ? Logic::get().get_frame(PlayLayer::get()) : 0;
+    auto const& clicks = player2 ? logic.clicks_p2 : logic.clicks_p1;
+    return static_cast<unsigned>(recent_clicks(logic, clicks, now).in_second);
 }
 
 bool Logic::burst_too_fast(Session const& value, int clicks, int first, int last) const {
