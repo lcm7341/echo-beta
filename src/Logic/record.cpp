@@ -4,6 +4,7 @@
 // pressing a button thats already held is not a new input. the latest hold per player & button is kept so that check is instant
 // in a 1 player dual 1 button moves both icons, thats stored as p1 even when the 2nd icon is the one being recorded
 // recording over part of a macro trims everything after that point for the recorded player & leaves the other players inputs
+// capture_player / apply_player copy a players whole state. setting the flags alone leaves the sprite in the wrong mode, so it goes thru gds setters
 #include "Logic/logic.hpp"
 #include "Hooks/rotation.hpp"
 #include <Geode/utils/async.hpp>
