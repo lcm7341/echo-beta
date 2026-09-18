@@ -4,6 +4,9 @@
 // GJBaseGameLayer: update (handed to run_frame), processCommands (1 physics step, echo::step::begin / end wrap it), handleButton (recording)
 // PlayerObject: buttons, death, rotation, trail & particles
 // most trajectory hooks do NOTHING unless a prediction is running
+// visual tilt: ship / ufo / wave / swing turn too little per step at high tps to look right, so a separate visual angle is kept & drawn.
+//   physics & hitboxes still use the real one
+// the step count patches & silicates reset patches are at the bottom
 #include "Logic/logic.hpp"
 #include "Hooks/rotation.hpp"
 #include "Hooks/step.hpp"
@@ -1183,13 +1186,46 @@ void on_lvl_seed(safetyhook::Context&) {
 
 // the mid hooks are NOT geode patches so disable bot has to take them out itself
 void echo_raw_hooks(bool on) {
-    // todo
+    static safetyhook::MidHook shake_a, shake_b, shake_c, shake_d;
+    static safetyhook::MidHook teleport;
+    if (!on) {
+        g_levelSeed = {};
+        shake_a = {};
+        shake_b = {};
+        shake_c = {};
+        shake_d = {};
+        teleport = {};
+        return;
+    }
+    // where resetLevel writes the attempts rand state (silicate's offset, 2.2081)
+    g_levelSeed = safetyhook::create_mid(geode::base::get() + 0x3b90fb, on_lvl_seed);
+
+    auto shake_step = [](safetyhook::Context& ctx) {
+        auto& state = Logic::get().shake_state;
+        state = static_cast<uint64_t>(static_cast<int>((214013ull * state + 2531011ull) >> 16) & 0x7FFF);
+        ctx.rax = static_cast<uintptr_t>(state);
+        ctx.rip += 6;
+    };
+    auto teleport_step = [](safetyhook::Context& ctx) {
+        auto& state = Logic::get().tp_state;
+        state = static_cast<uint64_t>(static_cast<int>((214013ull * state + 2531011ull) >> 16) & 0x7FFF);
+        ctx.rax = static_cast<uintptr_t>(state);
+    };
+    shake_a = safetyhook::create_mid(geode::base::get() + 0x23E173, shake_step); // the 4 rand calls for shake
+    shake_b = safetyhook::create_mid(geode::base::get() + 0x23E1A1, shake_step);
+    shake_c = safetyhook::create_mid(geode::base::get() + 0x23E1CB, shake_step);
+    shake_d = safetyhook::create_mid(geode::base::get() + 0x23E1E9, shake_step);
+    teleport = safetyhook::create_mid(geode::base::get() + 0x20FEDC, teleport_step); // in teleportPlayer
 }
 
 // silicate saved MY step patch as its "original" (it loaded after me). when it turns itself off it puts mine back
 // even if im disabled, & then the game reads my step count forever. so while im off i keep that spot gds own
 void echo_guard_step_site() {
-    // later
+    auto* at = reinterpret_cast<uint8_t*>(geode::base::get() + 0x237A5B);
+    if (!g_step_patch || g_step_bytes.empty() || std::memcmp(at, g_step_bytes.data(), g_step_bytes.size()) != 0)
+        return;
+    (void)g_step_patch->enable();
+    (void)g_step_patch->disable();
 }
 
 $execute {
@@ -1206,6 +1242,70 @@ $execute {
     patch(0x3BA508, std::vector<uint8_t>(5, 0x90), "PlayLayer::resumeAndRestart");
 }
 
+class $modify(EchoShaderLayer, ShaderLayer) {
+    void performCalculations() {
+        ShaderLayer::performCalculations();
+    }
+};
+
+class $modify(EchoEffectManager, GJEffectManager) {
+    void updateEffects(float dt) {
+        GJEffectManager::updateEffects(dt);
+    }
+
+    float opacityModForGroup(int id) {
+        return GJEffectManager::opacityModForGroup(id);
+    }
+};
+
+class $modify(EchoHardStreak, HardStreak) {
+    void addPoint(CCPoint point) {
+        auto* points = m_pointArray;
+        auto* last = points && points->count() > 0 ? static_cast<PointNode*>(points->lastObject()) : nullptr;
+        if (!last) {
+            HardStreak::addPoint(point);
+            return;
+        }
+        auto* layer = GJBaseGameLayer::get();
+        float zoom = layer ? layer->m_gameState.m_cameraZoom : 1.f;
+        if (!std::isfinite(zoom) || zoom < 0.05f)
+            zoom = 1.f;
+        float reach = 0.25f / zoom;
+        if (ccpDistanceSQ(last->m_point, point) < reach * reach)
+            return;
+        HardStreak::addPoint(point);
+    }
+};
+
+class $modify(EchoDirector, CCDirector) {
+};
+
+class $modify(EchoEGLView, CCEGLView) {
+    void setFrameSize(float width, float height) {
+        CCEGLView::setFrameSize(width, height);
+    }
+
+    void onGLFWframebuffersize(GLFWwindow* window, int width, int height) {
+        CCEGLView::onGLFWframebuffersize(window, width, height);
+    }
+
+    void onGLFWWindowSizeFunCallback(GLFWwindow* window, int width, int height) {
+        CCEGLView::onGLFWWindowSizeFunCallback(window, width, height);
+    }
+
+    void toggleLockCursor(bool locked) {
+        if (locked && menu_holds_mouse())
+            locked = false;
+        CCEGLView::toggleLockCursor(locked);
+    }
+};
+
+class $modify(EchoAudioEngine, FMODAudioEngine) {
+    void update(float dt) {
+        FMODAudioEngine::update(dt);
+    }
+};
+
 FMOD_RESULT echo_mixer_update(FMOD::System* self) {
     return self->update();
 }
@@ -1217,3 +1317,21 @@ $execute {
         "FMOD::System::update",
         tulip::hook::TulipConvention::Stdcall);
 }
+
+class $modify(EchoAppDelegate, AppDelegate) {
+    void applicationDidEnterBackground() {
+        Logic::get().save_settings_file();
+        Logic::get().on_focus_change();
+        AppDelegate::applicationDidEnterBackground();
+    }
+
+    void trySaveGame(bool force) {
+        Logic::get().save_settings_file();
+        AppDelegate::trySaveGame(force);
+    }
+
+    void applicationWillEnterForeground() {
+        AppDelegate::applicationWillEnterForeground();
+        Logic::get().on_focus_change();
+    }
+};
