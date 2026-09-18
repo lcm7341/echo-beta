@@ -62,6 +62,20 @@
 			"default": "None",
 			"category": "gameplay"
 		},
+		"key-save": {
+			"type": "keybind",
+			"platforms": ["win"],
+			"name": "Save replay",
+			"default": "None",
+			"category": "gameplay"
+		},
+		"key-load": {
+			"type": "keybind",
+			"platforms": ["win"],
+			"name": "Load replay",
+			"default": "None",
+			"category": "gameplay"
+		},
 		"key-reset": {
 			"type": "keybind",
 			"platforms": ["win"],

@@ -792,6 +792,16 @@ public:
 	bool dispatch_setting_key(std::string_view key, bool down);
 	fs::path save_root();
 	void notify(std::string const& text, bool success);
+	bool write_file();
+	bool autosave_replay();
+	void poll_autosave();
+	bool read_file(fs::path const& path);
+	bool export_kind(std::string_view kind);
+	bool append_sequence_file(fs::path const& path, int amount);
+	bool merge_replay(fs::path const& path);
+	void pick_replay();
+	void import_replays();
+	int convert_legacy_echoes();
 	unsigned count_presses_in_last_second(bool player2);
 	void note_click(PlayLayer* play, bool down, bool player1, int button = static_cast<int>(PlayerButton::Jump));
 	void update_cps(PlayLayer* play);

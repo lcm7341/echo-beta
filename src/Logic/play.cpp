@@ -85,6 +85,9 @@ void Logic::toggle_recording() {
     if (logic.is_recording() && !was_recording && logic.inputs.capacity() < 4096) {
         logic.inputs.reserve(4096);
     }
+    if (was_recording && !(logic).is_recording()) {
+        Logic::get().autosave_replay();
+    }
 }
 
 void Logic::toggle_playing() {
@@ -1054,6 +1057,9 @@ void Logic::on_complete(PlayLayer* play) {
     if (play->m_player1) {
         logic.end_x = play->m_player1->getPositionX();
     }
+    if (was_recording) {
+        Logic::get().autosave_replay();
+    }
     logic.message = "Level complete";
 }
 
@@ -1431,6 +1437,7 @@ void Logic::offset_frames(int delta, int first, int last) {
     logic.touch_inputs();
     Logic::get().sort_inputs();
     Logic::get().message = fmt::format("Shifted inputs by {}", delta);
+    Logic::get().autosave_replay();
 }
 
 void Logic::offset_inputs(int magnitude, int first, int last) {
@@ -1459,6 +1466,7 @@ void Logic::offset_inputs(int magnitude, int first, int last) {
     logic.touch_inputs();
     Logic::get().sort_inputs();
     Logic::get().message = fmt::format("Randomly offset inputs by +/- {}", magnitude);
+    Logic::get().autosave_replay();
 }
 
 void Logic::remove_player_inputs(bool player2) {
@@ -1474,6 +1482,7 @@ void Logic::remove_player_inputs(bool player2) {
     Logic::get().refresh_live_hold();
     Logic::get().recompute_cps(Logic::get());
     Logic::get().message = player2 ? "Removed player 2 inputs" : "Removed player 1 inputs";
+    Logic::get().autosave_replay();
 }
 
 void Logic::flip_input_holds() {
@@ -1482,6 +1491,7 @@ void Logic::flip_input_holds() {
     Logic::get().refresh_live_hold();
     Logic::get().recompute_cps(Logic::get());
     Logic::get().message = "Flipped presses and releases";
+    Logic::get().autosave_replay();
 }
 
 void Logic::flip_input_players() {
@@ -1490,6 +1500,7 @@ void Logic::flip_input_players() {
     Logic::get().refresh_live_hold();
     Logic::get().recompute_cps(Logic::get());
     Logic::get().message = "Flipped player 1 and 2";
+    Logic::get().autosave_replay();
 }
 
 void Logic::sort_inputs() {
