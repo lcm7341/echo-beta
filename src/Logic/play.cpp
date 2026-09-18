@@ -800,7 +800,30 @@ void Logic::seed_rand_triggers(uint64_t seed) {
 }
 
 void Logic::roll_live_seed(PlayLayer* play) {
-    // TODO
+    static std::mt19937_64 rng{ std::random_device{}() };
+    auto& logic = Logic::get();
+    uint64_t rolled = rng();
+    if (rolled == 0) {
+        rolled = 1;
+    }
+    variance_lock().held = false;
+    if (!logic.lvl_seed_from_file || logic.is_recording()) {
+        logic.lvl_seed = rolled;
+        logic.lvl_seed_known = true;
+        if (logic.is_recording()) {
+            logic.lvl_seed_from_file = false;
+        }
+    }
+    if (!play)
+        return;
+    play->m_randomSeed = rolled;
+    play->m_replayRandSeed = rolled;
+    play->m_unk32e0 = rolled;
+    Logic::get().set_game_random_state(rolled);
+    logic.shake_state = rolled & 0x7FFF;
+    logic.tp_state = rolled & 0x7FFF;
+    fill_variance(play, rolled);
+    Logic::get().seed_rand_triggers(rolled);
 }
 
 void Logic::apply_attempt_variance(PlayLayer* play, uint64_t seed) {
@@ -823,7 +846,23 @@ void Logic::keep_variance(PlayLayer* play) {
 }
 
 void Logic::plant_lvl_seed(PlayLayer* play) {
-    // TODO
+    auto& logic = Logic::get();
+    if (!play || logic.keep_lvl_seed)
+        return;
+    if (logic.seed_override) {
+        logic.lvl_seed = logic.seed_override_value;
+        logic.lvl_seed_known = true;
+    }
+    if (!logic.lvl_seed_known)
+        return;
+    play->m_randomSeed = logic.lvl_seed;
+    play->m_replayRandSeed = logic.lvl_seed;
+    play->m_unk32e0 = logic.lvl_seed;
+    Logic::get().set_game_random_state(logic.lvl_seed);
+    logic.shake_state = logic.lvl_seed & 0x7FFF;
+    logic.tp_state = logic.lvl_seed & 0x7FFF;
+    Logic::get().apply_attempt_variance(play, logic.lvl_seed);
+    Logic::get().seed_rand_triggers(logic.lvl_seed);
 }
 
 void Logic::restore_checkpoint_random(PlayLayer* play) {
