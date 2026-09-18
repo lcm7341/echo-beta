@@ -1,6 +1,9 @@
 // where echo hooks the game
 //
 // PlayLayer: level start, reset, completion, pause & checkpoints. reset is where the seed goes in & the macro rewinds
+// GJBaseGameLayer: update (handed to run_frame), processCommands (1 physics step, echo::step::begin / end wrap it), handleButton (recording)
+// PlayerObject: buttons, death, rotation, trail & particles
+// most trajectory hooks do NOTHING unless a prediction is running
 #include "Logic/logic.hpp"
 #include "Hooks/rotation.hpp"
 #include "Hooks/step.hpp"
@@ -987,6 +990,97 @@ class $modify(EchoPlayerObject, PlayerObject) {
     }
 };
 
+class $modify(EchoSchedulerDepth, CCScheduler) {
+    static void onModify(auto& self) {
+        (void)self.setHookPriority("cocos2d::CCScheduler::update", Priority::First);
+    }
+
+    void update(float dt) {
+        auto& logic = Logic::get();
+        ++logic.scheduler_depth;
+        CCScheduler::update(dt);
+        --logic.scheduler_depth;
+    }
+};
+
+class $modify(EchoScheduler, CCScheduler) {
+};
+
+class $modify(EchoGameObject, GameObject) {
+    static void onModify(auto& self) {
+        hold_for_predict(self, "GameObject::activateObject");
+        hold_for_predict(self, "GameObject::deactivateObject");
+        hold_for_predict(self, "GameObject::playShineEffect");
+    }
+
+    void activateObject() {
+        if (Logic::get().predicting)
+            return;
+        GameObject::activateObject();
+    }
+
+    void deactivateObject(bool deactivate) {
+        if (Logic::get().predicting)
+            return;
+        GameObject::deactivateObject(deactivate);
+    }
+
+    void playShineEffect() {
+        if (Logic::get().predicting)
+            return;
+        GameObject::playShineEffect();
+    }
+
+    void addGlow(gd::string frame) {
+        GameObject::addGlow(std::move(frame));
+    }
+};
+
+class $modify(EchoEffectObject, EffectGameObject) {
+    void triggerObject(GJBaseGameLayer* layer, int uniqueID, gd::vector<int> const* remapKeys) {
+        EffectGameObject::triggerObject(layer, uniqueID, remapKeys);
+    }
+
+    void triggerActivated(float xPosition) {
+        if (Logic::get().predicting)
+            return;
+        EffectGameObject::triggerActivated(xPosition);
+    }
+};
+
+class $modify(EchoEnhancedObject, EnhancedGameObject) {
+    void activatedByPlayer(PlayerObject* player) {
+        if (Trajectory::get().isFake(player)) {
+            phys::activateForTrajectory(static_cast<EffectGameObject*>(static_cast<GameObject*>(this)), player);
+            return;
+        }
+        if (!player || !Logic::get().player_hidden(player)) {
+            EnhancedGameObject::activatedByPlayer(player);
+            return;
+        }
+        bool effects = player->m_playEffects;
+        player->m_playEffects = false;
+        EnhancedGameObject::activatedByPlayer(player);
+        player->m_playEffects = effects;
+    }
+};
+
+class $modify(EchoRingObject, RingObject) {
+    void spawnCircle() {
+        if (Logic::get().predicting)
+            return;
+        auto* play = PlayLayer::get();
+        if (play) {
+            auto caused = [&](PlayerObject* player) {
+                return player && Logic::get().player_hidden(player) && player->m_touchingRings && player->m_touchingRings->containsObject(this);
+            };
+            if (caused(play->m_player1) || caused(play->m_player2))
+                return;
+        }
+        RingObject::spawnCircle();
+    }
+};
+
 // skidded from silicate (GPL-3.0, gd 2.2081)
 // swaps gds step count math in GJBaseGameLayer::update for a load of my count
 // HAS to be a raw patch, a midhook saves every register & that changes the ship delta
@@ -996,22 +1090,89 @@ namespace {
 }
 
 void install_physics_step_patch() {
-    // TODO
+    log::debug("install physics step patch");
+    std::vector<uint8_t> bytes = {
+        0x49, 0xBB, // movabs r11, <count ptr>
+        0, 0, 0, 0, 0, 0, 0, 0,
+        0x45, 0x8B, 0x1B,            // mov r11d, [r11]
+        0xE9, 0x31, 0x00, 0x00, 0x00 // jmp over the old math
+    };
+    auto* amt = &Logic::get().tick_steps;
+    std::memcpy(bytes.data() + 2, &amt, sizeof(amt));
+    auto address = reinterpret_cast<void*>(geode::base::get() + 0x237A5B); // in GJBaseGameLayer::update
+    if (auto res = geode::Mod::get()->patch(address, bytes); res) {
+        g_step_patch = res.unwrap();
+    }
+    g_step_bytes = bytes;
 }
 
 // silicate patches the SAME spot with its own count so mine gets ignored (crash at high tps)
 // its disable bot button can also put gds old math back
 void check_physics_step_patch() {
-    // TODO
+    auto* at = reinterpret_cast<uint8_t*>(geode::base::get() + 0x237A5B);
+    if (g_step_bytes.empty() || std::memcmp(at, g_step_bytes.data(), g_step_bytes.size()) == 0)
+        return;
+    for (auto* mod : Loader::get()->getAllMods()) {
+        if (mod == Mod::get()) {
+            continue;
+        }
+        for (auto* patch : mod->getPatches()) {
+            if (!patch->isEnabled() || patch->getAddress() != reinterpret_cast<uintptr_t>(at)) {
+                continue;
+            }
+            Logic::get().message = fmt::format("Mod conflict: Disable {} in Geode!", mod->getName());
+            Notification::create(Logic::get().message, NotificationIcon::Error)->show();
+            return;
+        }
+    }
+    if (g_step_patch) {
+        (void)g_step_patch->disable();
+        (void)g_step_patch->enable();
+    }
 }
 
 int vanilla_physics_steps(float dt, float timeWarp) {
-    // TODO
-    return {};
+    log::debug("vanilla physics steps");
+    float warp = std::min(timeWarp, 1.f);
+    if (!std::isfinite(warp) || !(warp > 0.f)) {
+        warp = 1.f;
+    }
+    if (!std::isfinite(dt) || dt < 0.f) {
+        dt = 0.f;
+    }
+    int steps = static_cast<int>(std::lround(static_cast<double>(dt) * 60.0 / static_cast<double>(warp) * 4.0));
+    return std::max(steps, 1);
 }
 
 void apply_lvl_seed() {
-    // TODO
+    auto* play = PlayLayer::get();
+    if (!play)
+        return;
+    auto& logic = Logic::get();
+    if (logic.keep_lvl_seed)
+        return;
+    if (!logic.is_playing() && !logic.seed_override) {
+        Logic::get().roll_live_seed(play);
+        return;
+    }
+    if (logic.seed_override) {
+        logic.lvl_seed = logic.seed_override_value;
+        logic.lvl_seed_known = true;
+    }
+    if (logic.lvl_seed_known) {
+        Logic::get().set_game_random_state(logic.lvl_seed);
+        logic.shake_state = logic.lvl_seed & 0x7FFF;
+        logic.tp_state = logic.lvl_seed & 0x7FFF;
+        Logic::get().apply_attempt_variance(play, logic.lvl_seed);
+        Logic::get().seed_rand_triggers(logic.lvl_seed);
+        return;
+    }
+    uint64_t state = Logic::get().game_random_state();
+    logic.lvl_seed = state;
+    logic.lvl_seed_known = true;
+    logic.shake_state = state & 0x7FFF;
+    logic.tp_state = state & 0x7FFF;
+    Logic::get().seed_rand_triggers(state);
 }
 
 safetyhook::MidHook g_levelSeed;
