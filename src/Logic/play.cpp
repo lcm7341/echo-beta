@@ -4,6 +4,7 @@
 //   so gd applies them exactly like a real press
 // resets: held buttons, the queue, the seed, click counters & labels all go back to a known state. a key still down from
 //   before the reset would fire again & look like a new press, so it is swallowed until its really let go
+// holds across death & respawn are remembered & put back silently. no new press = no jump & no flipped gravity
 #include "Logic/logic.hpp"
 #include "Hooks/step.hpp"
 #include "Hack/trajectory.hpp"
@@ -944,21 +945,72 @@ void Logic::restore_holds(PlayLayer* play) {
 }
 
 void Logic::save_checkpoint(PlayLayer* play, CheckpointObject* object) {
-    // TODO
+    auto& logic = Logic::get();
+    if (!play || !object || logic.predicting)
+        return;
+    if (std::ranges::any_of(logic.checkpoints, [object](Checkpoint const& saved) {
+            return saved.object == object;
+        }))
+        return;
+    int frame = Logic::get().get_frame(play) + (logic.in_step ? 1 : 0);
+    logic.checkpoints.push_back(Logic::get().capture_checkpoint(play, object, frame));
+    logic.object_capture = object;
 }
 
 Checkpoint Logic::capture_checkpoint(PlayLayer* play, CheckpointObject* object, int frame) {
-    // port this
-    return {};
+    auto& logic = Logic::get();
+    Checkpoint checkpoint;
+    checkpoint.object = object;
+    checkpoint.frame = frame;
+    checkpoint.layer = Logic::get().capture_layer(play);
+    checkpoint.player1 = Logic::get().capture_player(play->m_player1);
+    checkpoint.player2 = Logic::get().capture_player(play->m_player2);
+    checkpoint.replay_pos = logic.replay_pos;
+    checkpoint.removed_frames = logic.removed_frames;
+    int jump = static_cast<int>(PlayerButton::Jump);
+    int left = static_cast<int>(PlayerButton::Left), right = static_cast<int>(PlayerButton::Right);
+    checkpoint.held_p1 = Logic::get().held_at(logic, false, checkpoint.frame, jump);
+    checkpoint.held_p2 = Logic::get().held_at(logic, true, checkpoint.frame, jump);
+    checkpoint.held_left_p1 = Logic::get().held_at(logic, false, checkpoint.frame, left);
+    checkpoint.held_left_p2 = Logic::get().held_at(logic, true, checkpoint.frame, left);
+    checkpoint.held_right_p1 = Logic::get().held_at(logic, false, checkpoint.frame, right);
+    checkpoint.held_right_p2 = Logic::get().held_at(logic, true, checkpoint.frame, right);
+    checkpoint.random_state = Logic::get().game_random_state();
+    checkpoint.shake_state = logic.shake_state;
+    checkpoint.tp_state = logic.tp_state;
+    checkpoint.variance.assign(play->m_varianceValues.begin(), play->m_varianceValues.end());
+    for (auto const& trigger : live_rand()) {
+        if (trigger.state) {
+            checkpoint.rand_states.emplace_back(trigger.unique_id, *trigger.state);
+        }
+    }
+    return checkpoint;
 }
 
 void Logic::sync_checkpoints(PlayLayer* play) {
-    // TODO
+    auto& logic = Logic::get();
+    std::erase_if(logic.checkpoints, [play](Checkpoint const& saved) {
+        return !play || !play->m_checkpointArray || !play->m_checkpointArray->containsObject(saved.object);
+    });
+    if (logic.restored_checkpoint && (!play || !play->m_checkpointArray ||
+                                         !play->m_checkpointArray->containsObject(logic.restored_checkpoint)))
+        logic.restored_checkpoint = nullptr;
 }
 
 Checkpoint const* Logic::get_latest_checkpoint(PlayLayer* play) {
-    // TODO
-    return {};
+    log::debug("get latest checkpoint");
+    auto& logic = Logic::get();
+    if (!play || !(play->m_isPracticeMode || logic.backstepping)) {
+        return nullptr;
+    }
+    auto* obj = logic.restored_checkpoint ? logic.restored_checkpoint : play->getLastCheckpoint();
+    if (!obj || !play->m_checkpointArray || !play->m_checkpointArray->containsObject(obj)) {
+        return nullptr;
+    }
+    auto it = std::ranges::find_if(logic.checkpoints, [obj](Checkpoint const& saved) {
+        return saved.object == obj;
+    });
+    return it == logic.checkpoints.end() ? nullptr : &*it;
 }
 
 void Logic::on_complete(PlayLayer* play) {
