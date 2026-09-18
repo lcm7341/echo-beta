@@ -1,4 +1,6 @@
 // where echo hooks the game
+//
+// PlayLayer: level start, reset, completion, pause & checkpoints. reset is where the seed goes in & the macro rewinds
 #include "Logic/logic.hpp"
 #include "Hooks/rotation.hpp"
 #include "Hooks/step.hpp"
@@ -80,7 +82,14 @@ namespace {
 }
 
 void Logic::sync_predict_hooks() {
-    // TODO
+    auto const& logic = Logic::get();
+    bool want = logic.show_traj || logic.pause_before_kill || logic.traj_autoclicker || logic.show_death_next || logic.predicting;
+    if (want == predict_hooks_on)
+        return;
+    for (auto* hook : predict_hooks()) {
+        auto res = want ? hook->enable() : hook->disable();
+    }
+    predict_hooks_on = want;
 }
 
 namespace {
@@ -257,12 +266,39 @@ namespace {
 }
 
 static bool menu_holds_mouse() {
-    // TODO
-    return {};
+    auto& imgui = ImGuiCocos::get();
+    if (!imgui.isInitialized() || !imgui.isVisible()) {
+        return false;
+    }
+    return ImGui::GetIO().WantCaptureMouse || ImGui::IsAnyItemActive();
 }
 
 static void keep_menu_cursor() {
-    // TODO
+    if (!menu_holds_mouse())
+        return;
+    auto* view = CCEGLView::get();
+    if (!view)
+        return;
+    if (view->m_bCursorLocked) {
+        view->toggleLockCursor(false);
+    }
+    if (!view->m_pMainWindow)
+        return;
+    auto hwnd = *reinterpret_cast<HWND*>(reinterpret_cast<uintptr_t>(view->m_pMainWindow) + 0x370); // tf
+    POINT point;
+    if (!hwnd || !GetCursorPos(&point) || !ScreenToClient(hwnd, &point))
+        return;
+    float x = static_cast<float>(point.x), y = static_cast<float>(point.y);
+    if (view->m_fFrameZoomFactor != 0.f) {
+        x /= view->m_fFrameZoomFactor;
+        y /= view->m_fFrameZoomFactor;
+    }
+    if (view->m_bInRetinaMonitor && view->m_nRetinaFactor == 1) {
+        x *= 2.f;
+        y *= 2.f;
+    }
+    view->m_fMouseX = x;
+    view->m_fMouseY = y;
 }
 
 // visual tilt for ship ufo wave swing
@@ -291,8 +327,11 @@ bool tilt_applies(PlayerObject* player) {
 }
 
 float visual_tilt(PlayerObject* player) {
-    // todo
-    return {};
+    float now = player->getRotation();
+    auto left = tilt_left().find(player);
+    auto shown = tilt_fix().find(player);
+    bool fresh = left == tilt_left().end() || left->second != now || shown == tilt_fix().end();
+    return fresh ? now : shown->second;
 }
 
 template <class Gameplay, class Visual>
@@ -308,11 +347,21 @@ void turn_both(PlayerObject* player, Gameplay&& gameplay_turn, Visual&& visual_t
 }
 
 void restore_tilt(PlayerObject* player) {
-    // port this
+    if (!player)
+        return;
+    auto held = tilt_held().find(player);
+    if (held == tilt_held().end())
+        return;
+    player->setRotation(held->second);
+    tilt_held().erase(held);
 }
 
 void present_tilt(PlayerObject* player) {
-    // TODO
+    if (!player || !tilt_applies(player) || !tilt_fix().contains(player))
+        return;
+    float visual = visual_tilt(player);
+    tilt_held()[player] = player->getRotation();
+    player->setRotation(visual);
 }
 
 void clear_tilt() {
@@ -349,6 +398,249 @@ namespace echo::rotation {
 void check_physics_step_patch();
 void echo_guard_step_site();
 
+class $modify(EchoPlayLayer, PlayLayer) {
+    bool init(GJGameLevel* level, bool useReplay, bool dontCreateObjects) {
+        check_physics_step_patch();
+        // the macro says if ldm was on. has to be set BEFORE the level builds its objects
+        if (auto& macro = Logic::get(); level && macro.macro_ldm_known && !macro.inputs.empty() && level->m_lowDetailModeToggled != macro.macro_ldm) {
+            level->m_lowDetailModeToggled = macro.macro_ldm;
+            Notification::create(macro.macro_ldm ? "Low Detail Mode turned on for this macro" : "Low Detail Mode turned off for this macro", NotificationIcon::Success)->show();
+        }
+        Logic::get().clear_rand_triggers();
+        clear_tilt();
+        if (!PlayLayer::init(level, useReplay, dontCreateObjects))
+            return false;
+        if (Logic::get().practice_music_hack)
+            m_practiceMusicSync = true;
+        Logic::get().on_play_init(this);
+        return true;
+    }
+
+    void postUpdate(float dt) {
+        PlayLayer::postUpdate(dt);
+        Logic::get().after_frame(this, dt);
+    }
+
+    // TODO ts rebuilds the label every frame
+
+    void updateVisibility(float dt) {
+        PlayLayer::updateVisibility(dt);
+    }
+
+    void addObject(GameObject* object) {
+        PlayLayer::addObject(object);
+    }
+
+    void setupHasCompleted() {
+        PlayLayer::setupHasCompleted();
+        if (Logic::get().render_queued) {
+            Logic::get().render_queued = false;
+        }
+    }
+
+    void updateColor(ccColor3B& color, float fadeTime, int colorID, bool blending, float opacity, ccHSVValue& copyHSV, int colorIDToCopy, bool copyOpacity, EffectGameObject* callerObject, int unk1, int unk2) {
+        PlayLayer::updateColor(color, fadeTime, colorID, blending, opacity, copyHSV, colorIDToCopy, copyOpacity, callerObject, unk1, unk2);
+    }
+
+    void resetLevel() {
+        restore_tilt(m_player1);
+        restore_tilt(m_player2);
+        clear_tilt();
+        auto& logic = Logic::get();
+        if (!logic.backstepping) {
+        }
+        logic.carry = 0.f;
+        logic.respawn_frames = 0;
+        logic.resetting = true;
+        logic.restored_checkpoint = nullptr;
+        Logic::get().sync_checkpoints(this);
+        Logic::get().save_holds(this);
+        Logic::get().keep_lvl_seed = Logic::get().get_latest_checkpoint(this);
+        bool roll_seed = !Logic::get().keep_lvl_seed && !logic.seed_override && !logic.is_playing();
+        if (!roll_seed)
+            Logic::get().plant_lvl_seed(this);
+        g_nativeReset = true;
+        g_seedApplied = false;
+        PlayLayer::resetLevel();
+        g_nativeReset = false;
+        if (Logic::get().keep_lvl_seed)
+            Logic::get().restore_checkpoint_random(this);
+        else if (!roll_seed)
+            Logic::get().plant_lvl_seed(this);
+        Logic::get().keep_lvl_seed = false;
+        logic.resetting = false;
+        logic.present = true;
+        Logic::get().onReset(this);
+        dash_spin_reset();
+        Logic::get().sync_time_scale();
+    }
+
+    void loadFromCheckpoint(CheckpointObject* checkpoint) {
+        Logic::get().restored_checkpoint = checkpoint;
+        PlayLayer::loadFromCheckpoint(checkpoint);
+        Logic::get().restore_checkpoint_random(this);
+    }
+
+    void storeCheckpoint(CheckpointObject* checkpoint) {
+        restore_tilt(m_player1);
+        restore_tilt(m_player2);
+        PlayLayer::storeCheckpoint(checkpoint);
+        Logic::get().sync_checkpoints(this);
+        if (checkpoint && m_checkpointArray && m_checkpointArray->containsObject(checkpoint))
+            Logic::get().save_checkpoint(this, checkpoint);
+    }
+
+    void removeCheckpoint(bool first) {
+        PlayLayer::removeCheckpoint(first);
+        Logic::get().sync_checkpoints(this);
+    }
+
+    void removeAllCheckpoints() {
+        PlayLayer::removeAllCheckpoints();
+        Logic::get().sync_checkpoints(this);
+    }
+
+    void destroyPlayer(PlayerObject* player, GameObject* object) {
+        if (object == m_anticheatSpike) {
+            PlayLayer::destroyPlayer(player, object);
+            return;
+        }
+        if (Logic::get().should_noclip(this, player)) {
+            if (player == m_player1)
+                Logic::get().noclip_dead_p1 = true;
+            else if (player == m_player2)
+                Logic::get().noclip_dead_p2 = true;
+            return;
+        }
+        PlayLayer::destroyPlayer(player, object);
+        if (m_playerDied)
+            Logic::get().sync_time_scale();
+    }
+
+    void delayedResetLevel() {
+        PlayLayer::delayedResetLevel();
+        m_resumeTimer = 0;
+        Logic::get().clear_stuck_death(this);
+    }
+
+    void fullReset() {
+        PlayLayer::fullReset();
+        m_resumeTimer = 0;
+        Logic::get().clear_stuck_death(this);
+    }
+
+    void resetLevelFromStart() {
+        PlayLayer::resetLevelFromStart();
+        m_resumeTimer = 0;
+        Logic::get().clear_stuck_death(this);
+    }
+
+    void showNewBest(bool newReward, int orbs, int diamonds, bool demonKey, bool noRetry, bool noTitle) {
+        auto& logic = Logic::get();
+        if (logic.predicting || logic.showed_new_best)
+            return;
+        logic.showed_new_best = true;
+        PlayLayer::showNewBest(newReward, orbs, diamonds, demonKey, noRetry, noTitle);
+    }
+
+    void checkForEnd() {
+        if (Logic::get().predicting)
+            return;
+        PlayLayer::checkForEnd();
+    }
+
+    void levelComplete() {
+        if (Logic::get().predicting)
+            return;
+        Logic::get().on_complete(this);
+        PlayLayer::levelComplete();
+    }
+
+    void showCompleteEffect() {
+        PlayLayer::showCompleteEffect();
+    }
+
+    void playEndAnimationToPos(CCPoint position) {
+        if (Logic::get().predicting)
+            return;
+        PlayLayer::playEndAnimationToPos(position);
+    }
+
+    void playPlatformerEndAnimationToPos(CCPoint position, bool instant) {
+        if (Logic::get().predicting)
+            return;
+        PlayLayer::playPlatformerEndAnimationToPos(position, instant);
+    }
+
+    void pauseGame(bool unfocused) {
+        PlayLayer::pauseGame(unfocused);
+        if (unfocused)
+            Logic::get().on_focus_change();
+    }
+
+    void resume() {
+        PlayLayer::resume();
+        Logic::get().resume_attempt(this);
+    }
+
+    void resumeAndRestart(bool fromStart) {
+        PlayLayer::resumeAndRestart(fromStart);
+        Logic::get().resume_attempt(this);
+    }
+
+    void onQuit() {
+        restore_tilt(m_player1);
+        restore_tilt(m_player2);
+        clear_tilt();
+        Logic::get().onQuit(this);
+        PlayLayer::onQuit();
+    }
+};
+
+class $modify(EchoEditor, LevelEditorLayer) {
+    void onPlaytest() {
+        Logic::get().begin_editor_playtest();
+        LevelEditorLayer::onPlaytest();
+    }
+
+    void onStopPlaytest() {
+        LevelEditorLayer::onStopPlaytest();
+        Logic::get().end_editor_playtest(this);
+    }
+
+    void updateEditor(float dt) {
+        LevelEditorLayer::updateEditor(dt);
+        if (Logic::get().show_hitboxes && !Logic::get().editor_testing) {
+        }
+    }
+
+    void postUpdate(float dt) {
+        LevelEditorLayer::postUpdate(dt);
+        if (Logic::get().hide_p1 && m_player1)
+            m_player1->setVisible(false);
+        if (Logic::get().hide_p2 && m_player2)
+            m_player2->setVisible(false);
+    }
+
+    void updateDebugDraw() {
+        LevelEditorLayer::updateDebugDraw();
+    }
+};
+
+class $modify(EchoPauseLayer, PauseLayer) {
+    void onRestart(CCObject* sender) {
+        PauseLayer::onRestart(sender);
+        if (auto* play = PlayLayer::get())
+            Logic::get().resume_attempt(play);
+    }
+
+    void onRestartFull(CCObject* sender) {
+        PauseLayer::onRestartFull(sender);
+        if (auto* play = PlayLayer::get())
+            Logic::get().resume_attempt(play);
+    }
+};
+
 int vanilla_physics_steps(float dt, float timeWarp);
 
 namespace echo::step {
@@ -375,6 +667,325 @@ namespace echo::step {
     }
 
 }
+
+class $modify(EchoUILayer, UILayer) {
+
+    bool ccTouchBegan(CCTouch* touch, CCEvent* event) {
+        if (Logic::get().suppress_auto_hold)
+            return false;
+        return UILayer::ccTouchBegan(touch, event);
+    }
+
+    void handleKeypress(enumKeyCodes key, bool down, double timestamp) {
+        Input::note_key(key, down);
+        if (Logic::get().steer_key(m_gameLayer, key, down, timestamp))
+            return;
+        UILayer::handleKeypress(key, down, timestamp);
+    }
+
+    void visit() {
+        UILayer::visit();
+    }
+};
+
+class $modify(EchoPlayerObject, PlayerObject) {
+    struct Fields {
+        Ref<CCNode> tick_spin;
+        int64_t dash_effect_step = std::numeric_limits<int64_t>::min();
+    };
+
+    void stop_tick_spin() {
+        if (auto* node = m_fields->tick_spin.data())
+            dash_spin_manager()->removeAllActionsFromTarget(node);
+    }
+
+    void updateDashArt() {
+        PlayerObject::updateDashArt();
+        stop_tick_spin();
+        if (Trajectory::get().isFake(this) || !dash_spin_enabled() || !m_isDashing || !m_iconSprite)
+            return;
+        auto* spin = m_iconSprite->getActionByTag(DASH_SPIN_TAG);
+        if (!spin)
+            return;
+        if (!m_fields->tick_spin)
+            m_fields->tick_spin = CCNode::create();
+        auto* node = m_fields->tick_spin.data();
+        node->setRotation(m_iconSprite->getRotation());
+        auto* copy = static_cast<CCAction*>(spin->copy());
+        copy->autorelease();
+        dash_spin_manager()->addAction(copy, node, false);
+    }
+
+    void update(float dt) {
+        if (Trajectory::get().isFake(this) && !Logic::get().predicting)
+            return;
+        if (Logic::get().suppress_auto_hold && !Trajectory::get().isFake(this)) {
+            auto& logic = Logic::get();
+            auto it = m_holdingButtons.find(static_cast<int>(PlayerButton::Jump));
+            if (it != m_holdingButtons.end() && it->second)
+                PlayerObject::releaseButton(PlayerButton::Jump);
+            m_jumpBuffered = false;
+            bool keyDown = Input::jump_key_down(), mouseDown = Input::mouseDown(), ui_down = false;
+            if (auto* layer = GJBaseGameLayer::get()) {
+                if (auto* ui = layer->m_uiLayer) {
+                    ui_down = ui->m_p1Jumping || ui->m_p2Jumping || ui->m_p1TouchId != -1 || ui->m_p2TouchId != -1;
+                }
+            }
+            if (!keyDown && !mouseDown && !ui_down)
+                logic.suppress_auto_hold = false;
+        }
+        Logic::get().reinforce_routed_hold(this);
+        PlayerObject::update(dt);
+        if (!Trajectory::get().isFake(this))
+            Trajectory::get().set_delta(dt);
+        if (m_isSwing && tilt_applies(this) && tilt_fix().contains(this) && !tilt_held().contains(this)) {
+            float turn = visual_tilt(this) - getRotation();
+            for (auto* burst : std::array{ m_swingBurstParticles1, m_swingBurstParticles2 }) {
+                if (burst)
+                    burst->setAngle(burst->getAngle() - turn);
+            }
+        }
+    }
+
+    void updateShipRotation(float dt) {
+        restore_tilt(this);
+        if (!tilt_applies(this)) {
+            tilt_fix().erase(this);
+            PlayerObject::updateShipRotation(dt);
+            return;
+        }
+        turn_both(this, [this, dt] {
+            PlayerObject::updateShipRotation(dt);
+        },
+            [this, dt] {
+                auto pos = getPosition();
+                auto back = pos - m_shipRotation;
+                float moved = back.x * back.x + back.y * back.y;
+                float need = dt * 1.25f + 0.01f;
+                auto saved = m_shipRotation;
+                if (moved > 1e-8f && moved < need)
+                    m_shipRotation = pos - back * std::sqrt(need / moved);
+                PlayerObject::updateShipRotation(dt);
+                m_shipRotation = saved;
+            });
+    }
+
+    void updateRotation(float dt, float rotation) {
+        restore_tilt(this);
+        if (!tilt_applies(this)) {
+            PlayerObject::updateRotation(dt, rotation);
+            return;
+        }
+        auto turn = [this, dt, rotation] {
+            PlayerObject::updateRotation(dt, rotation);
+        };
+        turn_both(this, turn, turn);
+    }
+
+    void setPosition(CCPoint const& position) {
+        if (auto& logic = Logic::get(); logic.defer_player_art && !Trajectory::get().isFake(this)) {
+            logic.player_art_deferred = true;
+            return;
+        }
+        if (!tilt_applies(this) || !tilt_fix().contains(this) || tilt_held().contains(this)) {
+            PlayerObject::setPosition(position);
+            return;
+        }
+        float gameplay = getRotation();
+        setRotation(visual_tilt(this));
+        PlayerObject::setPosition(position);
+        setRotation(gameplay);
+    }
+
+    void setVisible(bool visible) {
+        auto* layer = GJBaseGameLayer::get();
+        PlayerObject::setVisible(visible);
+    }
+
+    void ringJump(RingObject* ring, bool skipCheck) {
+        if (Trajectory::get().isFake(this)) {
+            phys::ringJump(this, ring);
+            return;
+        }
+        if (!Logic::get().player_hidden(this)) {
+            PlayerObject::ringJump(ring, skipCheck);
+            return;
+        }
+        bool effects = m_playEffects;
+        m_playEffects = false;
+        PlayerObject::ringJump(ring, skipCheck);
+        m_playEffects = effects;
+    }
+
+    void bumpPlayer(float force, int objectType, bool playEffect, GameObject* object) {
+        if (Trajectory::get().isFake(this)) {
+            if (Logic::get().predicting) {
+            }
+            phys::bumpPlayer(this, force, objectType, playEffect, object);
+            return;
+        }
+        PlayerObject::bumpPlayer(force, objectType, playEffect, object);
+    }
+
+    void propellPlayer(float force, bool noEffects, int objectType) {
+        if (Trajectory::get().isFake(this)) {
+            if (Logic::get().predicting) {
+            }
+            phys::propellPlayer(this, force, noEffects, objectType);
+            return;
+        }
+        PlayerObject::propellPlayer(force, noEffects, objectType);
+    }
+
+    void startDashing(DashRingObject* ring) {
+        if (Trajectory::get().isFake(this)) {
+            phys::startDashing(this, ring);
+            return;
+        }
+        CCNode* object_layer = nullptr;
+        unsigned before = object_layer && object_layer->getChildren() ? object_layer->getChildren()->count() : 0;
+    }
+
+    void incrementJumps() {
+        if (Trajectory::get().drawing())
+            return;
+        PlayerObject::incrementJumps();
+    }
+
+    void note_partner() {
+        auto* layer = GJBaseGameLayer::get();
+        if (layer && this == layer->m_player2 && !Trajectory::get().isFake(this))
+            ++Logic::get().partner_presses;
+    }
+
+    void releaseButton(PlayerButton button) {
+        auto* play = PlayLayer::get();
+        auto& logic = Logic::get();
+        if (!Trajectory::get().isFake(this))
+            echo::step::trace_button('R', false, static_cast<int>(button));
+        note_partner();
+        PlayerObject::releaseButton(button);
+    }
+
+    bool pushButton(PlayerButton button) {
+        auto& logic = Logic::get();
+        if (!Trajectory::get().isFake(this))
+            echo::step::trace_button('P', true, static_cast<int>(button));
+        if (logic.suppress_auto_hold && button == PlayerButton::Jump && !Trajectory::get().isFake(this) && !logic.maintaining_gravity && !logic.applying_playback && !logic.injecting) {
+            return false;
+        }
+        note_partner();
+        bool track = button == PlayerButton::Jump && !Trajectory::get().isFake(this);
+        auto finish = [&](bool pressed) {
+            return pressed;
+        };
+        // maintain gravity clicks here NOT thru handleButton
+        GJBaseGameLayer* layer = nullptr;
+        bool player1 = true;
+        int swifts = 0;
+        if (track && !in_orb_button && !orb_swift && logic.maintaining_gravity && !logic.applying_playback && !logic.injecting && !logic.restoring_holds && !logic.predicting && !logic.suppress_rings) {
+            layer = GJBaseGameLayer::get();
+            if (layer) {
+                player1 = this != layer->m_player2;
+            }
+        }
+        bool stash = logic.suppress_rings && button == PlayerButton::Jump && m_touchingRings && m_touchingRings->count() > 0;
+        bool pressed = false;
+        if (!stash) {
+            pressed = finish(PlayerObject::pushButton(button));
+        }
+        else {
+            std::vector<CCObject*> rings;
+            rings.reserve(m_touchingRings->count());
+            for (unsigned int i = 0; i < m_touchingRings->count(); ++i) {
+                auto* ring = m_touchingRings->objectAtIndex(i);
+                ring->retain();
+                rings.push_back(ring);
+            }
+            m_touchingRings->removeAllObjects();
+            pressed = PlayerObject::pushButton(button);
+            for (auto* ring : rings) {
+                m_touchingRings->addObject(ring);
+                ring->release();
+            }
+            pressed = finish(pressed);
+        }
+        if (swifts <= 0)
+            return pressed;
+        orb_swift = true;
+        int jump = static_cast<int>(PlayerButton::Jump);
+        for (int i = 0; i < swifts; ++i) {
+            releaseButton(PlayerButton::Jump);
+            if (layer && logic.is_recording())
+                Logic::get().record_input(layer, false, player1, jump);
+            pushButton(PlayerButton::Jump);
+            if (layer && logic.is_recording())
+                Logic::get().record_input(layer, true, player1, jump);
+        }
+        orb_swift = false;
+        return pressed;
+    }
+
+    void playDeathEffect() {
+        PlayerObject::playDeathEffect();
+    }
+
+    void playerDestroyed(bool noEffects) {
+        auto* play = PlayLayer::get();
+        if (play && Logic::get().should_noclip(play, this)) {
+            m_isDead = false;
+            bool other_dead = (play->m_player1 && play->m_player1 != this && play->m_player1->m_isDead) || (play->m_player2 && play->m_player2 != this && play->m_player2->m_isDead);
+            if (!other_dead)
+                play->m_playerDied = false;
+            return;
+        }
+        PlayerObject::playerDestroyed(noEffects);
+    }
+
+    void playBumpEffect(int objectType, GameObject* object) {
+        PlayerObject::playBumpEffect(objectType, object);
+    }
+
+    void playSpiderDashEffect(CCPoint from, CCPoint to) {
+        PlayerObject::playSpiderDashEffect(from, to);
+    }
+
+    void playSpawnEffect() {
+        PlayerObject::playSpawnEffect();
+    }
+
+    void spawnCircle() {
+        PlayerObject::spawnCircle();
+    }
+
+    void spawnDualCircle() {
+        PlayerObject::spawnDualCircle();
+    }
+
+    void spawnPortalCircle(ccColor3B color, float startRadius) {
+        PlayerObject::spawnPortalCircle(color, startRadius);
+    }
+
+    void spawnScaleCircle() {
+        PlayerObject::spawnScaleCircle();
+    }
+
+    void activateStreak() {
+        if (Logic::get().player_hidden(this))
+            return;
+        PlayerObject::activateStreak();
+    }
+
+    void placeStreakPoint() {
+        if (Trajectory::get().isFake(this)) {
+            m_justPlacedStreak = false;
+            return;
+        }
+        if (Logic::get().player_hidden(this))
+            return;
+        PlayerObject::placeStreakPoint();
+    }
+};
 
 // skidded from silicate (GPL-3.0, gd 2.2081)
 // swaps gds step count math in GJBaseGameLayer::update for a load of my count
