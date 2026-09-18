@@ -3,6 +3,7 @@
 // play_macro runs at the start of every physics step: the inputs stored for that step go into gds button queue,
 //   so gd applies them exactly like a real press
 // resets: held buttons, the queue, the seed, click counters & labels all go back to a known state. a key still down from
+//   before the reset would fire again & look like a new press, so it is swallowed until its really let go
 #include "Logic/logic.hpp"
 #include "Hooks/step.hpp"
 #include "Hack/trajectory.hpp"
@@ -1628,51 +1629,280 @@ unsigned Logic::count_presses_in_last_second(bool player2) {
 }
 
 bool Logic::burst_too_fast(Session const& value, int clicks, int first, int last) const {
-    // todo
-    return {};
+    if (clicks < Logic::MIN_BURST_CLICKS) {
+        return false;
+    }
+    double span = value.seconds_at(last) - value.seconds_at(first);
+    if (!(span > 0.0)) {
+        return true;
+    }
+    return static_cast<double>(clicks) / span > Logic::MAX_BURST_RATE;
 }
 
 bool Logic::player_cps_broken(std::deque<int> const& clicks, int now, float max_per_second) const {
-    // TODO
-    return {};
+    if (clicks.empty()) {
+        return false;
+    }
+    auto const& logic = Logic::get();
+    auto recent = recent_clicks(logic, clicks, now);
+    if (static_cast<float>(recent.in_second) > max_per_second) {
+        return true;
+    }
+    if (recent.on_frame > Logic::MAX_PER_FRAME) {
+        return true;
+    }
+    int n = static_cast<int>(clicks.size());
+    double back_t = logic.seconds_at(clicks.back());
+    if (n < Logic::MIN_BURST_CLICKS || logic.seconds_at(now) - back_t > 1.0) {
+        return false;
+    }
+    double need = static_cast<double>(Logic::MAX_BURST_RATE) * back_t - static_cast<double>(n);
+    double slack = 1e-6 + 1e-12 * std::abs(need);
+    double top = burst_peak(logic, clicks);
+    if (top > need + slack) {
+        return true;
+    }
+    if (top <= need - slack) {
+        return false;
+    }
+    for (int start = 0; start <= n - Logic::MIN_BURST_CLICKS; ++start) {
+        if (Logic::get().burst_too_fast(logic, n - start, clicks[static_cast<size_t>(start)], clicks.back())) {
+            return true;
+        }
+    }
+    return false;
 }
 
 void Logic::set_tps(float rate) {
-    // TODO
+    auto& logic = Logic::get();
+    rate = std::clamp(rate, 1.f, FLT_MAX);
+    if (!std::isfinite(rate))
+        return;
+    if (!step_patched && rate < VANILLA_TPS) {
+        logic.message = "TPS below 240 requires the physics step patch";
+        rate = VANILLA_TPS;
+    }
+    if ((logic).is_recording()) {
+        int frame = PlayLayer::get() ? Logic::get().get_frame(PlayLayer::get()) : 0;
+        Logic::get().place_rate(frame, rate);
+        logic.message = fmt::format("TPS {:.2f} at frame {}", rate, frame);
+    }
+    else if (!(logic).is_playing()) {
+        logic.macro_fps = rate;
+        logic.fps = rate;
+        Logic::get().push_runtime_settings();
+    }
+    else if (logic.playback_tps_changes) {
+        // while a macro plays ts ONLY sets its starting tps (the 1 silicate gets wrong). the changes in the macro stay
+        logic.macro_fps = rate;
+        int frame = PlayLayer::get() ? Logic::get().get_frame(PlayLayer::get()) : 0;
+        logic.fps = logic.rate_at(frame);
+        rate = logic.fps;
+        logic.message = fmt::format("Starting TPS {:.2f}", logic.macro_fps);
+    }
+    if (logic.playback_fps < 1.f) {
+        if (auto* director = CCDirector::sharedDirector()) {
+            director->setAnimationInterval(1.f / rate);
+        }
+    }
 }
 
 void Logic::place_rate(int frame, float rate) {
-    // later
+    auto& logic = Logic::get();
+    rate = std::clamp(rate, 1.f, FLT_MAX);
+    if (!std::isfinite(rate))
+        return;
+    if (frame <= 0) {
+        logic.macro_fps = rate;
+        logic.fps = rate;
+        std::erase_if(logic.rates, [](RateChange const& change) {
+            return change.frame <= 0;
+        });
+        return;
+    }
+    float prev = logic.rate_at(frame - 1);
+    auto at = std::find_if(logic.rates.begin(), logic.rates.end(), [frame](RateChange const& change) {
+        return change.frame == frame;
+    });
+    if (rate == prev) {
+        if (at != logic.rates.end()) {
+            logic.rates.erase(at);
+        }
+        logic.fps = rate;
+        return;
+    }
+    if (at != logic.rates.end())
+        at->fps = rate;
+    else {
+        logic.rates.push_back({ frame, rate });
+        std::stable_sort(logic.rates.begin(), logic.rates.end(), [](RateChange const& a, RateChange const& b) {
+            return a.frame < b.frame;
+        });
+    }
+    logic.fps = rate;
 }
 
 void Logic::apply_rate(int frame) {
-    // todo
+    auto& logic = Logic::get();
+    float next = logic.rate_at(frame);
+    if (!std::isfinite(next) || next < 1.f) {
+        next = 240.f;
+    }
+    if (next == logic.fps)
+        return;
+    logic.fps = next;
 }
 
 void Logic::normalize_rates() {
-    // TODO
+    auto& logic = Logic::get();
+    std::erase_if(logic.rates, [](RateChange const& change) {
+        return change.frame < 0 || !std::isfinite(change.fps) || change.fps < 1.f;
+    });
+    std::stable_sort(logic.rates.begin(), logic.rates.end(), [](RateChange const& a, RateChange const& b) {
+        return a.frame < b.frame;
+    });
+    std::vector<RateChange> kept;
+    float rate = logic.macro_fps;
+    for (auto const& change : logic.rates) {
+        if (!kept.empty() && kept.back().frame == change.frame)
+            kept.back() = change;
+        else
+            kept.push_back(change);
+    }
+    logic.rates.clear();
+    for (auto const& change : kept) {
+        if (change.fps == rate) {
+            continue;
+        }
+        logic.rates.push_back(change);
+        rate = change.fps;
+    }
 }
 
 void Logic::trim_rates(int frame) {
-    // TODO
+    std::erase_if(Logic::get().rates, [frame](RateChange const& change) {
+        return change.frame >= frame;
+    });
+    Logic::get().apply_rate(std::max(frame, 0));
 }
 
 void Logic::update_cps(PlayLayer* play) {
-    // TODO
+    auto& logic = Logic::get();
+    auto holding = [](PlayerObject* player) {
+        if (!player) {
+            return false;
+        }
+        static constexpr int buttons[] = {
+            static_cast<int>(PlayerButton::Jump),
+            static_cast<int>(PlayerButton::Left),
+            static_cast<int>(PlayerButton::Right),
+        };
+        return std::ranges::any_of(buttons, [player](int button) {
+            return Logic::button_held(player, button);
+        });
+    };
+    logic.currently_pressing = holding(play->m_player1) || (play->m_gameState.m_isDualMode && holding(play->m_player2));
+    bool twoPlayer = play->m_levelSettings && play->m_levelSettings->m_twoPlayerMode;
+    bool two_dual = twoPlayer && play->m_gameState.m_isDualMode;
+    if (!two_dual && !logic.clicks_p2.empty()) {
+        logic.clicks_p2.clear();
+        ++logic.clicks_revision;
+    }
+    unsigned p1 = Logic::get().count_presses_in_last_second(false);
+    unsigned p2 = two_dual ? Logic::get().count_presses_in_last_second(true) : 0;
+    logic.current_cps = static_cast<float>(two_dual ? std::max(p1, p2) : p1);
+    int now = Logic::get().get_frame(play);
+    float limit = std::max(static_cast<float>(logic.max_cps), 1.f);
+    logic.cps_breaking = Logic::get().player_cps_broken(logic.clicks_p1, now, limit);
+    if (two_dual) {
+        logic.cps_breaking = logic.cps_breaking || Logic::get().player_cps_broken(logic.clicks_p2, now, limit);
+    }
+    if (logic.cps_breaking) {
+        logic.over_max_cps = true;
+    }
 }
 
 void Logic::tick_autoclicker(PlayLayer* play) {
-    // TODO
+    auto& logic = Logic::get();
+    if (!logic.autoclicker || !play || play->m_isPaused)
+        return;
+    auto& click = logic.auto_click;
+    if (click.pressed)
+        ++click.since_press;
+    else
+        ++click.since_release;
+
+    int jump = static_cast<int>(PlayerButton::Jump);
+    auto press_player = [&](bool player1) {
+        bool twoPlayer = play->m_level && play->m_level->m_twoPlayerMode;
+        if (!player1 && !twoPlayer)
+            return;
+        play->queueButton(jump, true, !player1, Logic::get().click_stamp());
+    };
+    auto release_player = [&](bool player1) {
+        bool twoPlayer = play->m_level && play->m_level->m_twoPlayerMode;
+        if (!player1 && !twoPlayer)
+            return;
+        play->queueButton(jump, false, !player1, Logic::get().click_stamp());
+    };
+
+    if (!click.pressed && click.since_release >= click.release_interval) {
+        click.pressed = true;
+        click.since_release = 0;
+        click.since_press = 0;
+        if (logic.autoclick_p1) {
+            press_player(true);
+        }
+        if (logic.autoclick_p2) {
+            press_player(false);
+        }
+        if (click.press_interval <= 0) {
+            click.pressed = false;
+            if (logic.autoclick_p1) {
+                release_player(true);
+            }
+            if (logic.autoclick_p2) {
+                release_player(false);
+            }
+        }
+    }
+    else if (click.pressed && click.since_press >= click.press_interval) {
+        click.pressed = false;
+        click.since_press = 0;
+        if (logic.autoclick_p1) {
+            release_player(true);
+        }
+        if (logic.autoclick_p2) {
+            release_player(false);
+        }
+    }
+
+    if (logic.autoclick_auto_disable) {
+        --click.disable_in;
+        if (click.disable_in <= 0) {
+            logic.autoclicker = false;
+            logic.autoclick_auto_disable = false;
+            click.disable_in = 1;
+            Logic::write_bool("autoclicker", false);
+            logic.message = "Autoclicker disabled";
+        }
+    }
 }
 
 int Logic::follow_steps() const {
-    // TODO
-    return {};
+    double steps = follow_delay_ms ? follow_delay / 1000.0 * sample_rate() : follow_delay;
+    if (!std::isfinite(steps)) {
+        return 0;
+    }
+    return std::max(0, static_cast<int>(std::lround(steps)));
 }
 
 bool Logic::follow_active(GJBaseGameLayer* play) const {
-    // TODO
-    return {};
+    bool macro = backstep_target >= 0 ? (backstep_state == RunState::Playing || backstep_state == RunState::RecordingAndPlaying) : is_playing();
+    if (follow_mode == 0 || click_both || macro || !play) {
+        return false;
+    }
+    return play->m_levelSettings && play->m_levelSettings->m_twoPlayerMode;
 }
 
 void Logic::note_follow_press(GJBaseGameLayer* play, bool down, int button) {
@@ -1689,7 +1919,15 @@ bool Logic::follow_due(FollowPress const& press, int frame, double time) const {
 }
 
 void Logic::rewind_follow(GJBaseGameLayer* play) {
-    // port this
+    std::erase_if(follow_log, [this](auto const& press) {
+        return press.frame > step_frame;
+    });
+    if (!play)
+        return;
+    double time = play->m_gameState.m_levelTime;
+    double delay = std::max(follow_delay, 0.f) / 1000.0;
+    for (auto& press : follow_log)
+        press.sent = follow_delay_ms ? press.time + delay < time - 1e-7 : press.frame + follow_steps() <= step_frame;
 }
 
 void Logic::run_follow(GJBaseGameLayer* play) {
