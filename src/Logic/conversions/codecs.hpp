@@ -155,7 +155,12 @@ public:
 	static std::string import_stem(fs::path const& path);
 	static void adopt_inputs(std::vector<Frame> inputs, float fps, std::vector<FramePose> poses = {});
 	static std::vector<Frame> sorted_inputs();
+	static int pack_button(int button);
+	static int unpack_button(int code);
+	template <typename A1>
+	static void write_pod(std::ostream& file, A1 const& value);
 	template <typename A1>
 	static bool read_pod(std::istream& file, A1& value);
 	static bool write_packed_echo(fs::path const& path);
+	static bool read_packed_echo(fs::path const& path);
 };

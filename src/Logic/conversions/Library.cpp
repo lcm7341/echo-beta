@@ -84,6 +84,10 @@ bool Logic::write_file() {
         logic.macro_path = ReplayIO::unique_file(dir, base, ".echo");
     else if (logic.macro_path.empty() || ReplayIO::lower_ext(logic.macro_path) != ".echo" || ReplayIO::is_autosave(logic.macro_path))
         logic.macro_path = direct;
+    if (!ReplayIO::save_as(logic.macro_path, ReplayIO::write_packed_echo)) {
+        Logic::get().notify("Could not write replay", false);
+        return false;
+    }
     remove_autosave();
     logic.macro_name = ReplayIO::import_stem(logic.macro_path);
     logic.macro_name_typed = false;
