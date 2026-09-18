@@ -26,5 +26,48 @@
 			"resources/*.ttf"
 		]
 	},
-	"settings": {}
+	"settings": {
+		"toggle-record": {
+			"type": "keybind",
+			"platforms": ["win"],
+			"name": "Toggle recording",
+			"default": "F4",
+			"category": "gameplay"
+		},
+		"toggle-play": {
+			"type": "keybind",
+			"platforms": ["win"],
+			"name": "Toggle playback",
+			"default": "F5",
+			"category": "gameplay"
+		},
+		"key-click-both": {
+			"type": "keybind",
+			"platforms": ["win"],
+			"name": "Click both players",
+			"default": "None",
+			"category": "gameplay"
+		},
+		"key-swap": {
+			"type": "keybind",
+			"platforms": ["win"],
+			"name": "Swap player input",
+			"default": "None",
+			"category": "gameplay"
+		},
+		"key-ignore": {
+			"type": "keybind",
+			"platforms": ["win"],
+			"name": "Ignore actions",
+			"default": "None",
+			"category": "gameplay"
+		},
+		"key-reset": {
+			"type": "keybind",
+			"platforms": ["win"],
+			"name": "Reset level",
+			"default": "None",
+			"category": "gameplay"
+		}
+	}
 }

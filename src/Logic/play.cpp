@@ -452,7 +452,39 @@ void Logic::check_advance_pause(PlayLayer* play) {
 }
 
 void Logic::on_keybind(std::string_view key, bool down) {
-    // todo
+    if (key == "open-menu") {
+        return;
+    }
+    if (!down && key == "step-back") {
+        Logic::get().holding_back = false;
+        return;
+    }
+    if (!down && key == "step-frame") {
+        Logic::get().holding_advance = false;
+        Logic::get().disarm_length_pause_if_holding();
+        return;
+    }
+    if (!down)
+        return;
+    if (key == "find-best-frame") {
+        return;
+    }
+    if (key == "step-back") {
+        auto now = chrono::steady_clock::now();
+        Logic::get().holding_back = true;
+        Logic::get().back_hold_start = now;
+        Logic::get().last_back_step = now;
+        return;
+    }
+    if (key == "step-frame") {
+        auto now = chrono::steady_clock::now();
+        Logic::get().holding_advance = true;
+        Logic::get().advance_hold_start = now;
+        Logic::get().last_advance_step = now;
+        Logic::get().advance_one_frame();
+        return;
+    }
+    Logic::get().dispatch_setting_key(key, true);
 }
 
 void Logic::resume_attempt(PlayLayer* play) {
