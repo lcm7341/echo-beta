@@ -86,7 +86,19 @@ void Logic::trim_fresh_attempt(PlayLayer* play, Session& value) {
 }
 
 void Logic::trim_from_checkpoint(PlayLayer* play, Session& value, Checkpoint const& checkpoint) {
-    // TODO
+    value.step_frame = checkpoint.frame;
+    Logic::get().apply_layer(play, checkpoint.layer);
+    Logic::get().apply_player(play->m_player1, checkpoint.player1);
+    Logic::get().apply_player(play->m_player2, checkpoint.player2);
+    if ((value).is_recording()) {
+        int frame = Logic::get().get_frame(play);
+        Logic::get().trim_recorded_inputs(value, frame);
+        if (!value.is_playing()) {
+            Logic::get().trim_rates(frame);
+        }
+        Logic::get().sort_inputs();
+        value.replay_pos = value.inputs.size();
+    }
 }
 
 void Logic::clear_physical_holds() {
