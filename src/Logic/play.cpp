@@ -431,7 +431,26 @@ void Logic::advance_one_frame() {
 }
 
 void Logic::poll_advance_hold() {
-    // TODO
+    auto& logic = Logic::get();
+    if (!logic.frame_advance || !logic.holding_advance || !PlayLayer::get())
+        return;
+    auto now = chrono::steady_clock::now();
+    auto start = logic.advance_hold_start + chrono::milliseconds(logic.advance_hold_ms);
+    if (now < start)
+        return;
+    auto from = std::max(start, logic.last_advance_step);
+    double rate = logic.sample_rate() * std::clamp(logic.advance_speed, 1.f, 200.f) / 100.0 * logic.speedhack;
+    if (!std::isfinite(rate) || !(rate > 0.0))
+        return;
+    double elapsed = chrono::duration<double>(now - from).count();
+    int cap = std::min(logic.unlocked_step_cap(), logic.max_steps_for_frame());
+    double wanted = std::floor(elapsed * rate);
+    if (wanted < 1.0)
+        return;
+    int steps = static_cast<int>(std::min(wanted, static_cast<double>(cap)));
+    logic.last_advance_step = wanted > cap ? now : from + chrono::duration_cast<decltype(now - from)>(chrono::duration<double>(steps / rate));
+    logic.advance_steps = logic.advance_queued ? std::min(cap, logic.advance_steps + steps) : steps;
+    logic.advance_queued = true;
 }
 
 void Logic::check_advance_pause(PlayLayer* play) {
