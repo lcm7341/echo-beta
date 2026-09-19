@@ -427,7 +427,7 @@ void Logic::record_input(GJBaseGameLayer* play, bool down, bool player1, int but
     }
     if (!logic.records_player(player2) && !(folded && logic.records_player(true)))
         return;
-    int now = Logic::get().step_frame;
+    int now = Logic::get().step_frame + 1;
     if (!(logic).is_playing()) {
         auto last = std::find_if(logic.inputs.rbegin(), logic.inputs.rend(), [player2](Frame const& input) {
             return input.player2 == player2;
