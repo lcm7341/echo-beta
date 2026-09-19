@@ -96,6 +96,14 @@
 			"name": "Reset level",
 			"default": "None",
 			"category": "gameplay"
+		},
+		"key-speedhack": {
+			"type": "keybind",
+			"platforms": ["win"],
+			"name": "Speedhack",
+			"description": "Switch between 1x and the speed set on the slider.",
+			"default": "None",
+			"category": "gameplay"
 		}
 	}
 }

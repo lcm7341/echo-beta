@@ -9,7 +9,22 @@
 #include "Hooks/step.hpp"
 
 void Logic::sync_time_scale() {
-    // TODO
+    auto* scheduler = CCDirector::sharedDirector()->getScheduler();
+    if (!scheduler)
+        return;
+    auto const& logic = Logic::get();
+    float speed = std::max(logic.speedhack, 0.01f);
+    if (!std::isfinite(speed) || speed < 0.01f) {
+        speed = 1.f;
+    }
+    if (auto* play = PlayLayer::get(); play && play->m_playerDied) {
+        scheduler->setTimeScale(speed);
+        return;
+    }
+    if (PlayLayer::get() || logic.editor_testing)
+        scheduler->setTimeScale(1.f);
+    else
+        scheduler->setTimeScale(speed);
 }
 
 void Logic::sync_playback_fps() {
