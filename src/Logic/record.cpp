@@ -31,9 +31,8 @@ using namespace geode::prelude;
 
 FramePose Logic::capture_pose(PlayerObject* player) {
     FramePose pose;
-    if (!player) {
+    if (!player)
         return pose;
-    }
     pose.x = player->getPositionX();
     pose.y = player->getPositionY();
     pose.rotation = player->getRotation();
@@ -78,9 +77,8 @@ void Logic::trim_recorded_inputs(Session& value, int frame) {
 void Logic::trim_fresh_attempt(PlayLayer* play, Session& value) {
     (void)play;
     Logic::get().trim_recorded_inputs(value, 0);
-    if (!value.is_playing()) {
+    if (!value.is_playing())
         Logic::get().trim_rates(0);
-    }
     value.removed_frames = 0;
     value.replay_pos = 0;
 }
@@ -93,9 +91,8 @@ void Logic::trim_from_checkpoint(PlayLayer* play, Session& value, Checkpoint con
     if ((value).is_recording()) {
         int frame = Logic::get().get_frame(play);
         Logic::get().trim_recorded_inputs(value, frame);
-        if (!value.is_playing()) {
+        if (!value.is_playing())
             Logic::get().trim_rates(frame);
-        }
         Logic::get().sort_inputs();
         value.replay_pos = value.inputs.size();
     }
@@ -266,17 +263,16 @@ bool Logic::held_at(Session const& value, bool player2, int frame, int button) {
         bool held = false;
         for (auto const& input : value.inputs) {
             int stored = input.button == 0 ? jump : input.button;
-            if (input.player2 != player2 || stored != want || input.number > frame) {
+            if (input.player2 != player2 || stored != want || input.number > frame)
                 continue;
-            }
             held = input.holding;
         }
         return held;
     }
     size_t slot = static_cast<size_t>(lane);
-    if (value.live_seen[slot] && frame >= value.live_frame[slot]) {
+    if (value.live_seen[slot] && frame >= value.live_frame[slot])
         return value.live_held[slot] != 0;
-    }
+    // playing a macro outside a 2 player level: a p2 input moves the same icon as a p1 input, so count them as 1
     if (value.is_playing() && !value.is_recording()) {
         auto* play = PlayLayer::get();
         if (play && !(play->m_levelSettings && play->m_levelSettings->m_twoPlayerMode)) {
@@ -289,9 +285,8 @@ bool Logic::held_at(Session const& value, bool player2, int frame, int button) {
         for (size_t i = value.inputs.size(); i-- > 0;) {
             auto const& input = value.inputs[i];
             int stored = input.button == 0 ? jump : input.button;
-            if (input.player2 != player2 || stored != want || input.number > frame) {
+            if (input.player2 != player2 || stored != want || input.number > frame)
                 continue;
-            }
             return input.holding;
         }
         return false;
@@ -310,7 +305,6 @@ bool Logic::inputs_sorted(Session const& value) {
 }
 
 void note_live(Session& value, Frame const& frame) {
-    log::debug("note live");
     value.newest_input = std::max(value.newest_input, frame.number);
     int jump = static_cast<int>(PlayerButton::Jump);
     int left = static_cast<int>(PlayerButton::Left), right = static_cast<int>(PlayerButton::Right);
@@ -344,46 +338,39 @@ void grow_sides(Session& value, size_t index, bool appended) {
     };
     grow(value.poses, FramePose{});
     grow(value.input_ids, uint64_t{ 0 });
-    if (value.save_debug && value.poses.size() != value.inputs.size()) {
+    if (value.save_debug && value.poses.size() != value.inputs.size())
         value.poses.resize(value.inputs.size());
-    }
 }
 
 size_t Logic::add_input(Session& value, Frame const& frame) {
     (frame.holding ? value.hold_count : value.release_count) += 1;
     if (!value.sort_automatically || !(value).is_playing()) {
-        if (!value.inputs.empty() && frame.number < value.inputs.back().number) {
+        if (!value.inputs.empty() && frame.number < value.inputs.back().number)
             value.inputs_in_order = false;
-        }
         value.inputs.push_back(frame);
         grow_sides(value, value.inputs.size() - 1, true);
         note_live(value, frame);
         return value.inputs.size() - 1;
     }
     auto later = std::upper_bound(value.inputs.begin(), value.inputs.end(), frame, [](Frame const& key, Frame const& element) {
-        if (key.number != element.number) {
+        if (key.number != element.number)
             return key.number < element.number;
-        }
-        if (key.player2 != element.player2) {
+        if (key.player2 != element.player2)
             return key.player2 < element.player2;
-        }
         return key.button < element.button;
     });
     size_t idx = static_cast<size_t>(std::distance(value.inputs.begin(), later));
     value.inputs.insert(later, frame);
     grow_sides(value, idx, false);
-    if (idx + 1 != value.inputs.size()) {
+    if (idx + 1 != value.inputs.size())
         value.touch_inputs();
-    }
-    if (idx <= value.replay_pos) {
+    if (idx <= value.replay_pos)
         ++value.replay_pos;
-    }
     note_live(value, frame);
     return idx;
 }
 
 void Logic::refresh_live_hold() {
-    log::debug("refresh live hold");
     auto& logic = Logic::get();
     logic.live_frame.fill(-1);
     logic.live_held.fill(0);
@@ -396,9 +383,8 @@ void Logic::refresh_live_hold() {
     for (auto const& input : logic.inputs) {
         note_live(logic, input);
         (input.holding ? logic.hold_count : logic.release_count) += 1;
-        if (prev >= 0 && input.number < prev) {
+        if (prev >= 0 && input.number < prev)
             logic.inputs_in_order = false;
-        }
         prev = input.number;
     }
 }
@@ -413,9 +399,8 @@ void Logic::record_input(GJBaseGameLayer* play, bool down, bool player1, int but
     int left = static_cast<int>(PlayerButton::Left), right = static_cast<int>(PlayerButton::Right);
     if (button != 0 && button != jump && button != left && button != right)
         return;
-    if (button == 0) {
+    if (button == 0)
         button = jump;
-    }
     if (logic.mirror_click)
         return;
     bool player2 = !player1;

@@ -30,11 +30,9 @@
 using namespace geode::prelude;
 
 PlayerSave Logic::capture_player(PlayerObject* player) {
-    log::debug("capture player");
     PlayerSave shot;
-    if (!player) {
+    if (!player)
         return shot;
-    }
     shot.present = true;
     shot.x = player->getPositionX();
     shot.y = player->getPositionY();
@@ -168,9 +166,8 @@ void Logic::apply_player(PlayerObject* player, PlayerSave const& shot) {
     if (!player || !shot.present)
         return;
     auto mode = [&](bool active, bool saved, auto toggle) {
-        if (active && !saved) {
+        if (active && !saved)
             (player->*toggle)(false, true);
-        }
     };
     mode(player->m_isShip, shot.ship, &PlayerObject::toggleFlyMode);
     mode(player->m_isBird, shot.bird, &PlayerObject::toggleBirdMode);
@@ -179,30 +176,22 @@ void Logic::apply_player(PlayerObject* player, PlayerSave const& shot) {
     mode(player->m_isRobot, shot.robot, &PlayerObject::toggleRobotMode);
     mode(player->m_isSpider, shot.spider, &PlayerObject::toggleSpiderMode);
     mode(player->m_isSwing, shot.swing, &PlayerObject::toggleSwingMode);
-    if (shot.ship && !player->m_isShip) {
+    if (shot.ship && !player->m_isShip)
         player->toggleFlyMode(true, true);
-    }
-    if (shot.bird && !player->m_isBird) {
+    if (shot.bird && !player->m_isBird)
         player->toggleBirdMode(true, true);
-    }
-    if (shot.ball && !player->m_isBall) {
+    if (shot.ball && !player->m_isBall)
         player->toggleRollMode(true, true);
-    }
-    if (shot.dart && !player->m_isDart) {
+    if (shot.dart && !player->m_isDart)
         player->toggleDartMode(true, true);
-    }
-    if (shot.robot && !player->m_isRobot) {
+    if (shot.robot && !player->m_isRobot)
         player->toggleRobotMode(true, true);
-    }
-    if (shot.spider && !player->m_isSpider) {
+    if (shot.spider && !player->m_isSpider)
         player->toggleSpiderMode(true, true);
-    }
-    if (shot.swing && !player->m_isSwing) {
+    if (shot.swing && !player->m_isSwing)
         player->toggleSwingMode(true, true);
-    }
-    if (player->m_isUpsideDown != shot.upside_down) {
+    if (player->m_isUpsideDown != shot.upside_down)
         player->flipGravity(shot.upside_down, true);
-    }
     // TODO mini cube respawns full size
     player->setPosition({ shot.x, shot.y });
     player->setRotation(shot.rotation);
@@ -323,13 +312,13 @@ void Logic::apply_player(PlayerObject* player, PlayerSave const& shot) {
     player->m_spriteHeightScale = shot.sprite_height_scale;
     player->setScaleX(shot.scaleX);
     player->setScaleY(shot.scaleY);
+    // m_position is NOT physics. gd just copies the node pos there
     player->m_position = CCPoint(shot.x, shot.y);
     player->m_lastPosition = shot.lastPosition;
     echo::rotation::restore(player, shot.rotation, shot.visual_rotation);
 }
 
 LayerSnapshot Logic::capture_layer(PlayLayer* play) {
-    log::debug("capture layer");
     LayerSnapshot shot;
     auto const& state = play->m_gameState;
     shot.levelTime = state.m_levelTime;
