@@ -140,6 +140,8 @@ public:
 	static bool debug_format(ReplayFormat format);
 	static std::string clock(double seconds);
 	static void finish_load(std::string const& detail);
+	static bool write_echo_json(fs::path const& path);
+	static bool read_echo_json(fs::path const& path);
 	template <typename A1>
 	static bool read_pod(std::vector<uint8_t> const& data, size_t& cursor, A1& value);
 	static std::vector<uint8_t> read_all(fs::path const& path);
@@ -163,4 +165,6 @@ public:
 	static bool read_pod(std::istream& file, A1& value);
 	static bool write_packed_echo(fs::path const& path);
 	static bool read_packed_echo(fs::path const& path);
+	static bool read_plain(fs::path const& path);
+	static bool write_plain(fs::path const& path);
 };

@@ -165,9 +165,15 @@ bool ReplayIO::fill_replay(fs::path const& path) {
 
 bool ReplayIO::fill_raw(fs::path const& path) {
     auto ext = ReplayIO::lower_ext(path);
+    if (ext == ".txt") {
+        return ReplayIO::read_plain(path);
+    }
     std::ifstream file(path);
     auto parsed = matjson::Value::parse(file);
     auto const& json = parsed.unwrap();
+    if (json.contains("inputs")) {
+        return ReplayIO::read_echo_json(path);
+    }
     return ReplayIO::read_legacy_echo(path);
 }
 
