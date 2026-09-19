@@ -2,6 +2,9 @@
 //
 // steps owed = frame time / step length. the leftover is carried to the next frame (logic.carry) so no time is lost
 // the count reaches gd thru tick_steps, which the step patch makes update() read instead of doing its own math
+// frame advance: exactly 1 step per press. speedhack & frame time dont matter
+// pause before kill / trajectory autoclicker: 1 step at a time, so there is a chance to stop BEFORE the death
+// real time: a frame may run up to a seconds worth of steps so game time stays right when physics cant keep up
 #include "Logic/logic.hpp"
 #include "Hooks/step.hpp"
 #include "Hack/trajectory.hpp"
@@ -182,18 +185,91 @@ void Logic::note_frame_work(double seconds) {
 
 // for the trace. what the pacing thinks a step & a frame cost rn
 std::string echo::step::pace() {
-    // TODO
-    return {};
+    log::debug("pace");
+    auto& logic = Logic::get();
+    auto const& cost = step_cost();
+    auto* director = CCDirector::sharedDirector();
+    return fmt::format("tps={:.2f} fps={:.2f} interval_ms={:.3f} real_time={} lock_tps={} speed={:.3f} step_us={:.1f} update_us={:.1f} other_us={:.1f} afford={} cap={}",
+        logic.sample_rate(), logic.playback_fps, director ? director->getAnimationInterval() * 1000.0 : 0.0,
+        logic.real_time_mode, logic.lock_delta, logic.speedhack, cost.per_step * 1e6, cost.per_update * 1e6, cost.other_work * 1e6,
+        logic.max_steps_for_frame(), logic.unlocked_step_cap());
 }
 
 int Logic::max_steps_for_frame() const {
-    // TODO
-    return {};
+    auto const& cost = step_cost();
+    if (!(cost.per_step > 0.0)) {
+        return std::numeric_limits<int>::max();
+    }
+    auto* director = CCDirector::sharedDirector();
+    double interval = director ? director->getAnimationInterval() : 1.0 / 60.0;
+    if (!std::isfinite(interval) || interval <= 0.0) {
+        interval = 1.0 / 60.0;
+    }
+    if (real_time_mode) {
+        constexpr double REAL_TIME_FRAME = 0.25;
+        double fixed = cost.per_update + cost.other_work;
+        double room = std::max({ REAL_TIME_FRAME - fixed, REAL_TIME_FRAME * 0.5, std::min(fixed, 1.0) });
+        double steps = std::floor(room / cost.per_step);
+        if (!std::isfinite(steps) || steps >= static_cast<double>(std::numeric_limits<int>::max())) {
+            return std::numeric_limits<int>::max();
+        }
+        return std::max(static_cast<int>(steps), 8);
+    }
+    double budget = std::clamp(interval * 1.5, 0.004, 0.05);
+    double fixed = cost.per_update + cost.other_work;
+    double floor = std::max(cost.per_update, std::min(fixed * 4.0, 0.05 - fixed));
+    floor = std::max(floor, std::min(fixed, 0.25));
+    double room = std::max(budget - cost.per_update, floor);
+    double steps = std::floor(room / cost.per_step);
+    if (!std::isfinite(steps) || steps >= static_cast<double>(std::numeric_limits<int>::max())) {
+        return std::numeric_limits<int>::max();
+    }
+    return std::max(static_cast<int>(steps), 8);
 }
 
 int Logic::count_unlocked_steps(GJBaseGameLayer* play, double dt) {
-    // todo
-    return {};
+    auto& logic = Logic::get();
+    if (!play) {
+        return 0;
+    }
+    Logic::get().apply_rate(logic.step_frame);
+    float warp = std::min(play->m_gameState.m_timeWarp, 1.f);
+    if (!std::isfinite(warp) || warp < 0.f) {
+        warp = 1.f;
+    }
+    float wanted = logic.physics_step() * warp;
+    if (!std::isfinite(wanted) || !(wanted > 0.f)) {
+        return 0;
+    }
+    if (!std::isfinite(dt) || dt < 0.f) {
+        dt = 0.f;
+    }
+    if (logic.respawn_frames > 0) {
+        logic.carry = 0.f;
+        play->m_extraDelta = 0.0;
+    }
+    if (!std::isfinite(logic.carry) || logic.carry < 0.f) {
+        logic.carry = 0.f;
+    }
+    double pending = logic.carry + dt;
+    if (!std::isfinite(pending) || pending < 0.f) {
+        pending = 0.f;
+    }
+    double requested = std::floor(pending / wanted);
+    int steps = static_cast<int>(std::min(requested, double(std::numeric_limits<int>::max())));
+    if (steps < 0) {
+        steps = 0;
+    }
+    bool capped = false;
+    logic.carry = capped && !logic.real_time_mode ? 0.f : pending - static_cast<double>(steps) * wanted;
+    if (!std::isfinite(logic.carry) || logic.carry < 0.f) {
+        logic.carry = 0.f;
+    }
+    if (logic.respawn_frames > 0) {
+        --logic.respawn_frames;
+        steps = std::min(steps, 1);
+    }
+    return steps;
 }
 
 void Logic::run_frame(GJBaseGameLayer* play, float dt, std::function<void(float)> const& tick) {
@@ -223,5 +299,14 @@ void Logic::cancel_steps() {
 }
 
 void Logic::flush_visual_refresh() {
-    // todo
+    auto& logic = Logic::get();
+    if (!logic.refresh_queued)
+        return;
+    auto* director = CCDirector::sharedDirector();
+    if (!director || !director->getScheduler())
+        return;
+    logic.refresh_queued = false;
+    logic.refresh_only = true;
+    director->getScheduler()->update(0.f);
+    logic.refresh_only = false;
 }
