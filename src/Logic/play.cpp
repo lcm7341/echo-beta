@@ -390,7 +390,17 @@ void Logic::sync_same_gravity(GJBaseGameLayer* play) {
 }
 
 void Logic::toggle_frame_advance() {
-    // later
+    auto& logic = Logic::get();
+    logic.frame_advance = !logic.frame_advance;
+    logic.advance_queued = false;
+    if (!logic.frame_advance) {
+        Logic::get().stop_best_frame();
+    }
+    logic.holding_advance = false;
+    if (logic.frame_advance) {
+        Logic::get().disarm_length_pause_if_holding();
+    }
+    logic.message = logic.frame_advance ? "Frame advance on" : "Frame advance off";
 }
 
 void Logic::disarm_length_pause_if_holding() {
@@ -407,7 +417,17 @@ void Logic::disarm_length_pause_if_holding() {
 }
 
 void Logic::advance_one_frame() {
-    // TODO
+    log::debug("advance one frame");
+    auto& logic = Logic::get();
+    bool was_off = !logic.frame_advance;
+    if (!logic.frame_advance) {
+        logic.frame_advance = true;
+    }
+    if (was_off) {
+        Logic::get().disarm_length_pause_if_holding();
+    }
+    logic.advance_steps = 1;
+    logic.advance_queued = true;
 }
 
 void Logic::poll_advance_hold() {

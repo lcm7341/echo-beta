@@ -41,6 +41,20 @@
 			"default": "F5",
 			"category": "gameplay"
 		},
+		"toggle-advance": {
+			"type": "keybind",
+			"platforms": ["win"],
+			"name": "Toggle frame advance",
+			"default": "V",
+			"category": "gameplay"
+		},
+		"step-frame": {
+			"type": "keybind",
+			"platforms": ["win"],
+			"name": "Step one frame",
+			"default": "C",
+			"category": "gameplay"
+		},
 		"key-click-both": {
 			"type": "keybind",
 			"platforms": ["win"],
