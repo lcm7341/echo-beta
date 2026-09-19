@@ -454,6 +454,7 @@ class $modify(EchoPlayLayer, PlayLayer) {
         clear_tilt();
         auto& logic = Logic::get();
         if (!logic.backstepping) {
+            Logic::get().stop_best_frame();
         }
         logic.carry = 0.f;
         logic.respawn_frames = 0;
@@ -478,6 +479,7 @@ class $modify(EchoPlayLayer, PlayLayer) {
         logic.present = true;
         Logic::get().onReset(this);
         dash_spin_reset();
+        Logic::get().cancel_steps();
         Logic::get().sync_time_scale();
     }
 
@@ -658,6 +660,8 @@ namespace echo::step {
         GJBaseGameLayer* layer = play;
         if (!layer && editor && logic.editor_testing)
             layer = editor;
+        if (layer && !logic.predicting)
+            Logic::get().note_step();
         if (play && !logic.predicting) {
             Logic::get().keep_variance(play);
             logic.noclip_dead_p1 = false;
@@ -672,7 +676,648 @@ namespace echo::step {
         return layer;
     }
 
+    void end(GJBaseGameLayer* self, GJBaseGameLayer* layer, bool isHalfTick) {
+        auto& logic = Logic::get();
+        auto* play = Logic::as_play(self);
+
+        if (!layer) {
+            dash_spin_post(isHalfTick);
+            return;
+        }
+        if (self->m_resumeTimer > 0) {
+            dash_spin_post(isHalfTick);
+            return;
+        }
+
+        if (!self->m_playerDied) {
+            logic.step_frame++;
+            if (play && !logic.progress_base_set) {
+                logic.progress_base = static_cast<int>(self->m_gameState.m_currentProgress) - logic.step_frame;
+                logic.progress_base_set = true;
+            }
+            Logic::get().apply_rate(logic.step_frame);
+        }
+        if (play)
+            trace(self);
+        if (logic.ignore_record_frames > 0)
+            --logic.ignore_record_frames;
+
+        logic.buttons_prepared = false;
+        if (play)
+            Logic::get().tick_autoclicker(play);
+        dash_spin_post(isHalfTick);
+    }
 }
+
+class $modify(EchoGameLayer, GJBaseGameLayer) {
+    static void onModify(auto& self) {
+        hold_for_predict(self, "GJBaseGameLayer::gameEventTriggered");
+        hold_for_predict(self, "GJBaseGameLayer::updateObjectSection");
+        hold_for_predict(self, "GJBaseGameLayer::collisionCheckObjects");
+        hold_for_predict(self, "GJBaseGameLayer::flipGravity");
+        hold_for_predict(self, "GJBaseGameLayer::teleportPlayer");
+        hold_for_predict(self, "GJBaseGameLayer::destroyObject");
+        hold_for_predict(self, "GJBaseGameLayer::pickupItem");
+        (void)self.setHookPriority("GJBaseGameLayer::update", Priority::First);
+        (void)self.setHookPriority("GJBaseGameLayer::GJBaseGameLayer", Priority::Last);
+        (void)self.setHookPriorityAfter("GJBaseGameLayer::GJBaseGameLayer", "smjs.object-collab");
+    }
+
+    void destructor() {
+        drop_broken_sections(this);
+        reinterpret_cast<void (*)(GJBaseGameLayer*)>(geode::base::get() + 0x2057a0)(this); // the real ~GJBaseGameLayer
+    }
+
+    void update(float dt) {
+        auto& logic = Logic::get();
+        if (logic.skip_physics)
+            return;
+        // death HAS to reach the original or auto retry freezes
+        if (auto* play = Logic::as_play(this); play && play->m_playerDied) {
+            logic.tick_steps = static_cast<uint32_t>(vanilla_physics_steps(dt, m_gameState.m_timeWarp));
+            GJBaseGameLayer::update(dt);
+            return;
+        }
+        auto* play = Logic::as_play(this);
+        auto* editor = Logic::as_editor(this);
+        GJBaseGameLayer* layer = play;
+        if (!layer && editor && logic.editor_testing)
+            layer = editor;
+        bool locked = Logic::get().lock_delta_active();
+        if (logic.refresh_only || !layer || Logic::get().defer_physics()) {
+            logic.tick_steps = static_cast<uint32_t>(vanilla_physics_steps(dt, m_gameState.m_timeWarp));
+            GJBaseGameLayer::update(dt);
+            return;
+        }
+        if (logic.disable_shakes || logic.layout_mode)
+            m_skipCameraShake = true;
+        if (!locked && logic.steps_left == 0) {
+            logic.tick_steps = static_cast<uint32_t>(std::max(Logic::get().count_unlocked_steps(layer, dt), 0));
+            if (logic.tick_steps == 0)
+                return;
+        }
+        else if (!locked) {
+            logic.tick_steps = static_cast<uint32_t>(std::max(logic.steps_left, 0));
+        }
+        else {
+            logic.tick_steps = 1;
+        }
+        GJBaseGameLayer::update(dt);
+    }
+
+    double getModifiedDelta(float dt) {
+        double original = GJBaseGameLayer::getModifiedDelta(dt);
+        if (auto* play = Logic::as_play(this); play && play->m_playerDied)
+            return original;
+        bool gameplay = Logic::as_play(this) || (Logic::get().editor_testing && Logic::as_editor(this));
+        if (!gameplay)
+            return original;
+        if (auto* editor = Logic::as_editor(this); editor && editor->m_playbackActive)
+            return original;
+        auto const& logic = Logic::get();
+        if (logic.refresh_only)
+            return 0.0;
+        if (Logic::get().defer_physics())
+            return original;
+        float warp = std::min(m_gameState.m_timeWarp, 1.f);
+        float step = logic.physics_step();
+        if (!std::isfinite(warp) || warp < 0.f || !std::isfinite(step) || !(step > 0.f))
+            return 0.0;
+        return static_cast<double>(step) * static_cast<double>(warp) * static_cast<double>(logic.tick_steps);
+    }
+
+    // advanced follow can throw stuff to like 1e12 xd
+    template <class Point>
+    static bool sectionable(Point const& pos) {
+        constexpr float LIMIT = 1e7f;
+        return std::isfinite(pos.x) && std::isfinite(pos.y) && std::fabs(pos.x) < LIMIT && std::fabs(pos.y) < LIMIT;
+    }
+
+    void addToSection(GameObject* object) {
+        if (!object)
+            return;
+        auto const pos = object->getPosition();
+        if (!sectionable(pos))
+            return;
+        GJBaseGameLayer::addToSection(object);
+    }
+
+    void updateObjectSection(GameObject* object) {
+        if (!object)
+            return;
+        auto const pos = object->getPosition();
+        if (!sectionable(pos))
+            return;
+        GJBaseGameLayer::updateObjectSection(object);
+    }
+
+    // checkpoint restore moves an object without fixing its section
+    // then gd removes it from slot -1 & crashes
+    void removeObjectFromSection(GameObject* object) {
+        if (!object)
+            return;
+        auto* raw = reinterpret_cast<uint8_t*>(object);
+        auto section_x = reinterpret_cast<int*>(raw + 0x278); // GameObject offsets (windows 2.2081)
+        auto section_y = reinterpret_cast<int*>(raw + 0x27c);
+        auto slot = reinterpret_cast<int*>(raw + 0x270);
+        auto* object_id = reinterpret_cast<int*>(raw + 0x40c);
+        auto* block_slot = reinterpret_cast<int*>(raw + 0x274);
+        auto forget = [&] {
+            *section_x = -1;
+            *section_y = -1;
+            *slot = -1;
+        };
+        auto pointer_ok = [](void* pointer) {
+            auto bits = reinterpret_cast<uintptr_t>(pointer);
+            return bits > 0x10000 && (bits & 7) == 0;
+        };
+        auto* layer_base = reinterpret_cast<uint8_t*>(this);
+        auto* objectType = reinterpret_cast<int*>(raw + 0x3a0);
+        bool block = *object_id == 0x718;
+        bool has_second = block || *objectType != 7;
+        bool moving = raw[0x280] != 0; // gd moves ts one every step
+        std::size_t list_field = block ? 0x3600 : 0x35e0, list_count = block ? 0x3618 : 0x35f8;
+        std::size_t grid_field = block ? 0x35c8 : 0x35b0, grid_sizes = block ? 0x3670 : 0x3658;
+        auto second_list = [&](GameObject***& begin_field, GameObject***& end_field, int*& count) {
+            begin_field = nullptr;
+            end_field = nullptr;
+            count = nullptr;
+            if (!has_second)
+                return;
+            if (moving) {
+                begin_field = reinterpret_cast<GameObject***>(layer_base + list_field);
+                end_field = reinterpret_cast<GameObject***>(layer_base + list_field + sizeof(void*));
+                count = reinterpret_cast<int*>(layer_base + list_count);
+                return;
+            }
+            if (*section_x < 0 || *section_y < 0)
+                return;
+            auto* columns = *reinterpret_cast<uint8_t***>(layer_base + grid_field);
+            auto* columns_end = *reinterpret_cast<uint8_t***>(layer_base + grid_field + sizeof(void*));
+            auto* size_columns = *reinterpret_cast<uint8_t***>(layer_base + grid_sizes);
+            auto* size_columns_end = *reinterpret_cast<uint8_t***>(layer_base + grid_sizes + sizeof(void*));
+            if (!columns || !size_columns || *section_x >= columns_end - columns || *section_x >= size_columns_end - size_columns || !columns[*section_x] || !size_columns[*section_x])
+                return;
+            auto* column = columns[*section_x];
+            auto* rows = *reinterpret_cast<uint8_t***>(column);
+            auto* rows_end = *reinterpret_cast<uint8_t***>(column + sizeof(void*));
+            auto* size_column = size_columns[*section_x];
+            auto* size_rows = *reinterpret_cast<int**>(size_column);
+            auto* size_rows_end = *reinterpret_cast<int**>(size_column + sizeof(void*));
+            if (!rows || !size_rows || *section_y >= rows_end - rows || *section_y >= size_rows_end - size_rows || !rows[*section_y])
+                return;
+            auto* bucket = rows[*section_y];
+            begin_field = reinterpret_cast<GameObject***>(bucket);
+            end_field = reinterpret_cast<GameObject***>(bucket + sizeof(void*));
+            count = &size_rows[*section_y];
+        };
+        auto second_ok = [&] {
+            if (!has_second)
+                return true;
+            GameObject*** begin_field;
+            GameObject*** end_field;
+            int* amt;
+            second_list(begin_field, end_field, amt);
+            if (!begin_field || !*begin_field || !amt)
+                return false;
+            int stored = *end_field > *begin_field ? static_cast<int>(*end_field - *begin_field) : 0;
+            int used = *amt;
+            return used >= 1 && used <= stored && *block_slot >= 0 && *block_slot < used && (*begin_field)[*block_slot] == object && pointer_ok((*begin_field)[used - 1]);
+        };
+        if (*object_id != 0x718 && *section_x >= 0 && *section_y >= 0 && *slot >= 0) {
+            auto* base = reinterpret_cast<uint8_t*>(this);
+            auto* columns = *reinterpret_cast<uint8_t***>(base + 0x3598); // the section grid
+            auto* columns_end = *reinterpret_cast<uint8_t***>(base + 0x3598 + sizeof(void*));
+            auto* size_columns = *reinterpret_cast<uint8_t***>(base + 0x3640); // how many are in each section
+            auto* size_columns_end = *reinterpret_cast<uint8_t***>(base + 0x3640 + sizeof(void*));
+            if (columns && size_columns && *section_x < columns_end - columns && *section_x < size_columns_end - size_columns &&
+                columns[*section_x] && size_columns[*section_x]) {
+                auto* column = columns[*section_x];
+                auto* rows = *reinterpret_cast<uint8_t***>(column);
+                auto* rows_end = *reinterpret_cast<uint8_t***>(column + sizeof(void*));
+                auto* size_column = size_columns[*section_x];
+                auto* size_rows = *reinterpret_cast<int**>(size_column);
+                auto* size_rows_end = *reinterpret_cast<int**>(size_column + sizeof(void*));
+                if (rows && size_rows && *section_y < rows_end - rows && *section_y < size_rows_end - size_rows && rows[*section_y]) {
+                    auto* bucket = rows[*section_y];
+                    auto* objects = *reinterpret_cast<GameObject***>(bucket);
+                    auto* objects_end = *reinterpret_cast<GameObject***>(bucket + sizeof(void*));
+                    int stored = objects && objects_end > objects ? static_cast<int>(objects_end - objects) : 0;
+                    int used = size_rows[*section_y];
+                    if (used >= 1 && used <= stored && *slot < used && objects[*slot] == object && pointer_ok(objects[used - 1]) && second_ok()) {
+                        GJBaseGameLayer::removeObjectFromSection(object);
+                        return;
+                    }
+                }
+            }
+        }
+        auto compact = [&](GameObject*** begin_field, GameObject*** end_field, int* count, bool keep) {
+            if (!begin_field || !end_field) {
+                *block_slot = -1;
+                return;
+            }
+            auto* begin = *begin_field;
+            auto* end = *end_field;
+            int size = begin && end > begin ? static_cast<int>(end - begin) : 0;
+            int used = count ? *count : size;
+            if (used < 0)
+                used = 0;
+            if (used > size)
+                used = size;
+            int write = 0;
+            int it = -1;
+            bool kept = false;
+            if (begin) {
+                for (int i = 0; i < used; ++i) {
+                    auto* item = begin[i];
+                    if (!pointer_ok(item))
+                        continue;
+                    if (item == object) {
+                        if (!keep || kept)
+                            continue;
+                        kept = true;
+                    }
+                    if (write != i)
+                        begin[write] = item;
+                    auto* idx = reinterpret_cast<int*>(reinterpret_cast<uint8_t*>(item) + 0x274);
+                    if (*idx != write)
+                        *idx = write;
+                    if (item == object)
+                        it = write;
+                    ++write;
+                }
+            }
+            if (begin)
+                *end_field = begin + write;
+            if (count)
+                *count = write;
+            *block_slot = it;
+        };
+        auto* base = reinterpret_cast<uint8_t*>(this);
+        auto repair_blocks = [&](bool keep) {
+            if (!has_second)
+                return;
+            GameObject*** begin_field;
+            GameObject*** end_field;
+            int* amt;
+            second_list(begin_field, end_field, amt);
+            compact(begin_field, end_field, amt, keep);
+        };
+        bool main_ok = *section_x >= 0 && *section_y >= 0 && *slot >= 0;
+        if (main_ok) {
+            auto* columns = *reinterpret_cast<uint8_t***>(base + 0x3598);
+            auto* columns_end = *reinterpret_cast<uint8_t***>(base + 0x3598 + sizeof(void*));
+            auto* size_columns = *reinterpret_cast<uint8_t***>(base + 0x3640);
+            auto* size_columns_end = *reinterpret_cast<uint8_t***>(base + 0x3640 + sizeof(void*));
+            main_ok = columns && size_columns && *section_x < columns_end - columns && *section_x < size_columns_end - size_columns && columns[*section_x] && size_columns[*section_x];
+            if (main_ok) {
+                auto* column = columns[*section_x];
+                auto* rows = *reinterpret_cast<uint8_t***>(column);
+                auto* rows_end = *reinterpret_cast<uint8_t***>(column + sizeof(void*));
+                auto* size_column = size_columns[*section_x];
+                auto* size_rows = *reinterpret_cast<int**>(size_column);
+                auto* size_rows_end = *reinterpret_cast<int**>(size_column + sizeof(void*));
+                main_ok = rows && size_rows && *section_y < rows_end - rows && *section_y < size_rows_end - size_rows && rows[*section_y];
+                if (main_ok) {
+                    auto* bucket = rows[*section_y];
+                    auto* objects = *reinterpret_cast<GameObject***>(bucket);
+                    auto* objects_end = *reinterpret_cast<GameObject***>(bucket + sizeof(void*));
+                    auto* amt = &size_rows[*section_y];
+                    int stored = objects && objects_end > objects ? static_cast<int>(objects_end - objects) : 0;
+                    int used = *amt;
+                    if (used < 0)
+                        used = 0;
+                    if (used > stored)
+                        used = stored;
+                    int write = 0;
+                    for (int i = 0; i < used; ++i) {
+                        auto* item = objects[i];
+                        if (!pointer_ok(item))
+                            continue;
+                        if (write != i)
+                            objects[write] = item;
+                        auto* idx = reinterpret_cast<int*>(reinterpret_cast<uint8_t*>(item) + 0x270);
+                        if (*idx != write)
+                            *idx = write;
+                        ++write;
+                    }
+                    *amt = write;
+                    main_ok = write > 0 && *slot >= 0 && *slot < write && objects[*slot] == object && pointer_ok(objects[write - 1]);
+                }
+            }
+        }
+        repair_blocks(main_ok);
+        if (!main_ok) {
+            forget();
+            return;
+        }
+        int saved_id = *object_id, saved_type = *objectType;
+        bool spoof = has_second && *block_slot < 0;
+        if (spoof) {
+            *object_id = 0;
+            *objectType = 7;
+        }
+        GJBaseGameLayer::removeObjectFromSection(object);
+        if (spoof) {
+            *object_id = saved_id;
+            *objectType = saved_type;
+        }
+    }
+
+    void processCommands(float dt, bool isHalfTick, bool isLastTick) {
+        auto& logic = Logic::get();
+        if (logic.refresh_only)
+            return;
+        if (logic.predicting)
+            return;
+        auto* layer = echo::step::begin(this);
+        logic.in_step = true;
+        GJBaseGameLayer::processCommands(dt, isHalfTick, isLastTick);
+        logic.in_step = false;
+        echo::step::end(this, layer, isHalfTick);
+    }
+
+    void resetLevelVariables() {
+        GJBaseGameLayer::resetLevelVariables();
+        m_queuedButtons.clear();
+        if (Logic::get().editor_testing && Logic::as_editor(this)) {
+            auto& logic = Logic::get();
+            logic.step_frame = 0;
+            logic.carry = 0.f;
+            logic.buttons_prepared = false;
+            logic.follow_log.clear();
+            if (logic.is_playing())
+                Logic::get().set_replay_pos(nullptr);
+        }
+    }
+
+    void collisionCheckObjects(PlayerObject* player, gd::vector<GameObject*>* objects, int length, float dt) {
+        if (!Trajectory::get().isFake(player)) {
+            GJBaseGameLayer::collisionCheckObjects(player, objects, length, dt);
+            return;
+        }
+        phys::collisionCheckObjects(this, player, objects, length, dt);
+    }
+
+    void flipGravity(PlayerObject* player, bool flip, bool noEffects) {
+        if (Trajectory::get().isFake(player)) {
+            phys::flipGravity(player, flip, true);
+            return;
+        }
+        GJBaseGameLayer::flipGravity(player, flip, noEffects);
+    }
+
+    void teleportPlayer(TeleportPortalObject* object, PlayerObject* player) {
+        if (Trajectory::get().isFake(player)) {
+            phys::teleportPlayer(this, object, player);
+            return;
+        }
+        GJBaseGameLayer::teleportPlayer(object, player);
+    }
+
+    void destroyObject(GameObject* object) {
+        if (Logic::get().predicting)
+            return;
+        GJBaseGameLayer::destroyObject(object);
+    }
+
+    void pickupItem(EffectGameObject* object) {
+        if (Logic::get().predicting)
+            return;
+        GJBaseGameLayer::pickupItem(object);
+    }
+
+    void processQueuedButtons(float dt, bool clearInputQueue) {
+        if (Logic::get().predicting)
+            return;
+        if (auto* play = Logic::as_play(this)) {
+            Logic::get().play_macro(play, this, dt, clearInputQueue);
+            return;
+        }
+        if (Logic::get().editor_testing && Logic::as_editor(this)) {
+            Logic::get().play_macro(this, this, dt, clearInputQueue);
+            return;
+        }
+        GJBaseGameLayer::processQueuedButtons(dt, clearInputQueue);
+    }
+
+    void handleButton(bool down, int button, bool player1) {
+        if (Logic::get().predicting)
+            return;
+        auto& value = Logic::get();
+        // flip 2 player controls: i do the swap myself & tell gd not to (see the native call)
+        // so a macro always holds the REAL player & records / plays the same with the option on or off
+        bool flips = value.flip_controls() && !m_isPlatformer && !m_useReplay;
+        bool mine = !value.applying_playback && !value.routing_input && !value.restoring_holds && !value.maintaining_gravity && !value.injecting && !value.follow_injecting && !orb_swift;
+        if (flips && mine && m_levelSettings && m_levelSettings->m_twoPlayerMode)
+            player1 = !player1;
+        echo::step::trace_button('H', down, player1);
+        auto* live = Logic::as_play(this);
+        int jump_early = static_cast<int>(PlayerButton::Jump);
+        bool jump_button_early = button == 0 || button == jump_early;
+        if (value.suppress_auto_hold && jump_button_early && !value.applying_playback && !value.restoring_holds && !value.maintaining_gravity) {
+            if (!down) {
+                value.suppress_auto_hold = false;
+            }
+            else {
+                if (auto* ui = m_uiLayer) {
+                    if (player1) {
+                        ui->m_p1Jumping = false;
+                        ui->m_p1TouchId = -1;
+                    }
+                    else {
+                        ui->m_p2Jumping = false;
+                        ui->m_p2TouchId = -1;
+                    }
+                }
+                return;
+            }
+        }
+        if (!down && !player1 && value.is_recording() && !value.applying_playback &&
+            !value.restoring_holds && !value.maintaining_gravity &&
+            !m_gameState.m_isDualMode && !(m_levelSettings && m_levelSettings->m_twoPlayerMode)) {
+            int key = button == 0 ? static_cast<int>(PlayerButton::Jump) : button;
+            if (!Logic::get().held_at(value, true, value.step_frame + 1, key) &&
+                Logic::get().held_at(value, false, value.step_frame + 1, key))
+                player1 = true;
+        }
+        {
+            int jump_key = static_cast<int>(PlayerButton::Jump);
+            bool move_button = button == 0 || button == jump_key || button == static_cast<int>(PlayerButton::Left) || button == static_cast<int>(PlayerButton::Right);
+            if (move_button && !value.follow_injecting && !value.restoring_holds && !value.maintaining_gravity && !value.injecting && Logic::get().follow_active(this)) {
+                bool leader1 = value.follow_mode == 1;
+                if (!value.applying_playback) {
+                    player1 = leader1;
+                    value.note_follow_press(this, down, button == 0 ? jump_key : button);
+                }
+                else if (value.backstep_target >= 0 && player1 == leader1) {
+                    value.note_follow_press(this, down, button == 0 ? jump_key : button);
+                }
+            }
+        }
+        bool opened_button = !in_orb_button;
+        in_orb_button = true;
+        bool steered = false;
+        if (!value.applying_playback && !value.routing_input && !value.restoring_holds && !value.maintaining_gravity) {
+            steered = Logic::get().steer_player(player1);
+            bool other_played = value.plays_player(player1);
+            if (!steered && value.click_both && !other_played && !value.plays_player(!player1) && (button == 0 || button == static_cast<int>(PlayerButton::Jump) || button == static_cast<int>(PlayerButton::Left) || button == static_cast<int>(PlayerButton::Right))) {
+                value.routing_input = true;
+                handleButton(down, button, !player1);
+                value.routing_input = false;
+            }
+        }
+        int jump = static_cast<int>(PlayerButton::Jump);
+        int left = static_cast<int>(PlayerButton::Left), right = static_cast<int>(PlayerButton::Right);
+        bool jump_button = button == 0 || button == jump;
+        int swifts = 0;
+        if (down && jump_button && !orb_swift && !value.applying_playback && !value.injecting && !value.restoring_holds && !value.maintaining_gravity) {
+            PlayerObject* body = player1 ? m_player1 : m_player2;
+        }
+        if ((button == 0 || button == jump) && !orb_swift && !value.applying_playback && !value.maintaining_gravity && !value.restoring_holds && !value.resetting && !down) {
+            value.restart_hold_captured = false;
+            value.death_jump_p1 = value.death_jump_p2 = false;
+        }
+        if (button == jump && !value.suppress_click_hitbox && !value.maintaining_gravity && !value.restoring_holds) {
+            if (auto* play = Logic::as_play(this)) {
+                bool twoPlayer = play->m_levelSettings && play->m_levelSettings->m_twoPlayerMode;
+                if (twoPlayer) {
+                }
+                else if (!Logic::get().routing_input) {
+                }
+            }
+        }
+        if (auto* play = Logic::as_play(this)) {
+            auto& logic = Logic::get();
+            // mirror clicks are NOT p2
+            bool ignored_p2 = !player1 && play->m_levelSettings && play->m_levelSettings->m_twoPlayerMode && !m_gameState.m_isDualMode;
+            if (!logic.injecting && !orb_swift && !logic.routing_input && !ignored_p2)
+                Logic::get().note_click(play, down, player1, button);
+            if (!logic.applying_playback && logic.is_recording() && !logic.injecting && !logic.restoring_holds) {
+                Logic::get().record_input(play, down, player1, button);
+            }
+        }
+        else if (Logic::get().editor_testing && Logic::as_editor(this)) {
+            auto& logic = Logic::get();
+            if (!logic.applying_playback && logic.is_recording() && !logic.injecting && !logic.restoring_holds) {
+                Logic::get().record_input(this, down, player1, button);
+            }
+        }
+        bool one_replay = value.applying_playback && value.play_p1 != value.play_p2;
+        bool icon2 = !player1;
+        if (value.maintaining_gravity || steered || one_replay) {
+            if (steered)
+                Logic::get().set_routed_hold(icon2, button, down);
+            Logic::get().play_input(this, icon2, down, button);
+        }
+        else {
+            auto* manager = GameManager::get();
+            if (flips && manager)
+                manager->setGameVariable("0010", false);
+            GJBaseGameLayer::handleButton(down, button, player1);
+            if (flips && manager)
+                manager->setGameVariable("0010", true);
+        }
+        if ((button == 0 || button == jump || button == left || button == right) && !orb_swift && !value.maintaining_gravity && !value.suppress_click_hitbox && !value.restoring_holds) {
+        }
+        if (swifts > 0) {
+            orb_swift = true;
+            bool was_routing = value.routing_input;
+            value.routing_input = true;
+            for (int i = 0; i < swifts; ++i) {
+                handleButton(false, jump, player1);
+                handleButton(true, jump, player1);
+            }
+            value.routing_input = was_routing;
+            orb_swift = false;
+        }
+        if (opened_button)
+            in_orb_button = false;
+    }
+
+    void activateSFXTrigger(SFXTriggerGameObject* object) {
+        if (Logic::get().predicting)
+            return;
+        GJBaseGameLayer::activateSFXTrigger(object);
+    }
+
+    void activateSFXEditTrigger(SFXTriggerGameObject* object) {
+        if (Logic::get().predicting)
+            return;
+        GJBaseGameLayer::activateSFXEditTrigger(object);
+    }
+
+    void activateSongTrigger(SongTriggerGameObject* object) {
+        if (Logic::get().predicting)
+            return;
+        GJBaseGameLayer::activateSongTrigger(object);
+    }
+
+    void activateSongEditTrigger(SongTriggerGameObject* object) {
+        if (Logic::get().predicting)
+            return;
+        GJBaseGameLayer::activateSongEditTrigger(object);
+    }
+
+    void activatedAudioTrigger(SFXTriggerGameObject* object) {
+        if (Logic::get().predicting)
+            return;
+        GJBaseGameLayer::activatedAudioTrigger(object);
+    }
+
+    void shakeCamera(float duration, float strength, float interval) {
+        if (Logic::get().predicting)
+            return;
+        GJBaseGameLayer::shakeCamera(duration, strength, interval);
+    }
+
+    void gameEventTriggered(GJGameEvent event, int material, int playerID) {
+        if (Logic::get().predicting)
+            return;
+        GJBaseGameLayer::gameEventTriggered(event, material, playerID);
+    }
+
+    void checkpointActivated(CheckpointGameObject* object) {
+        if (Logic::get().predicting)
+            return;
+        GJBaseGameLayer::checkpointActivated(object);
+    }
+
+    CCParticleSystemQuad* spawnParticle(char const* plist, int zOrder, tCCPositionType positionType, CCPoint position) {
+        if (Logic::get().predicting)
+            return nullptr;
+        return GJBaseGameLayer::spawnParticle(plist, zOrder, positionType, position);
+    }
+
+    void spawnParticleTrigger(int particleID, CCPoint position, float rotation, float scale) {
+        if (Logic::get().predicting)
+            return;
+        GJBaseGameLayer::spawnParticleTrigger(particleID, position, rotation, scale);
+    }
+
+    void createBackground(int background) {
+        GJBaseGameLayer::createBackground(background);
+    }
+
+    void createMiddleground(int middleground) {
+        if (m_middleground) {
+            m_middleground->removeFromParent();
+            m_middleground = nullptr;
+        }
+    }
+
+    void createGroundLayer(int ground, int line) {
+        GJBaseGameLayer::createGroundLayer(18, 2);
+    }
+
+    void updateColor(ccColor3B& color, float fadeTime, int colorID, bool blending, float opacity, ccHSVValue& copyHSV, int colorIDToCopy, bool copyOpacity, EffectGameObject* callerObject, int unk1, int unk2) {
+        GJBaseGameLayer::updateColor(color, fadeTime, colorID, blending, opacity, copyHSV, colorIDToCopy, copyOpacity, callerObject, unk1, unk2);
+    }
+
+    void triggerGradientCommand(GradientTriggerObject* object) {
+        GJBaseGameLayer::triggerGradientCommand(object);
+    }
+};
 
 class $modify(EchoUILayer, UILayer) {
 
@@ -930,6 +1575,22 @@ class $modify(EchoPlayerObject, PlayerObject) {
         }
         orb_swift = false;
         return pressed;
+    }
+
+    void releaseAllButtons() {
+        auto* layer = GJBaseGameLayer::get();
+        auto* play = Logic::as_play(layer);
+        auto& logic = Logic::get();
+        if (logic.resetting || logic.suppress_auto_hold || !play) {
+            PlayerObject::releaseAllButtons();
+            return;
+        }
+        bool second = this == play->m_player2;
+        bool only2 = logic.records_player(true) && !logic.records_player(false);
+        bool only1 = logic.records_player(false) && !logic.records_player(true);
+        if ((second && only2) || (!second && only1 && this == play->m_player1))
+            return;
+        PlayerObject::releaseAllButtons();
     }
 
     void playDeathEffect() {

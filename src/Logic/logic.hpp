@@ -729,6 +729,10 @@ public:
 	bool follow_due(FollowPress const& press, int frame, double time) const;
 	void rewind_follow(GJBaseGameLayer* play);
 	void run_follow(GJBaseGameLayer* play);
+	void request_best_frame();
+	void stop_best_frame(char const* why = nullptr);
+	void find_best_frame(PlayLayer* play, std::function<void(float)> const& tick);
+	void click_best_frame(PlayLayer* play);
 	Checkpoint capture_checkpoint(PlayLayer* play, CheckpointObject* object, int frame);
 	void disarm_length_pause_if_holding();
 	void check_advance_pause(PlayLayer* play);
@@ -818,8 +822,10 @@ public:
 	void on_focus_change();
 	void resume_attempt(PlayLayer* play);
 	void retain_playback_hold(PlayLayer* play);
+	void note_step();
 	void release_replay_index();
 	int max_steps_for_frame() const;
+	void note_frame_work(double seconds);
 	double frame_work = 0.0;
 	void begin_editor_playtest();
 	void end_editor_playtest(GJBaseGameLayer* editor);
@@ -828,6 +834,12 @@ public:
 	bool pause_menu_open();
 	float render_frame_game_step = 0.f;
 	void sync_predict_hooks();
+	bool advance_paused(GJBaseGameLayer* play);
+	bool lock_delta_active() const;
+	int count_unlocked_steps(GJBaseGameLayer* play, double dt);
+	void run_frame(GJBaseGameLayer* play, float dt, std::function<void(float)> const& tick);
+	void cancel_steps();
+	void flush_visual_refresh();
 	void recompute_cps(Session& value);
 
 	std::string read_folder_setting(char const* key);

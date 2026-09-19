@@ -470,6 +470,7 @@ void Logic::on_keybind(std::string_view key, bool down) {
     if (!down)
         return;
     if (key == "find-best-frame") {
+        Logic::get().request_best_frame();
         return;
     }
     if (key == "step-back") {
@@ -709,6 +710,7 @@ void Logic::on_play_init(PlayLayer* play) {
     logic.in_scheduler = false;
     logic.buttons_prepared = false;
     logic.replay_clicks_left = 0;
+    Logic::get().cancel_steps();
     Logic::get().apply_rate(0);
     logic.present = true;
     logic.layout_styled = false;
@@ -994,6 +996,9 @@ void Logic::onReset(PlayLayer* play) {
     if (from_checkpoint) {
         play->m_extraDelta = 0.0;
         logic.refresh_queued = true;
+        if (!logic.in_scheduler && logic.scheduler_depth == 0) {
+            Logic::get().flush_visual_refresh();
+        }
     }
     if (!practice) {
         logic.checkpoints.clear();
@@ -1104,6 +1109,7 @@ void Logic::on_complete(PlayLayer* play) {
 
 void Logic::onQuit(PlayLayer*) {
     auto& logic = Logic::get();
+    Logic::get().stop_best_frame();
     logic.holding_back = false;
     logic.frame_advance = false;
     logic.advance_queued = false;
@@ -1217,6 +1223,9 @@ namespace {
 void Logic::prepare_buttons(GJBaseGameLayer* play) {
     auto& logic = Logic::get();
     bool paused = Logic::get().editor_paused;
+    if (auto* live = Logic::as_play(play)) {
+        paused = paused || live->m_isPaused;
+    }
     if (!play || logic.buttons_prepared || logic.resetting || logic.refresh_only || paused || !(logic).physics_locked())
         return;
     logic.buttons_prepared = true;
@@ -1348,17 +1357,46 @@ void Logic::remember_move(PlayerButtonCommand const& cmd) {
 }
 
 void run_orb_clicks(GJBaseGameLayer* play, GJBaseGameLayer* layer, float dt) {
-    // later
+    auto* live = Logic::as_play(play);
+    if (!live || !layer || Logic::get().predicting)
+        return;
+    auto saved = std::move(play->m_queuedButtons);
+    play->m_queuedButtons.clear();
+    auto& logic = Logic::get();
+    logic.suppress_click_hitbox = true;
+    if (!play->m_queuedButtons.empty()) {
+        if (logic.is_recording() && !logic.restoring_holds) {
+            for (auto const& cmd : play->m_queuedButtons) {
+                Logic::get().record_input(play, cmd.m_isPush, !cmd.m_isPlayer2, static_cast<int>(cmd.m_button));
+            }
+        }
+        logic.injecting = true;
+        layer->GJBaseGameLayer::processQueuedButtons(dt, true);
+        logic.injecting = false;
+    }
+    logic.suppress_click_hitbox = false;
+    play->m_queuedButtons = std::move(saved);
 }
 
 void Logic::play_macro(GJBaseGameLayer* play, GJBaseGameLayer* layer, float dt, bool clearInputQueue) {
     log::debug("play macro");
     auto& logic = Logic::get();
     bool paused = Logic::get().editor_paused;
+    if (auto* live = Logic::as_play(play)) {
+        paused = paused || live->m_isPaused;
+    }
     if (!play || !layer || logic.resetting || logic.refresh_only || paused || !(logic).physics_locked()) {
         if (layer) {
             drop_ignored_inputs(play);
             gd::vector<PlayerButtonCommand> orbs;
+            if (auto* live = Logic::as_play(play); live && !logic.predicting) {
+                size_t before = play->m_queuedButtons.size();
+                for (size_t i = before; i < play->m_queuedButtons.size(); ++i)
+                    orbs.push_back(play->m_queuedButtons[i]);
+                if (play->m_queuedButtons.size() > before) {
+                    play->m_queuedButtons.resize(before);
+                }
+            }
             layer->GJBaseGameLayer::processQueuedButtons(dt, clearInputQueue);
             if (!orbs.empty()) {
                 logic.suppress_click_hitbox = true;

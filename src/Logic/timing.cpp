@@ -1,0 +1,227 @@
+// decides how many physics steps each drawn frame runs, then runs them
+//
+// steps owed = frame time / step length. the leftover is carried to the next frame (logic.carry) so no time is lost
+// the count reaches gd thru tick_steps, which the step patch makes update() read instead of doing its own math
+#include "Logic/logic.hpp"
+#include "Hooks/step.hpp"
+#include "Hack/trajectory.hpp"
+#include <Geode/binding/PlayLayer.hpp>
+#include <Geode/binding/LevelEditorLayer.hpp>
+#include <algorithm>
+#include <chrono>
+#include <cmath>
+#include <functional>
+#include <limits>
+#include <utility>
+
+namespace chrono = std::chrono;
+
+using namespace geode::prelude;
+
+PlayLayer* Logic::as_play(GJBaseGameLayer* layer) {
+    if (!layer) {
+        return nullptr;
+    }
+    if (auto* play = PlayLayer::get(); play && static_cast<GJBaseGameLayer*>(play) == layer) {
+        return play;
+    }
+    if (auto* editor = LevelEditorLayer::get(); editor && static_cast<GJBaseGameLayer*>(editor) == layer) {
+        return nullptr;
+    }
+    return typeinfo_cast<PlayLayer*>(layer);
+}
+
+LevelEditorLayer* Logic::as_editor(GJBaseGameLayer* layer) {
+    log::debug("as editor");
+    if (!layer) {
+        return nullptr;
+    }
+    if (auto* editor = LevelEditorLayer::get(); editor && static_cast<GJBaseGameLayer*>(editor) == layer) {
+        return editor;
+    }
+    if (auto* play = PlayLayer::get(); play && static_cast<GJBaseGameLayer*>(play) == layer) {
+        return nullptr;
+    }
+    return typeinfo_cast<LevelEditorLayer*>(layer);
+}
+
+bool Logic::advance_paused(GJBaseGameLayer* play) {
+    return play && Logic::get().frame_advance && !Logic::get().render_capturing();
+}
+
+bool Logic::lock_delta_active() const {
+    return lock_delta;
+}
+
+int Logic::unlocked_step_cap() const {
+    auto* director = CCDirector::sharedDirector();
+    double interval = director ? director->getAnimationInterval() : 1.0 / 60.0;
+    if (!std::isfinite(interval) || interval <= 0.0) {
+        interval = 1.0 / 60.0;
+    }
+    if (real_time_mode) {
+        interval = std::max(interval, 0.1);
+    }
+    double per_frame = std::ceil(sample_rate() * std::max(interval, 1.0 / 1000.0));
+    return static_cast<int>(std::clamp(per_frame, 1.0, 100000.0)) * 10;
+}
+
+namespace {
+    using Clock = chrono::steady_clock;
+
+    double seconds_since(Clock::time_point start, Clock::time_point end) {
+        return chrono::duration<double>(end - start).count();
+    }
+
+    struct StepClock {
+        Clock::time_point first, last;
+        int steps = 0;
+        int sampled_step = 0;
+        bool active = false;
+    };
+
+    struct FrameSample {
+        double spans = 0.0;
+        double gaps = 0.0;
+        double updates = 0.0;
+        double update_time = 0.0;
+        double steps = 0.0;
+    };
+
+    struct StepCost {
+        double per_step = 0.0, per_update = 0.0;
+        double last_physics = 0.0;
+        double other_work = 0.0;
+    };
+
+    StepClock& step_clock() {
+        static StepClock clock;
+        return clock;
+    }
+
+    FrameSample& frame_sample() {
+        static FrameSample sample;
+        return sample;
+    }
+
+    StepCost& step_cost() {
+        static StepCost cost;
+        return cost;
+    }
+
+    template <class Update>
+    void time_update(Update&& update) {
+        step_clock() = {};
+        step_clock().active = true;
+        auto started = Clock::now();
+        update();
+        step_clock().active = false;
+        auto const& clock = step_clock();
+        auto& sample = frame_sample();
+        sample.updates += 1.0;
+        sample.update_time += seconds_since(started, Clock::now());
+        sample.steps += clock.steps;
+        if (clock.sampled_step < 2)
+            return;
+        sample.spans += seconds_since(clock.first, clock.last);
+        sample.gaps += clock.sampled_step - 1;
+    }
+
+    void settle_cost() {
+        auto sample = std::exchange(frame_sample(), FrameSample{});
+        auto& cost = step_cost();
+        cost.last_physics = sample.update_time;
+        if (sample.gaps < 4.0)
+            return;
+        double per_step = sample.spans / sample.gaps;
+        if (!(per_step > 0.0) || !std::isfinite(per_step))
+            return;
+        double per_update = std::max(0.0, (sample.update_time - sample.steps * per_step) / std::max(sample.updates, 1.0));
+        bool fresh = !(cost.per_step > 0.0);
+        cost.per_step = fresh ? per_step : cost.per_step + (per_step - cost.per_step) * 0.3;
+        cost.per_update = fresh ? per_update : cost.per_update + (per_update - cost.per_update) * 0.3;
+    }
+
+    void place_deferred_player_art(GJBaseGameLayer* play) {
+        auto& logic = Logic::get();
+        if (!std::exchange(logic.player_art_deferred, false))
+            return;
+        for (auto* player : { play->m_player1, play->m_player2 }) {
+            if (player)
+                player->setPosition(player->getPosition());
+        }
+    }
+}
+
+void Logic::note_step() {
+    auto& clock = step_clock();
+    if (!clock.active)
+        return;
+    ++clock.steps;
+    if (clock.steps > 8 && (clock.steps & 15) != 0)
+        return;
+    auto now = Clock::now();
+    if (clock.steps == 1) {
+        clock.first = now;
+    }
+    clock.last = now;
+    clock.sampled_step = clock.steps;
+}
+
+// everything a frame does that ISNT physics
+void Logic::note_frame_work(double seconds) {
+    if (std::isfinite(seconds)) {
+        frame_work = frame_work > 0.0 ? frame_work + (seconds - frame_work) * 0.05 : seconds;
+    }
+    auto& cost = step_cost();
+    double other = std::max(0.0, seconds - std::exchange(cost.last_physics, 0.0));
+    if (!std::isfinite(other))
+        return;
+    cost.other_work = cost.other_work > 0.0 ? cost.other_work + (other - cost.other_work) * 0.2 : other;
+}
+
+// for the trace. what the pacing thinks a step & a frame cost rn
+std::string echo::step::pace() {
+    // TODO
+    return {};
+}
+
+int Logic::max_steps_for_frame() const {
+    // TODO
+    return {};
+}
+
+int Logic::count_unlocked_steps(GJBaseGameLayer* play, double dt) {
+    // todo
+    return {};
+}
+
+void Logic::run_frame(GJBaseGameLayer* play, float dt, std::function<void(float)> const& tick) {
+    // port this
+}
+
+void Logic::stop_best_frame(char const* why) {
+    // later
+}
+
+void Logic::request_best_frame() {
+    // TODO
+}
+
+void Logic::find_best_frame(PlayLayer* play, std::function<void(float)> const& tick) {
+    // port this
+}
+
+void Logic::click_best_frame(PlayLayer* play) {
+    // TODO
+}
+
+void Logic::cancel_steps() {
+    auto& logic = Logic::get();
+    logic.steps_left = 0;
+    logic.carry = 0.f;
+}
+
+void Logic::flush_visual_refresh() {
+    // todo
+}
