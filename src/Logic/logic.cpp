@@ -69,7 +69,6 @@ std::string Logic::read_folder_setting(char const* key) {
 }
 
 void Logic::boot() {
-    log::debug("boot");
     auto root = Logic::get().save_root();
     std::error_code error;
     for (auto const* folder : { "replays", "converted", "clickpacks", "renders", "logs" }) {
@@ -109,14 +108,12 @@ void Logic::boot() {
     migrate_key("open-menu", KEY_LeftMenu, KeyboardModifier::None, KEY_LeftMenu, left_alt);
     migrate_key("toggle-advance", KEY_F6, KeyboardModifier::None, KEY_V, KeyboardModifier::None);
     migrate_key("step-frame", KEY_F7, KeyboardModifier::None, KEY_C, KeyboardModifier::None);
-    if (std::fabs(Logic::read_float("macro-fps", 240.f) - 60.f) < 0.01f) {
+    if (std::fabs(Logic::read_float("macro-fps", 240.f) - 60.f) < 0.01f)
         Logic::write_float("macro-fps", 240.f);
-    }
     Logic::get().pull_settings();
     SettingChangedEventV3().listen([](std::string_view modID, std::string_view, std::shared_ptr<SettingV3>) {
-                               if (bulk_settings || modID != Mod::get()->getID()) {
+                               if (bulk_settings || modID != Mod::get()->getID())
                                    return ListenerResult::Propagate;
-                               }
                                Logic::get().save_settings_file();
                                return ListenerResult::Propagate;
                            })
@@ -132,265 +129,183 @@ void Logic::pull_settings() {
         auto parsed = matjson::Value::parse(file);
         if (parsed) {
             auto const& json = parsed.unwrap();
-            if (auto number = json["macro_fps"].asDouble()) {
+            if (auto number = json["macro_fps"].asDouble())
                 logic.fps = static_cast<float>(number.unwrap());
-            }
-            if (auto number = json["speedhack"].asDouble()) {
+            if (auto number = json["speedhack"].asDouble())
                 logic.speedhack = static_cast<float>(number.unwrap());
-            }
             if (auto number = json["speedhack_memory"].asDouble())
                 logic.speedhack_memory = static_cast<float>(number.unwrap());
             else if (std::abs(logic.speedhack - 1.f) > 0.05f)
                 logic.speedhack_memory = logic.speedhack;
-            if (auto flag = json["real_time_mode"].asBool()) {
+            if (auto flag = json["real_time_mode"].asBool())
                 logic.real_time_mode = flag.unwrap();
-            }
-            if (auto flag = json["lock_delta"].asBool()) {
+            if (auto flag = json["lock_delta"].asBool())
                 logic.lock_delta = flag.unwrap();
-            }
-            if (auto flag = json["fix_tps_rotation"].asBool()) {
+            if (auto flag = json["fix_tps_rotation"].asBool())
                 logic.fix_tps_rotation = flag.unwrap();
-            }
-            if (auto flag = json["save_debug"].asBool()) {
+            if (auto flag = json["save_debug"].asBool())
                 logic.save_debug = flag.unwrap();
-            }
-            if (auto flag = json["lock_display_fps"].asBool()) {
+            if (auto flag = json["lock_display_fps"].asBool())
                 logic.lock_display_fps = flag.unwrap();
-            }
             if (auto number = json["playback_fps"].asDouble())
                 logic.playback_fps = std::clamp(static_cast<float>(number.unwrap()), 0.f, 100000.f);
             else if (auto number = json["playback_fps"].asInt())
                 logic.playback_fps = std::clamp(static_cast<float>(number.unwrap()), 0.f, 100000.f);
-            if (auto flag = json["ignore_inputs"].asBool()) {
+            if (auto flag = json["ignore_inputs"].asBool())
                 logic.ignore_inputs = flag.unwrap();
-            }
-            if (auto flag = json["no_overwrite"].asBool()) {
+            if (auto flag = json["no_overwrite"].asBool())
                 logic.no_overwrite = flag.unwrap();
-            }
-            if (auto flag = json["playback_tps_changes"].asBool()) {
+            if (auto flag = json["playback_tps_changes"].asBool())
                 logic.playback_tps_changes = flag.unwrap();
-            }
-            if (auto flag = json["trace_logging"].asBool()) {
+            if (auto flag = json["trace_logging"].asBool())
                 logic.trace_logging = flag.unwrap();
-            }
-            if (auto flag = json["record_p1"].asBool()) {
+            if (auto flag = json["record_p1"].asBool())
                 logic.record_p1 = flag.unwrap();
-            }
-            if (auto flag = json["record_p2"].asBool()) {
+            if (auto flag = json["record_p2"].asBool())
                 logic.record_p2 = flag.unwrap();
-            }
-            if (auto flag = json["play_p1"].asBool()) {
+            if (auto flag = json["play_p1"].asBool())
                 logic.play_p1 = flag.unwrap();
-            }
-            if (auto flag = json["play_p2"].asBool()) {
+            if (auto flag = json["play_p2"].asBool())
                 logic.play_p2 = flag.unwrap();
-            }
-            if (auto flag = json["click_both"].asBool()) {
+            if (auto flag = json["click_both"].asBool())
                 logic.click_both = flag.unwrap();
-            }
-            if (auto number = json["follow_mode"].asInt()) {
+            if (auto number = json["follow_mode"].asInt())
                 logic.follow_mode = std::clamp(static_cast<int>(number.unwrap()), 0, 2);
-            }
-            if (auto number = json["follow_delay"].asDouble()) {
+            if (auto number = json["follow_delay"].asDouble())
                 logic.follow_delay = std::max(static_cast<float>(number.unwrap()), 0.f);
-            }
-            if (auto flag = json["follow_delay_ms"].asBool()) {
+            if (auto flag = json["follow_delay_ms"].asBool())
                 logic.follow_delay_ms = flag.unwrap();
-            }
-            if (auto flag = json["maintain_gravity"].asBool()) {
+            if (auto flag = json["maintain_gravity"].asBool())
                 logic.maintain_gravity = flag.unwrap();
-            }
-            if (auto flag = json["same_gravity"].asBool()) {
+            if (auto flag = json["same_gravity"].asBool())
                 logic.same_gravity = flag.unwrap();
-            }
-            if (auto flag = json["hide_p1"].asBool()) {
+            if (auto flag = json["hide_p1"].asBool())
                 logic.hide_p1 = flag.unwrap();
-            }
-            if (auto flag = json["hide_p2"].asBool()) {
+            if (auto flag = json["hide_p2"].asBool())
                 logic.hide_p2 = flag.unwrap();
-            }
-            if (auto flag = json["hide_hitbox_p1"].asBool()) {
+            if (auto flag = json["hide_hitbox_p1"].asBool())
                 logic.hide_hitbox_p1 = flag.unwrap();
-            }
-            if (auto flag = json["hide_hitbox_p2"].asBool()) {
+            if (auto flag = json["hide_hitbox_p2"].asBool())
                 logic.hide_hitbox_p2 = flag.unwrap();
-            }
-            if (auto flag = json["hitboxes_follow_hide_player"].asBool()) {
+            if (auto flag = json["hitboxes_follow_hide_player"].asBool())
                 logic.hitboxes_follow_hide_player = flag.unwrap();
-            }
-            if (auto flag = json["hide_trajectory_p1"].asBool()) {
+            if (auto flag = json["hide_trajectory_p1"].asBool())
                 logic.hide_traj_p1 = flag.unwrap();
-            }
-            if (auto flag = json["hide_trajectory_p2"].asBool()) {
+            if (auto flag = json["hide_trajectory_p2"].asBool())
                 logic.hide_traj_p2 = flag.unwrap();
-            }
-            if (auto flag = json["trajectory_follow_hide_player"].asBool()) {
+            if (auto flag = json["trajectory_follow_hide_player"].asBool())
                 logic.traj_follow_hide_player = flag.unwrap();
-            }
-            if (auto flag = json["disable_death_effect"].asBool()) {
+            if (auto flag = json["disable_death_effect"].asBool())
                 logic.disable_death_effect = flag.unwrap();
-            }
-            if (auto flag = json["safe_mode"].asBool()) {
+            if (auto flag = json["safe_mode"].asBool())
                 logic.safeMode = flag.unwrap();
-            }
-            if (auto flag = json["swap_players"].asBool()) {
+            if (auto flag = json["swap_players"].asBool())
                 logic.swap_players = flag.unwrap();
-            }
-            if (auto flag = json["inverse_p1"].asBool()) {
+            if (auto flag = json["inverse_p1"].asBool())
                 logic.inverse_p1 = flag.unwrap();
-            }
-            if (auto flag = json["inverse_p2"].asBool()) {
+            if (auto flag = json["inverse_p2"].asBool())
                 logic.inverse_p2 = flag.unwrap();
-            }
-            if (auto flag = json["noclip_p1"].asBool()) {
+            if (auto flag = json["noclip_p1"].asBool())
                 logic.noclip_p1 = flag.unwrap();
-            }
-            if (auto flag = json["noclip_p2"].asBool()) {
+            if (auto flag = json["noclip_p2"].asBool())
                 logic.noclip_p2 = flag.unwrap();
-            }
-            if (auto flag = json["show_hitboxes"].asBool()) {
+            if (auto flag = json["show_hitboxes"].asBool())
                 logic.show_hitboxes = flag.unwrap();
-            }
-            if (auto flag = json["layout_mode"].asBool()) {
+            if (auto flag = json["layout_mode"].asBool())
                 logic.layout_mode = flag.unwrap();
-            }
-            if (auto flag = json["layout_default_art"].asBool()) {
+            if (auto flag = json["layout_default_art"].asBool())
                 logic.layout_default_art = flag.unwrap();
-            }
-            if (auto flag = json["disable_shakes"].asBool()) {
+            if (auto flag = json["disable_shakes"].asBool())
                 logic.disable_shakes = flag.unwrap();
-            }
-            if (auto flag = json["no_mirror_portals"].asBool()) {
+            if (auto flag = json["no_mirror_portals"].asBool())
                 logic.no_mirror_portals = flag.unwrap();
-            }
-            if (auto flag = json["show_frame"].asBool()) {
+            if (auto flag = json["show_frame"].asBool())
                 logic.show_frame = flag.unwrap();
-            }
-            if (auto flag = json["show_cps"].asBool()) {
+            if (auto flag = json["show_cps"].asBool())
                 logic.show_cps = flag.unwrap();
-            }
-            if (auto flag = json["show_percent"].asBool()) {
+            if (auto flag = json["show_percent"].asBool())
                 logic.show_percent = flag.unwrap();
-            }
-            if (auto flag = json["show_time"].asBool()) {
+            if (auto flag = json["show_time"].asBool())
                 logic.show_time = flag.unwrap();
-            }
-            if (auto flag = json["show_recording"].asBool()) {
+            if (auto flag = json["show_recording"].asBool())
                 logic.show_recording = flag.unwrap();
-            }
-            if (auto flag = json["show_position"].asBool()) {
+            if (auto flag = json["show_position"].asBool())
                 logic.show_pos = flag.unwrap();
-            }
-            if (auto flag = json["show_velocity"].asBool()) {
+            if (auto flag = json["show_velocity"].asBool())
                 logic.show_velocity = flag.unwrap();
-            }
-            if (auto flag = json["show_alive"].asBool()) {
+            if (auto flag = json["show_alive"].asBool())
                 logic.show_alive = flag.unwrap();
-            }
-            if (auto flag = json["show_max_cps"].asBool()) {
+            if (auto flag = json["show_max_cps"].asBool())
                 logic.show_max_cps = flag.unwrap();
-            }
-            if (auto flag = json["show_gravity"].asBool()) {
+            if (auto flag = json["show_gravity"].asBool())
                 logic.show_gravity = flag.unwrap();
-            }
-            if (auto flag = json["show_utilities"].asBool()) {
+            if (auto flag = json["show_utilities"].asBool())
                 logic.show_utilities = flag.unwrap();
-            }
-            if (auto flag = json["show_safe_mode"].asBool()) {
+            if (auto flag = json["show_safe_mode"].asBool())
                 logic.show_safe_mode = flag.unwrap();
-            }
-            if (auto flag = json["labels_auto"].asBool()) {
+            if (auto flag = json["labels_auto"].asBool())
                 logic.labels_auto = flag.unwrap();
-            }
-            if (auto number = json["label_corner"].asInt()) {
+            if (auto number = json["label_corner"].asInt())
                 logic.label_corner = std::clamp(static_cast<int>(number.unwrap()), 0, 3);
-            }
-            if (auto number = json["label_scale"].asDouble()) {
+            if (auto number = json["label_scale"].asDouble())
                 logic.labelScale = std::clamp(static_cast<float>(number.unwrap()), .05f, 10.f);
-            }
-            if (auto text = json["label_font"].asString()) {
+            if (auto text = json["label_font"].asString())
                 logic.labelFont = text.unwrap();
-            }
             if (json["label_order"].isArray()) {
                 logic.label_order.clear();
                 for (auto const& key : json["label_order"]) {
-                    if (auto text = key.asString()) {
+                    if (auto text = key.asString())
                         logic.label_order.push_back(text.unwrap());
-                    }
                 }
             }
-            if (auto flag = json["show_death_next"].asBool()) {
+            if (auto flag = json["show_death_next"].asBool())
                 logic.show_death_next = flag.unwrap();
-            }
-            if (auto flag = json["click_dash_orbs"].asBool()) {
+            if (auto flag = json["click_dash_orbs"].asBool())
                 logic.click_dash_orbs = flag.unwrap();
-            }
-            if (auto flag = json["click_black_orbs"].asBool()) {
+            if (auto flag = json["click_black_orbs"].asBool())
                 logic.click_black_orbs = flag.unwrap();
-            }
-            if (auto number = json["orb_click_count"].asInt()) {
+            if (auto number = json["orb_click_count"].asInt())
                 logic.orb_click_count = std::max(1, static_cast<int>(number.unwrap()));
-            }
-            if (auto flag = json["pad_black_orb"].asBool()) {
+            if (auto flag = json["pad_black_orb"].asBool())
                 logic.pad_black_orb = flag.unwrap();
-            }
-            if (auto flag = json["pad_blue_orb"].asBool()) {
+            if (auto flag = json["pad_blue_orb"].asBool())
                 logic.pad_blue_orb = flag.unwrap();
-            }
-            if (auto flag = json["autoclicker"].asBool()) {
+            if (auto flag = json["autoclicker"].asBool())
                 logic.autoclicker = flag.unwrap();
-            }
-            if (auto flag = json["sync_audio"].asBool()) {
+            if (auto flag = json["sync_audio"].asBool())
                 logic.sync_audio = flag.unwrap();
-            }
-            if (auto number = json["sync_audio_threshold"].asInt()) {
+            if (auto number = json["sync_audio_threshold"].asInt())
                 logic.sync_audio_threshold = std::clamp(static_cast<int>(number.unwrap()), 20, 2000);
-            }
-            if (auto flag = json["audio_speedhack"].asBool()) {
+            if (auto flag = json["audio_speedhack"].asBool())
                 logic.audio_speedhack = flag.unwrap();
-            }
-            if (auto flag = json["practice_music_hack"].asBool()) {
+            if (auto flag = json["practice_music_hack"].asBool())
                 logic.practice_music_hack = flag.unwrap();
-            }
-            if (auto flag = json["autoclick_p1"].asBool()) {
+            if (auto flag = json["autoclick_p1"].asBool())
                 logic.autoclick_p1 = flag.unwrap();
-            }
-            if (auto flag = json["autoclick_p2"].asBool()) {
+            if (auto flag = json["autoclick_p2"].asBool())
                 logic.autoclick_p2 = flag.unwrap();
-            }
-            if (auto flag = json["autoclick_auto_disable"].asBool()) {
+            if (auto flag = json["autoclick_auto_disable"].asBool())
                 logic.autoclick_auto_disable = flag.unwrap();
-            }
-            if (auto flag = json["sequence_enabled"].asBool()) {
+            if (auto flag = json["sequence_enabled"].asBool())
                 logic.sequence_enabled = flag.unwrap();
-            }
-            if (auto flag = json["sequence_random"].asBool()) {
+            if (auto flag = json["sequence_random"].asBool())
                 logic.sequence_random = flag.unwrap();
-            }
-            if (auto number = json["max_cps"].asDouble()) {
+            if (auto number = json["max_cps"].asDouble())
                 logic.max_cps = static_cast<float>(number.unwrap());
-            }
-            if (auto number = json["hitbox_thickness"].asDouble()) {
+            if (auto number = json["hitbox_thickness"].asDouble())
                 logic.hitbox_thickness = static_cast<float>(number.unwrap());
-            }
-            if (auto number = json["trail_length"].asInt()) {
+            if (auto number = json["trail_length"].asInt())
                 logic.trail_length = std::max(0, static_cast<int>(number.unwrap()));
-            }
-            if (auto flag = json["sort_automatically"].asBool()) {
+            if (auto flag = json["sort_automatically"].asBool())
                 logic.sort_automatically = flag.unwrap();
-            }
-            if (auto flag = json["keep_checkpoint_hold"].asBool()) {
+            if (auto flag = json["keep_checkpoint_hold"].asBool())
                 logic.keep_checkpoint_hold = flag.unwrap();
-            }
-            if (auto flag = json["immediate_restart"].asBool()) {
+            if (auto flag = json["immediate_restart"].asBool())
                 logic.immediate_restart = flag.unwrap();
-            }
-            if (auto flag = json["layout_regular_bg"].asBool()) {
+            if (auto flag = json["layout_regular_bg"].asBool())
                 logic.layout_use_regular_bg = flag.unwrap();
-            }
-            if (auto number = json["render_width"].asInt()) {
+            if (auto number = json["render_width"].asInt())
                 logic.render_width = std::max(2, static_cast<int>(number.unwrap()));
-            }
             if (json["render_presets"].isArray()) {
                 logic.render_presets.clear();
                 for (auto const& entry : json["render_presets"]) {
@@ -403,90 +318,65 @@ void Logic::pull_settings() {
                     logic.render_presets.push_back(std::move(preset));
                 }
             }
-            if (auto number = json["render_height"].asInt()) {
+            if (auto number = json["render_height"].asInt())
                 logic.render_height = std::max(2, static_cast<int>(number.unwrap()));
-            }
-            if (auto number = json["render_fps"].asInt()) {
+            if (auto number = json["render_fps"].asInt())
                 logic.render_fps = std::max(1, static_cast<int>(number.unwrap()));
-            }
             if (auto number = json["render_bitrate"].asInt()) {
                 int bits = static_cast<int>(number.unwrap());
                 logic.render_bitrate = bits <= 0 ? 0 : std::max(bits, 1000);
             }
-            if (auto number = json["render_fade_in"].asDouble()) {
+            if (auto number = json["render_fade_in"].asDouble())
                 logic.render_fade_in = static_cast<float>(number.unwrap());
-            }
-            if (auto number = json["render_fade_out"].asDouble()) {
+            if (auto number = json["render_fade_out"].asDouble())
                 logic.render_fade_out = static_cast<float>(number.unwrap());
-            }
-            if (auto number = json["render_after_end"].asDouble()) {
+            if (auto number = json["render_after_end"].asDouble())
                 logic.render_after_end = static_cast<float>(number.unwrap());
-            }
-            if (auto number = json["render_music"].asDouble()) {
+            if (auto number = json["render_music"].asDouble())
                 logic.render_music = static_cast<float>(number.unwrap());
-            }
-            if (auto number = json["render_sfx"].asDouble()) {
+            if (auto number = json["render_sfx"].asDouble())
                 logic.render_sfx = static_cast<float>(number.unwrap());
-            }
-            if (auto flag = json["render_record_pause"].asBool()) {
+            if (auto flag = json["render_record_pause"].asBool())
                 logic.render_record_pause = flag.unwrap();
-            }
-            if (auto flag = json["render_show_level"].asBool()) {
+            if (auto flag = json["render_show_level"].asBool())
                 logic.render_show_lvl = flag.unwrap();
-            }
-            if (auto flag = json["render_screen_shape"].asBool()) {
+            if (auto flag = json["render_screen_shape"].asBool())
                 logic.render_screen_shape = flag.unwrap();
-            }
-            if (auto flag = json["seed_override"].asBool()) {
+            if (auto flag = json["seed_override"].asBool())
                 logic.seed_override = flag.unwrap();
-            }
             if (json.contains("seed_override_value")) {
-                if (auto text = json["seed_override_value"].asString()) {
+                if (auto text = json["seed_override_value"].asString())
                     logic.seed_override_value = std::strtoull(text.unwrap().c_str(), nullptr, 10);
-                }
             }
-            if (auto flag = json["render_ssb"].asBool()) {
+            if (auto flag = json["render_ssb"].asBool())
                 logic.render_ssb_fix = flag.unwrap();
-            }
-            if (auto flag = json["render_speedhack"].asBool()) {
+            if (auto flag = json["render_speedhack"].asBool())
                 logic.render_speedhack = flag.unwrap();
-            }
-            if (auto flag = json["render_color_fix"].asBool()) {
+            if (auto flag = json["render_color_fix"].asBool())
                 logic.render_color_fix = flag.unwrap();
-            }
-            if (auto flag = json["render_hide_labels"].asBool()) {
+            if (auto flag = json["render_hide_labels"].asBool())
                 logic.render_hide_labels = flag.unwrap();
-            }
-            if (auto flag = json["render_hide_pause"].asBool()) {
+            if (auto flag = json["render_hide_pause"].asBool())
                 logic.render_hide_pause = flag.unwrap();
-            }
-            if (auto flag = json["render_auto_exit"].asBool()) {
+            if (auto flag = json["render_auto_exit"].asBool())
                 logic.render_auto_exit = flag.unwrap();
-            }
-            if (auto text = json["render_codec"].asString()) {
+            if (auto text = json["render_codec"].asString())
                 logic.render_codec = text.unwrap();
-            }
-            if (auto text = json["render_extension"].asString()) {
+            if (auto text = json["render_extension"].asString())
                 logic.render_extension = text.unwrap();
-            }
             if (auto text = json["render_preset"].asString()) {
                 auto preset = text.unwrap();
-                if (preset == "ultrafast" || preset == "veryfast" || preset == "medium") {
+                if (preset == "ultrafast" || preset == "veryfast" || preset == "medium")
                     logic.render_preset = preset;
-                }
             }
-            if (auto text = json["render_args"].asString()) {
+            if (auto text = json["render_args"].asString())
                 logic.render_args = text.unwrap();
-            }
-            if (auto text = json["render_name"].asString()) {
+            if (auto text = json["render_name"].asString())
                 logic.render_name = text.unwrap();
-            }
-            if (auto flag = json["fill_hitboxes"].asBool()) {
+            if (auto flag = json["fill_hitboxes"].asBool())
                 logic.fill_hitboxes = flag.unwrap();
-            }
-            if (auto flag = json["hitbox_outline_only"].asBool()) {
+            if (auto flag = json["hitbox_outline_only"].asBool())
                 logic.hitbox_outline_only = flag.unwrap();
-            }
             if (json.contains("hitbox_trail")) {
                 if (auto flag = json["hitbox_trail"].asBool()) {
                     had_trail = true;
@@ -494,57 +384,40 @@ void Logic::pull_settings() {
                     logic.hitbox_trail = trail_file;
                 }
             }
-            if (auto flag = json["hitbox_trail_visual"].asBool()) {
+            if (auto flag = json["hitbox_trail_visual"].asBool())
                 logic.hitbox_trail_visual = flag.unwrap();
-            }
-            if (auto flag = json["hitbox_player"].asBool()) {
+            if (auto flag = json["hitbox_player"].asBool())
                 logic.hitbox_player = flag.unwrap();
-            }
-            if (auto flag = json["hitbox_click"].asBool()) {
+            if (auto flag = json["hitbox_click"].asBool())
                 logic.hitbox_click = flag.unwrap();
-            }
-            if (auto flag = json["hitbox_rotated"].asBool()) {
+            if (auto flag = json["hitbox_rotated"].asBool())
                 logic.hitbox_rotated = flag.unwrap();
-            }
-            if (auto flag = json["hitbox_inner"].asBool()) {
+            if (auto flag = json["hitbox_inner"].asBool())
                 logic.hitbox_inner = flag.unwrap();
-            }
-            if (auto flag = json["hitbox_circle"].asBool()) {
+            if (auto flag = json["hitbox_circle"].asBool())
                 logic.hitbox_circle = flag.unwrap();
-            }
-            if (auto flag = json["hitbox_solid"].asBool()) {
+            if (auto flag = json["hitbox_solid"].asBool())
                 logic.hitbox_solid = flag.unwrap();
-            }
-            if (auto flag = json["hitbox_slope"].asBool()) {
+            if (auto flag = json["hitbox_slope"].asBool())
                 logic.hitbox_slope = flag.unwrap();
-            }
-            if (auto flag = json["hitbox_hazard"].asBool()) {
+            if (auto flag = json["hitbox_hazard"].asBool())
                 logic.hitbox_hazard = flag.unwrap();
-            }
-            if (auto flag = json["hitbox_interact"].asBool()) {
+            if (auto flag = json["hitbox_interact"].asBool())
                 logic.hitbox_interact = flag.unwrap();
-            }
-            if (auto flag = json["hide_activated_objects"].asBool()) {
+            if (auto flag = json["hide_activated_objects"].asBool())
                 logic.hide_activated_objects = flag.unwrap();
-            }
-            if (auto number = json["hitbox_fill_opacity"].asDouble()) {
+            if (auto number = json["hitbox_fill_opacity"].asDouble())
                 logic.hitbox_fill_opacity = static_cast<float>(number.unwrap());
-            }
-            if (auto number = json["hitbox_trail_opacity"].asDouble()) {
+            if (auto number = json["hitbox_trail_opacity"].asDouble())
                 logic.hitbox_trail_opacity = std::clamp(static_cast<float>(number.unwrap()), 0.f, 1.f);
-            }
-            if (auto flag = json["show_trajectory"].asBool()) {
+            if (auto flag = json["show_trajectory"].asBool())
                 logic.show_traj = flag.unwrap();
-            }
-            if (auto flag = json["trajectory_hold"].asBool()) {
+            if (auto flag = json["trajectory_hold"].asBool())
                 logic.traj_hold = flag.unwrap();
-            }
-            if (auto flag = json["trajectory_release"].asBool()) {
+            if (auto flag = json["trajectory_release"].asBool())
                 logic.traj_release = flag.unwrap();
-            }
-            if (auto flag = json["trajectory_swift"].asBool()) {
+            if (auto flag = json["trajectory_swift"].asBool())
                 logic.traj_swift = flag.unwrap();
-            }
             bool had_seconds = false;
             if (auto number = json["trajectory_seconds"].asDouble()) {
                 logic.traj_length = std::clamp(static_cast<float>(number.unwrap()), 0.05f, 4.f);
@@ -553,51 +426,37 @@ void Logic::pull_settings() {
             else if (auto frames = json["trajectory_length"].asInt()) {
                 logic.traj_length = std::clamp(static_cast<float>(frames.unwrap()) / 240.f, 0.05f, 4.f);
             }
-            if (auto number = json["trajectory_width"].asDouble()) {
+            if (auto number = json["trajectory_width"].asDouble())
                 logic.traj_width = static_cast<float>(number.unwrap());
-            }
-            if (!had_seconds && logic.traj_width >= 1.4f) {
+            if (!had_seconds && logic.traj_width >= 1.4f)
                 logic.traj_width = 0.5f;
-            }
-            if (auto flag = json["docked_menu"].asBool()) {
+            if (auto flag = json["docked_menu"].asBool())
                 logic.docked_menu = flag.unwrap();
-            }
-            if (auto number = json["floating_x"].asDouble()) {
+            if (auto number = json["floating_x"].asDouble())
                 logic.floating_x = static_cast<float>(number.unwrap());
-            }
-            if (auto number = json["floating_y"].asDouble()) {
+            if (auto number = json["floating_y"].asDouble())
                 logic.floating_y = static_cast<float>(number.unwrap());
-            }
-            if (auto number = json["frame_bar_x"].asDouble()) {
+            if (auto number = json["frame_bar_x"].asDouble())
                 logic.frame_bar_x = static_cast<float>(number.unwrap());
-            }
-            if (auto number = json["frame_bar_y"].asDouble()) {
+            if (auto number = json["frame_bar_y"].asDouble())
                 logic.frame_bar_y = static_cast<float>(number.unwrap());
-            }
-            if (auto flag = json["floating_hide_in_level"].asBool()) {
+            if (auto flag = json["floating_hide_in_level"].asBool())
                 logic.floating_hide_in_lvl = flag.unwrap();
-            }
             if (auto number = json["floating_size"].asDouble()) {
                 float size = static_cast<float>(number.unwrap());
-                if (std::isfinite(size)) {
+                if (std::isfinite(size))
                     logic.floating_size = std::clamp(size, 24.f, 72.f);
-                }
             }
-            if (auto number = json["menu_scale"].asDouble()) {
+            if (auto number = json["menu_scale"].asDouble())
                 logic.menu_scale = std::clamp(static_cast<float>(number.unwrap()), 0.35f, 3.f);
-            }
-            if (auto number = json["menu_scale_undocked"].asDouble()) {
+            if (auto number = json["menu_scale_undocked"].asDouble())
                 logic.menu_scale_undocked = std::clamp(static_cast<float>(number.unwrap()), 0.35f, 3.f);
-            }
-            if (auto number = json["menu_anim_speed"].asDouble()) {
+            if (auto number = json["menu_anim_speed"].asDouble())
                 logic.menu_anim_speed = std::clamp(static_cast<float>(number.unwrap()), 0.25f, 4.f);
-            }
-            if (auto text = json["theme_name"].asString()) {
+            if (auto text = json["theme_name"].asString())
                 logic.theme_name = text.unwrap();
-            }
-            if (auto number = json["ui_style"].asInt()) {
+            if (auto number = json["ui_style"].asInt())
                 logic.ui_style = static_cast<int>(number.unwrap());
-            }
             if (json["tiles"].isArray()) {
                 logic.tile_places.clear();
                 for (auto const& entry : json["tiles"]) {
@@ -607,37 +466,32 @@ void Logic::pull_settings() {
                     place.hidden = entry["hidden"].asBool().unwrapOr(false);
                     place.x = static_cast<float>(entry["x"].asDouble().unwrapOr(0.0));
                     place.y = static_cast<float>(entry["y"].asDouble().unwrapOr(0.0));
-                    if (!place.key.empty()) {
+                    if (!place.key.empty())
                         logic.tile_places.push_back(std::move(place));
-                    }
                 }
             }
             if (json["open_pages"].isArray()) {
                 logic.open_pages.clear();
                 for (auto const& entry : json["open_pages"]) {
-                    if (auto name = entry.asString()) {
+                    if (auto name = entry.asString())
                         logic.open_pages.push_back(name.unwrap());
-                    }
                 }
             }
             if (json["tab_order"].isArray() && json["tab_order"].size() > 0) {
                 std::vector<std::string> order;
                 for (auto const& entry : json["tab_order"]) {
-                    if (auto name = entry.asString()) {
+                    if (auto name = entry.asString())
                         order.push_back(name.unwrap());
-                    }
                 }
-                if (!order.empty()) {
+                if (!order.empty())
                     logic.tab_order = std::move(order);
-                }
             }
             auto read_color = [&](char const* key, float* color, int count) {
                 if (!json[key].isArray() || static_cast<int>(json[key].size()) < count)
                     return;
                 for (int i = 0; i < count; ++i) {
-                    if (auto channel = json[key][i].asDouble()) {
+                    if (auto channel = json[key][i].asDouble())
                         color[i] = static_cast<float>(channel.unwrap());
-                    }
                 }
             };
             read_color("hitbox_outer_color", logic.hitbox_outer_color, 4);
@@ -651,76 +505,57 @@ void Logic::pull_settings() {
             read_color("hitbox_interact_color", logic.hitbox_interact_color, 4);
             read_color("hitbox_click_color", logic.hitbox_click_color, 4);
             read_color("hitbox_release_color", logic.hitbox_release_color, 4);
-            if (json.contains("trajectory_color")) {
+            if (json.contains("trajectory_color"))
                 read_color("trajectory_color", logic.traj_color, 4);
-            }
-            if (json.contains("trajectory_swift_color")) {
+            if (json.contains("trajectory_swift_color"))
                 read_color("trajectory_swift_color", logic.traj_swift_color, 4);
-            }
-            if (json.contains("trajectory_release_color")) {
+            if (json.contains("trajectory_release_color"))
                 read_color("trajectory_release_color", logic.traj_release_color, 4);
-            }
             read_color("editor_p1", logic.editor_p1, 4);
             read_color("editor_p2", logic.editor_p2, 4);
             read_color("editor_sel_p1", logic.editor_sel_p1, 4);
             read_color("editor_sel_p2", logic.editor_sel_p2, 4);
-            if (auto text = json["rename_format"].asString()) {
+            if (auto text = json["rename_format"].asString())
                 logic.rename_format = text.unwrap();
-            }
-            if (auto text = json["clickpack"].asString()) {
+            if (auto text = json["clickpack"].asString())
                 logic.clickpack = text.unwrap();
-            }
             if (json.contains("clickpack_p2")) {
-                if (auto text = json["clickpack_p2"].asString()) {
+                if (auto text = json["clickpack_p2"].asString())
                     logic.clickpack_p2 = text.unwrap();
-                }
             }
             else {
                 logic.clickpack_p2 = logic.clickpack;
             }
-            if (auto flag = json["clickbot"].asBool()) {
+            if (auto flag = json["clickbot"].asBool())
                 logic.clickbot = flag.unwrap();
-            }
-            if (auto number = json["frame_advance_hold_duration"].asInt()) {
+            if (auto number = json["frame_advance_hold_duration"].asInt())
                 logic.advance_hold_ms = static_cast<unsigned>(number.unwrap());
-            }
-            if (auto number = json["frame_advance_delay"].asInt()) {
+            if (auto number = json["frame_advance_delay"].asInt())
                 logic.advance_delay_ms = static_cast<unsigned>(number.unwrap());
-            }
-            if (auto number = json["frame_advance_speed"].asDouble()) {
+            if (auto number = json["frame_advance_speed"].asDouble())
                 logic.advance_speed = std::clamp(static_cast<float>(number.unwrap()), 1.f, 200.f);
-            }
-            if (auto flag = json["pause_before_kill"].asBool()) {
+            if (auto flag = json["pause_before_kill"].asBool())
                 logic.pause_before_kill = flag.unwrap();
-            }
-            if (auto flag = json["trajectory_autoclicker"].asBool()) {
+            if (auto flag = json["trajectory_autoclicker"].asBool())
                 logic.traj_autoclicker = flag.unwrap();
-            }
-            if (auto flag = json["trajectory_moving_objects"].asBool()) {
+            if (auto flag = json["trajectory_moving_objects"].asBool())
                 logic.traj_moving_objects = flag.unwrap();
-            }
-            if (auto flag = json["backstep"].asBool()) {
+            if (auto flag = json["backstep"].asBool())
                 logic.backstep = flag.unwrap();
-            }
-            if (auto flag = json["velocity_unrounding"].asBool()) {
+            if (auto flag = json["velocity_unrounding"].asBool())
                 logic.velocity_unrounding = flag.unwrap();
-            }
-            if (auto percent = json["backstep_percent"].asInt()) {
+            if (auto percent = json["backstep_percent"].asInt())
                 logic.backstep_percent = std::clamp(static_cast<int>(percent.unwrap()), 1, 200);
-            }
-            if (auto range = json["best_frame_range"].asInt()) {
+            if (auto range = json["best_frame_range"].asInt())
                 logic.best_frame_range = std::clamp(static_cast<int>(range.unwrap()), 1, 2000);
-            }
-            if (auto flag = json["best_frame_click"].asBool()) {
+            if (auto flag = json["best_frame_click"].asBool())
                 logic.best_frame_click = flag.unwrap();
-            }
             if (auto flag = json["best_frame_auto"].asBool())
                 logic.best_frame_auto = flag.unwrap();
             else if (auto amt = json["backstep_saves"].asInt())
                 logic.backstep_percent = std::clamp(static_cast<int>(std::lround(amt.unwrap() * 100.0 / 240.0)), 1, 200);
-            if (auto flag = json["pause_at_trajectory_length"].asBool()) {
+            if (auto flag = json["pause_at_trajectory_length"].asBool())
                 logic.pause_at_traj_length = flag.unwrap();
-            }
             logic.pause_at_traj_length = false;
             if (auto number = json["pause_trajectory_ms"].asInt()) {
                 logic.pause_traj_ms = static_cast<unsigned>(std::clamp(static_cast<int>(number.unwrap()), 1, 4000));
@@ -728,68 +563,51 @@ void Logic::pull_settings() {
             else if (auto number = json["pause_trajectory_seconds"].asDouble()) {
                 logic.pause_traj_ms = static_cast<unsigned>(std::clamp(static_cast<int>(std::lround(number.unwrap() * 1000.0)), 1, 4000));
             }
-            if (auto number = json["percent_accuracy"].asInt()) {
+            if (auto number = json["percent_accuracy"].asInt())
                 logic.percent_accuracy = std::clamp(static_cast<int>(number.unwrap()), 0, 6);
-            }
-            if (auto number = json["clickbot_volume"].asDouble()) {
+            if (auto number = json["clickbot_volume"].asDouble())
                 logic.clickbot_volume = static_cast<float>(number.unwrap());
-            }
             if (json.contains("clickbot_volume_p2")) {
-                if (auto number = json["clickbot_volume_p2"].asDouble()) {
+                if (auto number = json["clickbot_volume_p2"].asDouble())
                     logic.clickbot_volume_p2 = static_cast<float>(number.unwrap());
-                }
             }
             else {
                 logic.clickbot_volume_p2 = logic.clickbot_volume;
             }
-            if (auto flag = json["p1_softs"].asBool()) {
+            if (auto flag = json["p1_softs"].asBool())
                 logic.p1_softs = flag.unwrap();
-            }
-            if (auto flag = json["p2_softs"].asBool()) {
+            if (auto flag = json["p2_softs"].asBool())
                 logic.p2_softs = flag.unwrap();
-            }
-            if (auto flag = json["p1_hards"].asBool()) {
+            if (auto flag = json["p1_hards"].asBool())
                 logic.p1_hards = flag.unwrap();
-            }
-            if (auto flag = json["p2_hards"].asBool()) {
+            if (auto flag = json["p2_hards"].asBool())
                 logic.p2_hards = flag.unwrap();
-            }
-            if (auto flag = json["p1_micros"].asBool()) {
+            if (auto flag = json["p1_micros"].asBool())
                 logic.p1_micros = flag.unwrap();
-            }
-            if (auto flag = json["p2_micros"].asBool()) {
+            if (auto flag = json["p2_micros"].asBool())
                 logic.p2_micros = flag.unwrap();
-            }
-            if (auto number = json["p1_softs_time"].asDouble()) {
+            if (auto number = json["p1_softs_time"].asDouble())
                 logic.p1_soft_ms = static_cast<float>(number.unwrap());
-            }
-            if (auto number = json["p2_softs_time"].asDouble()) {
+            if (auto number = json["p2_softs_time"].asDouble())
                 logic.p2_soft_ms = static_cast<float>(number.unwrap());
-            }
-            if (auto number = json["p1_hards_time"].asDouble()) {
+            if (auto number = json["p1_hards_time"].asDouble())
                 logic.p1_hard_seconds = static_cast<float>(number.unwrap());
-            }
-            if (auto number = json["p2_hards_time"].asDouble()) {
+            if (auto number = json["p2_hards_time"].asDouble())
                 logic.p2_hard_seconds = static_cast<float>(number.unwrap());
-            }
-            if (auto number = json["p1_micros_time"].asInt()) {
+            if (auto number = json["p1_micros_time"].asInt())
                 logic.p1_micro_ms = static_cast<int>(number.unwrap());
-            }
-            if (auto number = json["p2_micros_time"].asInt()) {
+            if (auto number = json["p2_micros_time"].asInt())
                 logic.p2_micro_ms = static_cast<int>(number.unwrap());
-            }
             if (json["backgroundColor"].isArray() && json["backgroundColor"].size() >= 3) {
                 for (int i = 0; i < 3; ++i) {
-                    if (auto channel = json["backgroundColor"][i].asDouble()) {
+                    if (auto channel = json["backgroundColor"][i].asDouble())
                         logic.backgroundColor[i] = static_cast<float>(channel.unwrap());
-                    }
                 }
             }
             if (json["blocksColor"].isArray() && json["blocksColor"].size() >= 3) {
                 for (int i = 0; i < 3; ++i) {
-                    if (auto channel = json["blocksColor"][i].asDouble()) {
+                    if (auto channel = json["blocksColor"][i].asDouble())
                         logic.blocks_color[i] = static_cast<float>(channel.unwrap());
-                    }
                 }
             }
             logic.frame_label = Logic::get().read_placement(json["frame_label"], logic.frame_label);
@@ -805,15 +623,12 @@ void Logic::pull_settings() {
             logic.utility_label = Logic::get().read_placement(json["utility_label"], logic.utility_label);
             logic.death_label = Logic::get().read_placement(json["death_label"], logic.death_label);
             logic.safe_mode_label = Logic::get().read_placement(json["safe_mode_label"], logic.safe_mode_label);
-            if (auto number = json["press_interval"].asInt()) {
+            if (auto number = json["press_interval"].asInt())
                 logic.auto_click.press_interval = static_cast<int>(number.unwrap());
-            }
-            if (auto number = json["release_interval"].asInt()) {
+            if (auto number = json["release_interval"].asInt())
                 logic.auto_click.release_interval = static_cast<int>(number.unwrap());
-            }
-            if (auto number = json["autoclick_swifts"].asInt()) {
+            if (auto number = json["autoclick_swifts"].asInt())
                 logic.auto_click.swifts = std::clamp(static_cast<int>(number.unwrap()), 0, 8);
-            }
         }
     }
 
@@ -843,9 +658,8 @@ void Logic::pull_settings() {
     logic.fill_hitboxes = Logic::read_bool("fill-hitboxes", logic.fill_hitboxes);
     logic.hitbox_trail = Logic::read_bool("hitbox-trail", logic.hitbox_trail);
     logic.hitbox_click = Logic::read_bool("hitbox-click", logic.hitbox_click);
-    if (had_trail) {
+    if (had_trail)
         logic.hitbox_trail = trail_file;
-    }
     logic.layout_mode = Logic::read_bool("layout-mode", logic.layout_mode);
     logic.disable_shakes = Logic::read_bool("disable-shakes", logic.disable_shakes);
     logic.show_frame = Logic::read_bool("show-frame", logic.show_frame);
@@ -862,29 +676,23 @@ void Logic::pull_settings() {
     logic.auto_click.swifts = std::clamp(Logic::read_int("autoclick-swifts", logic.auto_click.swifts), 0, 8);
     logic.autoclick_auto_disable = Logic::read_bool("autoclick-auto-disable", logic.autoclick_auto_disable);
     auto pack = Logic::get().read_folder_setting("clickpack");
-    if (!pack.empty()) {
+    if (!pack.empty())
         logic.clickpack = pack;
-    }
     if (logic.clickpack.empty()) {
         auto example = Logic::get().save_root() / "clickpacks" / "example";
         std::error_code error;
-        if (fs::is_directory(example, error)) {
+        if (fs::is_directory(example, error))
             logic.clickpack = example.string();
-        }
     }
-    if (logic.clickpack_p2.empty()) {
+    if (logic.clickpack_p2.empty())
         logic.clickpack_p2 = logic.clickpack;
-    }
-    if (logic.fps < 1.f) {
+    if (logic.fps < 1.f)
         logic.fps = 240.f;
-    }
     logic.macro_fps = logic.fps;
-    if (logic.speedhack <= 0.f) {
+    if (logic.speedhack <= 0.f)
         logic.speedhack = 1.f;
-    }
-    if (logic.max_cps <= 0.f) {
+    if (logic.max_cps <= 0.f)
         logic.max_cps = static_cast<float>(Logic::MAX_PER_SECOND);
-    }
     logic.speedhack = 1.f;
     logic.format = logic.save_debug ? ReplayFormat::MetaDebug : ReplayFormat::Meta;
 }
@@ -1191,16 +999,15 @@ void Logic::save_settings_file() {
     json["death_label"] = Logic::get().placement_json(logic.death_label);
     json["safe_mode_label"] = Logic::get().placement_json(logic.safe_mode_label);
 
+    // geode keeps keybinds in the same file & i used to wipe them :/
     auto* mod = Mod::get();
     for (auto const& key : mod->getSettingKeys()) {
         auto setting = mod->getSetting(key);
-        if (!setting) {
+        if (!setting)
             continue;
-        }
         auto* binds = typeinfo_cast<KeybindSettingV3*>(setting.get());
-        if (!binds) {
+        if (!binds)
             continue;
-        }
         matjson::Value list = matjson::Value::array();
         for (auto const& bind : binds->getValue()) {
             list.push(matjson::makeObject({
@@ -1210,19 +1017,16 @@ void Logic::save_settings_file() {
         }
         json[key] = std::move(list);
     }
-    if (auto* manager = ModSettingsManager::from(mod)) {
+    if (auto* manager = ModSettingsManager::from(mod))
         manager->getSaveData() = json;
-    }
 
     {
         std::ofstream file(Logic::get().save_root() / "settings.json");
-        if (file) {
+        if (file)
             file << json.dump(4);
-        }
     }
-    if (!bulk_settings) {
+    if (!bulk_settings)
         (void)Mod::get()->saveData();
-    }
 }
 
 #ifndef NOMINMAX
