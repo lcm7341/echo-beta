@@ -5,6 +5,7 @@
 // resets: held buttons, the queue, the seed, click counters & labels all go back to a known state. a key still down from
 //   before the reset would fire again & look like a new press, so it is swallowed until its really let go
 // holds across death & respawn are remembered & put back silently. no new press = no jump & no flipped gravity
+// practice checkpoints, maintain / same gravity, follow player & the seed handling are in here too
 #include "Logic/logic.hpp"
 #include "Hooks/step.hpp"
 
