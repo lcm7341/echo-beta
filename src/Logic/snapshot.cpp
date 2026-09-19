@@ -192,7 +192,12 @@ void Logic::apply_player(PlayerObject* player, PlayerSave const& shot) {
         player->toggleSwingMode(true, true);
     if (player->m_isUpsideDown != shot.upside_down)
         player->flipGravity(shot.upside_down, true);
-    // TODO mini cube respawns full size
+    // mini cube respawned full size once :/
+    {
+        bool mini = shot.vehicle_size != 1.f;
+        player->m_vehicleSize = mini ? 1.f : 0.6f;
+        player->togglePlayerScale(mini, true);
+    }
     player->setPosition({ shot.x, shot.y });
     player->setRotation(shot.rotation);
     player->m_yVelocity = shot.yVelocity;
