@@ -167,4 +167,6 @@ public:
 	static bool read_packed_echo(fs::path const& path);
 	static bool read_plain(fs::path const& path);
 	static bool write_plain(fs::path const& path);
+	static bool read_gdr(fs::path const& path);
+	static bool write_gdr(fs::path const& path);
 };

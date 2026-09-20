@@ -168,9 +168,15 @@ bool ReplayIO::fill_raw(fs::path const& path) {
     if (ext == ".txt") {
         return ReplayIO::read_plain(path);
     }
+    if (ext == ".gdr") {
+        return ReplayIO::read_gdr(path);
+    }
     std::ifstream file(path);
     auto parsed = matjson::Value::parse(file);
     auto const& json = parsed.unwrap();
+    if (json["inputs"].isArray() && json.contains("framerate")) {
+        return ReplayIO::read_gdr(path);
+    }
     if (json.contains("inputs")) {
         return ReplayIO::read_echo_json(path);
     }
