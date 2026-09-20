@@ -168,6 +168,9 @@ bool ReplayIO::fill_raw(fs::path const& path) {
     if (ext == ".txt") {
         return ReplayIO::read_plain(path);
     }
+    if (ext == ".slc") {
+        return ReplayIO::read_silicate(path);
+    }
     if (ext == ".tcm") {
         return ReplayIO::read_tcbot(path);
     }
