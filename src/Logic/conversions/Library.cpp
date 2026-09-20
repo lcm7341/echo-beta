@@ -96,8 +96,39 @@ bool Logic::write_file() {
 }
 
 bool Logic::export_kind(std::string_view kind) {
-    // TODO
-    return {};
+    log::debug("export kind");
+    if (kind == "JSON") {
+        auto path = ReplayIO::unique_file(Logic::get().save_root() / "converted", ReplayIO::sanitize(Logic::get().macro_name), ".echo.json");
+        bool ok = ReplayIO::save_as(path, ReplayIO::write_echo_json);
+        Logic::get().notify(ok ? fmt::format("Exported {}", path.filename().string()) : "Export failed", ok);
+        return ok;
+    }
+    auto const base = ReplayIO::sanitize(Logic::get().macro_name);
+    auto converted = Logic::get().save_root() / "converted";
+    fs::path path;
+    bool ok = false;
+    if (kind == "Plain Text") {
+        path = ReplayIO::unique_file(converted, base, ".txt");
+        ok = ReplayIO::save_as(path, ReplayIO::write_plain);
+    }
+    else if (kind == "Silicate") {
+        path = ReplayIO::unique_file(converted, base, ".slc");
+        ok = ReplayIO::save_as(path, ReplayIO::write_silicate);
+    }
+    else if (kind == "TCBot") {
+        path = ReplayIO::unique_file(converted, base, ".tcm");
+        ok = ReplayIO::save_as(path, ReplayIO::write_tcbot);
+    }
+    else if (kind == "GDR") {
+        path = ReplayIO::unique_file(converted, base, ".gdr");
+        ok = ReplayIO::save_as(path, ReplayIO::write_gdr);
+    }
+    else {
+        Logic::get().notify("Unknown convert format", false);
+        return false;
+    }
+    Logic::get().notify(ok ? fmt::format("Exported {}", path.filename().string()) : "Export failed", ok);
+    return ok;
 }
 
 bool Logic::append_sequence_file(fs::path const& path, int amount) {

@@ -69,6 +69,13 @@
 			"default": "None",
 			"category": "gameplay"
 		},
+		"key-no-overwrite": {
+			"type": "keybind",
+			"platforms": ["win"],
+			"name": "No overwrite",
+			"default": "None",
+			"category": "gameplay"
+		},
 		"key-ignore": {
 			"type": "keybind",
 			"platforms": ["win"],
