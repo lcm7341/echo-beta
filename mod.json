@@ -69,6 +69,13 @@
 			"default": "None",
 			"category": "gameplay"
 		},
+		"key-shakes": {
+			"type": "keybind",
+			"platforms": ["win"],
+			"name": "Disable shake",
+			"default": "None",
+			"category": "gameplay"
+		},
 		"key-no-overwrite": {
 			"type": "keybind",
 			"platforms": ["win"],

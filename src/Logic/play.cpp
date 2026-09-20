@@ -858,7 +858,13 @@ void Logic::set_game_random_state(uint64_t state) {
 }
 
 void Logic::note_rand_trigger(int unique_id, uint64_t* state) {
-    // later
+    if (!state)
+        return;
+    for (auto const& trigger : live_rand()) {
+        if (trigger.state == state)
+            return;
+    }
+    live_rand().push_back({ unique_id, state });
 }
 
 void Logic::clear_rand_triggers() {
@@ -866,7 +872,12 @@ void Logic::clear_rand_triggers() {
 }
 
 void Logic::seed_rand_triggers(uint64_t seed) {
-    // todo
+    for (auto& trigger : live_rand()) {
+        if (!trigger.state) {
+            continue;
+        }
+        *trigger.state = seed ^ (static_cast<uint64_t>(trigger.unique_id) * 2137ull);
+    }
 }
 
 void Logic::roll_live_seed(PlayLayer* play) {
