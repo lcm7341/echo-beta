@@ -168,6 +168,9 @@ bool ReplayIO::fill_raw(fs::path const& path) {
     if (ext == ".txt") {
         return ReplayIO::read_plain(path);
     }
+    if (ext == ".tcm") {
+        return ReplayIO::read_tcbot(path);
+    }
     if (ext == ".gdr") {
         return ReplayIO::read_gdr(path);
     }
