@@ -97,7 +97,6 @@ bool Logic::write_file() {
 }
 
 bool Logic::export_kind(std::string_view kind) {
-    log::debug("export kind");
     if (kind == "JSON") {
         auto path = ReplayIO::unique_file(Logic::get().save_root() / "converted", ReplayIO::sanitize(Logic::get().macro_name), ".echo.json");
         bool ok = ReplayIO::save_as(path, ReplayIO::write_echo_json);
@@ -173,6 +172,7 @@ std::optional<MacroSnap> ReplayIO::load_snap(fs::path const& path) {
 }
 
 bool ReplayIO::fill_replay(fs::path const& path) {
+    // files are NOT trusted. if reading throws the file fails & the game lives
     bool filled = false;
     try {
         filled = ReplayIO::fill_raw(path);
@@ -180,9 +180,8 @@ bool ReplayIO::fill_replay(fs::path const& path) {
     catch (...) {
         filled = false;
     }
-    if (!filled) {
+    if (!filled)
         return false;
-    }
     auto& logic = Logic::get();
     std::ranges::for_each(logic.inputs, [](Frame& input) {
         input.number += FILE_FRAME_SHIFT;
@@ -197,55 +196,44 @@ bool ReplayIO::fill_replay(fs::path const& path) {
 
 bool ReplayIO::fill_raw(fs::path const& path) {
     auto ext = ReplayIO::lower_ext(path);
-    if (ext == ".txt") {
+    if (ext == ".txt")
         return ReplayIO::read_plain(path);
-    }
-    if (ext == ".slc") {
+    if (ext == ".slc")
         return ReplayIO::read_silicate(path);
-    }
-    if (ext == ".tcm") {
+    if (ext == ".tcm")
         return ReplayIO::read_tcbot(path);
-    }
-    if (ext == ".gdr") {
+    if (ext == ".gdr")
         return ReplayIO::read_gdr(path);
-    }
     if (ext == ".echo") {
         std::ifstream probe(path);
         char first = 0;
         probe.get(first);
-        if (first == '{') {
+        if (first == '{')
             return ReplayIO::read_echo_json(path);
-        }
-        if (first == 'E') {
+        if (first == 'E')
             return ReplayIO::read_packed_echo(path);
-        }
         return ReplayIO::read_legacy_echo(path);
     }
     std::ifstream file(path);
     auto parsed = matjson::Value::parse(file);
-    if (!parsed) {
+    if (!parsed)
         return ReplayIO::read_legacy_echo(path);
-    }
     auto const& json = parsed.unwrap();
-    if (json["inputs"].isArray() && json.contains("framerate")) {
+    if (json["inputs"].isArray() && json.contains("framerate"))
         return ReplayIO::read_gdr(path);
-    }
-    if (json.contains("inputs")) {
+    if (json.contains("inputs"))
         return ReplayIO::read_echo_json(path);
-    }
     return ReplayIO::read_legacy_echo(path);
 }
 
 bool Logic::read_file(fs::path const& path) {
-    log::debug("read file");
     if (!fs::exists(path)) {
         Logic::get().notify("File not found", false);
         return false;
     }
     std::string title = ReplayIO::import_stem(path);
-    if (title.empty()) {
+    if (title.empty())
         title = "Replay";
-    }
     Logic::get().notify(fmt::format("Loading {}", title), true);
     static std::atomic<unsigned> ticket{ 0 };
     unsigned mine = ticket.fetch_add(1) + 1;
@@ -309,9 +297,8 @@ void ReplayIO::restore_macro(MacroSnap const& snap) {
     auto& logic = Logic::get();
     logic.inputs = snap.inputs;
     logic.poses = snap.poses;
-    if (logic.poses.size() != logic.inputs.size()) {
+    if (logic.poses.size() != logic.inputs.size())
         logic.poses.clear();
-    }
     logic.input_ids.clear();
     logic.touch_inputs();
     Logic::get().refresh_live_hold();
@@ -333,7 +320,6 @@ void ReplayIO::restore_macro(MacroSnap const& snap) {
 }
 
 bool ReplayIO::file_is_packed(fs::path const& path) {
-    log::debug("file is packed");
     std::ifstream file(path, std::ios::binary);
     char magic[4] = {};
     file.read(magic, 4);
@@ -348,9 +334,8 @@ std::string ReplayIO::import_stem(fs::path const& path) {
     });
     auto cut = [&](char const* ext) {
         size_t n = std::char_traits<char>::length(ext);
-        if (lower.size() < n || lower.compare(lower.size() - n, n, ext) != 0) {
+        if (lower.size() < n || lower.compare(lower.size() - n, n, ext) != 0)
             return false;
-        }
         file.resize(file.size() - n);
         lower.resize(lower.size() - n);
         return true;
@@ -364,9 +349,8 @@ std::string ReplayIO::import_stem(fs::path const& path) {
     cut(".slc");
     cut(".tcm");
     cut(".gdr");
-    if (file.empty()) {
+    if (file.empty())
         file = path.stem().string();
-    }
     return file;
 }
 
@@ -379,9 +363,8 @@ int Logic::convert_legacy_echoes() {
     }
     std::vector<fs::path> files;
     for (auto const& entry : fs::directory_iterator(dir, error)) {
-        if (error || !entry.is_regular_file()) {
+        if (error || !entry.is_regular_file())
             continue;
-        }
         files.push_back(entry.path());
     }
     auto saved = ReplayIO::capture_macro();
@@ -393,18 +376,15 @@ int Logic::convert_legacy_echoes() {
         std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char c) {
             return static_cast<char>(std::tolower(c));
         });
-        if (lower.ends_with(".old.echo")) {
+        if (lower.ends_with(".old.echo"))
             continue;
-        }
         bool legacy_echo = lower.ends_with(".echo") && !lower.ends_with(".json");
-        if (legacy_echo && ReplayIO::file_is_packed(path)) {
+        if (legacy_echo && ReplayIO::file_is_packed(path))
             continue;
-        }
         bool known = lower.ends_with(".txt") || lower.ends_with(".json") || lower.ends_with(".slc") || lower.ends_with(".tcm") ||
                      lower.ends_with(".gdr") || legacy_echo;
-        if (!known) {
+        if (!known)
             continue;
-        }
         auto stem = ReplayIO::import_stem(path);
         if (!legacy_echo && fs::exists(dir / (stem + ".echo"))) {
             ++skipped;
@@ -434,18 +414,15 @@ int Logic::convert_legacy_echoes() {
         ReplayIO::restore_macro(saved);
     }
     std::string message = fmt::format("Converted {} replay{}", converted, converted == 1 ? "" : "s");
-    if (skipped) {
+    if (skipped)
         message += fmt::format(", {} already converted", skipped);
-    }
-    if (failed) {
+    if (failed)
         message += fmt::format(", {} failed", failed);
-    }
     Logic::get().notify(message, failed == 0);
     return converted;
 }
 
 void Logic::import_replays() {
-    log::debug("import replays");
     using namespace geode::utils::file;
     FilePickOptions options;
     options.defaultPath = Logic::get().save_root() / "replays";
@@ -475,9 +452,8 @@ void Logic::import_replays() {
             ReplayIO::restore_macro(saved);
         }
         std::string message = fmt::format("Imported {} replay{}", copied, copied == 1 ? "" : "s");
-        if (failed) {
+        if (failed)
             message += fmt::format(", {} failed", failed);
-        }
         Logic::get().notify(message, failed == 0);
     });
 }
