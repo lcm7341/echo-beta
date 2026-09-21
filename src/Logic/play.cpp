@@ -323,7 +323,7 @@ void Logic::reinforce_routed_hold(PlayerObject* body) {
     }
 }
 
-void Logic::save_holds(PlayLayer* play) {
+void Logic::capture_restart_holds(PlayLayer* play) {
     restart_hold_captured = false;
     traj_flip_p1 = traj_flip_p2 = false;
     if (!play)

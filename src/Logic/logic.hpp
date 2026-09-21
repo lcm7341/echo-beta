@@ -763,7 +763,7 @@ public:
 	void clear_rand_triggers();
 	uint64_t game_random_state();
 	void set_game_random_state(uint64_t state);
-	void save_holds(PlayLayer* play);
+	void capture_restart_holds(PlayLayer* play);
 	void match_live_holds(PlayLayer* play);
 	void poll_hold_block();
 	void clear_stuck_death(PlayLayer* play);

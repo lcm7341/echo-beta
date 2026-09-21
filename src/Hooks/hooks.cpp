@@ -461,7 +461,7 @@ class $modify(EchoPlayLayer, PlayLayer) {
         logic.resetting = true;
         logic.restored_checkpoint = nullptr;
         Logic::get().sync_checkpoints(this);
-        Logic::get().save_holds(this);
+        Logic::get().capture_restart_holds(this);
         Logic::get().keep_lvl_seed = Logic::get().get_latest_checkpoint(this);
         bool roll_seed = !Logic::get().keep_lvl_seed && !logic.seed_override && !logic.is_playing();
         if (!roll_seed)
