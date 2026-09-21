@@ -371,8 +371,77 @@ std::string ReplayIO::import_stem(fs::path const& path) {
 }
 
 int Logic::convert_legacy_echoes() {
-    // todo
-    return {};
+    auto dir = Logic::get().save_root() / "replays";
+    std::error_code error;
+    if (!fs::exists(dir, error)) {
+        Logic::get().notify("No replays folder yet", false);
+        return 0;
+    }
+    std::vector<fs::path> files;
+    for (auto const& entry : fs::directory_iterator(dir, error)) {
+        if (error || !entry.is_regular_file()) {
+            continue;
+        }
+        files.push_back(entry.path());
+    }
+    auto saved = ReplayIO::capture_macro();
+    int converted = 0;
+    int failed = 0;
+    int skipped = 0;
+    for (auto const& path : files) {
+        std::string lower = path.filename().string();
+        std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char c) {
+            return static_cast<char>(std::tolower(c));
+        });
+        if (lower.ends_with(".old.echo")) {
+            continue;
+        }
+        bool legacy_echo = lower.ends_with(".echo") && !lower.ends_with(".json");
+        if (legacy_echo && ReplayIO::file_is_packed(path)) {
+            continue;
+        }
+        bool known = lower.ends_with(".txt") || lower.ends_with(".json") || lower.ends_with(".slc") || lower.ends_with(".tcm") ||
+                     lower.ends_with(".gdr") || legacy_echo;
+        if (!known) {
+            continue;
+        }
+        auto stem = ReplayIO::import_stem(path);
+        if (!legacy_echo && fs::exists(dir / (stem + ".echo"))) {
+            ++skipped;
+            continue;
+        }
+        if (!ReplayIO::fill_replay(path)) {
+            ++failed;
+            ReplayIO::restore_macro(saved);
+            continue;
+        }
+        if (legacy_echo) {
+            fs::rename(path, dir / (stem + ".old.echo"), error);
+            if (error) {
+                ++failed;
+                error.clear();
+                ReplayIO::restore_macro(saved);
+                continue;
+            }
+        }
+        auto dest = ReplayIO::unique_file(dir, stem, ".echo");
+        if (!ReplayIO::save_as(dest, ReplayIO::write_packed_echo)) {
+            ++failed;
+            ReplayIO::restore_macro(saved);
+            continue;
+        }
+        ++converted;
+        ReplayIO::restore_macro(saved);
+    }
+    std::string message = fmt::format("Converted {} replay{}", converted, converted == 1 ? "" : "s");
+    if (skipped) {
+        message += fmt::format(", {} already converted", skipped);
+    }
+    if (failed) {
+        message += fmt::format(", {} failed", failed);
+    }
+    Logic::get().notify(message, failed == 0);
+    return converted;
 }
 
 void Logic::import_replays() {
