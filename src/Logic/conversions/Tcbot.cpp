@@ -183,8 +183,37 @@ public:
 };
 
 bool ReplayIO::read_tcbot(fs::path const& path) {
-    // TODO
-    return {};
+    ByteCursor in{ ReplayIO::read_all(path) };
+    if (in.data.size() < TcbotReplay::header.size() + TcbotReplay::meta_size) {
+        return false;
+    }
+    if (std::memcmp(in.data.data(), TcbotReplay::header.data(), TcbotReplay::header.size()) != 0) {
+        return false;
+    }
+    size_t meta = TcbotReplay::header.size();
+    uint8_t version = in.data[meta];
+    uint8_t flags = in.data[meta + 2];
+    float rate = 0.f;
+    std::memcpy(&rate, in.data.data() + meta + 4, sizeof(rate));
+    float tps = rate;
+    if (version == 2 && !(flags & TcbotReplay::tps_flag) && rate > 0.f) {
+        tps = 1.f / rate;
+        float whole = std::round(tps);
+        if (whole > 0.f && static_cast<float>(1.0 / whole) == rate) {
+            tps = whole;
+        }
+    }
+    in.at = meta + TcbotReplay::meta_size;
+    TcbotReplay replay;
+    bool ok = version == 1 ? replay.read_v1(in) : version == 2 ? replay.read_v2(in)
+                                                               : false;
+    if (!ok) {
+        return false;
+    }
+    for (auto& input : replay.inputs)
+        input.number = std::max(input.number - 1, 0);
+    ReplayIO::adopt_inputs(std::move(replay.inputs), tps);
+    return true;
 }
 
 bool ReplayIO::write_tcbot(fs::path const& path) {

@@ -144,6 +144,8 @@ public:
 	static bool read_echo_json(fs::path const& path);
 	template <typename A1>
 	static bool read_pod(std::vector<uint8_t> const& data, size_t& cursor, A1& value);
+	static bool parse_legacy(std::vector<uint8_t> const& data, int string_bytes, bool with_meta, LegacyMacro& out);
+	static std::optional<LegacyMacro> read_legacy_bytes(std::vector<uint8_t> const& data);
 	static std::vector<uint8_t> read_all(fs::path const& path);
 	static bool read_legacy_echo(fs::path const& path);
 	static std::optional<MacroSnap> load_snap(fs::path const& path);

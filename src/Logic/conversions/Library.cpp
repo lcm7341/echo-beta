@@ -209,8 +209,23 @@ bool ReplayIO::fill_raw(fs::path const& path) {
     if (ext == ".gdr") {
         return ReplayIO::read_gdr(path);
     }
+    if (ext == ".echo") {
+        std::ifstream probe(path);
+        char first = 0;
+        probe.get(first);
+        if (first == '{') {
+            return ReplayIO::read_echo_json(path);
+        }
+        if (first == 'E') {
+            return ReplayIO::read_packed_echo(path);
+        }
+        return ReplayIO::read_legacy_echo(path);
+    }
     std::ifstream file(path);
     auto parsed = matjson::Value::parse(file);
+    if (!parsed) {
+        return ReplayIO::read_legacy_echo(path);
+    }
     auto const& json = parsed.unwrap();
     if (json["inputs"].isArray() && json.contains("framerate")) {
         return ReplayIO::read_gdr(path);
