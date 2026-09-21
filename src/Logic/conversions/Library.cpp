@@ -19,7 +19,7 @@ namespace chrono = std::chrono;
 using namespace geode::prelude;
 
 namespace {
-    constexpr int FILE_FRAME_SHIFT = 0;
+    constexpr int FILE_FRAME_SHIFT = 1;
     constexpr char const* AUTOSAVE_SUFFIX = ".autosave";
 
     fs::path replays_dir() {
