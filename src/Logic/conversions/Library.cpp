@@ -1,5 +1,6 @@
 // saving & loading macros. write_file / read_file are the way in, the formats themselves are the other files in here
 // also autosave, merging 2 macros & importing other bots formats
+// a file is never trusted: if it fails to parse it is rejected & the macro thats loaded is left alone
 #include "Logic/logic.hpp"
 #include "Logic/conversions/codecs.hpp"
 #include <Geode/utils/async.hpp>
@@ -325,8 +326,33 @@ bool ReplayIO::file_is_packed(fs::path const& path) {
 }
 
 std::string ReplayIO::import_stem(fs::path const& path) {
-    // TODO
-    return {};
+    std::string file = path.filename().string();
+    std::string lower = file;
+    std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char c) {
+        return static_cast<char>(std::tolower(c));
+    });
+    auto cut = [&](char const* ext) {
+        size_t n = std::char_traits<char>::length(ext);
+        if (lower.size() < n || lower.compare(lower.size() - n, n, ext) != 0) {
+            return false;
+        }
+        file.resize(file.size() - n);
+        lower.resize(lower.size() - n);
+        return true;
+    };
+    cut(".echo.json");
+    cut(".gdr.json");
+    cut(".json");
+    cut(".echo");
+    cut(AUTOSAVE_SUFFIX);
+    cut(".txt");
+    cut(".slc");
+    cut(".tcm");
+    cut(".gdr");
+    if (file.empty()) {
+        file = path.stem().string();
+    }
+    return file;
 }
 
 int Logic::convert_legacy_echoes() {
@@ -335,5 +361,39 @@ int Logic::convert_legacy_echoes() {
 }
 
 void Logic::import_replays() {
-    // TODO
+    log::debug("import replays");
+    using namespace geode::utils::file;
+    FilePickOptions options;
+    options.defaultPath = Logic::get().save_root() / "replays";
+    options.filters.push_back({ "Replays", { "*.echo", "*.json", "*.txt", "*.slc", "*.tcm", "*.gdr" } });
+    geode::async::spawn(pickMany(std::move(options)), [](PickManyResult result) {
+        if (!result) {
+            Logic::get().notify(result.unwrapErr(), false);
+            return;
+        }
+        auto saved = ReplayIO::capture_macro();
+        auto dir = Logic::get().save_root() / "replays";
+        int copied = 0;
+        int failed = 0;
+        for (auto const& path : result.unwrap()) {
+            if (!ReplayIO::fill_replay(path)) {
+                ++failed;
+                ReplayIO::restore_macro(saved);
+                continue;
+            }
+            auto dest = ReplayIO::unique_file(dir, ReplayIO::import_stem(path), ".echo");
+            if (!ReplayIO::save_as(dest, ReplayIO::write_packed_echo)) {
+                ++failed;
+                ReplayIO::restore_macro(saved);
+                continue;
+            }
+            ++copied;
+            ReplayIO::restore_macro(saved);
+        }
+        std::string message = fmt::format("Imported {} replay{}", copied, copied == 1 ? "" : "s");
+        if (failed) {
+            message += fmt::format(", {} failed", failed);
+        }
+        Logic::get().notify(message, failed == 0);
+    });
 }
