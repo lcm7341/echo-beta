@@ -237,7 +237,8 @@ int Logic::count_unlocked_steps(GJBaseGameLayer* play, double dt) {
     if (!std::isfinite(warp) || warp < 0.f) {
         warp = 1.f;
     }
-    float wanted = logic.physics_step() * warp;
+    (void)warp;
+    float wanted = logic.physics_step();
     if (!std::isfinite(wanted) || !(wanted > 0.f)) {
         return 0;
     }
