@@ -213,28 +213,24 @@ bool ReplayIO::read_gdr(fs::path const& path) {
     matjson::Value json;
     if (start != data.end() && *start == '{') {
         auto parsed = matjson::parse(std::string_view(reinterpret_cast<char const*>(data.data()), data.size()));
-        if (!parsed) {
+        if (!parsed)
             return false;
-        }
         json = parsed.unwrap();
     }
     else {
         json = GdrReplay::decode(in);
-        if (in.failed) {
+        if (in.failed)
             return false;
-        }
     }
-    if (!json.isObject() || !json["inputs"].isArray()) {
+    if (!json.isObject() || !json["inputs"].isArray())
         return false;
-    }
     std::vector<Frame> inputs;
     for (auto const& item : json["inputs"]) {
         Frame input;
         input.number = std::max(ReplayIO::read_int(item["frame"], 0), 0);
         input.button = ReplayIO::read_int(item["btn"], 1);
-        if (input.button < 1 || input.button > 3) {
+        if (input.button < 1 || input.button > 3)
             input.button = 1;
-        }
         input.player2 = ReplayIO::read_boolish(item["2p"]);
         input.holding = ReplayIO::read_boolish(item["down"]);
         inputs.push_back(input);
