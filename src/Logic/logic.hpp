@@ -114,7 +114,7 @@ struct LabelPlacement {
 	int opacity = 40;
 };
 
-struct PlayerSave {
+struct PlayerSnapshot {
 	bool present = false;
 	float x = 0.f, y = 0.f;
 	float rotation = 0.f, visual_rotation = 0.f;
@@ -256,7 +256,7 @@ struct Checkpoint {
 	int removed_frames = 0;
 	bool held_p1 = false, held_p2 = false, held_left_p1 = false, held_left_p2 = false, held_right_p1 = false;
 	bool held_right_p2 = false;
-	PlayerSave player1, player2;
+	PlayerSnapshot player1, player2;
 	LayerSnapshot layer;
 	uint64_t random_state = 0, shake_state = 0, tp_state = 0;
 	std::vector<float> variance;
@@ -850,8 +850,8 @@ public:
 	void set_replay_pos(PlayLayer* play);
 	void trim_recorded_inputs(Session& value, int frame);
 	void trim_fresh_attempt(PlayLayer* play, Session& value);
-	PlayerSave capture_player(PlayerObject* player);
-	void apply_player(PlayerObject* player, PlayerSave const& shot);
+	PlayerSnapshot capture_player(PlayerObject* player);
+	void apply_player(PlayerObject* player, PlayerSnapshot const& shot);
 	LayerSnapshot capture_layer(PlayLayer* play);
 	void apply_layer(PlayLayer* play, LayerSnapshot const& shot);
 	void trim_from_checkpoint(PlayLayer* play, Session& value, Checkpoint const& checkpoint);

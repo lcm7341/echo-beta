@@ -30,8 +30,8 @@
 
 using namespace geode::prelude;
 
-PlayerSave Logic::capture_player(PlayerObject* player) {
-    PlayerSave shot;
+PlayerSnapshot Logic::capture_player(PlayerObject* player) {
+    PlayerSnapshot shot;
     if (!player)
         return shot;
     shot.present = true;
@@ -163,7 +163,7 @@ PlayerSave Logic::capture_player(PlayerObject* player) {
     return shot;
 }
 
-void Logic::apply_player(PlayerObject* player, PlayerSave const& shot) {
+void Logic::apply_player(PlayerObject* player, PlayerSnapshot const& shot) {
     if (!player || !shot.present)
         return;
     auto mode = [&](bool active, bool saved, auto toggle) {
