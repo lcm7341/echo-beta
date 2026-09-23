@@ -15,9 +15,8 @@ void Logic::sync_time_scale() {
         return;
     auto const& logic = Logic::get();
     float speed = std::max(logic.speedhack, 0.01f);
-    if (!std::isfinite(speed) || speed < 0.01f) {
+    if (!std::isfinite(speed) || speed < 0.01f)
         speed = 1.f;
-    }
     if (auto* play = PlayLayer::get(); play && play->m_playerDied) {
         scheduler->setTimeScale(speed);
         return;
@@ -32,9 +31,8 @@ void Logic::sync_playback_fps() {
     auto& logic = Logic::get();
     auto* director = CCDirector::sharedDirector();
     if (logic.playback_fps >= 1.f) {
-        if (!logic.playback_fps_held) {
+        if (!logic.playback_fps_held)
             logic.held_interval = director->getAnimationInterval();
-        }
         logic.playback_fps_held = true;
         director->setAnimationInterval(1.f / (logic.playback_fps * logic.speedhack));
         return;
