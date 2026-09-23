@@ -378,12 +378,29 @@ void GUI::show_cps_range(int first, int last, bool player2) {
 }
 
 bool GUI::shift_selecting() const {
-    // TODO
-    return {};
+    if (ImGui::GetIO().KeyShift) return true;
+    if (ImGui::IsKeyDown(ImGuiKey_LeftShift) || ImGui::IsKeyDown(ImGuiKey_RightShift)) return true;
+    if (auto* keys = CCKeyboardDispatcher::get()) return keys->getShiftKeyPressed();
+    return false;
 }
 
 void GUI::select_input(int index, bool range) {
-    // TODO
+    auto& inputs = Logic::get().inputs;
+    if (index < 0 || index >= static_cast<int>(inputs.size())) {
+        selected = -1;
+        selected_id = 0;
+        anchor = -1;
+        anchor_id = 0;
+        return;
+    }
+    if (Logic::get().input_id(static_cast<size_t>(index)) == 0) Logic::get().identify_inputs(true);
+    selected = index;
+    selected_id = Logic::get().input_id(static_cast<size_t>(index));
+    draft = inputs[index];
+    if (!range || anchor < 0 || anchor >= static_cast<int>(inputs.size())) {
+        anchor = selected;
+        anchor_id = selected_id;
+    }
 }
 void GUI::follow_selection() {
     auto& value = Logic::get();
