@@ -387,6 +387,8 @@ void Logic::pull_settings() {
             }
             if (auto flag = json["hitbox_trail_visual"].asBool())
                 logic.hitbox_trail_visual = flag.unwrap();
+            // no toggle for ts so a saved true would be stuck
+            logic.hitbox_dedup = false;
             if (auto flag = json["hitbox_player"].asBool())
                 logic.hitbox_player = flag.unwrap();
             if (auto flag = json["hitbox_click"].asBool())
