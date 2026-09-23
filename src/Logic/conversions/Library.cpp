@@ -1,6 +1,7 @@
 // saving & loading macros. write_file / read_file are the way in, the formats themselves are the other files in here
 // also autosave, merging 2 macros & importing other bots formats
 // a file is never trusted: if it fails to parse it is rejected & the macro thats loaded is left alone
+#include "GUI/gui.hpp"
 #include "Logic/logic.hpp"
 #include "Logic/conversions/codecs.hpp"
 #include <Geode/utils/async.hpp>
@@ -285,6 +286,7 @@ bool Logic::merge_replay(fs::path const& path) {
 }
 
 void Logic::pick_replay() {
+    GUI::get().open_macro_picker(false, 1);
 }
 
 MacroSnap ReplayIO::capture_macro() {

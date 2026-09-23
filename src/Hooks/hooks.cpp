@@ -10,6 +10,7 @@
 #include "Logic/logic.hpp"
 #include "Hooks/rotation.hpp"
 #include "Hooks/step.hpp"
+#include "GUI/gui.hpp"
 #include "Hack/trajectory.hpp"
 #include "Physics/collisions.hpp"
 #include "Physics/gjbasegamelayer.hpp"

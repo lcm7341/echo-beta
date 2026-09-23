@@ -8,6 +8,7 @@
 // practice checkpoints, maintain / same gravity, follow player & the seed handling are in here too
 #include "Logic/logic.hpp"
 #include "Hooks/step.hpp"
+#include "GUI/gui.hpp"
 #include "Hack/trajectory.hpp"
 #include <Geode/binding/PlayerButtonCommand.hpp>
 #include <Geode/binding/GameManager.hpp>
@@ -463,6 +464,10 @@ void Logic::poll_advance_hold() {
     auto& logic = Logic::get();
     if (!logic.frame_advance || !logic.holding_advance || !PlayLayer::get())
         return;
+    if (GUI::get().typing()) {
+        logic.holding_advance = false;
+        return;
+    }
     auto now = chrono::steady_clock::now();
     auto start = logic.advance_hold_start + chrono::milliseconds(logic.advance_hold_ms);
     if (now < start)
@@ -523,7 +528,12 @@ void Logic::check_advance_pause(PlayLayer* play) {
 }
 
 void Logic::on_keybind(std::string_view key, bool down) {
+    if (down && GUI::get().typing())
+        return;
     if (key == "open-menu") {
+        if (down) {
+            GUI::get().open_popup();
+        }
         return;
     }
     if (!down && key == "step-back") {

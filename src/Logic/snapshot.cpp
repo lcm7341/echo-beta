@@ -7,6 +7,7 @@
 // capture_player / apply_player copy a players whole state. setting the flags alone leaves the sprite in the wrong mode, so it goes thru gds setters
 #include "Logic/logic.hpp"
 #include "Hooks/rotation.hpp"
+#include "GUI/gui.hpp"
 #include <Geode/utils/async.hpp>
 #include <Geode/binding/PlayerButtonCommand.hpp>
 #include <Geode/binding/GameManager.hpp>

@@ -1,4 +1,5 @@
 #include "Logic/logic.hpp"
+#include "GUI/gui.hpp"
 #include <Geode/binding/PlayerButtonCommand.hpp>
 #include <Geode/binding/GameManager.hpp>
 #include <Geode/binding/PlayLayer.hpp>

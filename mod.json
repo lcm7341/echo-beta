@@ -27,6 +27,15 @@
 		]
 	},
 	"settings": {
+		"open-menu": {
+			"type": "keybind",
+			"platforms": ["win"],
+			"name": "Open menu",
+			"description": "Show or hide the Echo menu.",
+			"default": "Alt+LeftMenu",
+			"category": "universal",
+			"allow-in-text-inputs": true
+		},
 		"toggle-record": {
 			"type": "keybind",
 			"platforms": ["win"],
