@@ -191,12 +191,50 @@ std::string GUI::ordinal(int number) {
 }
 
 std::string GUI::format_plain(Session const& value) {
-    // todo
-    return {};
+    std::ostringstream out;
+    out << value.fps << "\n";
+    for (size_t i = 0; i < value.inputs.size(); ++i) {
+        auto const& input = value.inputs[i];
+        int button = input.button == 0 ? 1 : input.button;
+        out << input.number << " " << (input.holding ? 1 : 0) << " " << (input.player2 ? 1 : 0) << " " << button;
+        if (i + 1 != value.inputs.size()) out << "\n";
+    }
+    return out.str();
 }
 
 void GUI::apply_plain(std::string const& text) {
-    // TODO
+    std::istringstream lines(text);
+    std::string line;
+    if (!std::getline(lines, line)) return;
+    float fps = 0.f;
+    std::istringstream header(line);
+    if (header >> fps && std::isfinite(fps) && fps >= 1.f) {
+        auto& value = Logic::get();
+        if (!(value).is_recording() && !(value).is_playing()) Logic::get().set_tps(fps);
+    }
+    std::vector<Frame> next;
+    while (std::getline(lines, line)) {
+        if (line.empty()) continue;
+        std::istringstream row(line);
+        Frame input;
+        int holding = 0;
+        int player2 = 0;
+        int button = 1;
+        if (!(row >> input.number >> holding >> player2)) continue;
+        row >> button;
+        input.holding = holding != 0;
+        input.player2 = player2 != 0;
+        input.button = button == 0 ? 1 : button;
+        if (input.number < 0) input.number = 0;
+        next.push_back(input);
+    }
+    Logic::get().inputs = std::move(next);
+    Logic::get().poses.clear();
+    Logic::get().input_ids.clear();
+    Logic::get().touch_inputs();
+    Logic::get().refresh_live_hold();
+    Logic::get().recompute_cps(Logic::get());
+    Logic::get().autosave_replay();
 }
 
 void GUI::draw_edit_fields(bool enabled, float column) {
