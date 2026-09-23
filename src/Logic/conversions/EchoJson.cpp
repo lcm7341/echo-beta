@@ -181,26 +181,22 @@ bool ReplayIO::write_echo_json(fs::path const& path) {
     std::vector<Frame> sorted;
     std::vector<FramePose> sorted_poses;
     sorted.reserve(inputs.size());
-    if (debug) {
+    if (debug)
         sorted_poses.reserve(inputs.size());
-    }
     for (size_t i : order) {
         auto input = inputs[i];
-        if (input.button < 1 || input.button > 3) {
+        if (input.button < 1 || input.button > 3)
             input.button = 1;
-        }
         input.number = std::max(input.number, 0);
         sorted.push_back(input);
-        if (debug) {
+        if (debug)
             sorted_poses.push_back(poses[i]);
-        }
     }
     inputs.swap(sorted);
     poses.swap(sorted_poses);
     std::ofstream file(path);
-    if (!file) {
+    if (!file)
         return false;
-    }
     file << "{\n";
     file << "\t\"format\": \"echo\",\n";
     file << fmt::format("\t\"version\": {},\n", EchoJson::version);
@@ -216,18 +212,14 @@ bool ReplayIO::write_echo_json(fs::path const& path) {
     file << fmt::format("\t\"endX\": {},\n", EchoJson::number(logic.end_x));
     file << fmt::format("\t\"recordingSeconds\": {},\n", EchoJson::number(logic.recording_seconds));
     file << fmt::format("\t\"attempts\": {},\n", logic.attempts);
-    if (logic.lvl_seed_known) {
+    if (logic.lvl_seed_known)
         file << fmt::format("\t\"seed\": \"{}\",\n", logic.lvl_seed);
-    }
-    if (logic.macro_unrounded) {
+    if (logic.macro_unrounded)
         file << "\t\"velocity_unrounding\": true,\n";
-    }
-    if (logic.macro_silicate_variance) {
+    if (logic.macro_silicate_variance)
         file << "\t\"silicate_variance\": true,\n";
-    }
-    if (logic.macro_ldm_known) {
+    if (logic.macro_ldm_known)
         file << fmt::format("\t\"low_detail_mode\": {},\n", logic.macro_ldm);
-    }
     file << fmt::format("\t\"debug\": {},\n", debug);
     file << "\t\"inputs\": [";
     for (size_t i = 0; i < inputs.size(); ++i) {
@@ -240,12 +232,10 @@ bool ReplayIO::write_echo_json(fs::path const& path) {
 bool ReplayIO::read_echo_json(fs::path const& path) {
     std::ifstream file(path);
     auto parsed = matjson::Value::parse(file);
-    if (!parsed) {
+    if (!parsed)
         return false;
-    }
     auto const& json = parsed.unwrap();
-    if (!json.contains("inputs") || !json["inputs"].isArray()) {
+    if (!json.contains("inputs") || !json["inputs"].isArray())
         return false;
-    }
     return EchoJson::is_current(json) ? EchoJson::read_current(json) : EchoJson::read_old(json);
 }
