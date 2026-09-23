@@ -232,23 +232,19 @@ public:
 bool ReplayIO::read_silicate(fs::path const& path) {
     ByteCursor in{ ReplayIO::read_all(path) };
     auto& data = in.data;
-    if (data.size() < SilicateReplay::magic_size + 2 + 16 + 1) {
+    if (data.size() < SilicateReplay::magic_size + 2 + 16 + 1)
         return false;
-    }
-    if (std::memcmp(data.data(), SilicateReplay::magic, SilicateReplay::magic_size) != 0) {
+    if (std::memcmp(data.data(), SilicateReplay::magic, SilicateReplay::magic_size) != 0)
         return false;
-    }
     in.at = SilicateReplay::magic_size;
     auto meta_size = static_cast<size_t>(in.uint(2));
-    if (meta_size < 16 || in.left() < meta_size + 1) {
+    if (meta_size < 16 || in.left() < meta_size + 1)
         return false;
-    }
     size_t meta_start = in.at;
     SilicateReplay replay;
     replay.tps = in.pod<double>();
-    if (!std::isfinite(replay.tps) || replay.tps < 1.0) {
+    if (!std::isfinite(replay.tps) || replay.tps < 1.0)
         replay.tps = 240.0;
-    }
     replay.start_tps = replay.tps;
     uint64_t seed = in.uint(8);
     in.at = meta_start + meta_size;
@@ -256,18 +252,15 @@ bool ReplayIO::read_silicate(fs::path const& path) {
     while (end - in.at >= 12) {
         auto id = static_cast<uint32_t>(in.uint(4));
         uint64_t size = in.uint(8) & SilicateReplay::size_mask;
-        if (size > end - in.at) {
+        if (size > end - in.at)
             return false;
-        }
         size_t atom_end = size == 0 ? end : in.at + static_cast<size_t>(size);
-        if (id == SilicateReplay::action_atom && !replay.actions(in, atom_end)) {
+        if (id == SilicateReplay::action_atom && !replay.actions(in, atom_end))
             return false;
-        }
         in.at = atom_end;
     }
-    if (in.failed) {
+    if (in.failed)
         return false;
-    }
     ReplayIO::adopt_inputs(std::move(replay.inputs), static_cast<float>(replay.start_tps));
     Logic::get().rates = std::move(replay.rates);
     Logic::get().normalize_rates();
