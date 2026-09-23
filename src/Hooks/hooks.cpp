@@ -274,9 +274,8 @@ namespace {
 
 static bool menu_holds_mouse() {
     auto& imgui = ImGuiCocos::get();
-    if (!imgui.isInitialized() || !imgui.isVisible()) {
+    if (!imgui.isInitialized() || !imgui.isVisible())
         return false;
-    }
     return ImGui::GetIO().WantCaptureMouse || ImGui::IsAnyItemActive();
 }
 
@@ -286,9 +285,8 @@ static void keep_menu_cursor() {
     auto* view = CCEGLView::get();
     if (!view)
         return;
-    if (view->m_bCursorLocked) {
+    if (view->m_bCursorLocked)
         view->toggleLockCursor(false);
-    }
     if (!view->m_pMainWindow)
         return;
     auto hwnd = *reinterpret_cast<HWND*>(reinterpret_cast<uintptr_t>(view->m_pMainWindow) + 0x370); // tf
@@ -1755,7 +1753,6 @@ namespace {
 }
 
 void install_physics_step_patch() {
-    log::debug("install physics step patch");
     std::vector<uint8_t> bytes = {
         0x49, 0xBB, // movabs r11, <count ptr>
         0, 0, 0, 0, 0, 0, 0, 0,
@@ -1765,9 +1762,8 @@ void install_physics_step_patch() {
     auto* amt = &Logic::get().tick_steps;
     std::memcpy(bytes.data() + 2, &amt, sizeof(amt));
     auto address = reinterpret_cast<void*>(geode::base::get() + 0x237A5B); // in GJBaseGameLayer::update
-    if (auto res = geode::Mod::get()->patch(address, bytes); res) {
+    if (auto res = geode::Mod::get()->patch(address, bytes); res)
         g_step_patch = res.unwrap();
-    }
     g_step_bytes = bytes;
 }
 
@@ -1778,18 +1774,17 @@ void check_physics_step_patch() {
     if (g_step_bytes.empty() || std::memcmp(at, g_step_bytes.data(), g_step_bytes.size()) == 0)
         return;
     for (auto* mod : Loader::get()->getAllMods()) {
-        if (mod == Mod::get()) {
+        if (mod == Mod::get())
             continue;
-        }
         for (auto* patch : mod->getPatches()) {
-            if (!patch->isEnabled() || patch->getAddress() != reinterpret_cast<uintptr_t>(at)) {
+            if (!patch->isEnabled() || patch->getAddress() != reinterpret_cast<uintptr_t>(at))
                 continue;
-            }
             Logic::get().message = fmt::format("Mod conflict: Disable {} in Geode!", mod->getName());
             Notification::create(Logic::get().message, NotificationIcon::Error)->show();
             return;
         }
     }
+    // nobody owns it so take it back
     if (g_step_patch) {
         (void)g_step_patch->disable();
         (void)g_step_patch->enable();
@@ -1797,14 +1792,11 @@ void check_physics_step_patch() {
 }
 
 int vanilla_physics_steps(float dt, float timeWarp) {
-    log::debug("vanilla physics steps");
     float warp = std::min(timeWarp, 1.f);
-    if (!std::isfinite(warp) || !(warp > 0.f)) {
+    if (!std::isfinite(warp) || !(warp > 0.f))
         warp = 1.f;
-    }
-    if (!std::isfinite(dt) || dt < 0.f) {
+    if (!std::isfinite(dt) || dt < 0.f)
         dt = 0.f;
-    }
     int steps = static_cast<int>(std::lround(static_cast<double>(dt) * 60.0 / static_cast<double>(warp) * 4.0));
     return std::max(steps, 1);
 }
@@ -1860,8 +1852,10 @@ void echo_raw_hooks(bool on) {
         return;
     }
     // where resetLevel writes the attempts rand state (silicate's offset, 2.2081)
+    // recording keeps what gd picked, playback puts the macros seed back
     g_levelSeed = safetyhook::create_mid(geode::base::get() + 0x3b90fb, on_lvl_seed);
 
+    // shake & teleport rolls use my own seeded lcg NOT gds rand, so nothing else rolling changes them
     auto shake_step = [](safetyhook::Context& ctx) {
         auto& state = Logic::get().shake_state;
         state = static_cast<uint64_t>(static_cast<int>((214013ull * state + 2531011ull) >> 16) & 0x7FFF);
