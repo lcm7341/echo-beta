@@ -24,11 +24,24 @@ namespace fs = std::filesystem;
 using namespace geode::prelude;
 
 matjson::Value Logic::placement_json(LabelPlacement const& placement) {
-    // later
-    return {};
+    matjson::Value json;
+    json["x"] = placement.x;
+    json["y"] = placement.y;
+    json["scale"] = placement.scale;
+    json["opacity"] = placement.opacity;
+    return json;
 }
 
 LabelPlacement Logic::read_placement(matjson::Value const& json, LabelPlacement fallback) {
-    // todo
-    return {};
+    if (!json.isObject())
+        return fallback;
+    if (auto number = json["x"].asDouble())
+        fallback.x = static_cast<float>(number.unwrap());
+    if (auto number = json["y"].asDouble())
+        fallback.y = static_cast<float>(number.unwrap());
+    if (auto number = json["scale"].asDouble())
+        fallback.scale = static_cast<float>(number.unwrap());
+    if (auto number = json["opacity"].asInt())
+        fallback.opacity = static_cast<int>(number.unwrap());
+    return fallback;
 }
