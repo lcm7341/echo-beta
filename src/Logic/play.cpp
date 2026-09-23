@@ -2074,6 +2074,9 @@ void Logic::clear_inputs() {
 }
 
 void Logic::notify(std::string const& text, bool success) {
+    if (success) {
+        Notification::create(text, NotificationIcon::Success)->show();
+    }
     Logic::get().message = text;
 }
 
