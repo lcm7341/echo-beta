@@ -13,23 +13,20 @@ using namespace geode::prelude;
 
 bool ReplayIO::read_plain(fs::path const& path) {
     std::ifstream file(path);
-    if (!file) {
+    if (!file)
         return false;
-    }
     float fps = 0.f;
     file >> fps;
-    if (!file) {
+    if (!file)
         return false;
-    }
     std::vector<Frame> inputs;
     while (file) {
         Frame input;
         int holding = 0;
         int player2 = 0;
         file >> input.number >> holding >> player2;
-        if (!file) {
+        if (!file)
             break;
-        }
         input.holding = holding != 0;
         input.player2 = player2 != 0;
         inputs.push_back(input);
@@ -41,9 +38,8 @@ bool ReplayIO::read_plain(fs::path const& path) {
 
 bool ReplayIO::write_plain(fs::path const& path) {
     std::ofstream file(path);
-    if (!file) {
+    if (!file)
         return false;
-    }
     auto const& logic = Logic::get();
     file << logic.macro_fps << "\n";
     for (auto const& input : logic.inputs) {
