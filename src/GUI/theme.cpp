@@ -520,11 +520,103 @@ bool Logic::dispatch_setting_key(std::string_view key, bool down) {
 }
 
 void GUI::offer_rebind(char const* setting_id, char const* tip) {
-    // TODO
+    if (ImGui::IsItemHovered()) {
+        auto current = GUI::get().stored_bind(setting_id);
+        if (tip) ImGui::SetTooltip("%s\nRight-click to rebind (%s)", tip, current.c_str());
+        else ImGui::SetTooltip("Right-click to rebind (%s)", current.c_str());
+    }
+    if (ImGui::IsItemClicked(ImGuiMouseButton_Right)) {
+        GUI::get().prompt = setting_id;
+        GUI::get().prompt_nested = ImGui::GetCurrentContext()->BeginPopupStack.Size > 0;
+    }
 }
 
 void GUI::draw_keybind_prompt(bool nested) {
-    // TODO
+    log::debug("draw keybind prompt");
+    if (GUI::get().prompt.empty() || GUI::get().prompt_nested != nested) return;
+    if (GUI::get().prompt_shown != GUI::get().prompt) {
+        GUI::get().prompt_shown = GUI::get().prompt;
+        GUI::get().pressed.reset();
+        GUI::get().bind_ctrl = false;
+        GUI::get().bind_shift = false;
+        GUI::get().bind_alt = false;
+    }
+    if (!ImGui::IsPopupOpen("Confirm Keybind")) ImGui::OpenPopup("Confirm Keybind");
+    if (!ImGui::BeginPopupModal("Confirm Keybind", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) return;
+
+    std::string label = GUI::get().prompt;
+    for (auto const& action : kListed) {
+        if (GUI::get().prompt == action.setting) label = action.label;
+    }
+    auto existing = GUI::get().stored_bind(GUI::get().prompt.c_str());
+    if (existing != "None") ImGui::Text("Existing keybind: %s", existing.c_str());
+    ImGui::Text("Press a key for '%s'", label.c_str());
+
+    for (int key = ImGuiKey_NamedKey_BEGIN; key < ImGuiKey_NamedKey_END; ++key) {
+        auto imguiKey = static_cast<ImGuiKey>(key);
+        if (imguiKey >= ImGuiKey_MouseLeft) continue;
+        if (GUI::get().is_modifier(imguiKey)) {
+            if (GUI::get().pressed || !ImGui::IsKeyReleased(imguiKey)) continue;
+            auto mapped = GUI::get().cocos_key(imguiKey);
+            if (!mapped) continue;
+            auto own = GUI::get().modifier_for_key(*mapped);
+            GUI::get().pressed = mapped;
+            GUI::get().bind_ctrl = static_cast<bool>(own & KeyboardModifier::Control);
+            GUI::get().bind_shift = static_cast<bool>(own & KeyboardModifier::Shift);
+            GUI::get().bind_alt = static_cast<bool>(own & KeyboardModifier::Alt);
+            break;
+        }
+        if (!ImGui::IsKeyPressed(imguiKey, false)) continue;
+        auto mapped = GUI::get().cocos_key(imguiKey);
+        if (!mapped) continue;
+        GUI::get().pressed = mapped;
+        GUI::get().bind_ctrl = ImGui::GetIO().KeyCtrl;
+        GUI::get().bind_shift = ImGui::GetIO().KeyShift;
+        GUI::get().bind_alt = ImGui::GetIO().KeyAlt;
+        break;
+    }
+
+    float bindW = GUI::get().shared_button_width({"Save", "Remove"});
+    if (GUI::get().pressed) {
+        auto own = GUI::get().modifier_for_key(*GUI::get().pressed);
+        std::string pressed = "Pressed key: " + GUI::get().key_name(*GUI::get().pressed);
+        if (GUI::get().bind_ctrl && !(own & KeyboardModifier::Control)) pressed += " + Ctrl";
+        if (GUI::get().bind_shift && !(own & KeyboardModifier::Shift)) pressed += " + Shift";
+        if (GUI::get().bind_alt && !(own & KeyboardModifier::Alt)) pressed += " + Alt";
+        ImGui::TextUnformatted(pressed.c_str());
+        if (ImGui::Button("Save", ImVec2(bindW, 0.f))) {
+            GUI::get().store_bind(GUI::get().prompt.c_str(), *GUI::get().pressed, GUI::get().bind_ctrl, GUI::get().bind_shift, GUI::get().bind_alt);
+            GUI::get().prompt.clear();
+            GUI::get().prompt_shown.clear();
+            GUI::get().prompt_nested = false;
+            ImGui::CloseCurrentPopup();
+        }
+    } else {
+        ImGui::BeginDisabled();
+        ImGui::Button("Save", ImVec2(bindW, 0.f));
+        ImGui::EndDisabled();
+    }
+    ImGui::SameLine();
+    if (existing != "None") {
+        if (ImGui::Button("Remove", ImVec2(bindW, 0.f))) {
+            GUI::get().store_bind(GUI::get().prompt.c_str(), cocos2d::KEY_None, false, false, false);
+            GUI::get().prompt.clear();
+            GUI::get().prompt_shown.clear();
+            GUI::get().prompt_nested = false;
+            ImGui::CloseCurrentPopup();
+        }
+    } else {
+        ImGui::BeginDisabled();
+        ImGui::Button("Remove", ImVec2(bindW, 0.f));
+        ImGui::EndDisabled();
+    }
+    if (ImGui::Button("Exit", ImVec2(GUI::get().shared_button_width({"Exit"}), 0.f))) {
+        GUI::get().prompt.clear();
+        GUI::get().prompt_shown.clear();
+        GUI::get().prompt_nested = false;
+        ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndPopup();
 }
 
 $execute {
