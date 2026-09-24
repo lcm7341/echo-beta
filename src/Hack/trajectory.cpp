@@ -36,6 +36,7 @@ void Trajectory::park(PlayerObject* player) {
     player->m_isHidden = true;
     player->stopAllActions();
     player->unscheduleUpdate();
+    player->setPosition({ -100000.f, -100000.f });
     player->m_position = CCPoint{ -100000.f, -100000.f };
     if (auto* play = PlayLayer::get()) {
         play->removeObjectFromSection(player);
