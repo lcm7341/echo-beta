@@ -207,7 +207,7 @@ bool ReplayIO::read_tcbot(fs::path const& path) {
     if (!ok)
         return false;
     for (auto& input : replay.inputs)
-        input.number = std::max(input.number - 1, 0);
+        input.number = std::max(input.number - 2, 0);
     ReplayIO::adopt_inputs(std::move(replay.inputs), tps);
     return true;
 }
@@ -223,7 +223,7 @@ bool ReplayIO::write_tcbot(fs::path const& path) {
     std::memcpy(out.data.data() + meta + 4, &tps, sizeof(tps));
     auto inputs = ReplayIO::sorted_inputs();
     for (auto& input : inputs) {
-        long long shifted = static_cast<long long>(input.number) + 1;
+        long long shifted = static_cast<long long>(input.number) + 2;
         if (shifted > std::numeric_limits<int>::max())
             shifted = std::numeric_limits<int>::max();
         input.number = static_cast<int>(shifted);
