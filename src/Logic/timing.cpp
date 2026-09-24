@@ -23,29 +23,22 @@ namespace chrono = std::chrono;
 using namespace geode::prelude;
 
 PlayLayer* Logic::as_play(GJBaseGameLayer* layer) {
-    if (!layer) {
+    if (!layer)
         return nullptr;
-    }
-    if (auto* play = PlayLayer::get(); play && static_cast<GJBaseGameLayer*>(play) == layer) {
+    if (auto* play = PlayLayer::get(); play && static_cast<GJBaseGameLayer*>(play) == layer)
         return play;
-    }
-    if (auto* editor = LevelEditorLayer::get(); editor && static_cast<GJBaseGameLayer*>(editor) == layer) {
+    if (auto* editor = LevelEditorLayer::get(); editor && static_cast<GJBaseGameLayer*>(editor) == layer)
         return nullptr;
-    }
     return typeinfo_cast<PlayLayer*>(layer);
 }
 
 LevelEditorLayer* Logic::as_editor(GJBaseGameLayer* layer) {
-    log::debug("as editor");
-    if (!layer) {
+    if (!layer)
         return nullptr;
-    }
-    if (auto* editor = LevelEditorLayer::get(); editor && static_cast<GJBaseGameLayer*>(editor) == layer) {
+    if (auto* editor = LevelEditorLayer::get(); editor && static_cast<GJBaseGameLayer*>(editor) == layer)
         return editor;
-    }
-    if (auto* play = PlayLayer::get(); play && static_cast<GJBaseGameLayer*>(play) == layer) {
+    if (auto* play = PlayLayer::get(); play && static_cast<GJBaseGameLayer*>(play) == layer)
         return nullptr;
-    }
     return typeinfo_cast<LevelEditorLayer*>(layer);
 }
 
@@ -60,12 +53,10 @@ bool Logic::lock_delta_active() const {
 int Logic::unlocked_step_cap() const {
     auto* director = CCDirector::sharedDirector();
     double interval = director ? director->getAnimationInterval() : 1.0 / 60.0;
-    if (!std::isfinite(interval) || interval <= 0.0) {
+    if (!std::isfinite(interval) || interval <= 0.0)
         interval = 1.0 / 60.0;
-    }
-    if (real_time_mode) {
+    if (real_time_mode)
         interval = std::max(interval, 0.1);
-    }
     double per_frame = std::ceil(sample_rate() * std::max(interval, 1.0 / 1000.0));
     return static_cast<int>(std::clamp(per_frame, 1.0, 100000.0)) * 10;
 }
@@ -165,18 +156,16 @@ void Logic::note_step() {
     if (clock.steps > 8 && (clock.steps & 15) != 0)
         return;
     auto now = Clock::now();
-    if (clock.steps == 1) {
+    if (clock.steps == 1)
         clock.first = now;
-    }
     clock.last = now;
     clock.sampled_step = clock.steps;
 }
 
 // everything a frame does that ISNT physics
 void Logic::note_frame_work(double seconds) {
-    if (std::isfinite(seconds)) {
+    if (std::isfinite(seconds))
         frame_work = frame_work > 0.0 ? frame_work + (seconds - frame_work) * 0.05 : seconds;
-    }
     auto& cost = step_cost();
     double other = std::max(0.0, seconds - std::exchange(cost.last_physics, 0.0));
     if (!std::isfinite(other))
@@ -186,7 +175,6 @@ void Logic::note_frame_work(double seconds) {
 
 // for the trace. what the pacing thinks a step & a frame cost rn
 std::string echo::step::pace() {
-    log::debug("pace");
     auto& logic = Logic::get();
     auto const& cost = step_cost();
     auto* director = CCDirector::sharedDirector();
@@ -198,22 +186,19 @@ std::string echo::step::pace() {
 
 int Logic::max_steps_for_frame() const {
     auto const& cost = step_cost();
-    if (!(cost.per_step > 0.0)) {
+    if (!(cost.per_step > 0.0))
         return std::numeric_limits<int>::max();
-    }
     auto* director = CCDirector::sharedDirector();
     double interval = director ? director->getAnimationInterval() : 1.0 / 60.0;
-    if (!std::isfinite(interval) || interval <= 0.0) {
+    if (!std::isfinite(interval) || interval <= 0.0)
         interval = 1.0 / 60.0;
-    }
     if (real_time_mode) {
         constexpr double REAL_TIME_FRAME = 0.25;
         double fixed = cost.per_update + cost.other_work;
         double room = std::max({ REAL_TIME_FRAME - fixed, REAL_TIME_FRAME * 0.5, std::min(fixed, 1.0) });
         double steps = std::floor(room / cost.per_step);
-        if (!std::isfinite(steps) || steps >= static_cast<double>(std::numeric_limits<int>::max())) {
+        if (!std::isfinite(steps) || steps >= static_cast<double>(std::numeric_limits<int>::max()))
             return std::numeric_limits<int>::max();
-        }
         return std::max(static_cast<int>(steps), 8);
     }
     double budget = std::clamp(interval * 1.5, 0.004, 0.05);
@@ -222,51 +207,44 @@ int Logic::max_steps_for_frame() const {
     floor = std::max(floor, std::min(fixed, 0.25));
     double room = std::max(budget - cost.per_update, floor);
     double steps = std::floor(room / cost.per_step);
-    if (!std::isfinite(steps) || steps >= static_cast<double>(std::numeric_limits<int>::max())) {
+    if (!std::isfinite(steps) || steps >= static_cast<double>(std::numeric_limits<int>::max()))
         return std::numeric_limits<int>::max();
-    }
     return std::max(static_cast<int>(steps), 8);
 }
 
 int Logic::count_unlocked_steps(GJBaseGameLayer* play, double dt) {
     auto& logic = Logic::get();
-    if (!play) {
+    if (!play)
         return 0;
-    }
     Logic::get().apply_rate(logic.step_frame);
     float warp = std::min(play->m_gameState.m_timeWarp, 1.f);
-    if (!std::isfinite(warp) || warp < 0.f) {
+    if (!std::isfinite(warp) || warp < 0.f)
         warp = 1.f;
-    }
+    // a time warp under 1x makes each step SHORTER in level time, it does not add steps (gd runs the same step count)
+    // dividing by the warp here ran 2x the steps at 0.5x so the level never slowed down
     (void)warp;
     float wanted = logic.physics_step();
-    if (!std::isfinite(wanted) || !(wanted > 0.f)) {
+    if (!std::isfinite(wanted) || !(wanted > 0.f))
         return 0;
-    }
-    if (!std::isfinite(dt) || dt < 0.f) {
+    if (!std::isfinite(dt) || dt < 0.f)
         dt = 0.f;
-    }
     if (logic.respawn_frames > 0) {
         logic.carry = 0.f;
         play->m_extraDelta = 0.0;
     }
-    if (!std::isfinite(logic.carry) || logic.carry < 0.f) {
+    if (!std::isfinite(logic.carry) || logic.carry < 0.f)
         logic.carry = 0.f;
-    }
     double pending = logic.carry + dt;
-    if (!std::isfinite(pending) || pending < 0.f) {
+    if (!std::isfinite(pending) || pending < 0.f)
         pending = 0.f;
-    }
     double requested = std::floor(pending / wanted);
     int steps = static_cast<int>(std::min(requested, double(std::numeric_limits<int>::max())));
-    if (steps < 0) {
+    if (steps < 0)
         steps = 0;
-    }
     bool capped = false;
     logic.carry = capped && !logic.real_time_mode ? 0.f : pending - static_cast<double>(steps) * wanted;
-    if (!std::isfinite(logic.carry) || logic.carry < 0.f) {
+    if (!std::isfinite(logic.carry) || logic.carry < 0.f)
         logic.carry = 0.f;
-    }
     if (logic.respawn_frames > 0) {
         --logic.respawn_frames;
         steps = std::min(steps, 1);
