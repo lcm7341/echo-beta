@@ -831,7 +831,7 @@ void Logic::clear_rand_triggers() {
     live_rand().clear();
 }
 
-void Logic::seed_rand_triggers(uint64_t seed) {
+void Logic::reseed_rand_triggers(uint64_t seed) {
     for (auto& trigger : live_rand()) {
         if (!trigger.state)
             continue;
@@ -861,7 +861,7 @@ void Logic::roll_live_seed(PlayLayer* play) {
     logic.shake_state = rolled & 0x7FFF;
     logic.tp_state = rolled & 0x7FFF;
     fill_variance(play, rolled);
-    Logic::get().seed_rand_triggers(rolled);
+    Logic::get().reseed_rand_triggers(rolled);
 }
 
 void Logic::apply_attempt_variance(PlayLayer* play, uint64_t seed) {
@@ -900,7 +900,7 @@ void Logic::plant_lvl_seed(PlayLayer* play) {
     logic.shake_state = logic.lvl_seed & 0x7FFF;
     logic.tp_state = logic.lvl_seed & 0x7FFF;
     Logic::get().apply_attempt_variance(play, logic.lvl_seed);
-    Logic::get().seed_rand_triggers(logic.lvl_seed);
+    Logic::get().reseed_rand_triggers(logic.lvl_seed);
 }
 
 void Logic::restore_checkpoint_random(PlayLayer* play) {

@@ -1870,7 +1870,7 @@ void apply_lvl_seed() {
         logic.shake_state = logic.lvl_seed & 0x7FFF;
         logic.tp_state = logic.lvl_seed & 0x7FFF;
         Logic::get().apply_attempt_variance(play, logic.lvl_seed);
-        Logic::get().seed_rand_triggers(logic.lvl_seed);
+        Logic::get().reseed_rand_triggers(logic.lvl_seed);
         return;
     }
     uint64_t state = Logic::get().game_random_state();
@@ -1878,7 +1878,7 @@ void apply_lvl_seed() {
     logic.lvl_seed_known = true;
     logic.shake_state = state & 0x7FFF;
     logic.tp_state = state & 0x7FFF;
-    Logic::get().seed_rand_triggers(state);
+    Logic::get().reseed_rand_triggers(state);
 }
 
 safetyhook::MidHook g_levelSeed;

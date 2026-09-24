@@ -759,7 +759,7 @@ public:
 	void roll_live_seed(PlayLayer* play);
 	void restore_checkpoint_random(PlayLayer* play);
 	void note_rand_trigger(int unique_id, uint64_t* state);
-	void seed_rand_triggers(uint64_t seed);
+	void reseed_rand_triggers(uint64_t seed);
 	void clear_rand_triggers();
 	uint64_t game_random_state();
 	void set_game_random_state(uint64_t state);
