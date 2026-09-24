@@ -369,7 +369,16 @@ void Trajectory::flush_path(PlayLayer* play, PlayerObject* fake, Click click) {
 }
 
 void Trajectory::draw_death(PlayerObject* fake) {
-    // TODO
+    auto* play = PlayLayer::get();
+    if (!play)
+        return;
+    auto const& logic = Logic::get();
+    float width = lineWidth(play);
+    auto color = [](float const* c) {
+        return ccColor4F{ c[0], c[1], c[2], c[3] };
+    };
+    node->drawRect(fake->getObjectRect(), { 0.f, 0.f, 0.f, 0.f }, width, color(logic.hitbox_outer_color), BorderAlignment::Inside);
+    node->drawRect(fake->getObjectRect(0.3f, 0.3f), { 0.f, 0.f, 0.f, 0.f }, width, color(logic.hitbox_inner_color), BorderAlignment::Inside);
 }
 
 void Trajectory::simulate(PlayLayer* play, bool player1, Click click, bool both, bool draw, int limit, int measure) {
