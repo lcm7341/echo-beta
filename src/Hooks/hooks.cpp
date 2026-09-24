@@ -517,6 +517,11 @@ class $modify(EchoPlayLayer, PlayLayer) {
             PlayLayer::destroyPlayer(player, object);
             return;
         }
+        // predicting must NEVER kill the real attempt
+        if (Logic::get().predicting) {
+            Trajectory::get().mark_predict_death(player);
+            return;
+        }
         if (Trajectory::get().mark_dead(player) || m_player1->m_isDead || m_player2->m_isDead)
             return;
         if (Logic::get().should_noclip(this, player)) {
