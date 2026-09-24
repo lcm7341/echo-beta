@@ -474,7 +474,6 @@ void GUI::fade_page(char const* name, A1&& draw) {
 }
 
 const TabPage* GUI::active_page(std::vector<TabPage> const& pages) {
-    log::debug("active page");
     for (auto const& page : pages) {
         if (GUI::get().page == page.name) return &page;
     }
@@ -642,7 +641,6 @@ $on_mod(Loaded) {
 }
 
 void GUI::sync_menu_scale() {
-    log::debug("sync menu scale");
     auto& value = Logic::get();
     auto& gui = GUI::get();
     if (value.docked_menu) {
