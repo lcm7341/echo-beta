@@ -18,6 +18,9 @@ void activateForTrajectory(EffectGameObject* obj, PlayerObject* player);
 inline bool activatingPortal(GJBaseGameLayer* pl, PlayerObject* player,
                              EffectGameObject* portal) {
     if (pl->canBeActivatedByPlayer(player, portal)) {
+        if (Trajectory::get().fakeActivated(player, portal)) {
+            return false;
+        }
 
         pl->playerWillSwitchMode(player, portal);
 

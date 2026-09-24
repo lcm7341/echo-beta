@@ -465,6 +465,7 @@ void GUI::flip_setting(bool& field, char const* setting) {
 
 static void flip_utility(bool& field) {
     field = !field;
+    Logic::get().reset_traj();
     Logic::get().save_settings_file();
 }
 

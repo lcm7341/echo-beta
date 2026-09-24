@@ -16,6 +16,7 @@
 #include "Physics/gjbasegamelayer.hpp"
 #include "Physics/gravity.hpp"
 #include "Physics/player.hpp"
+#include "Physics/prediction_art.hpp"
 #include <unordered_set>
 #include <Geode/binding/PauseLayer.hpp>
 #include <Geode/modify/PauseLayer.hpp>
@@ -413,11 +414,15 @@ class $modify(EchoPlayLayer, PlayLayer) {
         }
         Logic::get().clear_rand_triggers();
         clear_tilt();
+        if (Trajectory::get().attached())
+            Trajectory::get().detach();
         if (!PlayLayer::init(level, useReplay, dontCreateObjects))
             return false;
         if (Logic::get().practice_music_hack)
             m_practiceMusicSync = true;
+        Trajectory::get().attach(this);
         Logic::get().on_play_init(this);
+        phys::prepare_prediction_art();
         return true;
     }
 
@@ -512,6 +517,8 @@ class $modify(EchoPlayLayer, PlayLayer) {
             PlayLayer::destroyPlayer(player, object);
             return;
         }
+        if (Trajectory::get().mark_dead(player) || m_player1->m_isDead || m_player2->m_isDead)
+            return;
         if (Logic::get().should_noclip(this, player)) {
             if (player == m_player1)
                 Logic::get().noclip_dead_p1 = true;
@@ -600,6 +607,7 @@ class $modify(EchoPlayLayer, PlayLayer) {
         restore_tilt(m_player2);
         clear_tilt();
         Logic::get().onQuit(this);
+        Trajectory::get().detach();
         PlayLayer::onQuit();
     }
 };
@@ -798,6 +806,8 @@ class $modify(EchoGameLayer, GJBaseGameLayer) {
         auto const pos = object->getPosition();
         if (!sectionable(pos))
             return;
+        if (Logic::get().is_traj_player(object))
+            return;
         GJBaseGameLayer::addToSection(object);
     }
 
@@ -806,6 +816,8 @@ class $modify(EchoGameLayer, GJBaseGameLayer) {
             return;
         auto const pos = object->getPosition();
         if (!sectionable(pos))
+            return;
+        if (Logic::get().is_traj_player(object))
             return;
         GJBaseGameLayer::updateObjectSection(object);
     }
@@ -1178,6 +1190,7 @@ class $modify(EchoGameLayer, GJBaseGameLayer) {
             value.death_jump_p1 = value.death_jump_p2 = false;
         }
         if (button == jump && !value.suppress_click_hitbox && !value.maintaining_gravity && !value.restoring_holds) {
+            Trajectory::get().note_button(player1, down);
             if (auto* play = Logic::as_play(this)) {
                 bool twoPlayer = play->m_levelSettings && play->m_levelSettings->m_twoPlayerMode;
                 if (twoPlayer) {
@@ -1433,7 +1446,12 @@ class $modify(EchoPlayerObject, PlayerObject) {
     }
 
     void setPosition(CCPoint const& position) {
+        if (Trajectory::get().isFake(this) && phys::fast_prediction_pos()) {
+            phys::pos_without_art(this, position);
+            return;
+        }
         if (auto& logic = Logic::get(); logic.defer_player_art && !Trajectory::get().isFake(this)) {
+            phys::pos_without_art(this, position);
             logic.player_art_deferred = true;
             return;
         }
@@ -1449,6 +1467,12 @@ class $modify(EchoPlayerObject, PlayerObject) {
 
     void setVisible(bool visible) {
         auto* layer = GJBaseGameLayer::get();
+        if (layer && !Logic::get().is_traj_player(this)) {
+            if (this == layer->m_player1 && Logic::get().hide_p1)
+                visible = false;
+            if (this == layer->m_player2 && Logic::get().hide_p2)
+                visible = false;
+        }
         PlayerObject::setVisible(visible);
     }
 
@@ -1593,11 +1617,17 @@ class $modify(EchoPlayerObject, PlayerObject) {
     }
 
     void playDeathEffect() {
+        if (Logic::get().predicting || Logic::get().is_traj_player(this) || Logic::get().player_hidden(this) || Logic::get().disable_death_effect)
+            return;
         PlayerObject::playDeathEffect();
     }
 
     void playerDestroyed(bool noEffects) {
         auto* play = PlayLayer::get();
+        if (Logic::get().predicting || Logic::get().is_traj_player(this)) {
+            m_isDead = true;
+            return;
+        }
         if (play && Logic::get().should_noclip(play, this)) {
             m_isDead = false;
             bool other_dead = (play->m_player1 && play->m_player1 != this && play->m_player1->m_isDead) || (play->m_player2 && play->m_player2 != this && play->m_player2->m_isDead);
@@ -1609,30 +1639,44 @@ class $modify(EchoPlayerObject, PlayerObject) {
     }
 
     void playBumpEffect(int objectType, GameObject* object) {
+        if (Logic::get().predicting || Logic::get().is_traj_player(this) || Logic::get().player_hidden(this))
+            return;
         PlayerObject::playBumpEffect(objectType, object);
     }
 
     void playSpiderDashEffect(CCPoint from, CCPoint to) {
+        if (Logic::get().predicting || Logic::get().is_traj_player(this) || Logic::get().player_hidden(this))
+            return;
         PlayerObject::playSpiderDashEffect(from, to);
     }
 
     void playSpawnEffect() {
+        if (Logic::get().predicting || Logic::get().backstepping || Logic::get().is_traj_player(this) || Logic::get().player_hidden(this))
+            return;
         PlayerObject::playSpawnEffect();
     }
 
     void spawnCircle() {
+        if (Logic::get().predicting || Logic::get().is_traj_player(this) || Logic::get().player_hidden(this))
+            return;
         PlayerObject::spawnCircle();
     }
 
     void spawnDualCircle() {
+        if (Logic::get().predicting || Logic::get().is_traj_player(this) || Logic::get().player_hidden(this))
+            return;
         PlayerObject::spawnDualCircle();
     }
 
     void spawnPortalCircle(ccColor3B color, float startRadius) {
+        if (Logic::get().predicting || Logic::get().is_traj_player(this) || Logic::get().player_hidden(this))
+            return;
         PlayerObject::spawnPortalCircle(color, startRadius);
     }
 
     void spawnScaleCircle() {
+        if (Logic::get().predicting || Logic::get().is_traj_player(this) || Logic::get().player_hidden(this))
+            return;
         PlayerObject::spawnScaleCircle();
     }
 

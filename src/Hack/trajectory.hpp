@@ -20,6 +20,10 @@ public:
 		return value;
 	}
 
+	void attach(PlayLayer* play);
+	void detach();
+	void sync_seat(PlayLayer* play);
+
 	CCDrawNode* overlay_node() const {
 		return node;
 	}
@@ -35,6 +39,12 @@ public:
 	void set_delta(float dt) {
 		delta = dt;
 	}
+
+	void note_button(bool player1, bool down);
+	void refresh(PlayLayer* play);
+	void lookahead(PlayLayer* play);
+	void autoclick(PlayLayer* play);
+	int flip_survival(PlayLayer* play, bool player1, int& full, std::vector<CCPoint>* path = nullptr, int limit = 0);
 
 	bool held_next(PlayLayer* play, bool player1) const {
 		return next_click(play, player1) == Click::Hold;
@@ -53,6 +63,13 @@ public:
 	PlayerObject* otherFake(PlayerObject* player) const {
 		return player == fake1 ? fake2 : fake1;
 	}
+
+	bool mark_dead(PlayerObject* player);
+	bool mark_predict_death(PlayerObject* player);
+	bool fakeActivated(PlayerObject* player, EnhancedGameObject* object) const;
+	bool realActivated(PlayerObject* player, EnhancedGameObject* object) const;
+	void rememberActivation(EnhancedGameObject* object, PlayerObject* player);
+	void dualPortal(GJBaseGameLayer* layer, PlayerObject* player, EffectGameObject* portal, bool on);
 
 private:
 	enum class Click {
@@ -103,6 +120,19 @@ private:
 	std::vector<CCPoint>* path_sink = nullptr;
 	std::unordered_set<EnhancedGameObject*> used_p1, used_p2;
 
+	void park(PlayerObject* player);
+	PlayerObject* spawn_fake(PlayLayer* play, char const* id);
+	Key make_key(PlayLayer* play) const;
+	void seed(PlayerObject* fake, PlayerObject* real);
+	void press(PlayLayer* play, PlayerObject* fake, Click click);
 	Click next_click(PlayLayer* play, bool player1) const;
+	template <class F>
+	void predicting(PlayLayer* play, F&& predict);
+	void simulate(PlayLayer* play, bool player1, Click click, bool both, bool draw, int limit, int measure);
+	bool advance(PlayLayer* play, PlayerObject* fake, float step_delta, bool draw, Click click);
 	std::vector<CCPoint> paths[2];
+	void flush_path(PlayLayer* play, PlayerObject* fake, Click click);
+	void draw_death(PlayerObject* fake);
+	ccColor4F color_for(PlayerObject* fake, Click click) const;
+	float lineWidth(PlayLayer* play) const;
 };

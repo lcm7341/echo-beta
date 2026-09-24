@@ -85,6 +85,13 @@
 			"default": "None",
 			"category": "gameplay"
 		},
+		"key-trajectory": {
+			"type": "keybind",
+			"platforms": ["win"],
+			"name": "Show trajectory",
+			"default": "None",
+			"category": "gameplay"
+		},
 		"key-no-overwrite": {
 			"type": "keybind",
 			"platforms": ["win"],
@@ -125,6 +132,13 @@
 			"platforms": ["win"],
 			"name": "Speedhack",
 			"description": "Switch between 1x and the speed set on the slider.",
+			"default": "None",
+			"category": "gameplay"
+		},
+		"key-pause-before-kill": {
+			"type": "keybind",
+			"platforms": ["win"],
+			"name": "Pause before death",
 			"default": "None",
 			"category": "gameplay"
 		}

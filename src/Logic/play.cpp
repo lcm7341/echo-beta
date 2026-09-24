@@ -1032,6 +1032,8 @@ void Logic::onReset(PlayLayer* play) {
         logic.checkpoints.clear();
     if ((logic).is_playing())
         Logic::get().set_replay_pos(play);
+    Trajectory::get().invalidate();
+    Trajectory::get().refresh(play);
     Logic::get().restore_holds(play);
     if (from_checkpoint) {
         logic.resume_pending = false;
@@ -2108,6 +2110,7 @@ void Logic::set_tps(float rate) {
         int frame = PlayLayer::get() ? Logic::get().get_frame(PlayLayer::get()) : 0;
         logic.fps = logic.rate_at(frame);
         rate = logic.fps;
+        Trajectory::get().invalidate();
         logic.message = fmt::format("Starting TPS {:.2f}", logic.macro_fps);
     }
     if (logic.playback_fps < 1.f) {

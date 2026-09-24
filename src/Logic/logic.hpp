@@ -833,6 +833,8 @@ public:
 	bool render_capturing();
 	bool pause_menu_open();
 	float render_frame_game_step = 0.f;
+	void reset_traj();
+	bool is_traj_player(CCObject* object);
 	void sync_predict_hooks();
 	bool advance_paused(GJBaseGameLayer* play);
 	bool lock_delta_active() const;

@@ -12,6 +12,7 @@ namespace phys {
 void flipGravityInner(PlayerObject* player, bool gravity) {
     bool icon2 = false;
     if (auto* layer = GJBaseGameLayer::get()) {
+        icon2 = player == layer->m_player2 || player == Trajectory::get().fake2;
     }
     bool ignoreUpsideDown = player->m_isDart && Logic::get().maintain_gravity && Logic::get().records_player(icon2);
 
@@ -56,6 +57,9 @@ void flipGravity(PlayerObject* player, bool gravity, bool linkPartner) {
     auto& gameState = GJBaseGameLayer::get()->m_gameState;
 
     flipGravityInner(player, gravity);
+    if (!linkPartner || !Trajectory::get().isFake(player) ||
+        gameState.m_unkBool31 || !gameState.m_isDualMode ||
+        GJBaseGameLayer::get()->m_levelSettings->m_twoPlayerMode) return;
     auto* p1 = player;
     auto* p2 = Trajectory::get().otherFake(player);
     if (!p2) return;

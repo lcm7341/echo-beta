@@ -230,6 +230,7 @@ void preSlopeCollision(PlayerObject* player, float dt, GameObject* slope) {
 void collidedWithSlopeInternal(PlayerObject*) {}
 
 void activateForTrajectory(EffectGameObject* obj, PlayerObject* player) {
+    Trajectory::get().rememberActivation(obj, player);
 }
 
 void bumpPlayerFromGJBGL(GJBaseGameLayer* pl, PlayerObject* player,
@@ -339,6 +340,9 @@ void collisionCheckObjects(GJBaseGameLayer* pl, PlayerObject* player,
         EffectGameObject* obj = nullptr;
         if (object->m_objectType != GameObjectType::Slope) {
             obj = static_cast<EffectGameObject*>(object);
+            if (obj && (Trajectory::get().fakeActivated(player, obj) ||
+                        Trajectory::get().realActivated(player, obj)))
+                continue;
         }
 
         cocos2d::CCRect rect;
@@ -374,6 +378,7 @@ void collisionCheckObjects(GJBaseGameLayer* pl, PlayerObject* player,
         if (object->m_objectID == 286 || object->m_objectID == 287) {
             if (Trajectory::get().isFake(player) && pl->canBeActivatedByPlayer(player, obj)) {
                 activateForTrajectory(obj, player);
+                Trajectory::get().dualPortal(pl, player, obj, object->m_objectID == 286);
             }
             continue;
         }
@@ -618,6 +623,12 @@ void triggerObject(EffectGameObject* object, GJBaseGameLayer* pl,
             if (pl->m_gameState.m_isDualMode &&
                 Trajectory::get().isFake(player)) {
                 PlayerObject* other = Trajectory::get().otherFake(player);
+                if (other && other != player &&
+                    !Trajectory::get().fakeActivated(other, object) &&
+                    !Trajectory::get().realActivated(other, object)) {
+                    rotate(other);
+                    phys::activateForTrajectory(object, other);
+                }
             }
 
             break;
@@ -683,6 +694,9 @@ void checkSpawnObjects(GJBaseGameLayer* pl, PlayerObject* player) {
         }
 
         if (object->m_isGroupDisabled) continue;
+        if (Trajectory::get().fakeActivated(player, object) ||
+            Trajectory::get().realActivated(player, object))
+            continue;
 
         if (!object->m_isTouchTriggered) {
             phys::triggerObject(object, pl, player);

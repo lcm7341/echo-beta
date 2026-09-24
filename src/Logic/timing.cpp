@@ -8,6 +8,7 @@
 #include "Logic/logic.hpp"
 #include "Hooks/step.hpp"
 #include "Hack/trajectory.hpp"
+#include "Physics/prediction_art.hpp"
 #include <Geode/binding/PlayLayer.hpp>
 #include <Geode/binding/LevelEditorLayer.hpp>
 #include <algorithm>
