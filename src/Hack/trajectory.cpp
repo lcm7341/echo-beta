@@ -1,6 +1,8 @@
 // shows where the player will go
 //
 // 2 fake players get the real players state copied on & run physics steps, once as if the button is held & once released
+// each path is drawn as lines w/ a marker where it dies
+// predicting must NEVER touch the real attempt: triggers dont fire for real, deaths stay on the fake, the random state is put back after
 #include "Hack/trajectory.hpp"
 #include "Hack/trajectory_path.hpp"
 #include "Logic/logic.hpp"
@@ -260,7 +262,17 @@ Trajectory::Key Trajectory::make_key(PlayLayer* play) const {
 
 // w silly cat skid
 void Trajectory::seed(PlayerObject* fake, PlayerObject* real) {
-    // TODO
+    fake->copyAttributes(real);
+    SavedPlayerCheckpoint checkpoint = SavedPlayerCheckpoint::create(real);
+    checkpoint.apply(fake);
+    fake->m_pendingCheckpoint = nullptr;
+    fake->m_maybeReducedEffects = real->m_maybeReducedEffects;
+    fake->m_isHidden = true;
+    fake->m_playEffects = false;
+    fake->setPosition(real->m_position);
+    fake->setRotation(real->getRotation());
+    fake->m_isObjectRectDirty = true;
+    fake->updateOrientedBox();
 }
 
 void Trajectory::dualPortal(GJBaseGameLayer* layer, PlayerObject* player, EffectGameObject* portal, bool on) {
@@ -272,12 +284,87 @@ void Trajectory::press(PlayLayer* play, PlayerObject* fake, Click click) {
 }
 
 bool Trajectory::advance(PlayLayer* play, PlayerObject* fake, float step_delta, bool draw, Click click) {
-    // todo
-    return {};
+    CCPoint from = fake->getPosition();
+
+    fake->m_totalTime += Logic::get().physics_step();
+    auto clear_log = [&](CCDictionary* log) {
+        if (!log)
+            return;
+        auto shared = [&](PlayerObject* body) {
+            if (!body) {
+                return false;
+            }
+            return log == body->m_collisionLogTop || log == body->m_collisionLogBottom || log == body->m_collisionLogLeft || log == body->m_collisionLogRight;
+        };
+        if (shared(play->m_player1) || shared(play->m_player2))
+            return;
+        log->removeAllObjects();
+    };
+    clear_log(fake->m_collisionLogTop);
+    clear_log(fake->m_collisionLogBottom);
+    clear_log(fake->m_collisionLogLeft);
+    clear_log(fake->m_collisionLogRight);
+    fake->m_playEffects = false;
+    bool live_was_dead = play->m_playerDied || (play->m_player1 && play->m_player1->m_isDead) || (play->m_player2 && play->m_player2->m_isDead);
+    fake->update(step_delta);
+    fake->m_unkUnused3 = fake->getRotation();
+    fake->updateRotation(step_delta);
+    fake->m_shipRotation = fake->getPosition();
+    PlayerObject*& slot = (fake == fake2) ? play->m_player2 : play->m_player1;
+    PlayerObject* saved_slot = slot;
+    if (slot) {
+        slot = fake;
+    }
+    colliding_fake = fake;
+    int hit = play->checkCollisions(fake, step_delta, false);
+    colliding_fake = nullptr;
+    if (slot) {
+        slot = saved_slot;
+    }
+    (void)hit;
+    if (fake->m_isDead) {
+        mark_dead(fake);
+    }
+    bool live_now_dead = play->m_playerDied || (play->m_player1 && play->m_player1->m_isDead) || (play->m_player2 && play->m_player2->m_isDead);
+    if (!live_was_dead && live_now_dead) {
+        mark_dead(fake);
+    }
+    phys::checkSpawnObjects(play, fake);
+
+    bool dead = (fake == fake1 ? dead_p1 : dead_p2) || fake->m_isDead;
+    if (dead) {
+        if (fake == fake1)
+            dead_p1 = true;
+        else if (fake == fake2)
+            dead_p2 = true;
+        if (draw) {
+            flush_path(play, fake, click);
+            CCPoint saved = fake->getPosition();
+            fake->setPosition(from);
+            draw_death(fake);
+            fake->setPosition(saved);
+        }
+        return true;
+    }
+    if (draw) {
+        auto& path = paths[fake == fake2];
+        if (path.empty()) {
+            path.push_back(from);
+        }
+        path.push_back(fake->getPosition());
+    }
+    return false;
 }
 
 void Trajectory::flush_path(PlayLayer* play, PlayerObject* fake, Click click) {
-    // TODO
+    log::debug("flush path");
+    auto& path = paths[fake == fake2];
+    float width = lineWidth(play);
+    auto color = color_for(fake, click);
+    echo::trajectory::draw_path(path, [&](CCPoint a, CCPoint b) {
+        node->drawSegment(a, b, width, color);
+    });
+    path.clear();
 }
 
 void Trajectory::draw_death(PlayerObject* fake) {
@@ -293,8 +380,23 @@ void Trajectory::refresh(PlayLayer* play) {
 }
 
 Trajectory::Click Trajectory::next_click(PlayLayer* play, bool player1) const {
-    // todo
-    return {};
+    auto const& logic = Logic::get();
+    PlayerObject* body = player1 ? play->m_player1 : play->m_player2;
+    if (logic.maintain_gravity && logic.records_player(!player1) && body && body->m_isDart) {
+        return Logic::get().physical_hold(play, !player1) ? Click::Hold : Click::Release;
+    }
+    int jump = static_cast<int>(PlayerButton::Jump);
+    for (auto it = play->m_queuedButtons.rbegin(); it != play->m_queuedButtons.rend(); ++it) {
+        int button = static_cast<int>(it->m_button);
+        if ((button == 0 || button == jump) && it->m_isPlayer2 != player1) {
+            return it->m_isPush ? Click::Hold : Click::Release;
+        }
+    }
+    if (!body) {
+        return Click::Release;
+    }
+    auto found = body->m_holdingButtons.find(jump);
+    return found != body->m_holdingButtons.end() && found->second ? Click::Hold : Click::Release;
 }
 
 template <class F>
@@ -332,8 +434,29 @@ void Trajectory::predicting(PlayLayer* play, F&& predict) {
 }
 
 int Trajectory::flip_survival(PlayLayer* play, bool player1, int& full, std::vector<CCPoint>* path, int limit) {
-    // port this
-    return {};
+    full = 0;
+    if (!play || !play->m_started || play->m_playerDied || !node || !fake1 || !fake2) {
+        return 0;
+    }
+    auto& logic = Logic::get();
+    constexpr int MEASURE_HOLD = 2, MEASURE_RELEASE = 4;
+    bool twoPlayer = play->m_levelSettings && play->m_levelSettings->m_twoPlayerMode;
+    bool linked = player1 && play->m_gameState.m_isDualMode && play->m_player2 && !twoPlayer;
+    Click flip = next_click(play, player1) == Click::Hold ? Click::Release : Click::Hold;
+    float kept[4] = { logic.traj_hold_alive_p1, logic.traj_hold_alive_p2, logic.traj_release_alive_p1, logic.traj_release_alive_p2 };
+    measured[0] = measured[1] = measured_full = 0;
+    path_sink = path;
+    predicting(play, [&] {
+        simulate(play, player1, flip, linked, false, limit, flip == Click::Hold ? MEASURE_HOLD : MEASURE_RELEASE);
+    });
+    path_sink = nullptr;
+    logic.traj_hold_alive_p1 = kept[0];
+    logic.traj_hold_alive_p2 = kept[1];
+    logic.traj_release_alive_p1 = kept[2];
+    logic.traj_release_alive_p2 = kept[3];
+    cached = false;
+    full = measured_full;
+    return std::min(measured[0], measured[1]);
 }
 
 void Trajectory::autoclick(PlayLayer* play) {
@@ -341,12 +464,44 @@ void Trajectory::autoclick(PlayLayer* play) {
 }
 
 void Trajectory::lookahead(PlayLayer* play) {
-    // TODO
+    auto& logic = Logic::get();
+    logic.death_next_p1 = false;
+    logic.death_next_p2 = false;
+    if (!play || !play->m_started || play->m_playerDied || !play->m_player1 || !node || !fake1 || !fake2)
+        return;
+    if (play->m_hasCompletedLevel || play->m_levelEndAnimationStarted)
+        return;
+    auto actual = [&](bool player1) {
+        return next_click(play, player1);
+    };
+    auto watched = [&](bool player2) {
+        return logic.is_recording() ? logic.records_player(player2) : !logic.plays_player(player2);
+    };
+    constexpr int MEASURE_LIVE = 1;
+    bool twoPlayer = play->m_levelSettings && play->m_levelSettings->m_twoPlayerMode;
+    bool dual = play->m_gameState.m_isDualMode && play->m_player2;
+    bool linked = dual && !twoPlayer;
+    predicting(play, [&] {
+        if (watched(false) && !logic.plays_player(false)) {
+            simulate(play, true, actual(true), linked, false, 1, MEASURE_LIVE);
+        }
+        if (dual && !linked && watched(true) && !logic.plays_player(true)) {
+            simulate(play, false, actual(false), false, false, 1, MEASURE_LIVE);
+        }
+    });
+    logic.traj_alive_p1 = logic.traj_alive_p2 = 0.f;
+    logic.traj_dies_p1 = logic.traj_dies_p2 = false;
+    cached = false;
 }
 
 bool Logic::is_traj_player(CCObject* object) {
-    // TODO
-    return {};
+    log::debug("is traj player");
+    auto const& trajectory = Trajectory::get();
+    if (!object) {
+        return false;
+    }
+    return (trajectory.fake1 && object == static_cast<CCObject*>(trajectory.fake1)) ||
+           (trajectory.fake2 && object == static_cast<CCObject*>(trajectory.fake2));
 }
 
 void Logic::reset_traj() {
