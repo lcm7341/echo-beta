@@ -21,7 +21,8 @@ public:
     static constexpr uint8_t footer = 0xCC;
     static constexpr uint64_t size_mask = 0x00FFFFFFFFFFFFFFull; // low 56 bits
     static constexpr size_t max_section = size_t(1) << 15;
-    static constexpr uint64_t max_produced = ~uint64_t{ 0 };
+    // a bad file can repeat 2^31 times = trillions of inputs xd
+    static constexpr uint64_t max_produced = uint64_t{ 1 } << 24;
 
     enum class Special : uint8_t {
         Restart = 0,
