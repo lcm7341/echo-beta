@@ -279,7 +279,79 @@ void Trajectory::seed(PlayerObject* fake, PlayerObject* real) {
 }
 
 void Trajectory::dualPortal(GJBaseGameLayer* layer, PlayerObject* player, EffectGameObject* portal, bool on) {
-    // TODO
+    log::debug("dual portal");
+    auto& state = layer->m_gameState;
+    if (state.m_isDualMode == on || !fake1 || !fake2)
+        return;
+    bool twoPlayer = layer->m_levelSettings && layer->m_levelSettings->m_twoPlayerMode;
+    auto with_fakes = [&](auto&& action) {
+        PlayerObject* one = layer->m_player1;
+        PlayerObject* two = layer->m_player2;
+        layer->m_player1 = fake1;
+        layer->m_player2 = fake2;
+        action();
+        layer->m_player1 = one;
+        layer->m_player2 = two;
+    };
+    if (on) {
+        if (player != fake1 || pairing)
+            return;
+        state.m_isDualMode = true;
+        fake1->m_unkA99 = true;
+        if (join_real) {
+            seed(fake2, join_real);
+        }
+        fake2->m_unkA99 = true;
+        fake2->resetObject();
+        fake2->copyAttributes(fake1);
+        bool unlinked = state.m_unlinkDualGravity;
+        fake2->flipGravity(unlinked ? fake1->m_isUpsideDown : !fake1->m_isUpsideDown, true);
+        fake2->setYVelocity(unlinked ? fake1->m_yVelocity : -fake1->m_yVelocity, 0);
+        fake2->m_isOnGround = false;
+        fake2->m_isOnGround2 = false;
+        if (twoPlayer) {
+            if (!fake2->m_inputsLocked) {
+                fake2->m_holdingButtons[static_cast<int>(PlayerButton::Jump)] = false;
+            }
+            if (!fake2->m_controlsDisabled) {
+                fake2->m_jumpBuffered = false;
+                fake2->m_stateRingJump = false;
+                fake2->m_touchedPad = true;
+                if (fake2->m_isDashing) {
+                    fake2->stopDashing();
+                }
+            }
+        }
+        fake2->setVisible(false);
+        fake2->m_isHidden = true;
+        fake2->m_playEffects = false;
+        fake2->m_isObjectRectDirty = true;
+        state.m_lastActivatedPortal2 = portal;
+        with_fakes([&] {
+            layer->playerWillSwitchMode(player, portal);
+        });
+        joined = joinable;
+        return;
+    }
+    state.m_isDualMode = false;
+    fake1->m_unkA99 = false;
+    fake2->m_unkA99 = false;
+    if (player == fake2) {
+        fake1->copyAttributes(fake2);
+    }
+    fake2->releaseAllButtons();
+    state.m_lastActivatedPortal2 = nullptr;
+    int mode = 6;
+    if (fake1->m_isShip || fake1->m_isBird || fake1->m_isDart || fake1->m_isSwing)
+        mode = 5;
+    else if (fake1->m_isBall)
+        mode = 0x10;
+    else if (fake1->m_isSpider)
+        mode = 0x21;
+    with_fakes([&] {
+        layer->updateDualGround(player, mode, false, 0.f);
+    });
+    parted = true;
 }
 
 void Trajectory::press(PlayLayer* play, PlayerObject* fake, Click click) {
