@@ -484,6 +484,8 @@ class $modify(EchoPlayLayer, PlayLayer) {
         Logic::get().onReset(this);
         dash_spin_reset();
         Logic::get().cancel_steps();
+        if (!logic.in_scheduler && !logic.backstepping)
+            Logic::get().draw_hitboxes(this);
         Logic::get().sync_time_scale();
     }
 
@@ -631,6 +633,7 @@ class $modify(EchoEditor, LevelEditorLayer) {
     void updateEditor(float dt) {
         LevelEditorLayer::updateEditor(dt);
         if (Logic::get().show_hitboxes && !Logic::get().editor_testing) {
+            Logic::get().draw_hitboxes(this);
         }
     }
 
@@ -640,10 +643,13 @@ class $modify(EchoEditor, LevelEditorLayer) {
             m_player1->setVisible(false);
         if (Logic::get().hide_p2 && m_player2)
             m_player2->setVisible(false);
+        Logic::get().flush_click_hitboxes(this);
+        Logic::get().draw_hitboxes(this);
     }
 
     void updateDebugDraw() {
         LevelEditorLayer::updateDebugDraw();
+        Logic::get().draw_hitboxes(this);
     }
 };
 
@@ -708,6 +714,8 @@ namespace echo::step {
                 logic.progress_base_set = true;
             }
             Logic::get().apply_rate(logic.step_frame);
+            if (!logic.hitbox_trail_visual)
+                Logic::get().add_trail_point(layer);
         }
         if (play)
             trace(self);
@@ -1236,6 +1244,7 @@ class $modify(EchoGameLayer, GJBaseGameLayer) {
                 manager->setGameVariable("0010", true);
         }
         if ((button == 0 || button == jump || button == left || button == right) && !orb_swift && !value.maintaining_gravity && !value.suppress_click_hitbox && !value.restoring_holds) {
+            Logic::get().note_click_hitbox(this, player1, down);
         }
         if (swifts > 0) {
             orb_swift = true;
@@ -1387,6 +1396,8 @@ class $modify(EchoPlayerObject, PlayerObject) {
     void update(float dt) {
         if (Trajectory::get().isFake(this) && !Logic::get().predicting)
             return;
+        if (!Trajectory::get().isFake(this))
+            Logic::get().capture_pending_click(this);
         if (Logic::get().suppress_auto_hold && !Trajectory::get().isFake(this)) {
             auto& logic = Logic::get();
             auto it = m_holdingButtons.find(static_cast<int>(PlayerButton::Jump));

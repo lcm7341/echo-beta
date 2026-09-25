@@ -1,0 +1,522 @@
+// draws hitboxes for players & objects, the trail of where the player has been & marks where clicks happened
+// it reads the same collision lists gd checks, so only what can actually be hit is shown
+#include <cstring>
+#include "Logic/logic.hpp"
+#include "Hack/color.hpp"
+#include "Hack/trajectory.hpp"
+#include "Physics/object.hpp"
+#include <Geode/binding/LevelSettingsObject.hpp>
+#include <Geode/binding/LevelEditorLayer.hpp>
+#include <Geode/binding/EditorUI.hpp>
+#include <Geode/binding/ShaderLayer.hpp>
+#include <Geode/binding/UILayer.hpp>
+#include <Geode/binding/PlayLayer.hpp>
+#include <Geode/binding/GJBaseGameLayer.hpp>
+#include <Geode/binding/PlayerObject.hpp>
+#include <Geode/binding/GameObject.hpp>
+#include <Geode/binding/OBB2D.hpp>
+#include <algorithm>
+#include <array>
+#include <chrono>
+#include <cmath>
+#include <deque>
+#include <span>
+#include <unordered_set>
+#include <vector>
+
+using namespace geode::prelude;
+
+class Hitboxes {
+public:
+    static Hitboxes& get() {
+        static Hitboxes value;
+        return value;
+    }
+
+    void draw_player_hitbox(CCDrawNode* node, GJBaseGameLayer* play, PlayerObject* player, float width, bool fill, float const* tint);
+    void capture_click(GJBaseGameLayer* play, PlayerObject* player, bool down);
+    void draw_clicks(CCDrawNode* node, GJBaseGameLayer* play, float width, bool fill);
+    void clear_clicks();
+    void draw_object_hitbox(CCDrawNode* node, GJBaseGameLayer* play, GameObject* object, float width, bool fill);
+    void push_trail(std::deque<HitboxTrailPoint>& trail, HitboxTrailPoint point, GJBaseGameLayer* play);
+    int trail_limit();
+    int trail_now();
+    void trim_trail(std::deque<HitboxTrailPoint>& trail, GJBaseGameLayer* play);
+};
+
+constexpr int HITBOX_TAG = 0xEC06;
+
+CCDrawNode* find_hitbox_node(GJBaseGameLayer* play) {
+    auto find = [](CCNode* parent) -> CCDrawNode* {
+        if (!parent) {
+            return nullptr;
+        }
+        return typeinfo_cast<CCDrawNode*>(parent->getChildByTag(HITBOX_TAG));
+    };
+    if (auto* node = find(play)) {
+        return node;
+    }
+    if (auto* node = find(play->m_objectLayer)) {
+        return node;
+    }
+    if (auto* node = find(play->m_uiLayer)) {
+        return node;
+    }
+    return nullptr;
+}
+
+namespace {
+    void sync_to_object_layer(CCNode* node, CCNode* object_layer) {
+        if (!node || !object_layer || !node->getParent())
+            return;
+        node->setAdditionalTransform(CCAffineTransformConcat(
+            object_layer->nodeToWorldTransform(),
+            node->getParent()->worldToNodeTransform()));
+    }
+
+    int overlay_z_order(GJBaseGameLayer* play) {
+        if (auto* editor = typeinfo_cast<LevelEditorLayer*>(play); editor && editor->m_editorUI) {
+            return editor->m_editorUI->getZOrder() - 1;
+        }
+        return (play->m_uiLayer ? play->m_uiLayer->getZOrder() : 101) + 1;
+    }
+
+    class EchoHitboxNode : public CCDrawNode {
+    public:
+        static EchoHitboxNode* create() {
+            auto* node = new EchoHitboxNode();
+            if (node && node->init()) {
+                node->autorelease();
+                return node;
+            }
+            CC_SAFE_DELETE(node);
+            return nullptr;
+        }
+
+        void visit() override {
+            if (auto* play = GJBaseGameLayer::get(); play && play->m_objectLayer) {
+                sync_to_object_layer(this, play->m_objectLayer);
+            }
+            CCDrawNode::visit();
+        }
+    };
+}
+
+void Logic::seat_overlay(CCNode* node, GJBaseGameLayer* play) {
+    if (!node || !play || !play->m_objectLayer)
+        return;
+    int z = overlay_z_order(play);
+    if (node->getParent() != play) {
+        node->removeFromParentAndCleanup(false);
+        play->addChild(node, z, node->getTag());
+    }
+    else if (node->getZOrder() != z)
+        node->setZOrder(z);
+    node->setPosition({ 0.f, 0.f });
+    node->setAnchorPoint({ 0.f, 0.f });
+    node->setScale(1.f);
+    node->setRotation(0.f);
+    node->setSkewX(0.f);
+    node->setSkewY(0.f);
+    sync_to_object_layer(node, play->m_objectLayer);
+}
+
+void Logic::sync_overlay_seats(GJBaseGameLayer* play) {
+    if (!play || !play->m_objectLayer)
+        return;
+    if (auto* node = find_hitbox_node(play)) {
+        seat_overlay(node, play);
+    }
+    if (auto* live = Logic::as_play(play)) {
+        Trajectory::get().sync_seat(live);
+    }
+}
+
+struct ClickBox {
+    CCRect outer;
+    CCRect inner;
+    bool rotated = false;
+    bool down = true;
+    std::array<CCPoint, 4> corners{};
+    CCPoint center{};
+    float radius = 0.f;
+    int frame = 0;
+};
+
+std::deque<ClickBox> g_clicks;
+
+CCRect visible_layer_rect(CCNode* layer);
+
+struct PendingClick {
+    bool player2 = false;
+    bool down = true;
+};
+
+std::vector<PendingClick> g_pendingClicks;
+
+float collision_radius(GameObject* object) {
+    if (!object || object->m_objectRadius <= 0.f) {
+        return 0.f;
+    }
+    float radius = object->m_objectRadius;
+    float sx = std::abs(object->m_scaleX);
+    float sy = std::abs(object->m_scaleY);
+    if (sx != 1.f || sy != 1.f) {
+        radius *= std::max(sx, sy);
+    }
+    return radius;
+}
+
+float hazard_radius(GameObject* object) {
+    return collision_radius(object);
+}
+
+// drawing a hitbox fucks with cached
+class HitboxStateGuard {
+    static constexpr size_t SPAN_FROM = 0x2e0, SPAN_TO = 0x370, BOX_FROM = 0x140, BOX_TO = 0x1b8;
+    GameObject* m_object;
+    std::array<uint8_t, SPAN_TO - SPAN_FROM> m_fields{};
+    OBB2D* m_box;
+    std::array<uint8_t, BOX_TO - BOX_FROM> m_boxData{};
+    // sits before the span. gd works the offset out ONCE & keeps it (the deadlocked teleport portal thing)
+    bool m_offsetCalculated;
+    CCPoint m_offset;
+
+public:
+    explicit HitboxStateGuard(GameObject* object) : m_object(object), m_box(object->m_orientedBox),
+        m_offsetCalculated(object->m_boxOffsetCalculated), m_offset(object->m_boxOffset) {
+        auto* bytes = reinterpret_cast<uint8_t*>(object);
+        std::memcpy(m_fields.data(), bytes + SPAN_FROM, m_fields.size());
+        if (m_box)
+            std::memcpy(m_boxData.data(), reinterpret_cast<uint8_t*>(m_box) + BOX_FROM, m_boxData.size());
+    }
+
+    ~HitboxStateGuard() {
+        auto* created = m_object->m_orientedBox;
+        if (created && created != m_box)
+            created->release();
+        std::memcpy(reinterpret_cast<uint8_t*>(m_object) + SPAN_FROM, m_fields.data(), m_fields.size());
+        m_object->m_boxOffsetCalculated = m_offsetCalculated;
+        m_object->m_boxOffset = m_offset;
+        if (m_box)
+            std::memcpy(reinterpret_cast<uint8_t*>(m_box) + BOX_FROM, m_boxData.data(), m_boxData.size());
+    }
+
+    HitboxStateGuard(HitboxStateGuard const&) = delete;
+    HitboxStateGuard& operator=(HitboxStateGuard const&) = delete;
+};
+
+OBB2D* live_oriented_box(GameObject* object) {
+    if (!object) {
+        return nullptr;
+    }
+    bool editor = LevelEditorLayer::get() && !PlayLayer::get();
+    float saved_start = object->m_startRotationX;
+    if (editor) {
+        object->m_startRotationX = object->getRotation() - object->m_rotationXOffset;
+    }
+    object->m_isOrientedBoxDirty = true;
+    object->m_isObjectRectDirty = true;
+    object->updateOrientedBox();
+    if (editor) {
+        object->m_startRotationX = saved_start;
+    }
+    if (auto* box = object->m_orientedBox) {
+        return box;
+    }
+    return object->getOrientedBox();
+}
+
+void refresh_object_hitbox(GameObject* object) {
+    if (!object)
+        return;
+    if (object->m_customBoxOffset.x != 0.f || object->m_customBoxOffset.y != 0.f)
+        return;
+    // TODO hitboxes lag behind move triggers
+    object->m_isObjectRectDirty = true;
+}
+
+// obj hitbox without touching its caches
+CCRect Logic::object_hitbox(GameObject* object) {
+    if (!object) {
+        return {};
+    }
+    HitboxStateGuard preserve(object);
+    refresh_object_hitbox(object);
+    return object->getObjectRect();
+}
+
+void Logic::note_click_hitbox(GJBaseGameLayer* play, bool player1, bool down) {
+    if (!play || Logic::get().predicting)
+        return;
+    if (!Logic::get().show_hitboxes || !Logic::get().hitbox_click)
+        return;
+    g_pendingClicks.push_back({ !player1, down });
+    if (!play->m_gameState.m_isDualMode)
+        return;
+    g_pendingClicks.push_back({ player1, down });
+}
+
+void Logic::capture_pending_click(PlayerObject* player) {
+    // later
+}
+
+void Logic::flush_click_hitboxes(GJBaseGameLayer* play) {
+    // TODO
+}
+
+void Logic::clear_click_hitbox() {
+    g_pendingClicks.clear();
+    Hitboxes::get().clear_clicks();
+}
+
+void Hitboxes::capture_click(GJBaseGameLayer*, PlayerObject* player, bool down) {
+    // TODO
+}
+
+void Hitboxes::clear_clicks() {
+    g_clicks.clear();
+}
+
+void Hitboxes::draw_clicks(CCDrawNode* node, GJBaseGameLayer* play, float width, bool fill) {
+    // later
+}
+
+void Hitboxes::draw_player_hitbox(CCDrawNode* node, GJBaseGameLayer* play, PlayerObject* player, float width, bool fill, float const* tint) {
+    // port this
+}
+
+// Outline Only --> collects every shape then cuts the edges that are inside another one
+namespace {
+    struct OutlineShape {
+        std::vector<CCPoint> points;
+        ccColor4F fill;
+        ccColor4F line;
+        CCRect bounds;
+        int kind = 0;
+    };
+
+    struct OutlineSink {
+        bool collecting = false;
+        int kind = 0;
+        std::vector<OutlineShape> shapes;
+    };
+
+    OutlineSink& outlines() {
+        static OutlineSink sink;
+        return sink;
+    }
+
+    void collect_shape(CCPoint const* points, unsigned count, ccColor4F const& fill, ccColor4F const& line) {
+        if (count < 3)
+            return;
+
+        OutlineShape shape;
+        shape.points.assign(points, points + count);
+        float area = 0.f;
+        for (unsigned i = 0; i < count; ++i) {
+            auto const& a = shape.points[i];
+            auto const& b = shape.points[(i + 1) % count];
+            area += a.x * b.y - b.x * a.y;
+        }
+        if (area < 0.f)
+            std::reverse(shape.points.begin(), shape.points.end());
+        float minX = INFINITY, minY = INFINITY, maxX = -INFINITY, maxY = -INFINITY;
+        for (auto const& p : shape.points) {
+            minX = std::min(minX, p.x);
+            minY = std::min(minY, p.y);
+            maxX = std::max(maxX, p.x);
+            maxY = std::max(maxY, p.y);
+        }
+        shape.bounds = { minX, minY, maxX - minX, maxY - minY };
+        shape.fill = fill;
+        shape.line = line;
+        shape.kind = outlines().kind;
+        outlines().shapes.push_back(std::move(shape));
+    }
+
+    void emit_polygon(CCDrawNode* node, CCPoint* points, unsigned count, ccColor4F const& fill, float width, ccColor4F const& line) {
+        if (outlines().collecting)
+            return collect_shape(points, count, fill, line);
+        node->drawPolygon(points, count, fill, width, line, BorderAlignment::Inside);
+    }
+
+    void emit_rect(CCDrawNode* node, CCRect const& rect, ccColor4F const& fill, float width, ccColor4F const& line) {
+        if (outlines().collecting) {
+            std::array<CCPoint, 4> corners{ rect.origin, ccp(rect.getMaxX(), rect.getMinY()), ccp(rect.getMaxX(), rect.getMaxY()), ccp(rect.getMinX(), rect.getMaxY()) };
+            return collect_shape(corners.data(), 4, fill, line);
+        }
+        node->drawRect(rect, fill, width, line, BorderAlignment::Inside);
+    }
+
+    void emit_circle(CCDrawNode* node, CCPoint const& center, float radius, ccColor4F const& fill, float width, ccColor4F const& line, unsigned segments) {
+        if (outlines().collecting) {
+            std::vector<CCPoint> ring(std::max(segments, 8u));
+            for (std::size_t i = 0; i < ring.size(); ++i) {
+                float angle = (float)(i) * 2.f * (float)(M_PI) / (float)(ring.size());
+                ring[i] = center + CCPoint{ std::cos(angle), std::sin(angle) } * radius;
+            }
+            return collect_shape(ring.data(), static_cast<unsigned>(ring.size()), fill, line);
+        }
+        node->drawCircle(center, radius, fill, width, line, segments);
+    }
+
+    bool inside_shape(OutlineShape const& shape, CCPoint p) {
+        if (!shape.bounds.containsPoint(p))
+            return false;
+        auto const& pts = shape.points;
+        for (std::size_t i = 0; i < pts.size(); ++i) {
+            auto const& a = pts[i];
+            auto const& b = pts[(i + 1) % pts.size()];
+            if ((b.x - a.x) * (p.y - a.y) - (b.y - a.y) * (p.x - a.x) < -1e-4f)
+                return false;
+        }
+        return true;
+    }
+
+    void flush_outlines(CCDrawNode* node, float width) {
+        auto& sink = outlines();
+        sink.collecting = false;
+        auto& shapes = sink.shapes;
+        if (shapes.empty())
+            return;
+        for (auto& shape : shapes) {
+            if (shape.fill.a > 0.f)
+                node->drawPolygon(shape.points.data(), static_cast<unsigned>(shape.points.size()), shape.fill, 0.f, { 0.f, 0.f, 0.f, 0.f });
+        }
+        constexpr float CELL = 90.f;
+        std::unordered_map<std::uint64_t, std::vector<std::uint32_t>> cells;
+        auto cell_key = [](int x, int y) {
+            return (static_cast<std::uint64_t>(static_cast<std::uint32_t>(x)) << 32) | static_cast<std::uint32_t>(y);
+        };
+        for (std::uint32_t i = 0; i < shapes.size(); ++i) {
+            auto const& b = shapes[i].bounds;
+            for (int x = (int)(std::floor(b.getMinX() / CELL)); x <= (int)(std::floor(b.getMaxX() / CELL)); ++x)
+                for (int y = (int)(std::floor(b.getMinY() / CELL)); y <= (int)(std::floor(b.getMaxY() / CELL)); ++y)
+                    cells[cell_key(x, y)].push_back(i);
+        }
+        std::vector<std::uint32_t> nearby;
+        std::vector<std::uint32_t> seen(shapes.size(), UINT32_MAX);
+        std::vector<float> cuts;
+        float depth = width;
+        float probe = std::max(0.05f, width * 0.25f);
+        for (std::uint32_t i = 0; i < shapes.size(); ++i) {
+            auto const& shape = shapes[i];
+            auto const& pts = shape.points;
+            for (std::size_t e = 0; e < pts.size(); ++e) {
+                auto a = pts[e];
+                auto b = pts[(e + 1) % pts.size()];
+                auto d = b - a;
+                float len = std::hypot(d.x, d.y);
+                if (len < 1e-4f)
+                    continue;
+                CCPoint outward{ d.y / len, -d.x / len };
+                nearby.clear();
+                float minX = std::min(a.x, b.x) - probe, maxX = std::max(a.x, b.x) + probe;
+                float minY = std::min(a.y, b.y) - probe, maxY = std::max(a.y, b.y) + probe;
+                for (int x = (int)(std::floor(minX / CELL)); x <= (int)(std::floor(maxX / CELL)); ++x)
+                    for (int y = (int)(std::floor(minY / CELL)); y <= (int)(std::floor(maxY / CELL)); ++y) {
+                        auto it = cells.find(cell_key(x, y));
+                        if (it == cells.end())
+                            continue;
+                        for (auto j : it->second) {
+                            if (j == i || seen[j] == i * 1024u + e || shapes[j].kind != shape.kind)
+                                continue;
+                            seen[j] = static_cast<std::uint32_t>(i * 1024u + e);
+                            auto const& o = shapes[j].bounds;
+                            if (o.getMaxX() < minX || o.getMinX() > maxX || o.getMaxY() < minY || o.getMinY() > maxY)
+                                continue;
+                            nearby.push_back(j);
+                        }
+                    }
+                cuts.assign({ 0.f, 1.f });
+                for (auto j : nearby) {
+                    auto const& other = shapes[j].points;
+                    for (std::size_t k = 0; k < other.size(); ++k) {
+                        auto c = other[k];
+                        auto f = other[(k + 1) % other.size()] - c;
+                        float denom = d.x * f.y - d.y * f.x;
+                        if (std::abs(denom) < 1e-6f)
+                            continue;
+                        auto ac = c - a;
+                        float t = (ac.x * f.y - ac.y * f.x) / denom;
+                        float u = (ac.x * d.y - ac.y * d.x) / denom;
+                        if (t > 0.f && t < 1.f && u >= 0.f && u <= 1.f)
+                            cuts.push_back(t);
+                    }
+                }
+                std::sort(cuts.begin(), cuts.end());
+                CCPoint inward = outward * -depth;
+                for (std::size_t c = 0; c + 1 < cuts.size(); ++c) {
+                    float t0 = cuts[c], t1 = cuts[c + 1];
+                    if ((t1 - t0) * len < 0.01f)
+                        continue;
+                    auto mid = a + d * ((t0 + t1) * 0.5f);
+                    auto test = mid + outward * probe;
+                    bool covered = std::ranges::any_of(nearby, [&](std::uint32_t j) {
+                        return inside_shape(shapes[j], test);
+                    });
+                    if (covered)
+                        continue;
+                    float trim = std::min(depth / len, (t1 - t0) * 0.5f);
+                    node->drawSegment(a + d * (t0 + trim) + inward, a + d * (t1 - trim) + inward, depth, shape.line);
+                }
+            }
+        }
+        shapes.clear();
+    }
+}
+
+void Hitboxes::draw_object_hitbox(CCDrawNode* node, GJBaseGameLayer* play, GameObject* object, float width, bool fill) {
+    // TODO
+}
+
+CCRect visible_layer_rect(CCNode* layer) {
+    // todo
+    return {};
+}
+
+CCRect upright_rect(CCRect rect) {
+    // todo
+    return {};
+}
+
+struct TrailFit {
+    float width = 0.f, height = 0.f;
+};
+
+CCRect trail_rect(PlayerObject* player, TrailFit& fit) {
+    // later
+    return {};
+}
+
+bool same_trail_spot(CCRect const& a, CCRect const& b) {
+    // TODO
+    return {};
+}
+
+void Hitboxes::push_trail(std::deque<HitboxTrailPoint>& trail, HitboxTrailPoint point, GJBaseGameLayer* play) {
+    // TODO
+}
+
+int Hitboxes::trail_limit() {
+    // TODO
+    return {};
+}
+
+int Hitboxes::trail_now() {
+    auto const& logic = Logic::get();
+    return logic.hitbox_trail_visual ? logic.visual_frame : logic.step_frame;
+}
+
+void Hitboxes::trim_trail(std::deque<HitboxTrailPoint>& trail, GJBaseGameLayer* play) {
+    // TODO
+}
+
+void Logic::add_trail_point(GJBaseGameLayer* play) {
+    // TODO
+}
+
+void Logic::draw_hitboxes(GJBaseGameLayer* play) {
+    // TODO
+}

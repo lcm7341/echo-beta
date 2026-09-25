@@ -85,6 +85,13 @@
 			"default": "None",
 			"category": "gameplay"
 		},
+		"key-hitboxes": {
+			"type": "keybind",
+			"platforms": ["win"],
+			"name": "Show hitboxes",
+			"default": "None",
+			"category": "gameplay"
+		},
 		"key-trajectory": {
 			"type": "keybind",
 			"platforms": ["win"],

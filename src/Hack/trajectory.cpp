@@ -76,6 +76,7 @@ void Trajectory::attach(PlayLayer* play) {
     node->m_bUseArea = false;
     node->setID("trajectory"_spr);
     node->setBlendFunc({ GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA });
+    Logic::get().seat_overlay(node, play);
     fake1 = spawn_fake(play, "trajectory-player-1"_spr);
     fake2 = spawn_fake(play, "trajectory-player-2"_spr);
 }
@@ -83,6 +84,7 @@ void Trajectory::attach(PlayLayer* play) {
 void Trajectory::sync_seat(PlayLayer* play) {
     if (!node || !play)
         return;
+    Logic::get().seat_overlay(node, play);
 }
 
 void Trajectory::detach() {

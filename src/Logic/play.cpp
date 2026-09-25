@@ -708,6 +708,7 @@ void Logic::after_frame(PlayLayer* play, float dt) {
     auto& logic = Logic::get();
     if (!play || logic.resetting)
         return;
+    Logic::get().flush_click_hitboxes(play);
     Logic::get().hide_icon(play->m_player1, logic.hide_p1);
     Logic::get().hide_icon(play->m_player2, logic.hide_p2);
     if ((logic).is_recording())
@@ -719,6 +720,8 @@ void Logic::after_frame(PlayLayer* play, float dt) {
         logic.end_x = play->m_endPortal->getPositionX();
     if (!logic.present)
         return;
+    if (!logic.in_scheduler)
+        Logic::get().draw_hitboxes(play);
 }
 
 void Logic::on_play_init(PlayLayer* play) {
@@ -740,6 +743,7 @@ void Logic::on_play_init(PlayLayer* play) {
     logic.buttons_prepared = false;
     logic.replay_clicks_left = 0;
     Logic::get().cancel_steps();
+    Logic::get().clear_click_hitbox();
     Logic::get().apply_rate(0);
     logic.present = true;
     logic.layout_styled = false;
@@ -936,6 +940,7 @@ void reshuffle_sequence(Session& value) {
 
 void Logic::onReset(PlayLayer* play) {
     auto& logic = Logic::get();
+    Logic::get().clear_click_hitbox();
     logic.trail_p1.clear();
     logic.trail_p2.clear();
     logic.currently_pressing = false;

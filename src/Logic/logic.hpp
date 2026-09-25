@@ -827,6 +827,15 @@ public:
 	int max_steps_for_frame() const;
 	void note_frame_work(double seconds);
 	double frame_work = 0.0;
+	static CCRect object_hitbox(GameObject* object);
+	void draw_hitboxes(GJBaseGameLayer* play);
+	void seat_overlay(CCNode* node, GJBaseGameLayer* play);
+	void sync_overlay_seats(GJBaseGameLayer* play);
+	void add_trail_point(GJBaseGameLayer* play);
+	void note_click_hitbox(GJBaseGameLayer* play, bool player1, bool down);
+	void capture_pending_click(PlayerObject* player);
+	void flush_click_hitboxes(GJBaseGameLayer* play);
+	void clear_click_hitbox();
 	void begin_editor_playtest();
 	void end_editor_playtest(GJBaseGameLayer* editor);
 	bool render_active();
