@@ -258,11 +258,35 @@ void Logic::note_click_hitbox(GJBaseGameLayer* play, bool player1, bool down) {
 }
 
 void Logic::capture_pending_click(PlayerObject* player) {
-    // later
+    auto* play = GJBaseGameLayer::get();
+    if (!play || !player || Logic::get().is_traj_player(player))
+        return;
+    bool player2 = player == play->m_player2;
+    std::erase_if(g_pendingClicks, [&](PendingClick const& click) {
+        if (click.player2 != player2) {
+            return false;
+        }
+        Hitboxes::get().capture_click(play, player, click.down);
+        return true;
+    });
 }
 
 void Logic::flush_click_hitboxes(GJBaseGameLayer* play) {
-    // TODO
+    log::debug("flush click hitboxes");
+    if (!play) {
+        g_pendingClicks.clear();
+        return;
+    }
+    auto const& logic = Logic::get();
+    size_t from = g_pendingClicks.size() > 400 ? g_pendingClicks.size() - 400 : 0;
+    for (auto const& click : std::span(g_pendingClicks).subspan(from)) {
+        auto* player = click.player2 ? play->m_player2 : play->m_player1;
+        if ((click.player2 && Logic::get().hitbox_player_hidden(true)) || (!click.player2 && Logic::get().hitbox_player_hidden(false))) {
+            continue;
+        }
+        Hitboxes::get().capture_click(play, player, click.down);
+    }
+    g_pendingClicks.clear();
 }
 
 void Logic::clear_click_hitbox() {
@@ -283,7 +307,35 @@ void Hitboxes::draw_clicks(CCDrawNode* node, GJBaseGameLayer* play, float width,
 }
 
 void Hitboxes::draw_player_hitbox(CCDrawNode* node, GJBaseGameLayer* play, PlayerObject* player, float width, bool fill, float const* tint) {
-    // port this
+    if (!player || Logic::get().is_traj_player(player))
+        return;
+    auto const& logic = Logic::get();
+    auto rect = player->getObjectRect();
+    auto inner_rect = player->getObjectRect(0.3f, 0.3f);
+    CCPoint center{ rect.getMidX(), rect.getMidY() };
+    float const* outerColor = tint ? tint : logic.hitbox_outer_color;
+    float const* rotated_color = tint ? tint : logic.hitbox_rotated_color;
+    float const* innerColor = tint ? tint : logic.hitbox_inner_color;
+    float const* circle_color = tint ? tint : logic.hitbox_circle_color;
+    if (logic.hitbox_rotated) {
+        if (auto* box = player->getOrientedBox()) {
+            std::array<CCPoint, 4> corners = box->m_corners;
+            node->drawPolygon(corners.data(), 4, HitboxColor::with_fill(rotated_color, fill, logic.hitbox_fill_opacity), width, HitboxColor::line_of(rotated_color), BorderAlignment::Inside);
+        }
+    }
+    if (logic.hitbox_player) {
+        node->drawRect(rect, HitboxColor::with_fill(outerColor, fill, logic.hitbox_fill_opacity), width, HitboxColor::line_of(outerColor), BorderAlignment::Inside);
+    }
+    if (logic.hitbox_inner) {
+        node->drawRect(inner_rect, HitboxColor::with_fill(innerColor, fill, logic.hitbox_fill_opacity), width, HitboxColor::line_of(innerColor), BorderAlignment::Inside);
+    }
+    float radius = std::abs(rect.size.width) * 0.5f;
+    float zoom = std::max(play->m_gameState.m_cameraZoom, 0.05f);
+    bool fix_radius = play->m_levelSettings && play->m_levelSettings->m_fixRadiusCollision;
+    if ((logic.hitbox_circle || fix_radius) && radius > 0.f) {
+        unsigned segments = static_cast<unsigned>(std::max(radius, 8.f) * 2.f * std::sqrt(zoom));
+        node->drawCircle(center, radius, { 0.f, 0.f, 0.f, 0.f }, width, HitboxColor::line_of(circle_color), std::max(segments, 8u));
+    }
 }
 
 // Outline Only --> collects every shape then cuts the edges that are inside another one
@@ -468,17 +520,203 @@ namespace {
 }
 
 void Hitboxes::draw_object_hitbox(CCDrawNode* node, GJBaseGameLayer* play, GameObject* object, float width, bool fill) {
-    // TODO
+    if (!object || object->m_isGroupDisabled)
+        return;
+    if (!object->m_isActivated || object->m_objectType == GameObjectType::Decoration)
+        return;
+    if (object == play->m_player1 || object == play->m_player2 || Logic::get().is_traj_player(object))
+        return;
+    if (auto* live = Logic::as_play(play)) {
+        if (object == live->m_player1CollisionBlock || object == live->m_player2CollisionBlock)
+            return;
+        if (object == live->m_anticheatSpike)
+            return;
+    }
+    auto const& logic = Logic::get();
+    HitboxStateGuard preserve(object);
+    refresh_object_hitbox(object);
+
+    switch (object->m_objectType) {
+    case GameObjectType::Solid:
+    case GameObjectType::Slope:
+    case GameObjectType::Hazard:
+    case GameObjectType::AnimatedHazard:
+        outlines().kind = 0;
+        break;
+    default:
+        outlines().kind = 1;
+        break;
+    }
+    auto paint_rect = [&](float const* color) {
+        emit_rect(node, object->getObjectRect(), HitboxColor::with_fill(color, fill, logic.hitbox_fill_opacity), width, HitboxColor::line_of(color));
+    };
+
+    switch (object->m_objectType) {
+    case GameObjectType::Solid: {
+        if (!logic.hitbox_solid) {
+            break;
+        }
+        if (object->m_isPassable) {
+            break;
+        }
+        paint_rect(logic.hitbox_solid_color);
+        break;
+    }
+    case GameObjectType::Slope: {
+        auto rect = object->getObjectRect();
+        std::array<CCPoint, 3> verts{
+            rect.origin,
+            ccp(rect.getMinX(), rect.getMaxY()),
+            ccp(rect.getMaxX(), rect.getMinY()),
+        };
+        CCPoint max_point{ rect.getMaxX(), rect.getMaxY() };
+        switch (object->m_slopeDirection) {
+        case 0:
+        case 7:
+            verts[1] = max_point;
+            break;
+        case 1:
+        case 5:
+            verts[0] = max_point;
+            break;
+        case 3:
+        case 6:
+            verts[2] = max_point;
+            break;
+        default:
+            break;
+        }
+        float const* slope_color = object->m_slopeIsHazard ? logic.hitbox_hazard_color : logic.hitbox_slope_color;
+        if (object->m_slopeIsHazard ? !logic.hitbox_hazard : !logic.hitbox_slope) {
+            break;
+        }
+        if (object->m_slopeIsHazard) {
+            int dir = object->m_slopeDirection;
+            bool ceiling = dir >= 0 && dir <= 6 && ((0x6a >> dir) & 1);
+            float shift = (ceiling ? -4.f : 4.f);
+            int corner = 0;
+            for (int k = 0; k < 3; ++k) {
+                auto const& a = verts[(k + 1) % 3];
+                auto const& b = verts[(k + 2) % 3];
+                auto const& c = verts[k];
+                if ((c.x == a.x && c.y == b.y) || (c.x == b.x && c.y == a.y)) {
+                    corner = k;
+                }
+            }
+            std::array<CCPoint, 4> shape;
+            int n = 0;
+            for (int k = 0; k < 3; ++k) {
+                auto const& p = verts[(corner + k) % 3];
+                if (k == 0) {
+                    shape[n++] = p;
+                    continue;
+                }
+                CCPoint moved{ p.x, p.y + shift };
+                bool level = p.y == verts[corner].y;
+                if (level && k == 1) {
+                    shape[n++] = p;
+                    shape[n++] = moved;
+                }
+                else if (level) {
+                    shape[n++] = moved;
+                    shape[n++] = p;
+                }
+                else {
+                    shape[n++] = moved;
+                }
+            }
+            emit_polygon(node, shape.data(), n, HitboxColor::with_fill(slope_color, fill, logic.hitbox_fill_opacity), width, HitboxColor::line_of(slope_color));
+            break;
+        }
+        emit_polygon(node, verts.data(), 3, HitboxColor::with_fill(logic.hitbox_slope_color, fill, logic.hitbox_fill_opacity), width, HitboxColor::line_of(logic.hitbox_slope_color));
+        break;
+    }
+    case GameObjectType::Hazard:
+    case GameObjectType::AnimatedHazard: {
+        if (!logic.hitbox_hazard) {
+            break;
+        }
+        float radius = hazard_radius(object);
+        float zoom = std::max(play->m_gameState.m_cameraZoom, 0.05f);
+        if (radius > 0.f) {
+            unsigned segments = static_cast<unsigned>(std::max(radius, 8.f) * 2.f * std::sqrt(zoom));
+            emit_circle(node, object->getPosition(), radius, HitboxColor::with_fill(logic.hitbox_hazard_color, fill, logic.hitbox_fill_opacity), width, HitboxColor::line_of(logic.hitbox_hazard_color), std::max(segments, 8u));
+        }
+        else if (auto* box = live_oriented_box(object)) {
+            std::array<CCPoint, 4> corners = box->m_corners;
+            emit_polygon(node, corners.data(), 4, HitboxColor::with_fill(logic.hitbox_hazard_color, fill, logic.hitbox_fill_opacity), width, HitboxColor::line_of(logic.hitbox_hazard_color));
+        }
+        else {
+            paint_rect(logic.hitbox_hazard_color);
+        }
+        break;
+    }
+    default: {
+        if (logic.hide_activated_objects) {
+            if (auto* enhanced = typeinfo_cast<EnhancedGameObject*>(object)) {
+                bool used = play->m_player1 && phys::hasBeenActivatedByPlayer(play->m_player1, enhanced);
+                if (play->m_gameState.m_isDualMode) {
+                    used = used && play->m_player2 && phys::hasBeenActivatedByPlayer(play->m_player2, enhanced);
+                }
+                if (used)
+                    return;
+            }
+        }
+        if (!logic.hitbox_interact) {
+            break;
+        }
+        float radius = collision_radius(object);
+        bool fix_radius = play->m_levelSettings && play->m_levelSettings->m_fixRadiusCollision;
+        bool use_box = radius <= 0.f || (object->m_shouldUseOuterOb && !fix_radius);
+        if (radius > 0.f) {
+            float zoom = std::max(play->m_gameState.m_cameraZoom, 0.05f);
+            unsigned segments = static_cast<unsigned>(std::max(radius, 8.f) * 2.f * std::sqrt(zoom));
+            emit_circle(node, object->getPosition(), radius, HitboxColor::with_fill(logic.hitbox_interact_color, fill, logic.hitbox_fill_opacity), width, HitboxColor::line_of(logic.hitbox_interact_color), std::max(segments, 8u));
+        }
+        if (use_box) {
+            if (auto* box = live_oriented_box(object)) {
+                std::array<CCPoint, 4> corners = box->m_corners;
+                emit_polygon(node, corners.data(), 4, HitboxColor::with_fill(logic.hitbox_interact_color, fill, logic.hitbox_fill_opacity), width, HitboxColor::line_of(logic.hitbox_interact_color));
+            }
+            else if (radius <= 0.f) {
+                paint_rect(logic.hitbox_interact_color);
+            }
+        }
+        break;
+    }
+    }
 }
 
 CCRect visible_layer_rect(CCNode* layer) {
-    // todo
-    return {};
+    auto win = CCDirector::sharedDirector()->getWinSize();
+    CCPoint corners[4] = { { 0.f, 0.f }, { win.width, 0.f }, { win.width, win.height }, { 0.f, win.height } };
+    float minX = 0.f, minY = 0.f;
+    float maxX = 0.f, maxY = 0.f;
+    for (int i = 0; i < 4; ++i) {
+        CCPoint local = layer->convertToNodeSpace(corners[i]);
+        if (i == 0) {
+            minX = maxX = local.x;
+            minY = maxY = local.y;
+            continue;
+        }
+        minX = std::min(minX, local.x);
+        minY = std::min(minY, local.y);
+        maxX = std::max(maxX, local.x);
+        maxY = std::max(maxY, local.y);
+    }
+    return { minX, minY, std::max(maxX - minX, 0.f), std::max(maxY - minY, 0.f) };
 }
 
 CCRect upright_rect(CCRect rect) {
-    // todo
-    return {};
+    if (rect.size.width < 0.f) {
+        rect.origin.x += rect.size.width;
+        rect.size.width = -rect.size.width;
+    }
+    if (rect.size.height < 0.f) {
+        rect.origin.y += rect.size.height;
+        rect.size.height = -rect.size.height;
+    }
+    return rect;
 }
 
 struct TrailFit {
@@ -518,5 +756,245 @@ void Logic::add_trail_point(GJBaseGameLayer* play) {
 }
 
 void Logic::draw_hitboxes(GJBaseGameLayer* play) {
-    // TODO
+    log::debug("draw hitboxes");
+    auto& value = Logic::get();
+    auto* layer = play->m_objectLayer;
+    if (!layer)
+        return;
+    auto* node = find_hitbox_node(play);
+    if (!value.show_hitboxes) {
+        if (node) {
+            node->setVisible(false);
+        }
+        value.trail_p1.clear();
+        value.trail_p2.clear();
+        return;
+    }
+    if (!node) {
+        node = EchoHitboxNode::create();
+        node->setTag(HITBOX_TAG);
+    }
+    node->setVisible(true);
+    node->setBlendFunc({ GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA });
+    seat_overlay(node, play);
+    node->clear();
+    if (value.hide_p1 && play->m_player1) {
+        play->m_player1->setVisible(false);
+    }
+    if (value.hide_p2 && play->m_player2) {
+        play->m_player2->setVisible(false);
+    }
+    auto* player = play->m_player1;
+    bool level = Logic::as_play(play) != nullptr;
+    float view_scale = std::max(play->m_gameState.m_cameraZoom, 0.05f);
+    if (!level) {
+        view_scale = std::max(std::abs(layer->getScaleX()), 0.05f);
+    }
+    float width = std::max(value.hitbox_thickness, 0.f) / view_scale;
+    Hitboxes::get().trim_trail(value.trail_p1, play);
+    Hitboxes::get().trim_trail(value.trail_p2, play);
+    if (!value.hitbox_trail) {
+        value.trail_p1.clear();
+        value.trail_p2.clear();
+    }
+    auto grid = [](float value) {
+        return (int)(std::lround(value * 20.f));
+    };
+
+    struct Spot {
+        int x, y, w, h;
+        bool operator==(Spot const& other) const = default;
+    };
+
+    struct SpotHash {
+        size_t operator()(Spot const& spot) const {
+            size_t hash = static_cast<size_t>(spot.x);
+            hash = hash * 1315423911u + static_cast<size_t>(spot.y);
+            hash = hash * 1315423911u + static_cast<size_t>(spot.w);
+            return hash * 1315423911u + static_cast<size_t>(spot.h);
+        }
+    };
+
+    struct Corners {
+        std::array<int, 8> point{};
+        bool operator==(Corners const& other) const = default;
+    };
+
+    struct CornersHash {
+        size_t operator()(Corners const& corners) const {
+            size_t hash = 0;
+            for (int value : corners.point)
+                hash = hash * 1315423911u + static_cast<size_t>(value);
+            return hash;
+        }
+    };
+
+    auto quantize = [&](CCRect const& rect) {
+        return Spot{ grid(rect.origin.x), grid(rect.origin.y), grid(rect.size.width), grid(rect.size.height) };
+    };
+    auto quantize_corners = [&](std::array<CCPoint, 4> const& corners) {
+        Corners key;
+        for (int i = 0; i < 4; ++i) {
+            key.point[i * 2] = grid(corners[i].x);
+            key.point[i * 2 + 1] = grid(corners[i].y);
+        }
+        return key;
+    };
+    auto quantize_circle = [&](CCPoint center, float radius) {
+        return Spot{ grid(center.x), grid(center.y), grid(radius), 0 };
+    };
+    std::unordered_set<Spot, SpotHash> drawn_boxes;
+    std::unordered_set<Corners, CornersHash> drawn_rotated;
+    std::unordered_set<Spot, SpotHash> drawn_inner, drawn_circles;
+    auto claim_live = [&](PlayerObject* body) {
+        if (!body || Logic::get().is_traj_player(body))
+            return;
+        auto rect = body->getObjectRect();
+        auto inner = body->getObjectRect(0.3f, 0.3f);
+        drawn_boxes.insert(quantize(rect));
+        drawn_inner.insert(quantize(inner));
+        drawn_circles.insert(quantize_circle(CCPoint{ rect.getMidX(), rect.getMidY() }, std::abs(rect.size.width) * 0.5f));
+        if (auto* oriented = body->getOrientedBox()) {
+            std::array<CCPoint, 4> corners = oriented->m_corners;
+            drawn_rotated.insert(quantize_corners(corners));
+        }
+    };
+    if (!Logic::get().hitbox_player_hidden(false)) {
+        claim_live(play->m_player1);
+    }
+    if (play->m_gameState.m_isDualMode && !Logic::get().hitbox_player_hidden(true)) {
+        claim_live(play->m_player2);
+    }
+    bool fill = value.fill_hitboxes;
+    float trail_opacity = std::clamp(value.hitbox_trail_opacity, 0.f, 1.f);
+    auto trail_line = [&](float const* color) {
+        auto line = HitboxColor::line_of(color);
+        line.a *= trail_opacity;
+        return line;
+    };
+    auto trail_fill = [&](float const* color) {
+        auto painted = HitboxColor::with_fill(color, fill, value.hitbox_fill_opacity);
+        painted.a *= trail_opacity;
+        return painted;
+    };
+    auto each_trail = [&](auto&& draw) {
+        if (!value.hitbox_trail)
+            return;
+        draw(value.trail_p1);
+        draw(value.trail_p2);
+    };
+    if (value.hitbox_player) {
+        each_trail([&](std::deque<HitboxTrailPoint> const& trail) {
+            for (auto const& old : trail) {
+                if (!drawn_boxes.insert(quantize(old.rect)).second) {
+                    continue;
+                }
+                node->drawRect(old.rect, trail_fill(value.hitbox_outer_color), width, trail_line(value.hitbox_outer_color), BorderAlignment::Inside);
+            }
+        });
+    }
+    if (value.hitbox_rotated) {
+        each_trail([&](std::deque<HitboxTrailPoint> const& trail) {
+            for (auto const& old : trail) {
+                if (!old.rotated || !drawn_rotated.insert(quantize_corners(old.corners)).second) {
+                    continue;
+                }
+                auto corners = old.corners;
+                node->drawPolygon(corners.data(), 4, trail_fill(value.hitbox_rotated_color), width, trail_line(value.hitbox_rotated_color), BorderAlignment::Inside);
+            }
+        });
+    }
+    if (value.hitbox_circle) {
+        each_trail([&](std::deque<HitboxTrailPoint> const& trail) {
+            for (auto const& old : trail) {
+                if (!(old.radius > 0.f) || !drawn_circles.insert(quantize_circle(old.center, old.radius)).second) {
+                    continue;
+                }
+                node->drawCircle(old.center, old.radius, trail_fill(value.hitbox_circle_color), width, trail_line(value.hitbox_circle_color), 16);
+            }
+        });
+    }
+    if (value.hitbox_inner) {
+        each_trail([&](std::deque<HitboxTrailPoint> const& trail) {
+            for (auto const& old : trail) {
+                if (!drawn_inner.insert(quantize(old.inner)).second) {
+                    continue;
+                }
+                node->drawRect(old.inner, trail_fill(value.hitbox_inner_color), width, trail_line(value.hitbox_inner_color), BorderAlignment::Inside);
+            }
+        });
+    }
+    float view_x = player ? player->getPositionX() : 0.f;
+    float reach = 500.f;
+    CCRect view = visible_layer_rect(layer);
+    bool use_view = std::isfinite(view.origin.x) && std::isfinite(view.origin.y) && view.size.width > 1.f && view.size.height > 1.f;
+    if (use_view) {
+        // TODO use camera x for now might fuck with camera trigger but we ball
+        view_x = view.getMidX();
+        reach = view.size.width * 0.5f + 200.f;
+    }
+    else if (!level) {
+        auto win = CCDirector::sharedDirector()->getWinSize();
+        view_x = (-layer->getPositionX() + win.width * 0.5f) / view_scale;
+        reach = win.width / view_scale;
+    }
+    outlines().collecting = value.hitbox_outline_only;
+    outlines().shapes.clear();
+    if (Logic::as_play(play)) {
+        auto& grid = play->m_nonEffectObjects;
+        auto& sizes = play->m_nonEffectObjectsSizes;
+        float minY = use_view ? view.getMinY() - 200.f : -1e9f;
+        float maxY = use_view ? view.getMaxY() + 200.f : 1e9f;
+        float xFactor = play->m_sectionXFactor > 0.f ? play->m_sectionXFactor : 0.01f;
+        int first_x = std::max((int)(std::floor((view_x - reach) * xFactor)) - 1, 0);
+        int last_x = std::min((int)(std::floor((view_x + reach) * xFactor)) + 1, (int)(std::min(grid.size(), sizes.size())) - 1);
+        for (int x = first_x; x <= last_x; ++x) {
+            auto* column = grid[x];
+            auto* counts = sizes[x];
+            if (!column || !counts) {
+                continue;
+            }
+            int rows = (int)(std::min(column->size(), counts->size()));
+        }
+        auto const& moving = play->m_calcNonEffectObjects;
+        int moving_count = std::min<int>(play->m_calcNonEffectObjectsSize, (int)(moving.size()));
+        for (int i = 0; i < moving_count; ++i) {
+            auto* obj = moving[static_cast<std::size_t>(i)];
+            if (!obj || obj->m_isDisabled) {
+                continue;
+            }
+            if (std::fabs(obj->getPositionX() - view_x) > reach) {
+                continue;
+            }
+            Hitboxes::get().draw_object_hitbox(node, play, obj, width, value.fill_hitboxes);
+        }
+    }
+    else if (play->m_objects) {
+        for (auto* obj : CCArrayExt<GameObject*>(play->m_objects)) {
+            if (!obj) {
+                continue;
+            }
+            if (obj->m_isDisabled) {
+                continue;
+            }
+            if (std::fabs(obj->getPositionX() - view_x) > reach) {
+                continue;
+            }
+            Hitboxes::get().draw_object_hitbox(node, play, obj, width, value.fill_hitboxes);
+        }
+    }
+    if (outlines().collecting) {
+        flush_outlines(node, width);
+    }
+    if (!Logic::get().hitbox_player_hidden(false))
+        Hitboxes::get().draw_player_hitbox(node, play, play->m_player1, width, value.fill_hitboxes, nullptr);
+    else
+        value.trail_p1.clear();
+    if (play->m_gameState.m_isDualMode && !Logic::get().hitbox_player_hidden(true)) {
+        Hitboxes::get().draw_player_hitbox(node, play, play->m_player2, width, value.fill_hitboxes, nullptr);
+    }
+    else if (Logic::get().hitbox_player_hidden(true)) {
+        value.trail_p2.clear();
+    }
+    Hitboxes::get().draw_clicks(node, play, width, value.fill_hitboxes);
 }
