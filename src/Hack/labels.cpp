@@ -1,4 +1,5 @@
 // the on screen labels (frame, time, percent, cps, position, velocity ...)
+// auto position stacks the visible ones from a corner
 #include "Logic/logic.hpp"
 #include "Hack/trajectory.hpp"
 #include "Hack/label_types.hpp"
@@ -71,12 +72,32 @@ LabelInfo const* label_info(std::string const& key) {
 }
 
 std::vector<LabelInfo const*> ordered_labels(Session const& value) {
-    // TODO
-    return {};
+    log::debug("ordered labels");
+    std::vector<LabelInfo const*> out;
+    for (auto const& key : value.label_order) {
+        auto* info = label_info(key);
+        if (info && std::ranges::find(out, info) == out.end()) {
+            out.push_back(info);
+        }
+    }
+    for (auto const& info : LABELS) {
+        if (std::ranges::find(out, &info) == out.end()) {
+            out.push_back(&info);
+        }
+    }
+    return out;
 }
 
 void move_label(Session& value, LabelInfo const& label, int delta) {
-    // TODO
+    auto order = ordered_labels(value);
+    auto at = std::ranges::find(order, &label) - order.begin();
+    auto to = at + delta;
+    if (to < 0 || to >= static_cast<std::ptrdiff_t>(order.size()))
+        return;
+    std::swap(order[static_cast<size_t>(at)], order[static_cast<size_t>(to)]);
+    value.label_order.clear();
+    for (auto* info : order)
+        value.label_order.emplace_back(info->key);
 }
 
 std::vector<std::string> const& label_font_names() {
