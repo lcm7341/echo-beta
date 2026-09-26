@@ -132,6 +132,9 @@ void Labels::sync_label(PlayLayer* play, int tag, bool visible, LabelPlacement c
         alignments[tag] = kCCTextAlignmentLeft;
         play->addChild(label, 999, tag);
     }
+    if (text != label->getString()) {
+        label->setString(text.c_str());
+    }
     if (!logic.labels_auto) {
         if (label->getAnchorPoint() != CCPoint{ 0.f, 0.5f })
             label->setAnchorPoint({ 0.f, 0.5f });
