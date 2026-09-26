@@ -176,7 +176,151 @@ void GUI::draw_tools() {
 }
 
 void GUI::draw_visuals() {
-    // TODO
+    auto& value = Logic::get();
+    float spacing = ImGui::GetStyle().ItemSpacing.x;
+    float settingsNeed = GUI::get().label_width("Settings");
+    float tools = tool_column();
+    auto settingsWidth = [&]() {
+        float used = ImGui::GetItemRectSize().x + spacing;
+        return std::max(settingsNeed, tools - used);
+    };
+    char const* hide[] = {"Off", "Player 1", "Player 2", "Both"};
+    int hideSel = GUI::get().quad_index(value.hide_p1, value.hide_p2);
+    ImGui::SetNextItemWidth(GUI::get().px(150.f));
+    if (GUI::get().combo_items("Hide Player##dropdown_hideplayer", hide, 4, hideSel)) {
+        GUI::get().apply_quad(hideSel, value.hide_p1, value.hide_p2);
+        if (value.traj_follow_hide_player) Logic::get().reset_traj();
+        GUI::get().persist();
+    }
+    GUI::get().checkbox_setting("Disable Shake Effects", value.disable_shakes);
+    GUI::get().offer_rebind("key-shakes");
+    GUI::get().checkbox_setting("Disable Death Effect", value.disable_death_effect);
+    if (GUI::get().checkbox_setting("No Mirror Portals", value.no_mirror_portals)) GUI::get().apply_no_mirror();
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Stops mirror portals from flipping the level.");
+    GUI::get().checkbox_setting("Fix Rotation Bug", value.fix_tps_rotation);
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Fixes gamemode rotation on high TPS without affecting hitboxes.");
+    GUI::get().checkbox_setting("Layout###layout_checkbox", value.layout_mode);
+    GUI::get().offer_rebind("key-layout");
+    ImGui::SameLine();
+    if (ImGui::Button("Settings###layout_settings", ImVec2(settingsWidth(), 0.f))) ImGui::OpenPopup("Layout Settings###layoutsettings2");
+    if (ImGui::BeginPopupModal("Layout Settings###layoutsettings2", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        GUI::get().checkbox_setting("Layout Mode", value.layout_mode);
+        GUI::get().checkbox_setting("Use Regular Background", value.layout_use_regular_bg);
+        ImGui::SameLine();
+        ImGui::TextDisabled("(?)");
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Uses the level's actual background");
+        if (ImGui::ColorEdit3("Background Color", value.backgroundColor, ImGuiColorEditFlags_NoInputs)) Logic::get().save_settings_file();
+        if (ImGui::ColorEdit3("Ground Color", value.blocks_color, ImGuiColorEditFlags_NoInputs)) Logic::get().save_settings_file();
+        if (ImGui::Button("Close")) ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+    }
+    GUI::get().checkbox_setting("Hitboxes###hitbox_checkbox", value.show_hitboxes);
+    GUI::get().offer_rebind("key-hitboxes");
+    ImGui::SameLine();
+    if (ImGui::Button("Settings###notboxsettings", ImVec2(settingsWidth(), 0.f))) {
+        ImGui::OpenPopup("Hitbox Settings###boxsettings");
+    }
+    if (ImGui::BeginPopupModal("Hitbox Settings###boxsettings", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        auto hitboxColor = [](char const* label, bool& enabled, float* color) {
+            GUI::get().checkbox_setting(label, enabled);
+            ImGui::SameLine();
+            std::string id = std::string("##") + label;
+            if (ImGui::ColorEdit4(id.c_str(), color, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaBar)) Logic::get().save_settings_file();
+        };
+        GUI::get().checkbox_setting("Show Hitboxes", value.show_hitboxes);
+        GUI::get().checkbox_setting("Fill Hitboxes", value.fill_hitboxes);
+        GUI::get().checkbox_setting("Outline Only", value.hitbox_outline_only);
+        GUI::get().checkbox_setting("Hide Activated Objects", value.hide_activated_objects);
+        GUI::get().checkbox_setting("Follow Hide Player", value.hitboxes_follow_hide_player);
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Will hide the hitboxes of the hidden player.");
+        {
+            char const* hideHit[] = {"Off", "Player 1", "Player 2", "Both"};
+            int hideHitSel = GUI::get().quad_index(value.hide_hitbox_p1, value.hide_hitbox_p2);
+            if (value.hitboxes_follow_hide_player) ImGui::BeginDisabled();
+            ImGui::SetNextItemWidth(GUI::get().px(150.f));
+            if (GUI::get().combo_items("Hide Hitboxes##dropdown_hidehitbox", hideHit, 4, hideHitSel)) {
+                GUI::get().apply_quad(hideHitSel, value.hide_hitbox_p1, value.hide_hitbox_p2);
+                Logic::get().save_settings_file();
+            }
+            if (value.hitboxes_follow_hide_player) ImGui::EndDisabled();
+        }
+        ImGui::SetNextItemWidth(GUI::get().px(180.f));
+        GUI::get().drag_float_setting("Thickness", value.hitbox_thickness, 0.01f, -1000000.f, 1000000.f, "%.3f");
+        ImGui::SetNextItemWidth(GUI::get().px(180.f));
+        ImGui::SetNextItemWidth(GUI::get().px(180.f));
+        if (ImGui::DragFloat("Fill Opacity", &value.hitbox_fill_opacity, 0.01f, 0.f, 1.f, "%.2f")) {}
+        if (ImGui::IsItemDeactivatedAfterEdit()) Logic::get().save_settings_file();
+        int trail = value.trail_length;
+        ImGui::SetNextItemWidth(GUI::get().px(180.f));
+        char const* trailFormat = trail <= 0 ? "TPS" : "%d";
+        if (ImGui::DragInt("Trail Length", &trail, 1.f, 0, static_cast<int>(value.fps) * 10, trailFormat)) value.trail_length = std::max(trail, 0);
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("How many frames the trail and the click and release boxes stay on screen");
+        if (ImGui::IsItemDeactivatedAfterEdit()) Logic::get().save_settings_file();
+        GUI::get().checkbox_setting("Show Trail", value.hitbox_trail);
+        ImGui::SetNextItemWidth(GUI::get().px(180.f));
+        if (ImGui::DragFloat("Trail Opacity", &value.hitbox_trail_opacity, 0.01f, 0.f, 1.f, "%.2f")) value.hitbox_trail_opacity = std::clamp(value.hitbox_trail_opacity, 0.f, 1.f);
+        if (ImGui::IsItemDeactivatedAfterEdit()) Logic::get().save_settings_file();
+        GUI::get().checkbox_setting("Trail at visual FPS", value.hitbox_trail_visual);
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Displays one trail hitbox per displayed frame");
+        ImGui::Separator();
+        hitboxColor("Player box", value.hitbox_player, value.hitbox_outer_color);
+        hitboxColor("Click", value.hitbox_click, value.hitbox_click_color);
+        ImGui::SameLine();
+        if (ImGui::ColorEdit4("Release", value.hitbox_release_color, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaBar)) Logic::get().save_settings_file();
+        hitboxColor("Rotated box", value.hitbox_rotated, value.hitbox_rotated_color);
+        hitboxColor("Inner box", value.hitbox_inner, value.hitbox_inner_color);
+        hitboxColor("Player circle", value.hitbox_circle, value.hitbox_circle_color);
+        hitboxColor("Solids", value.hitbox_solid, value.hitbox_solid_color);
+        hitboxColor("Slopes", value.hitbox_slope, value.hitbox_slope_color);
+        hitboxColor("Hazards", value.hitbox_hazard, value.hitbox_hazard_color);
+        hitboxColor("Orbs, pads, and portals", value.hitbox_interact, value.hitbox_interact_color);
+        if (ImGui::Button("Close")) ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+    }
+    GUI::get().checkbox_setting("Trajectory###trajectory_checkbox", value.show_traj);
+    GUI::get().offer_rebind("key-trajectory");
+    ImGui::SameLine();
+    if (ImGui::Button("Settings###trajectory_settings", ImVec2(settingsWidth(), 0.f))) ImGui::OpenPopup("Trajectory Settings");
+    if (ImGui::BeginPopupModal("Trajectory Settings", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        GUI::get().checkbox_setting("Show Trajectory", value.show_traj);
+        if (GUI::get().checkbox_setting("Moving Object Support", value.traj_moving_objects)) Logic::get().reset_traj();
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("The trajectory moves the level's moving objects along with it. Off: objects stand still in the trajectory, which is faster.");
+        if (GUI::get().checkbox_setting("Follow Hide Player", value.traj_follow_hide_player)) Logic::get().reset_traj();
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Will hide the trajectory of the hidden player.");
+        {
+            char const* hideTraj[] = {"Off", "Player 1", "Player 2", "Both"};
+            int hideTrajSel = GUI::get().quad_index(value.hide_traj_p1, value.hide_traj_p2);
+            if (value.traj_follow_hide_player) ImGui::BeginDisabled();
+            ImGui::SetNextItemWidth(GUI::get().px(150.f));
+            if (GUI::get().combo_items("Hide Trajectory##dropdown_hidetraj", hideTraj, 4, hideTrajSel)) {
+                GUI::get().apply_quad(hideTrajSel, value.hide_traj_p1, value.hide_traj_p2);
+                Logic::get().reset_traj();
+                Logic::get().save_settings_file();
+            }
+            if (value.traj_follow_hide_player) ImGui::EndDisabled();
+        }
+        GUI::get().checkbox_setting("Hold", value.traj_hold);
+        ImGui::SameLine();
+        GUI::get().checkbox_setting("Release", value.traj_release);
+        ImGui::SameLine();
+        GUI::get().checkbox_setting("Swift", value.traj_swift);
+        float seconds = value.traj_length;
+        ImGui::SetNextItemWidth(GUI::get().px(160.f));
+        if (ImGui::DragFloat("Length (s)", &seconds, 0.05f, 0.1f, 4.f, "%.2f")) value.traj_length = std::clamp(seconds, 0.1f, 4.f);
+        if (ImGui::IsItemDeactivatedAfterEdit()) Logic::get().save_settings_file();
+        ImGui::SetNextItemWidth(GUI::get().px(160.f));
+        GUI::get().drag_float_setting("Width", value.traj_width, 0.05f, 0.1f, 4.f, "%.2f");
+        if (ImGui::ColorEdit4("Hold color", value.traj_color, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaBar)) Logic::get().save_settings_file();
+        ImGui::SameLine();
+        if (ImGui::ColorEdit4("Swift color", value.traj_swift_color, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaBar)) Logic::get().save_settings_file();
+        ImGui::SameLine();
+        if (ImGui::ColorEdit4("Release color", value.traj_release_color, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaBar)) Logic::get().save_settings_file();
+        ImGui::SameLine();
+        ImGui::TextDisabled("(?)");
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Player 1 uses these colors. Player 2 is each color, inverted.");
+        if (ImGui::Button("Close")) ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+    }
 }
 
 std::string GUI::ordinal(int number) {
