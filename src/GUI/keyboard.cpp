@@ -7,12 +7,10 @@ using namespace geode::prelude;
 
 namespace {
 ImGuiKey extra_im_gui_key(cocos2d::enumKeyCodes key) {
-    if (key >= KEY_F1 && key <= KEY_F24) {
+    if (key >= KEY_F1 && key <= KEY_F24)
         return static_cast<ImGuiKey>(ImGuiKey_F1 + (key - KEY_F1));
-    }
-    if (key >= KEY_NumPad0 && key <= KEY_NumPad9) {
+    if (key >= KEY_NumPad0 && key <= KEY_NumPad9)
         return static_cast<ImGuiKey>(ImGuiKey_Keypad0 + (key - KEY_NumPad0));
-    }
     switch (key) {
         case KEY_Decimal: return ImGuiKey_KeypadDecimal;
         case KEY_Divide: return ImGuiKey_KeypadDivide;
