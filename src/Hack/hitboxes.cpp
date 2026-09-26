@@ -1,5 +1,6 @@
 // draws hitboxes for players & objects, the trail of where the player has been & marks where clicks happened
 // it reads the same collision lists gd checks, so only what can actually be hit is shown
+// outline only collects every shape & hides the edges that fall inside another shape
 #include <cstring>
 #include "Logic/logic.hpp"
 #include "Hack/color.hpp"
@@ -724,22 +725,59 @@ struct TrailFit {
 };
 
 CCRect trail_rect(PlayerObject* player, TrailFit& fit) {
-    // later
-    return {};
+    CCRect raw = upright_rect(player->getObjectRect());
+    bool known = fit.width >= 2.f && fit.height >= 2.f;
+    bool finite = std::isfinite(raw.origin.x) && std::isfinite(raw.origin.y) && std::isfinite(raw.size.width) && std::isfinite(raw.size.height);
+    bool tiny = !finite || std::abs(player->getScaleX()) < 0.2f || raw.size.width < 2.f || raw.size.height < 2.f;
+    bool smear = finite && (raw.size.width > 75.f || raw.size.height > 75.f);
+    if (known && finite) {
+        smear = smear || (raw.size.width > fit.width * 2.5f && raw.size.width > 45.f) || (raw.size.height > fit.height * 2.5f && raw.size.height > 45.f);
+    }
+    if (!tiny && !smear) {
+        fit.width = raw.size.width;
+        fit.height = raw.size.height;
+        return raw;
+    }
+    if (!known) {
+        fit.width = std::clamp(finite ? raw.size.width : 30.f, 8.f, 36.f);
+        fit.height = std::clamp(finite ? raw.size.height : 30.f, 8.f, 36.f);
+    }
+    CCPoint pos = player->getPosition();
+    if (!std::isfinite(pos.x) || !std::isfinite(pos.y)) {
+        pos = CCPoint{ raw.getMidX(), raw.getMidY() };
+    }
+    CCRect held(pos.x - fit.width * 0.5f, pos.y - fit.height * 0.5f, fit.width, fit.height);
+    return held;
 }
 
 bool same_trail_spot(CCRect const& a, CCRect const& b) {
-    // TODO
-    return {};
+    auto close = [](float left, float right) {
+        return std::abs(left - right) < 0.05f;
+    };
+    return close(a.origin.x, b.origin.x) && close(a.origin.y, b.origin.y) && close(a.size.width, b.size.width) && close(a.size.height, b.size.height);
 }
 
 void Hitboxes::push_trail(std::deque<HitboxTrailPoint>& trail, HitboxTrailPoint point, GJBaseGameLayer* play) {
-    // TODO
+    if (!trail.empty() && trail.back().frame == point.frame) {
+        trail.back() = point;
+        return;
+    }
+    if (Logic::get().hitbox_dedup && !trail.empty() && same_trail_spot(trail.back().rect, point.rect)) {
+        point.frame = trail.back().frame;
+        trail.back() = point;
+        return;
+    }
+    trail.push_back(point);
+    Hitboxes::get().trim_trail(trail, play);
 }
 
 int Hitboxes::trail_limit() {
-    // TODO
-    return {};
+    auto const& logic = Logic::get();
+    int len = logic.trail_length;
+    if (len <= 0) {
+        len = std::max(1, (int)(std::lround(logic.fps)));
+    }
+    return std::max(1, len);
 }
 
 int Hitboxes::trail_now() {
@@ -748,11 +786,72 @@ int Hitboxes::trail_now() {
 }
 
 void Hitboxes::trim_trail(std::deque<HitboxTrailPoint>& trail, GJBaseGameLayer* play) {
-    // TODO
+    auto const& logic = Logic::get();
+    if (play && LevelEditorLayer::get() == play)
+        return;
+    if (logic.hitbox_trail_visual && logic.is_playing() && play && play->m_objectLayer) {
+        CCRect view = visible_layer_rect(play->m_objectLayer);
+        if (std::isfinite(view.origin.x) && std::isfinite(view.origin.y) && view.size.width > 1.f && view.size.height > 1.f) {
+            std::erase_if(trail, [&](HitboxTrailPoint const& point) {
+                return !view.intersectsRect(point.rect);
+            });
+            return;
+        }
+    }
+    int limit = Hitboxes::get().trail_limit();
+    int now = Hitboxes::get().trail_now();
+    while (!trail.empty() && (trail.front().frame > now || now - trail.front().frame >= limit))
+        trail.pop_front();
 }
 
 void Logic::add_trail_point(GJBaseGameLayer* play) {
-    // TODO
+    auto& logic = Logic::get();
+    if (!play || !logic.show_hitboxes || !logic.hitbox_trail)
+        return;
+    if (auto* live = Logic::as_play(play); live && (live->m_levelEndAnimationStarted || live->m_playerDied))
+        return;
+    int frame = Hitboxes::get().trail_now();
+    static TrailFit fit_p1, fit_p2;
+    if (logic.trail_p1.empty()) {
+        fit_p1 = {};
+    }
+    if (logic.trail_p2.empty()) {
+        fit_p2 = {};
+    }
+    auto capture = [&](PlayerObject* player, TrailFit& fit, std::deque<HitboxTrailPoint>& trail) {
+        HitboxTrailPoint point;
+        point.frame = frame;
+        point.rect = trail_rect(player, fit);
+        CCPoint mid{ point.rect.getMidX(), point.rect.getMidY() };
+        point.inner = point.rect;
+        point.inner.size.width *= 0.3f;
+        point.inner.size.height *= 0.3f;
+        point.inner.origin.x = mid.x - point.inner.size.width * 0.5f;
+        point.inner.origin.y = mid.y - point.inner.size.height * 0.5f;
+        point.center = mid;
+        point.radius = std::abs(point.rect.size.width) * 0.5f;
+        if (auto* oriented = player->getOrientedBox()) {
+            point.corners = oriented->m_corners;
+            float minX = point.corners[0].x, maxX = minX;
+            float minY = point.corners[0].y, maxY = minY;
+            for (int i = 1; i < 4; ++i) {
+                minX = std::min(minX, point.corners[i].x);
+                maxX = std::max(maxX, point.corners[i].x);
+                minY = std::min(minY, point.corners[i].y);
+                maxY = std::max(maxY, point.corners[i].y);
+            }
+            float span_w = maxX - minX, span_h = maxY - minY;
+            bool huge = span_w > 75.f || span_h > 75.f || (span_w > std::abs(point.rect.size.width) * 2.5f && span_w > 45.f) || (span_h > std::abs(point.rect.size.height) * 2.5f && span_h > 45.f);
+            point.rotated = !huge;
+        }
+        Hitboxes::get().push_trail(trail, point, play);
+    };
+    if (play->m_player1 && !Logic::get().hitbox_player_hidden(false) && !Logic::get().is_traj_player(play->m_player1)) {
+        capture(play->m_player1, fit_p1, logic.trail_p1);
+    }
+    if (play->m_player2 && !Logic::get().hitbox_player_hidden(true) && !Logic::get().is_traj_player(play->m_player2)) {
+        capture(play->m_player2, fit_p2, logic.trail_p2);
+    }
 }
 
 void Logic::draw_hitboxes(GJBaseGameLayer* play) {
