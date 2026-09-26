@@ -5,6 +5,7 @@
 // in a 1 player dual 1 button moves both icons, thats stored as p1 even when the 2nd icon is the one being recorded
 // recording over part of a macro trims everything after that point for the recorded player & leaves the other players inputs
 // capture_player / apply_player copy a players whole state. setting the flags alone leaves the sprite in the wrong mode, so it goes thru gds setters
+// recompute_cps marks where the click rules break (16 a second, 3 on a frame, 5+ faster than 48/s)
 #include "Logic/logic.hpp"
 #include "Hooks/rotation.hpp"
 #include "GUI/gui.hpp"
@@ -449,11 +450,94 @@ void Logic::inject_button(PlayLayer* play, bool down, int button, bool player1) 
 }
 
 void Logic::note_rule(std::vector<CpsNote>& notes, int first, int last, std::string text) {
-    // todo
+    if (last < first)
+        std::swap(first, last);
+    if (!notes.empty() && notes.back().text == text && notes.back().last + 1 >= first) {
+        notes.back().first = std::min(notes.back().first, first);
+        notes.back().last = std::max(notes.back().last, last);
+        return;
+    }
+    notes.push_back({ first, last, std::move(text) });
 }
 
 void Logic::eval_player_cps(std::vector<int> const& presses, bool player2, Session& value) {
-    // todo
+    auto& notes = player2 ? value.cps_notes_p2 : value.cps_notes_p1;
+    char const* who = player2 ? "P2" : "P1";
+    if (presses.empty())
+        return;
+    std::vector<double> times(presses.size());
+    std::ranges::transform(presses, times.begin(), [&](int frame) {
+        return value.seconds_at(frame);
+    });
+
+    int idx = 0;
+    while (idx < static_cast<int>(presses.size())) {
+        int frame = presses[idx];
+        int end = idx;
+        while (end < static_cast<int>(presses.size()) && presses[end] == frame)
+            ++end;
+        if (end - idx > Logic::MAX_PER_FRAME)
+            Logic::get().note_rule(notes, frame, frame, "Rule 2");
+        idx = end;
+    }
+
+    int best = player2 ? 0 : 0;
+    std::string best_text = fmt::format("{}: 0", who);
+    int left = 0;
+    for (int right = 0; right < static_cast<int>(presses.size()); ++right) {
+        double end = times[static_cast<size_t>(right)];
+        while (left <= right && end - times[static_cast<size_t>(left)] > 1.0)
+            ++left;
+        int amt = right - left + 1;
+        if (amt > best) {
+            best = amt;
+            best_text = fmt::format(
+                "{}: {} ({} to {})",
+                who,
+                amt,
+                presses[left],
+                presses[right]);
+        }
+        if (amt > value.max_cps)
+            Logic::get().note_rule(notes, presses[left], presses[right], "Rule 1");
+    }
+
+    // 5 or more clicks faster than 48/s breaks the rule
+    int n = static_cast<int>(presses.size());
+    double rate = static_cast<double>(Logic::MAX_BURST_RATE);
+    std::vector<double> lead(presses.size());
+    std::vector<double> peak(presses.size());
+    for (size_t s = 0; s < presses.size(); ++s) {
+        lead[s] = rate * times[s] - static_cast<double>(s);
+        peak[s] = s == 0 ? lead[s] : std::max(peak[s - 1], lead[s]);
+    }
+    for (int end = Logic::MIN_BURST_CLICKS - 1; end < n; ++end) {
+        int last_start = end - (Logic::MIN_BURST_CLICKS - 1);
+        double need = rate * times[static_cast<size_t>(end)] - static_cast<double>(end) - 1.0;
+        double slack = 1e-6 + 1e-12 * std::abs(need);
+        auto first = std::upper_bound(peak.begin(), peak.begin() + last_start + 1, need - slack);
+        for (int start = static_cast<int>(std::distance(peak.begin(), first)); start <= last_start; ++start) {
+            double margin = lead[static_cast<size_t>(start)] - need;
+            if (margin <= -slack)
+                continue;
+            int amt = end - start + 1;
+            if (margin > slack || Logic::get().burst_too_fast(value, amt, presses[start], presses[end])) {
+                Logic::get().note_rule(notes, presses[start], presses[end], "Rule 3");
+                break;
+            }
+        }
+    }
+
+    if (player2) {
+        if (best > 0 && (value.highest_cps.rfind("P2:", 0) == 0 || best_text > value.highest_cps)) {
+        }
+    }
+    int current_best = 0;
+    auto colon = value.highest_cps.find(": ");
+    if (colon != std::string::npos)
+        current_best = std::atoi(value.highest_cps.c_str() + colon + 2);
+    if (best >= current_best)
+        value.highest_cps = best_text;
 }
 
 namespace {
@@ -493,5 +577,36 @@ namespace {
 
 // runs on a worker so big macros dont freeze the game
 void Logic::recompute_cps(Session& value) {
-    // TODO
+    auto [p1, p2] = split_presses(value.inputs);
+    if (&value != &Logic::live()) {
+        take_cps(value, scan_cps(p1, p2, value.macro_fps, value.rates, value.max_cps));
+        return;
+    }
+    static std::atomic<uint64_t> ticket{ 0 };
+    uint64_t mine = ticket.fetch_add(1) + 1;
+    value.cps_notes_p1.clear();
+    value.cps_notes_p2.clear();
+    value.highest_cps = "Checking CPS...";
+    try {
+        std::thread([p1 = std::move(p1), p2 = std::move(p2), fps = value.macro_fps, rates = value.rates, max_cps = value.max_cps, mine] {
+            std::optional<CpsResult> res;
+            try {
+                res = scan_cps(p1, p2, fps, rates, max_cps);
+            }
+            catch (...) {
+                res.reset();
+            }
+            if (!res)
+                return;
+            geode::queueInMainThread([res = std::move(*res), mine]() mutable {
+                if (mine != ticket.load())
+                    return;
+                take_cps(Logic::live(), std::move(res));
+            });
+        }).detach();
+    }
+    catch (...) {
+        auto presses = split_presses(value.inputs);
+        take_cps(value, scan_cps(presses.first, presses.second, value.macro_fps, value.rates, value.max_cps));
+    }
 }

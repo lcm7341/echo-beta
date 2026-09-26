@@ -5,6 +5,7 @@
 // in a 1 player dual 1 button moves both icons, thats stored as p1 even when the 2nd icon is the one being recorded
 // recording over part of a macro trims everything after that point for the recorded player & leaves the other players inputs
 // capture_player / apply_player copy a players whole state. setting the flags alone leaves the sprite in the wrong mode, so it goes thru gds setters
+// recompute_cps marks where the click rules break (16 a second, 3 on a frame, 5+ faster than 48/s)
 #include "Logic/logic.hpp"
 #include "Hooks/rotation.hpp"
 #include "GUI/gui.hpp"
