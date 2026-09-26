@@ -40,7 +40,6 @@ matjson::Value GUI::color_json(ImVec4 const& color) {
 }
 
 matjson::Value GUI::pair_json(ImVec2 const& value) {
-    log::debug("pair json");
     matjson::Value json = matjson::Value::array();
     json.push(value.x);
     json.push(value.y);
@@ -420,7 +419,6 @@ std::string GUI::key_name(cocos2d::enumKeyCodes key) {
 }
 
 KeyboardModifier GUI::modifier_for_key(cocos2d::enumKeyCodes key) {
-    log::debug("modifier for key");
     switch (key) {
         case cocos2d::KEY_LeftControl:
         case cocos2d::KEY_RightControl:
@@ -532,7 +530,6 @@ void GUI::offer_rebind(char const* setting_id, char const* tip) {
 }
 
 void GUI::draw_keybind_prompt(bool nested) {
-    log::debug("draw keybind prompt");
     if (GUI::get().prompt.empty() || GUI::get().prompt_nested != nested) return;
     if (GUI::get().prompt_shown != GUI::get().prompt) {
         GUI::get().prompt_shown = GUI::get().prompt;
@@ -913,7 +910,6 @@ void GUI::refresh_renders() {
 }
 
 void GUI::open_render_picker() {
-    log::debug("open render picker");
     GUI::get().reveal_menu();
     auto& state = GUI::get().renders();
     state.second = false;
