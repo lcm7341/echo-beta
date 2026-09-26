@@ -431,7 +431,13 @@ class $modify(EchoPlayLayer, PlayLayer) {
         Logic::get().after_frame(this, dt);
     }
 
-    // TODO ts rebuilds the label every frame
+    // updateCamera calls ts every frame & it rebuilds the whole label :/
+    void flipArt(bool flip) {
+        flip = flip && !Logic::get().no_mirror_portals;
+        if (m_attemptLabel && m_attemptLabel->getScaleX() == (flip ? -1.f : 1.f))
+            return;
+        PlayLayer::flipArt(flip);
+    }
 
     void updateVisibility(float dt) {
         PlayLayer::updateVisibility(dt);
