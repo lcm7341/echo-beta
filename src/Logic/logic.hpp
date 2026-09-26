@@ -827,6 +827,8 @@ public:
 	int max_steps_for_frame() const;
 	void note_frame_work(double seconds);
 	double frame_work = 0.0;
+	void draw_overlay(PlayLayer* play);
+	void sync_death_label(PlayLayer* play);
 	static CCRect object_hitbox(GameObject* object);
 	void draw_hitboxes(GJBaseGameLayer* play);
 	void seat_overlay(CCNode* node, GJBaseGameLayer* play);

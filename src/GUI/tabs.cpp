@@ -1,4 +1,5 @@
 #include "GUI/gui.hpp"
+#include "Hack/label_types.hpp"
 #include <imgui-cocos.hpp>
 #include <imgui.h>
 #include <misc/cpp/imgui_stdlib.h>

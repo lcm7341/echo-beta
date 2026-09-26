@@ -113,6 +113,41 @@
 			"default": "None",
 			"category": "gameplay"
 		},
+		"key-show-recording": {
+			"type": "keybind",
+			"platforms": ["win"],
+			"name": "Show recording label",
+			"default": "None",
+			"category": "gameplay"
+		},
+		"key-show-cps": {
+			"type": "keybind",
+			"platforms": ["win"],
+			"name": "Show CPS",
+			"default": "None",
+			"category": "gameplay"
+		},
+		"key-show-frame": {
+			"type": "keybind",
+			"platforms": ["win"],
+			"name": "Show frame",
+			"default": "None",
+			"category": "gameplay"
+		},
+		"key-show-time": {
+			"type": "keybind",
+			"platforms": ["win"],
+			"name": "Show time",
+			"default": "None",
+			"category": "gameplay"
+		},
+		"key-show-percent": {
+			"type": "keybind",
+			"platforms": ["win"],
+			"name": "Show percent",
+			"default": "None",
+			"category": "gameplay"
+		},
 		"key-save": {
 			"type": "keybind",
 			"platforms": ["win"],

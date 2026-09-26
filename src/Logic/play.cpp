@@ -722,6 +722,7 @@ void Logic::after_frame(PlayLayer* play, float dt) {
         return;
     if (!logic.in_scheduler)
         Logic::get().draw_hitboxes(play);
+    Logic::get().draw_overlay(play);
 }
 
 void Logic::on_play_init(PlayLayer* play) {
