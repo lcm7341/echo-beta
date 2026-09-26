@@ -557,7 +557,24 @@ void GUI::draw_macro() {
 }
 
 void GUI::show_cps_range(int first, int last, bool player2) {
-    // TODO
+    if (last < first) std::swap(first, last);
+    mark_first = first;
+    mark_last = last;
+    mark_player = player2 ? 1 : 0;
+    show_editor_p1 = !player2;
+    show_editor_p2 = player2;
+    auto_scroll = false;
+    plain = false;
+    page = "Editor";
+    scroll_to_mark = true;
+    Logic::get().identify_inputs();
+    select_input(-1);
+    auto const& inputs = Logic::get().inputs;
+    for (int i = 0; i < static_cast<int>(inputs.size()); ++i) {
+        if (!in_cps_mark(inputs[i])) continue;
+        select_input(i);
+        break;
+    }
 }
 
 bool GUI::shift_selecting() const {
