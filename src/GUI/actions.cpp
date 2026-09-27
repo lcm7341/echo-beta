@@ -123,7 +123,6 @@ void GUI::offset_chosen(int delta) {
 }
 
 void GUI::random_offset_chosen() {
-    log::debug("random offset chosen");
     int first = 0;
     int last = 0;
     if (has_range() && selection_span(first, last)) Logic::get().offset_inputs(input_offset, first, last);
