@@ -296,7 +296,23 @@ void Logic::clear_click_hitbox() {
 }
 
 void Hitboxes::capture_click(GJBaseGameLayer*, PlayerObject* player, bool down) {
-    // TODO
+    auto const& logic = Logic::get();
+    if (!player || !logic.show_hitboxes || !logic.hitbox_click || Logic::get().is_traj_player(player))
+        return;
+    ClickBox box;
+    box.down = down;
+    box.frame = Hitboxes::get().trail_now();
+    box.outer = player->getObjectRect();
+    box.inner = player->getObjectRect(0.3f, 0.3f);
+    box.center = CCPoint{ box.outer.getMidX(), box.outer.getMidY() };
+    box.radius = std::abs(box.outer.size.width) * 0.5f;
+    if (auto* oriented = player->getOrientedBox()) {
+        box.corners = oriented->m_corners;
+        box.rotated = true;
+    }
+    g_clicks.push_back(box);
+    while (g_clicks.size() > 4096)
+        g_clicks.pop_front();
 }
 
 void Hitboxes::clear_clicks() {
@@ -304,7 +320,41 @@ void Hitboxes::clear_clicks() {
 }
 
 void Hitboxes::draw_clicks(CCDrawNode* node, GJBaseGameLayer* play, float width, bool fill) {
-    // later
+    auto const& logic = Logic::get();
+    if (!logic.hitbox_click) {
+        g_clicks.clear();
+        return;
+    }
+    if (!(play && LevelEditorLayer::get() == play)) {
+        int now = Hitboxes::get().trail_now();
+        CCRect view = play && play->m_objectLayer ? visible_layer_rect(play->m_objectLayer) : CCRect{};
+        bool view_known = std::isfinite(view.origin.x) && std::isfinite(view.origin.y) && view.size.width > 1.f && view.size.height > 1.f;
+        int limit = Hitboxes::get().trail_limit();
+        std::erase_if(g_clicks, [&](ClickBox const& box) {
+            if (box.frame > now) {
+                return true;
+            }
+            return view_known ? !view.intersectsRect(box.outer) : now - box.frame >= limit;
+        });
+    }
+    for (auto const& box : g_clicks) {
+        float const* color = box.down ? logic.hitbox_click_color : logic.hitbox_release_color;
+        auto tint = HitboxColor::with_fill(color, fill, logic.hitbox_fill_opacity);
+        auto line = HitboxColor::line_of(color);
+        if (logic.hitbox_rotated && box.rotated) {
+            auto corners = box.corners;
+            node->drawPolygon(corners.data(), 4, tint, width, line, BorderAlignment::Inside);
+        }
+        if (logic.hitbox_player || (!logic.hitbox_rotated && !logic.hitbox_inner && !logic.hitbox_circle)) {
+            node->drawRect(box.outer, tint, width, line, BorderAlignment::Inside);
+        }
+        if (logic.hitbox_inner) {
+            node->drawRect(box.inner, tint, width, line, BorderAlignment::Inside);
+        }
+        if (logic.hitbox_circle && box.radius > 0.f) {
+            node->drawCircle(box.center, box.radius, { 0.f, 0.f, 0.f, 0.f }, width, line, 24);
+        }
+    }
 }
 
 void Hitboxes::draw_player_hitbox(CCDrawNode* node, GJBaseGameLayer* play, PlayerObject* player, float width, bool fill, float const* tint) {
