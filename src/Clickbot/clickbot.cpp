@@ -349,7 +349,7 @@ void Logic::play_click(PlayLayer* play, bool down, bool player1) {
     Clickbot::get().queued.push_back({ kind_slot(kind, down), volume, player1 });
 }
 
-void Logic::play_frame_clicks() {
+void Logic::flush_clicks() {
     auto& queued = Clickbot::get().queued;
     if (queued.empty())
         return;

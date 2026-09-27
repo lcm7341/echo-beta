@@ -823,7 +823,7 @@ public:
 	void resume_attempt(PlayLayer* play);
 	void retain_playback_hold(PlayLayer* play);
 	void play_click(PlayLayer* play, bool down, bool player1);
-	void play_frame_clicks();
+	void flush_clicks();
 	void note_step();
 	void release_replay_index();
 	int max_steps_for_frame() const;
