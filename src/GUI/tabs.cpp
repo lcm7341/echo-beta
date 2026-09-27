@@ -930,10 +930,78 @@ void GUI::draw_sequence() {
 }
 
 void GUI::draw_click_times(bool& softs, float& soft_ms, bool& hards, float& hard_seconds, bool& micros, int& micro_ms, char const* suffix) {
-    // TODO
+    GUI::get().checkbox_setting((std::string("Soft Clicks###soft_") + suffix).c_str(), softs);
+    ImGui::SameLine();
+    GUI::get().checkbox_setting((std::string("Hard Clicks###hard_") + suffix).c_str(), hards);
+    ImGui::SameLine();
+    GUI::get().checkbox_setting((std::string("Micro Clicks###micro_") + suffix).c_str(), micros);
+    ImGui::Text("Micro Times:"); ImGui::SameLine();
+    ImGui::Text("0 to %ims", micro_ms);
+    ImGui::Text("Soft Times:"); ImGui::SameLine();
+    ImGui::Text("%ims to %.3fms", micro_ms, soft_ms);
+    ImGui::Text("Regular Times:"); ImGui::SameLine();
+    ImGui::Text("%.3fms to %.3fs", soft_ms, hard_seconds);
+    ImGui::Text("Hard Times:"); ImGui::SameLine();
+    ImGui::Text("%.3fs and up", hard_seconds);
+    ImGui::SetNextItemWidth(GUI::get().px(160.f));
+    GUI::get().drag_float_setting((std::string("Soft ms###softms_") + suffix).c_str(), soft_ms, 1.f, 0.f, 5000.f, "%.0f");
+    int micro = micro_ms;
+    ImGui::SetNextItemWidth(GUI::get().px(160.f));
+    if (ImGui::DragInt((std::string("Micro ms###micms_") + suffix).c_str(), &micro, 1.f, 0, 1000)) micro_ms = std::max(micro, 0);
+    if (ImGui::IsItemDeactivatedAfterEdit()) Logic::get().save_settings_file();
+    ImGui::SetNextItemWidth(GUI::get().px(160.f));
+    GUI::get().drag_float_setting((std::string("Hard seconds###hardms_") + suffix).c_str(), hard_seconds, 0.05f, 0.f, 30.f, "%.2f");
 }
 void GUI::draw_clickbot() {
-    // later
+    auto& value = Logic::get();
+    GUI::get().section_label("Clickbot");
+    GUI::get().checkbox_setting("Enabled###enable_clickbot", value.clickbot);
+    ImGui::SameLine();
+    static int player = 0;
+    char const* players[] = {"Player 1", "Player 2"};
+    ImGui::SetNextItemWidth(ImGui::GetFontSize() * 12.f);
+    GUI::get().combo_items("##dropdown_clickbot", players, 2, player);
+    ImGui::Separator();
+
+    auto& pack = player == 0 ? value.clickpack : value.clickpack_p2;
+    auto& volume = player == 0 ? value.clickbot_volume : value.clickbot_volume_p2;
+    ImGui::SetNextItemWidth(GUI::get().px(100.f));
+    GUI::get().drag_float_setting(player == 0 ? "Volume Multiplier###vol_p1" : "Volume Multiplier###vol_p2", volume, 0.25f, 0.f, 10.f, "%.2f");
+
+    auto foldersRoot = Logic::get().save_root() / "clickpacks";
+    std::vector<std::string> folders;
+    std::error_code folderError;
+    for (auto const& entry : std::filesystem::directory_iterator(foldersRoot, folderError)) {
+        if (!entry.is_directory(folderError)) continue;
+        try {
+            folders.push_back(entry.path().filename().string());
+        } catch (...) {}
+    }
+    std::string current;
+    try {
+        current = std::filesystem::path(pack).filename().string();
+    } catch (...) {}
+    if (current.empty()) current = pack;
+    ImGui::SetNextItemWidth(GUI::get().px(220.f));
+    if (ImGui::BeginCombo(player == 0 ? "##folder_dropdown_p1" : "##folder_dropdown_p2", current.empty() ? "Click Pack" : current.c_str())) {
+        for (auto const& folder : folders) {
+            if (ImGui::Selectable(folder.c_str(), folder == current)) {
+                pack = (foldersRoot / folder).string();
+                GUI::get().persist();
+            }
+        }
+        ImGui::EndCombo();
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Pick Clickpack")) {
+        GUI::get().clickpacks().player = player;
+        GUI::get().open_clickpack_picker();
+    }
+    if (player == 0) {
+        GUI::get().draw_click_times(value.p1_softs, value.p1_soft_ms, value.p1_hards, value.p1_hard_seconds, value.p1_micros, value.p1_micro_ms, "p1");
+    } else {
+        GUI::get().draw_click_times(value.p2_softs, value.p2_soft_ms, value.p2_hards, value.p2_hard_seconds, value.p2_micros, value.p2_micro_ms, "p2");
+    }
 }
 
 void GUI::draw_render() {
