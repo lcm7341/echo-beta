@@ -1,5 +1,6 @@
 // click sounds
 // a clickpack folder has sets for hard, normal, soft & micro clicks, picked by how long its been since the last click
+// decoded sounds are cached, only LIVE_CLICKS play at once & all the clicks of 1 frame are started together
 #include "Logic/logic.hpp"
 #include <Geode/fmod/fmod.hpp>
 #include <Geode/binding/FMODAudioEngine.hpp>
@@ -254,8 +255,24 @@ void Clickbot::play_file(bool player1, fs::path const& file, float volume) {
 }
 
 fs::path Clickbot::find_kind(fs::path const& pack, int kind, bool down) {
-    // TODO
-    return {};
+    if (kind == MICRO_CLICK) {
+        return down
+                   ? Clickbot::get().find_folder(pack, { "micro_clicks", "microclicks", "micro clicks", "micro" })
+                   : Clickbot::get().find_folder(pack, { "micro_releases", "microreleases", "micro releases" });
+    }
+    if (kind == SOFT_CLICK) {
+        return down
+                   ? Clickbot::get().find_folder(pack, { "soft_clicks", "softclicks", "soft clicks", "soft" })
+                   : Clickbot::get().find_folder(pack, { "soft_releases", "softreleases", "soft releases" });
+    }
+    if (kind == HARD_CLICK) {
+        return down
+                   ? Clickbot::get().find_folder(pack, { "hard_clicks", "hardclicks", "hard clicks", "hard" })
+                   : Clickbot::get().find_folder(pack, { "hard_releases", "hardreleases", "hard releases" });
+    }
+    return down
+               ? Clickbot::get().find_folder(pack, { "clicks", "click", "normal", "normals" })
+               : Clickbot::get().find_folder(pack, { "releases", "release", "normal_releases" });
 }
 
 void Logic::play_click(PlayLayer* play, bool down, bool player1) {
