@@ -225,7 +225,20 @@ FMOD::Sound* Clickbot::sound_for(PackCache& cache, FMOD::System* system, fs::pat
 }
 
 void Clickbot::drop_sounds(PackCache& cache) {
-    // port this
+    for (auto& item : Clickbot::get().live_clicks()) {
+        if (item.channel) {
+            item.channel->stop();
+        }
+    }
+    Clickbot::get().live_clicks().clear();
+    auto* engine = FMODAudioEngine::get();
+    bool alive = engine && engine->m_system && engine->m_system == cache.system;
+    for (auto& [file, sound] : cache.sounds) {
+        if (alive && sound) {
+            sound->release();
+        }
+    }
+    cache.sounds.clear();
 }
 
 float Clickbot::click_gain(float volume) {
