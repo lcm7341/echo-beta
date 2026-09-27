@@ -229,8 +229,11 @@ void Clickbot::drop_sounds(PackCache& cache) {
 }
 
 float Clickbot::click_gain(float volume) {
-    // TODO
-    return {};
+    float gain = std::clamp(volume, 0.f, 10.f);
+    if (gain <= 1.f) {
+        return gain;
+    }
+    return std::pow(2.f, gain / 2.f) / std::sqrt(2.f);
 }
 
 void Clickbot::play_file(bool player1, fs::path const& file, float volume) {
