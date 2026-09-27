@@ -1213,8 +1213,11 @@ class $modify(EchoGameLayer, GJBaseGameLayer) {
             if (auto* play = Logic::as_play(this)) {
                 bool twoPlayer = play->m_levelSettings && play->m_levelSettings->m_twoPlayerMode;
                 if (twoPlayer) {
+                    if (player1 || m_gameState.m_isDualMode)
+                        Logic::get().play_click(play, down, player1);
                 }
                 else if (!Logic::get().routing_input) {
+                    Logic::get().play_click(play, down, true);
                 }
             }
         }
