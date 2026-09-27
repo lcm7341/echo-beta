@@ -198,7 +198,23 @@ std::vector<LiveClick>& Clickbot::live_clicks() {
 }
 
 void Clickbot::reap_clicks() {
-    // TODO
+    auto& live = Clickbot::get().live_clicks();
+    std::erase_if(live, [](LiveClick const& item) {
+        bool playing = false;
+        if (item.channel) {
+            item.channel->isPlaying(&playing);
+        }
+        return !playing;
+    });
+    if (live.size() > LIVE_CLICKS) {
+        auto extra = live.size() - LIVE_CLICKS;
+        for (size_t i = 0; i < extra; ++i) {
+            if (live[i].channel) {
+                live[i].channel->stop();
+            }
+        }
+        live.erase(live.begin(), live.begin() + static_cast<std::ptrdiff_t>(extra));
+    }
 }
 
 FMOD::Sound* Clickbot::sound_for(PackCache& cache, FMOD::System* system, fs::path const& file) {
