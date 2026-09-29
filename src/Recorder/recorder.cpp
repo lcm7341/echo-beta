@@ -1,6 +1,8 @@
 // renders a macro to a video
 //
 // gd draws into a texture at the videos size, 1 fixed step per frame, so the video is smooth no matter how slow the pc is
+// the window keeps its real size while gd is told it has the videos size, & the shader layer is resized to match (silicate)
+// audio is tapped off gds own mixer (AudioTap): frozen between frames & moved on by exactly 1 frame of sound each time,
 #include "GUI/gui.hpp"
 #include "Recorder/stereo_audio.hpp"
 #include "Logic/conversions/codecs.hpp"
@@ -1508,7 +1510,52 @@ void Recorder::drawFrame() {
 }
 
 void Recorder::show_overlay() {
-    // port this
+    if (!active)
+        return;
+    auto pixels = window_pixels().value_or(saved_pixels);
+    if (pixels.width < 1.f || pixels.height < 1.f) {
+        pixels = CCSize(1.f, 1.f);
+    }
+    GLfloat clear[4] = {};
+    glGetFloatv(GL_COLOR_CLEAR_VALUE, clear);
+    GLboolean scissor = glIsEnabled(GL_SCISSOR_TEST);
+    if (scissor) {
+        glDisable(GL_SCISSOR_TEST);
+    }
+
+    glBindFramebuffer(GL_FRAMEBUFFER, static_cast<GLuint>(screen_fbo));
+    glViewport(0, 0, static_cast<GLsizei>(pixels.width), static_cast<GLsizei>(pixels.height));
+    glClearColor(0.f, 0.f, 0.f, 1.f);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+    if (Logic::get().render_show_lvl) {
+        Recorder::get().draw_preview(pixels);
+    }
+    PauseLayer* pause = nullptr;
+    if (auto* scene = CCDirector::sharedDirector()->getRunningScene()) {
+        pause = scene->getChildByType<PauseLayer>(0);
+    }
+    if (!pause) {
+        if (auto* play = PlayLayer::get()) {
+            pause = play->getChildByType<PauseLayer>(0);
+        }
+    }
+    if (pause) {
+        kmGLPushMatrix();
+        pause->visit();
+        kmGLPopMatrix();
+    }
+    Recorder::get().draw_progress();
+    if (auto* overlay = OverlayManager::get()) {
+        kmGLPushMatrix();
+        overlay->visit();
+        kmGLPopMatrix();
+    }
+
+    glClearColor(clear[0], clear[1], clear[2], clear[3]);
+    if (scissor) {
+        glEnable(GL_SCISSOR_TEST);
+    }
 }
 
 void Recorder::draw_preview(CCSize pixels) {
@@ -1520,25 +1567,111 @@ void Recorder::draw_progress() {
 }
 
 bool Recorder::harvest(bool wait) {
-    // TODO
-    return {};
+    if (in_flight.empty()) {
+        return false;
+    }
+    int slot = in_flight.front();
+    GLenum state = glClientWaitSync(fences[slot], wait ? GL_SYNC_FLUSH_COMMANDS_BIT : 0, wait ? 5'000'000'000ull : 0);
+    if (!wait && state != GL_ALREADY_SIGNALED && state != GL_CONDITION_SATISFIED) {
+        return false;
+    }
+    glDeleteSync(fences[slot]);
+    fences[slot] = nullptr;
+    in_flight.pop_front();
+    glBindBuffer(GL_PIXEL_PACK_BUFFER, pbo[slot]);
+    if (auto const* data = static_cast<uint8_t const*>(glMapBuffer(GL_PIXEL_PACK_BUFFER, GL_READ_ONLY))) {
+        auto frame = Recorder::get().acquire_frame();
+        std::memcpy(frame.data(), data, frame.size());
+        glUnmapBuffer(GL_PIXEL_PACK_BUFFER);
+        Recorder::get().queue_frame(std::move(frame));
+    }
+    glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+    return true;
 }
 
 std::vector<uint8_t> Recorder::acquire_frame() {
-    // later
-    return {};
+    std::vector<uint8_t> frame;
+    {
+        std::lock_guard guard(lock);
+        if (!spare_frames.empty()) {
+            frame = std::move(spare_frames.back());
+            spare_frames.pop_back();
+        }
+    }
+    frame.resize(frame_bytes());
+    return frame;
 }
 
 void Recorder::queue_frame(std::vector<uint8_t> frame) {
-    // later
+    std::unique_lock guard(lock);
+    {
+        Timed timed{ g_timing.wait_ns };
+        wake.wait(guard, [this] {
+            return queue.size() < QUEUE || broken;
+        });
+    }
+    if (broken)
+        return;
+    queue.push_back(std::move(frame));
+    wake.notify_all();
 }
 
 void Recorder::encode_loop() {
-    // TODO
+    log::debug("encode loop");
+    while (true) {
+        std::vector<uint8_t> frame;
+        {
+            std::unique_lock guard(lock);
+            wake.wait(guard, [this] {
+                return closing || !queue.empty();
+            });
+            if (queue.empty())
+                return;
+            frame = std::move(queue.front());
+            queue.pop_front();
+        }
+        wake.notify_all();
+        if (!broken && !Recorder::get().write_out(frame)) {
+            broken = true;
+            wake.notify_all();
+        }
+        {
+            std::lock_guard guard(lock);
+            if (spare_frames.size() < QUEUE + 1) {
+                spare_frames.push_back(std::move(frame));
+            }
+        }
+    }
 }
 
 void Recorder::finish_video() {
-    // TODO
+    while (Recorder::get().harvest(true)) {
+    }
+    if (worker.joinable()) {
+        {
+            std::lock_guard guard(lock);
+            closing = true;
+        }
+        wake.notify_all();
+        worker.join();
+    }
+    queue.clear();
+    spare_frames.clear();
+    closing = false;
+#ifdef ECHO_FFMPEG_API
+    if (api) {
+        api->stop();
+    }
+    api.reset();
+#endif
+    Recorder::get().close_handle(video);
+    if (process) {
+        if (WaitForSingleObject(process, 30000) != WAIT_OBJECT_0) {
+            TerminateProcess(process, 0);
+        }
+        CloseHandle(process);
+        process = nullptr;
+    }
 }
 
 bool Recorder::api_available() {
@@ -1552,17 +1685,50 @@ bool Recorder::prefer_api() {
 }
 
 bool Recorder::idle() const {
-    // TODO
-    return {};
+    log::debug("idle");
+    if (active) {
+        return false;
+    }
+#ifdef ECHO_FFMPEG_API
+    if (api) {
+        return false;
+    }
+#endif
+    return process == nullptr && video == INVALID_HANDLE_VALUE;
 }
 
 bool Recorder::write_out(std::vector<uint8_t> const& frame) {
-    // TODO
-    return {};
+    Timed timed{ g_timing.encode_ns };
+#ifdef ECHO_FFMPEG_API
+    if (api) {
+        auto res = api->writeFrame(frame);
+        if (res.isErr()) {
+            std::lock_guard guard(lock);
+            failure = res.unwrapErr();
+        }
+        return res.isOk();
+    }
+#endif
+    return Recorder::get().write_all(video, frame.data(), frame.size());
 }
 
 void Recorder::go_live() {
-    // TODO
+    auto& logic = Logic::get();
+    worker = std::thread([] {
+        Recorder::get().encode_loop();
+    });
+    uncap_pace();
+    active = true;
+    logic.render_speed_locked = audio_speed;
+#if   defined(ECHO_FFMPEG_API)
+    logic.message = use_api ? "Rendering (FFmpeg API)" : nv12 ? "Rendering (GPU)"
+                                                              : "Rendering";
+#else
+    logic.message = nv12 ? "Rendering (GPU)" : "Rendering";
+#endif
+    if (!AudioTap::get().attach(logic.render_music, logic.render_sfx, audio)) {
+        logic.message = "Rendering (audio capture failed, video only)";
+    }
 }
 
 #ifdef ECHO_FFMPEG_API
@@ -1653,8 +1819,45 @@ namespace {
 }
 
 RenderStatus Logic::render_status() {
-    // TODO
-    return {};
+    auto const& film = Recorder::get();
+    RenderStatus status;
+    if (!film.active) {
+        return status;
+    }
+    status.active = true;
+    if (film.paused) {
+        status.text = "Render paused";
+        return status;
+    }
+    auto* play = PlayLayer::get();
+    double video = (double)(film.frames) * (double)(Logic::get().render_step());
+    if (film.busy_seconds > 0.05) {
+        status.speed = (float)(video / film.busy_seconds);
+    }
+    std::string speed = status.speed > 0.f ? fmt::format("{:.1f}x realtime", status.speed) : std::string("measuring speed");
+    if (play && play->m_hasCompletedLevel) {
+        status.known = true;
+        status.finishing = true;
+        status.progress = 1.f;
+        status.text = fmt::format("Finishing  |  {}", speed);
+        return status;
+    }
+    float now = lvl_fraction(play, film.last_input_frame);
+    if (now < 0.f) {
+        status.text = fmt::format("{} rendered  |  {}", clock_text(video), speed);
+        return status;
+    }
+    status.known = true;
+    status.progress = now;
+    float done = now - std::max(film.start_fraction, 0.f);
+    std::string left = "estimating";
+    if (done > 0.002f && film.busy_seconds > 0.5) {
+        double tail = status.speed > 0.f ? (double)(Logic::get().render_after_end) / status.speed : 0.0;
+        status.eta = (float)(film.busy_seconds * (1.0 - now) / done + tail);
+        left = clock_text(status.eta) + " left";
+    }
+    status.text = fmt::format("{:.1f}%  |  {}  |  {}", now * 100.f, speed, left);
+    return status;
 }
 
 float Logic::render_wall_delta() {
@@ -1662,17 +1865,46 @@ float Logic::render_wall_delta() {
 }
 
 void Logic::sync_render_pause_button() {
-    // TODO
+    static CCNode* hidden = nullptr;
+    auto* play = PlayLayer::get();
+    CCNode* button = play && play->m_uiLayer ? play->m_uiLayer->m_pauseBtn : nullptr;
+    bool hide = button && render_hide_pause && Recorder::get().active;
+    hide = false;
+    if (hidden && hidden != button) {
+        hidden = nullptr;
+    }
+    if (hide && !hidden && button->isVisible()) {
+        button->setVisible(false);
+        hidden = button;
+    }
+    else if (!hide && hidden) {
+        hidden->setVisible(true);
+        hidden = nullptr;
+    }
 }
 
 bool Logic::render_uses_screen_shape() {
-    // TODO
-    return {};
+    return false;
 }
 
 int Logic::render_width_for(int width, int height) {
-    // todo
-    return {};
+    if (!render_uses_screen_shape()) {
+        return width;
+    }
+    auto* view = CCEGLView::get();
+    if (!view) {
+        return width;
+    }
+    auto frame = view->getFrameSize();
+    if (Recorder::get().holding) {
+        frame = Recorder::get().saved_frame;
+    }
+    if (frame.width <= 1.f || frame.height <= 1.f) {
+        return width;
+    }
+    float wide = std::max(frame.width, frame.height);
+    float tall = std::min(frame.width, frame.height);
+    return std::max(static_cast<int>(std::lround((float)(height) * wide / tall)), 2) & ~1;
 }
 
 bool Logic::render_active() {
@@ -1700,8 +1932,21 @@ bool Logic::render_blocks_mixer() {
 }
 
 bool Logic::render_should_skip() {
-    // TODO
-    return {};
+    auto* play = PlayLayer::get();
+    if (!play || Logic::get().render_paused()) {
+        return true;
+    }
+    if (Logic::get().pause_menu_open()) {
+        return true;
+    }
+    bool started = play->m_started || (Logic::get().render_record_pause && Recorder::get().seen_frames >= 2);
+    if (!started) {
+        return true;
+    }
+    if (play->m_isPaused) {
+        return true;
+    }
+    return false;
 }
 
 bool Logic::begin_render_frame() {
