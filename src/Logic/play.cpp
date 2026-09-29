@@ -2285,6 +2285,11 @@ void Logic::tick_autoclicker(PlayLayer* play) {
         if (!player1 && !twoPlayer)
             return;
         play->queueButton(jump, true, !player1, Logic::get().click_stamp());
+        // swift = let go & press again on the same frame
+        for (int i = 0; i < click.swifts; ++i) {
+            play->queueButton(jump, false, !player1, Logic::get().click_stamp());
+            play->queueButton(jump, true, !player1, Logic::get().click_stamp());
+        }
     };
     auto release_player = [&](bool player1) {
         bool twoPlayer = play->m_level && play->m_level->m_twoPlayerMode;
