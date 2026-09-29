@@ -1,4 +1,6 @@
 // renders a macro to a video
+//
+// gd draws into a texture at the videos size, 1 fixed step per frame, so the video is smooth no matter how slow the pc is
 #include "GUI/gui.hpp"
 #include "Recorder/stereo_audio.hpp"
 #include "Logic/conversions/codecs.hpp"
@@ -978,30 +980,116 @@ float Logic::merge_progress() {
 
 // Taken directly from Silicate (https://git.silicate.dev/silicate/silicate), GPL-3.0.
 void Recorder::silent_change_size(CCSize size) {
-    // TODO
+    auto director = CCDirector::sharedDirector();
+    auto view = CCEGLView::sharedOpenGLView();
+    view->CCEGLViewProtocol::setFrameSize(size.width, size.height);
+    director->updateScreenScale(size);
+    director->setViewport();
+    director->setProjection(kCCDirectorProjection2D);
+    glViewport(0, 0, size.width, size.height);
 }
 
 // Taken directly from Silicate (https://git.silicate.dev/silicate/silicate), GPL-3.0.
 void Recorder::resize_shader_layer(CCSize size) {
-    // later
+    auto gjbgl = GJBaseGameLayer::get();
+    if (!gjbgl || !gjbgl->m_shaderLayer) {
+        return;
+    }
+
+    ShaderLayer* sh = gjbgl->m_shaderLayer;
+    auto winSize = CCDirector::get()->getWinSize();
+
+    sh->m_screenSize = size;
+    sh->m_scaleFactor = size.height / winSize.height;
+    sh->m_aspectRatio = size.width / size.height;
+
+    float csf = CCDirector::get()->getContentScaleFactor();
+    CCDirector::get()->setContentScaleFactor(1.0);
+    sh->m_renderTexture->release();
+    sh->m_renderTexture = CCRenderTexture::create(
+        size.width, size.height, kCCTexture2DPixelFormat_RGBA8888);
+    sh->m_renderTexture->retain();
+    CCDirector::get()->setContentScaleFactor(csf);
+    sh->m_sprite->setTexture(sh->m_renderTexture->getSprite()->getTexture());
+    sh->m_textureContentSize = sh->m_sprite->getTexture()->getContentSize();
+    sh->m_targetTextureSize = size;
+    sh->m_targetTextureSizeExtra = CCSize(0.0f, 0.0f);
+    sh->m_sprite->setTextureRect(
+        { -1.0f, -1.0f, size.width + 2.0f, size.height + 2.0f });
+    sh->m_state.m_textureScaleX = size.width / winSize.width;
+    sh->m_state.m_textureScaleY = size.height / winSize.height;
 }
 
 std::optional<CCSize> Recorder::window_pixels() {
-    // later
-    return {};
+    HDC context = wglGetCurrentDC();
+    HWND window = context ? WindowFromDC(context) : nullptr;
+    RECT client{};
+    if (!window || !GetClientRect(window, &client)) {
+        return std::nullopt;
+    }
+    if (client.right <= client.left || client.bottom <= client.top) {
+        return std::nullopt;
+    }
+    return CCSize((float)(client.right - client.left), (float)(client.bottom - client.top));
 }
 
 // the bar & the % were placed for the screens width. a video of another shape has to move them or they sit off centre
 void Recorder::shift_ui(PlayLayer* play, float by) {
-    // later
+    if (!play || by == 0.f)
+        return;
+    if (play->m_progressBar) {
+        play->m_progressBar->setPositionX(play->m_progressBar->getPositionX() + by * .5f);
+    }
+    if (play->m_percentageLabel) {
+        play->m_percentageLabel->setPositionX(play->m_percentageLabel->getPositionX() + by * .5f);
+    }
+    if (play->m_uiLayer && play->m_uiLayer->m_pauseBtn) {
+        play->m_uiLayer->m_pauseBtn->setPositionX(play->m_uiLayer->m_pauseBtn->getPositionX() + by);
+    }
 }
 
 void Recorder::hold_view() {
-    // TODO
+    CCSize size((float)(width), (float)(height));
+    if (!holding) {
+        saved_win_width = CCDirector::sharedDirector()->getWinSize().width;
+        saved_frame = CCEGLView::sharedOpenGLView()->getFrameSize();
+        saved_pixels = window_pixels().value_or(saved_frame);
+        holding = true;
+    }
+    if (!CCEGLView::sharedOpenGLView()->getFrameSize().equals(size)) {
+        Recorder::get().silent_change_size(size);
+    }
+    if (auto* play = PlayLayer::get(); play && !ui_owner) {
+        float by = CCDirector::sharedDirector()->getWinSize().width - saved_win_width;
+        if (std::fabs(by) > .5f) {
+            shift_ui(play, by);
+            ui_shift = by;
+            ui_owner = play;
+        }
+    }
+    auto* layer = GJBaseGameLayer::get();
+    auto* shader = layer ? layer->m_shaderLayer : nullptr;
+    if (shader && (!shader->m_screenSize.equals(size) || !shader->m_targetTextureSize.equals(size))) {
+        Recorder::get().resize_shader_layer(size);
+    }
 }
 
 void Recorder::release_view() {
-    // TODO
+    if (!holding)
+        return;
+    holding = false;
+    auto pixels = window_pixels().value_or(saved_pixels);
+    CCSize restore(
+        saved_frame.width * pixels.width / std::max(saved_pixels.width, 1.f),
+        saved_frame.height * pixels.height / std::max(saved_pixels.height, 1.f));
+    Recorder::get().silent_change_size(restore);
+    Recorder::get().resize_shader_layer(restore);
+    if (ui_owner && ui_owner == PlayLayer::get()) {
+        shift_ui(ui_owner, -ui_shift);
+    }
+    ui_owner = nullptr;
+    ui_shift = 0.f;
+    CCDirector::sharedDirector()->setNextDeltaTimeZero(true);
 }
 
 size_t Recorder::frame_bytes() const {
@@ -1128,41 +1216,295 @@ namespace {
 }
 
 void Recorder::draw_full_quad() {
-    // todo
+    glBegin(GL_QUADS);
+    glTexCoord2f(0.f, 0.f);
+    glVertex2f(-1.f, -1.f);
+    glTexCoord2f(1.f, 0.f);
+    glVertex2f(1.f, -1.f);
+    glTexCoord2f(1.f, 1.f);
+    glVertex2f(1.f, 1.f);
+    glTexCoord2f(0.f, 1.f);
+    glVertex2f(-1.f, 1.f);
+    glEnd();
 }
 
 bool Recorder::setup_nv12() {
-    // port this
-    return {};
+    static char const* vertex = R"(
+#version 120
+void main() {
+	gl_Position = gl_Vertex;
+	gl_TexCoord[0].xy = vec2(gl_MultiTexCoord0.x, 1.0 - gl_MultiTexCoord0.y);
+}
+)";
+    static char const* luma = R"(
+#version 120
+uniform sampler2D u_texture;
+void main() {
+	vec3 rgb = texture2D(u_texture, gl_TexCoord[0].xy).rgb;
+	float y = dot(rgb, vec3(0.2126, 0.7152, 0.0722));
+	y = y * 219.0 / 255.0 + 16.0 / 255.0;
+	gl_FragColor = vec4(y, 0.0, 0.0, 1.0);
+}
+)";
+    static char const* chroma = R"(
+#version 120
+uniform sampler2D u_texture;
+void main() {
+	vec3 rgb = texture2D(u_texture, gl_TexCoord[0].xy).rgb;
+	float u = dot(rgb, vec3(-0.11457, -0.38543, 0.5)) + 0.5;
+	float v = dot(rgb, vec3(0.5, -0.45415, -0.04585)) + 0.5;
+	u = u * 224.0 / 255.0 + 16.0 / 255.0;
+	v = v * 224.0 / 255.0 + 16.0 / 255.0;
+	gl_FragColor = vec4(u, v, 0.0, 1.0);
+}
+)";
+    y_prog = link_program(vertex, luma);
+    uv_prog = link_program(vertex, chroma);
+    if (!y_prog || !uv_prog) {
+        return false;
+    }
+    GLint old_texture = 0, old_fbo = 0;
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &old_texture);
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &old_fbo);
+    y_color = make_color_target(GL_R8, GL_RED, width, height);
+    uv_color = make_color_target(GL_RG8, GL_RG, width / 2, height / 2);
+    y_fbo = make_framebuffer(y_color);
+    uv_fbo = make_framebuffer(uv_color);
+    glBindFramebuffer(GL_FRAMEBUFFER, old_fbo);
+    glBindTexture(GL_TEXTURE_2D, old_texture);
+    return y_color && uv_color && y_fbo && uv_fbo;
 }
 
 void Recorder::close_nv12() {
-    // TODO
+    if (y_prog) {
+        glDeleteProgram(y_prog);
+    }
+    if (uv_prog) {
+        glDeleteProgram(uv_prog);
+    }
+    if (y_fbo) {
+        glDeleteFramebuffers(1, &y_fbo);
+    }
+    if (uv_fbo) {
+        glDeleteFramebuffers(1, &uv_fbo);
+    }
+    if (y_color) {
+        glDeleteTextures(1, &y_color);
+    }
+    if (uv_color) {
+        glDeleteTextures(1, &uv_color);
+    }
+    y_prog = 0;
+    uv_prog = 0;
+    y_fbo = 0;
+    uv_fbo = 0;
+    y_color = 0;
+    uv_color = 0;
+    nv12 = false;
 }
 
 void Recorder::convert_nv12() {
-    // TODO
+    GLint old_prog = 0, old_texture = 0, old_fbo = 0;
+    GLint viewport[4] = {};
+    glGetIntegerv(GL_CURRENT_PROGRAM, &old_prog);
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &old_texture);
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &old_fbo);
+    glGetIntegerv(GL_VIEWPORT, viewport);
+    GLboolean blend = glIsEnabled(GL_BLEND);
+    GLboolean depth = glIsEnabled(GL_DEPTH_TEST);
+    if (blend) {
+        glDisable(GL_BLEND);
+    }
+    if (depth) {
+        glDisable(GL_DEPTH_TEST);
+    }
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, color);
+    glBindFramebuffer(GL_FRAMEBUFFER, y_fbo);
+    glViewport(0, 0, width, height);
+    glUseProgram(y_prog);
+    glUniform1i(glGetUniformLocation(y_prog, "u_texture"), 0);
+    draw_full_quad();
+    glBindFramebuffer(GL_FRAMEBUFFER, uv_fbo);
+    glViewport(0, 0, width / 2, height / 2);
+    glUseProgram(uv_prog);
+    glUniform1i(glGetUniformLocation(uv_prog, "u_texture"), 0);
+    draw_full_quad();
+    glUseProgram(old_prog);
+    glBindTexture(GL_TEXTURE_2D, old_texture);
+    glBindFramebuffer(GL_FRAMEBUFFER, old_fbo);
+    glViewport(viewport[0], viewport[1], viewport[2], viewport[3]);
+    if (blend) {
+        glEnable(GL_BLEND);
+    }
+    if (depth) {
+        glEnable(GL_DEPTH_TEST);
+    }
 }
 
 void Recorder::uncap_pace() {
-    // todo
+    if (pace_held)
+        return;
+    if (auto* director = CCDirector::sharedDirector()) {
+        saved_interval = director->getAnimationInterval();
+        if (!(saved_interval > 0.f)) {
+            saved_interval = 1.f / 60.f;
+        }
+        director->setAnimationInterval(1.f / 10000.f);
+    }
+    saved_swap = 1;
+    if (auto get_swap = reinterpret_cast<GetSwapIntervalFn>(wglGetProcAddress("wglGetSwapIntervalEXT"))) {
+        saved_swap = get_swap();
+    }
+    if (auto set_swap = reinterpret_cast<SwapIntervalFn>(wglGetProcAddress("wglSwapIntervalEXT"))) {
+        set_swap(0);
+    }
+    pace_held = true;
 }
 
 void Recorder::restore_pace() {
-    // todo
+    if (!pace_held)
+        return;
+    pace_held = false;
+    if (auto* director = CCDirector::sharedDirector()) {
+        director->setAnimationInterval(saved_interval > 0.f ? saved_interval : 1.f / 60.f);
+    }
+    if (auto set_swap = reinterpret_cast<SwapIntervalFn>(wglGetProcAddress("wglSwapIntervalEXT"))) {
+        set_swap(saved_swap);
+    }
 }
 
 bool Recorder::open_target() {
-    // TODO
-    return {};
+    GLint old_fbo = 0, old_texture = 0;
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &old_fbo);
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &old_texture);
+    glGenTextures(1, &color);
+    glBindTexture(GL_TEXTURE_2D, color);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glGenFramebuffers(1, &fbo);
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, color, 0);
+    bool complete = glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
+    glBindFramebuffer(GL_FRAMEBUFFER, old_fbo);
+    glBindTexture(GL_TEXTURE_2D, old_texture);
+
+    nv12 = !use_api && Recorder::get().setup_nv12();
+    if (!nv12) {
+        Recorder::get().close_nv12();
+    }
+    auto bytes = static_cast<GLsizeiptr>(Recorder::get().frame_bytes());
+    glGenBuffers(RING, pbo.data());
+    for (auto buf : pbo) {
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, buf);
+        glBufferData(GL_PIXEL_PACK_BUFFER, bytes, nullptr, GL_STREAM_READ);
+    }
+    glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+    fences.fill(nullptr);
+    in_flight.clear();
+    next_slot = 0;
+
+    shade = CCLayerColor::create(ccc4(0, 0, 0, 0));
+    shade->retain();
+    bar_back = CCLayerColor::create(ccc4(255, 255, 255, 45));
+    bar_back->retain();
+    bar_fill = CCLayerColor::create(ccc4(80, 210, 130, 255));
+    bar_fill->retain();
+    bar_text = CCLabelBMFont::create("Rendering", "bigFont.fnt");
+    if (bar_text) {
+        bar_text->retain();
+    }
+    bar_shown.clear();
+    text_clock = 0.0;
+    return complete;
 }
 
 void Recorder::close_target() {
-    // TODO
+    for (auto& fence : fences) {
+        if (fence) {
+            glDeleteSync(fence);
+        }
+        fence = nullptr;
+    }
+    in_flight.clear();
+    if (pbo[0]) {
+        glDeleteBuffers(RING, pbo.data());
+    }
+    pbo.fill(0);
+    Recorder::get().close_nv12();
+    if (fbo) {
+        glDeleteFramebuffers(1, &fbo);
+    }
+    if (color) {
+        glDeleteTextures(1, &color);
+    }
+    fbo = 0;
+    color = 0;
+    if (shade) {
+        shade->release();
+    }
+    shade = nullptr;
+    if (bar_back) {
+        bar_back->release();
+    }
+    if (bar_fill) {
+        bar_fill->release();
+    }
+    if (bar_text) {
+        bar_text->release();
+    }
+    bar_back = nullptr;
+    bar_fill = nullptr;
+    bar_text = nullptr;
 }
 
 void Recorder::drawFrame() {
-    // TODO
+    auto* director = CCDirector::sharedDirector();
+    GLint window = 0;
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &window);
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+    glViewport(0, 0, width, height);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    kmGLPushMatrix();
+    if (auto* play = PlayLayer::get())
+        play->visit();
+    else if (auto* scene = director->getRunningScene())
+        scene->visit();
+    if (fade < 1.f && shade) {
+        shade->setContentSize(director->getWinSize());
+        shade->setOpacity(static_cast<GLubyte>(std::lround((1.f - fade) * 255.f)));
+        shade->visit();
+    }
+    kmGLPopMatrix();
+
+    if (nv12) {
+        Recorder::get().convert_nv12();
+    }
+    int slot = next_slot;
+    while (fences[slot] && Recorder::get().harvest(true)) {
+    }
+    glBindBuffer(GL_PIXEL_PACK_BUFFER, pbo[slot]);
+    glPixelStorei(GL_PACK_ALIGNMENT, 1);
+    if (nv12) {
+        glBindFramebuffer(GL_FRAMEBUFFER, y_fbo);
+        glReadPixels(0, 0, width, height, GL_RED, GL_UNSIGNED_BYTE, nullptr);
+        glBindFramebuffer(GL_FRAMEBUFFER, uv_fbo);
+        auto offset = static_cast<uintptr_t>(width) * static_cast<uintptr_t>(height);
+        glReadPixels(0, 0, width / 2, height / 2, GL_RG, GL_UNSIGNED_BYTE, reinterpret_cast<void*>(offset));
+    }
+    else {
+        glReadPixels(0, 0, width, height, GL_BGRA, GL_UNSIGNED_BYTE, nullptr);
+    }
+    glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+    fences[slot] = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+    in_flight.push_back(slot);
+    next_slot = (slot + 1) % RING;
+    while (Recorder::get().harvest(false)) {
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, window);
 }
 
 void Recorder::show_overlay() {
