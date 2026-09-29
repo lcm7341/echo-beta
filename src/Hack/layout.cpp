@@ -347,7 +347,8 @@ void Logic::style_layout_object(GameObject* object) {
         LevelLayout::get().hide_object(object);
         return;
     }
-    // TODO user coins go blue
+    if (object->m_objectType == GameObjectType::UserCoin || object->m_objectType == GameObjectType::SecretCoin)
+        return;
     LevelLayout::get().style_solid_object(object);
 }
 
