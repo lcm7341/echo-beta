@@ -1571,7 +1571,29 @@ void Recorder::show_overlay() {
 }
 
 void Recorder::draw_preview(CCSize pixels) {
-    // TODO
+    if (!color || width < 1 || height < 1 || pixels.width < 1.f || pixels.height < 1.f)
+        return;
+    auto* program = CCShaderCache::sharedShaderCache()->programForKey(kCCShader_PositionTexture);
+    if (!program)
+        return;
+    auto win = CCDirector::sharedDirector()->getWinSize();
+    float screen = pixels.width / pixels.height;
+    float video = (float)(width) / (float)(height);
+    float across = video >= screen ? 1.f : video / screen;
+    float up = video >= screen ? screen / video : 1.f;
+    float x0 = win.width * (1.f - across) * .5f, y0 = win.height * (1.f - up) * .5f, x1 = win.width - x0;
+    float y1 = win.height - y0;
+    GLfloat const corners[] = { x0, y0, x1, y0, x0, y1, x1, y1 };
+    GLfloat const coords[] = { 0.f, 0.f, 1.f, 0.f, 0.f, 1.f, 1.f, 1.f };
+    program->use();
+    program->setUniformsForBuiltins();
+    ccGLBindTexture2D(color);
+    ccGLBlendFunc(GL_ONE, GL_ZERO);
+    ccGLEnableVertexAttribs(kCCVertexAttribFlag_Position | kCCVertexAttribFlag_TexCoords);
+    glVertexAttribPointer(kCCVertexAttrib_Position, 2, GL_FLOAT, GL_FALSE, 0, corners);
+    glVertexAttribPointer(kCCVertexAttrib_TexCoords, 2, GL_FLOAT, GL_FALSE, 0, coords);
+    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+    ccGLBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 }
 
 void Recorder::draw_progress() {
