@@ -949,6 +949,7 @@ void GUI::draw_render_picker() {
             state.filter.clear();
             continue;
         }
+        Logic::get().merge_renders(state.first, path);
         state.second = false;
         state.first.clear();
         ImGui::CloseCurrentPopup();

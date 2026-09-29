@@ -1,0 +1,1399 @@
+// renders a macro to a video
+#include "GUI/gui.hpp"
+#include "Recorder/stereo_audio.hpp"
+#include "Logic/conversions/codecs.hpp"
+#include "Logic/logic.hpp"
+#include <Geode/binding/FMODAudioEngine.hpp>
+#include <Geode/binding/FMODMusic.hpp>
+#include <Geode/binding/GJBaseGameLayer.hpp>
+#include <Geode/binding/GJShaderState.hpp>
+#include <Geode/binding/PauseLayer.hpp>
+#include <Geode/binding/LevelEditorLayer.hpp>
+#include <Geode/binding/PlayLayer.hpp>
+#include <Geode/binding/UILayer.hpp>
+#include <Geode/binding/CCMenuItemSpriteExtra.hpp>
+#include <Geode/binding/ShaderLayer.hpp>
+#include <Geode/fmod/fmod.hpp>
+#include <Geode/loader/Loader.hpp>
+#include <algorithm>
+#include <array>
+#include <atomic>
+#include <chrono>
+#include <cmath>
+#include <condition_variable>
+#include <cstdint>
+#include <cstring>
+#include <deque>
+#include <filesystem>
+#include <fstream>
+#include <mutex>
+#include <optional>
+#include <ranges>
+#include <string>
+#include <unordered_map>
+#include <unordered_set>
+#include <thread>
+#include <vector>
+
+#if ECHO_FFMPEG_API_ENABLED && __has_include(<eclipse.ffmpeg-api/include/events.hpp>)
+#include <eclipse.ffmpeg-api/include/events.hpp>
+#define ECHO_FFMPEG_API 1
+#endif
+
+#include <Geode/ui/OverlayManager.hpp>
+
+namespace fs = std::filesystem;
+namespace chrono = std::chrono;
+
+using namespace geode::prelude;
+
+#include <windows.h>
+
+namespace {
+    struct RenderTiming {
+        std::atomic<long long> read_ns{ 0 }, wait_ns{ 0 }, encode_ns{ 0 };
+        chrono::steady_clock::time_point began{};
+
+        void reset() {
+            read_ns = 0;
+            wait_ns = 0;
+            encode_ns = 0;
+            began = chrono::steady_clock::now();
+        }
+    };
+
+    RenderTiming g_timing;
+
+    struct Timed {
+        std::atomic<long long>& into;
+        chrono::steady_clock::time_point from = chrono::steady_clock::now();
+
+        ~Timed() {
+            into += chrono::duration_cast<chrono::nanoseconds>(chrono::steady_clock::now() - from).count();
+        }
+    };
+}
+
+class AudioTap {
+public:
+    static AudioTap& get() {
+        static AudioTap value;
+        return value;
+    }
+
+    bool attach(float music, float sfx, fs::path const& file);
+    void detach();
+    void advance(float dt, float fade);
+    void hold_effects();
+    static FMOD_RESULT F_CALLBACK read(FMOD_DSP_STATE* state, float* in, float* out, unsigned int length, int in_channels, int* out_channels);
+
+    bool attached = false;
+    bool engine_open = false;
+    bool mixing = false;
+    int rate = 0;
+    int channels = 0;
+    uint64_t written = 0;
+    uint64_t stray_blocks = 0;
+
+private:
+    FMOD::DSP* dsp = nullptr;
+    FMOD::ChannelGroup* master = nullptr;
+    std::mutex lock;
+    std::vector<float> pending;
+    std::ofstream out;
+    double clock = 0.0;
+    float loudest = 0.f;
+    std::string heard;
+    float old_music = 1.f, old_sfx = 1.f;
+    float effects = 1.f;
+    double song_lead = 0.0;
+    uint64_t song_mixed = 0;
+    bool song_tracked = false;
+    std::unordered_set<std::string> undecodable;
+    void bind_bus();
+    void keep_song_on_time(FMODAudioEngine* engine);
+    void sample_streams(FMODAudioEngine* engine);
+    void freeze(bool frozen);
+};
+
+class Recorder {
+public:
+    static Recorder& get() {
+        static Recorder value;
+        return value;
+    }
+    void close_handle(HANDLE& handle);
+    bool connect_pipe(HANDLE pipe);
+    bool write_all(HANDLE pipe, void const* data, size_t size);
+    fs::path game_directory();
+    std::string ffmpeg_path();
+    std::string run_hidden(std::string command, fs::path const& log_path);
+    bool harvest(bool wait);
+    bool setup_nv12();
+    void close_nv12();
+    void convert_nv12();
+    void draw_full_quad();
+    bool mux_audio();
+#ifdef ECHO_FFMPEG_API
+    std::string open_api(int fps);
+#endif
+    static bool api_available();
+    static bool prefer_api();
+    bool idle() const;
+    void go_live();
+    bool write_out(std::vector<uint8_t> const& frame);
+    void save_api_render();
+    void silent_change_size(CCSize size);
+    void resize_shader_layer(CCSize size);
+    std::optional<CCSize> window_pixels();
+    void hold_view();
+    void release_view();
+    bool open_target();
+    void close_target();
+    void drawFrame();
+    void show_overlay();
+    void draw_preview(CCSize pixels);
+    void draw_progress();
+    void queue_frame(std::vector<uint8_t> frame);
+    std::vector<uint8_t> acquire_frame();
+    void encode_loop();
+    void finish_video();
+    size_t frame_bytes() const;
+    void uncap_pace();
+    void restore_pace();
+
+    static constexpr int RING = 4;
+    static constexpr size_t QUEUE = 12;
+
+    bool active = false;
+    bool paused = false;
+    bool starting = false;
+    bool cancel = false;
+    bool holding = false;
+    bool use_api = false;
+    bool saving = false;
+    std::atomic<bool> broken = false;
+    std::string failure;
+    HANDLE video = INVALID_HANDLE_VALUE;
+    HANDLE process = nullptr;
+#ifdef ECHO_FFMPEG_API
+    std::unique_ptr<ffmpeg::events::Recorder> api;
+#endif
+    GLint screen_fbo = 0;
+    fs::path output;
+    fs::path audio;
+    int width = 0, height = 0;
+    int frames = 0, seen_frames = 0;
+    float endTime = 0.f;
+    float fade = 1.f;
+    float audio_speed = 1.f;
+    CCSize saved_frame{}, saved_pixels{};
+    float saved_win_width = 0.f, ui_shift = 0.f;
+    PlayLayer* ui_owner = nullptr;
+    void shift_ui(PlayLayer* play, float by);
+
+    GLuint fbo = 0;
+    GLuint color = 0;
+    GLuint y_fbo = 0, uv_fbo = 0;
+    GLuint y_color = 0, uv_color = 0;
+    GLuint y_prog = 0, uv_prog = 0;
+    bool nv12 = false;
+    int saved_swap = 1;
+    float saved_interval = 1.f / 60.f;
+    bool pace_held = false;
+    std::array<GLuint, RING> pbo{};
+    std::array<GLsync, RING> fences{};
+    std::deque<int> in_flight;
+    int next_slot = 0;
+    CCLayerColor* shade = nullptr;
+    CCLayerColor* bar_back = nullptr;
+    CCLayerColor* bar_fill = nullptr;
+    CCLabelBMFont* bar_text = nullptr;
+    std::string bar_shown;
+    double text_clock = 0.0;
+
+    chrono::steady_clock::time_point last_tick{};
+    bool ticked = false;
+    float wall_delta = 0.f;
+    double busy_seconds = 0.0;
+    float start_fraction = -1.f;
+    int last_input_frame = 0;
+
+    std::thread worker;
+    std::mutex lock;
+    std::condition_variable wake;
+    std::deque<std::vector<uint8_t>> queue;
+    std::vector<std::vector<uint8_t>> spare_frames;
+    bool closing = false;
+};
+
+FMOD_RESULT F_CALLBACK AudioTap::read(FMOD_DSP_STATE*, float* in, float* out, unsigned int length, int in_channels, int* out_channels) {
+    auto& tap = AudioTap::get();
+    size_t amt = static_cast<size_t>(length) * static_cast<size_t>(in_channels);
+    std::memcpy(out, in, amt * sizeof(float));
+    if (out_channels) {
+        *out_channels = in_channels;
+    }
+    std::lock_guard guard(tap.lock);
+    if (!tap.mixing) {
+        if (tap.attached) {
+            ++tap.stray_blocks;
+        }
+        return FMOD_OK;
+    }
+    tap.channels = in_channels;
+    tap.pending.insert(tap.pending.end(), in, in + amt);
+    return FMOD_OK;
+}
+
+void AudioTap::bind_bus() {
+    auto* engine = FMODAudioEngine::get();
+    if (!engine || !engine->m_system || !dsp)
+        return;
+    FMOD::ChannelGroup* live = nullptr;
+    if (engine->m_system->getMasterChannelGroup(&live) != FMOD_OK || !live)
+        return;
+    if (live != master) {
+        if (master && attached) {
+            master->setPaused(false);
+        }
+        if (master) {
+            master->removeDSP(dsp);
+        }
+        if (live->addDSP(FMOD_CHANNELCONTROL_DSP_TAIL, dsp) == FMOD_OK) {
+            master = live;
+        }
+    }
+    if (!master)
+        return;
+    auto adopt = [&](FMOD::ChannelGroup* group) {
+        if (!group || group == master)
+            return;
+        group->setPaused(false);
+        master->addGroup(group, true, nullptr);
+    };
+    adopt(engine->m_backgroundMusicChannel);
+    adopt(engine->m_globalChannel);
+    if (engine->m_globalChannel && engine->m_reverbChannel) {
+        engine->m_globalChannel->addGroup(engine->m_reverbChannel, true, nullptr);
+    }
+}
+
+void AudioTap::hold_effects() {
+    log::debug("hold effects");
+    if (!attached)
+        return;
+    auto* engine = FMODAudioEngine::get();
+    if (!engine)
+        return;
+    float volume = std::clamp(effects, 0.f, 1.f);
+    engine->setEffectsVolume(volume);
+    if (engine->m_globalChannel) {
+        engine->m_globalChannel->setVolume(volume);
+        engine->m_globalChannel->setPaused(false);
+    }
+    if (engine->m_reverbChannel) {
+        engine->m_reverbChannel->setPaused(false);
+    }
+}
+
+bool AudioTap::attach(float music, float sfx, fs::path const& file) {
+    auto* engine = FMODAudioEngine::get();
+    if (attached || !engine || !engine->m_system) {
+        return false;
+    }
+    auto* system = engine->m_system;
+    FMOD_DSP_DESCRIPTION description{};
+    description.pluginsdkversion = FMOD_PLUGIN_SDK_VERSION;
+    std::strncpy(description.name, "Echo Render", sizeof(description.name) - 1);
+    description.numinputbuffers = 1;
+    description.numoutputbuffers = 1;
+    description.read = &AudioTap::read;
+    if (system->createDSP(&description, &dsp) != FMOD_OK || !dsp) {
+        return false;
+    }
+    if (system->getMasterChannelGroup(&master) != FMOD_OK || !master || master->addDSP(FMOD_CHANNELCONTROL_DSP_TAIL, dsp) != FMOD_OK) {
+        dsp->release();
+        dsp = nullptr;
+        return false;
+    }
+    gd::string song;
+    unsigned song_ms = 0;
+    if (auto it = engine->m_channelIDToSoundPath.find(0); it != engine->m_channelIDToSoundPath.end()) {
+        song = it->second;
+        song_ms = engine->getMusicTimeMS(0);
+    }
+    if (auto it = engine->m_fmodMusic.find(0); song.empty() && it != engine->m_fmodMusic.end() && !it->second.m_filePath.empty()) {
+        song = it->second.m_filePath;
+        song_ms = engine->getMusicTimeMS(0);
+    }
+    out.open(file, std::ios::binary | std::ios::trunc);
+    if (!out || system->setOutput(FMOD_OUTPUTTYPE_NOSOUND_NRT) != FMOD_OK) {
+        out.close();
+        master->removeDSP(dsp);
+        dsp->release();
+        dsp = nullptr;
+        system->setOutput(FMOD_OUTPUTTYPE_AUTODETECT);
+        return false;
+    }
+    system->getSoftwareFormat(&rate, nullptr, nullptr);
+    if (!song.empty()) {
+        engine->stopAndRemoveMusic(0);
+        // fix later: song runs out on long renders
+        engine->queueStartMusic(song, 1.f, 0.f, std::clamp(music, 0.f, 1.f), false, static_cast<int>(song_ms), 0, 0, 0, 0, false, 0, false, false);
+        engine->updateQueuedMusic();
+        for (int tries = 0; tries < 600 && !engine->getActiveMusicChannel(0); ++tries) {
+            std::this_thread::sleep_for(chrono::milliseconds(5));
+            system->update();
+            engine->updateQueuedMusic();
+        }
+        sample_streams(engine);
+        auto* channel = engine->getActiveMusicChannel(0);
+        if (channel) {
+            channel->setLoopCount(0);
+        }
+        bool playing = false;
+        if (channel) {
+            channel->isPlaying(&playing);
+        }
+    }
+    if (engine->m_backgroundMusicChannel) {
+        engine->m_backgroundMusicChannel->setPaused(false);
+    }
+    old_music = engine->getBackgroundMusicVolume();
+    old_sfx = engine->getEffectsVolume();
+    effects = std::clamp(sfx, 0.f, 1.f);
+    engine->setBackgroundMusicVolume(std::clamp(music, 0.f, 1.f));
+    bind_bus();
+    hold_effects();
+    pending.clear();
+    channels = 0;
+    written = 0;
+    clock = 0.0;
+    song_tracked = false;
+    undecodable.clear();
+    stray_blocks = 0;
+    attached = true;
+    freeze(true);
+    return true;
+}
+
+void AudioTap::detach() {
+    if (!attached)
+        return;
+    freeze(false);
+    heard.clear();
+    loudest = 0.f;
+    attached = false;
+    engine_open = false;
+    mixing = false;
+    out.close();
+    pending.clear();
+    auto* engine = FMODAudioEngine::get();
+    if (!engine || !engine->m_system)
+        return;
+    if (master && dsp) {
+        master->removeDSP(dsp);
+    }
+    if (dsp) {
+        dsp->release();
+    }
+    dsp = nullptr;
+    master = nullptr;
+    engine->setBackgroundMusicVolume(old_music);
+    engine->setEffectsVolume(old_sfx);
+    engine->m_system->setOutput(FMOD_OUTPUTTYPE_AUTODETECT);
+}
+
+// freezes all sound between frames
+// without ts sfx play like 2-3x speed :/
+void AudioTap::freeze(bool frozen) {
+    if (master)
+        master->setPaused(frozen);
+}
+
+void AudioTap::sample_streams(FMODAudioEngine* engine) {
+    auto* system = engine->m_system;
+    std::vector<FMOD::Channel*> playing;
+    auto add = [&](FMOD::Channel* channel) {
+        if (channel && std::ranges::find(playing, channel) == playing.end()) {
+            playing.push_back(channel);
+        }
+    };
+    for (auto& [id, channel] : engine->m_channelIDToChannel)
+        add(channel);
+    auto walk = [&](auto& self, FMOD::ChannelGroup* group, int depth) -> void {
+        if (!group || depth > 8)
+            return;
+        int amt = 0;
+        if (group->getNumChannels(&amt) == FMOD_OK) {
+            for (int i = 0; i < amt; ++i) {
+                FMOD::Channel* channel = nullptr;
+                if (group->getChannel(i, &channel) == FMOD_OK) {
+                    add(channel);
+                }
+            }
+        }
+        int groups = 0;
+        if (group->getNumGroups(&groups) != FMOD_OK)
+            return;
+        for (int i = 0; i < groups; ++i) {
+            FMOD::ChannelGroup* child = nullptr;
+            if (group->getGroup(i, &child) == FMOD_OK) {
+                self(self, child, depth + 1);
+            }
+        }
+    };
+    FMOD::ChannelGroup* root = nullptr;
+    if (system->getMasterChannelGroup(&root) == FMOD_OK) {
+        walk(walk, root, 0);
+    }
+
+    for (auto* channel : playing) {
+        bool active = false;
+        FMOD::Sound* sound = nullptr;
+        FMOD_MODE mode = 0;
+        if (channel->isPlaying(&active) != FMOD_OK || !active || channel->getCurrentSound(&sound) != FMOD_OK || !sound ||
+            sound->getMode(&mode) != FMOD_OK || !(mode & FMOD_CREATESTREAM))
+            continue;
+        std::string path;
+        for (auto& [music_id, entry] : engine->m_fmodMusic) {
+            if (entry.m_sound == sound) {
+                path = entry.m_filePath;
+            }
+        }
+        for (auto& [name, entry] : engine->m_fmodSounds) {
+            if (path.empty() && entry.m_sound == sound) {
+                path = entry.m_filePath.empty() ? std::string(name) : std::string(entry.m_filePath);
+            }
+        }
+        for (auto& [name, cached] : engine->m_soundPathToSound) {
+            if (path.empty() && cached == sound) {
+                path = name;
+            }
+        }
+        if (path.empty() || undecodable.contains(path)) {
+            continue;
+        }
+        FMOD::Sound* sample = nullptr;
+        FMOD_MODE wanted = (mode & ~static_cast<FMOD_MODE>(FMOD_CREATESTREAM | FMOD_NONBLOCKING)) | FMOD_CREATESAMPLE;
+        auto res = system->createSound(path.c_str(), wanted, nullptr, &sample);
+        if (res != FMOD_OK || !sample) {
+            undecodable.insert(path);
+            continue;
+        }
+        unsigned position = 0;
+        bool paused = false;
+        float volume = 1.f, pitch = 1.f, frequency = 0.f;
+        int loops = 0;
+        FMOD::ChannelGroup* group = nullptr;
+        channel->getPosition(&position, FMOD_TIMEUNIT_PCM);
+        channel->getPaused(&paused);
+        channel->getVolume(&volume);
+        channel->getPitch(&pitch);
+        channel->getFrequency(&frequency);
+        channel->getLoopCount(&loops);
+        channel->getChannelGroup(&group);
+        unsigned fades = 0;
+        std::vector<unsigned long long> fade_clocks;
+        std::vector<float> fade_volumes;
+        if (channel->getFadePoints(&fades, nullptr, nullptr) == FMOD_OK && fades > 0) {
+            fade_clocks.resize(fades);
+            fade_volumes.resize(fades);
+            channel->getFadePoints(&fades, fade_clocks.data(), fade_volumes.data());
+        }
+        FMOD::Channel* next = nullptr;
+        if (system->playSound(sample, group, true, &next) != FMOD_OK || !next) {
+            sample->release();
+            undecodable.insert(path);
+            continue;
+        }
+        next->setVolumeRamp(false);
+        next->setLoopCount(loops);
+        next->setPosition(position, FMOD_TIMEUNIT_PCM);
+        next->setVolume(volume);
+        next->setPitch(pitch);
+        if (frequency > 0.f) {
+            next->setFrequency(frequency);
+        }
+        for (unsigned i = 0; i < fades; ++i)
+            next->addFadePoint(fade_clocks[i], fade_volumes[i]);
+        void* data = nullptr;
+        channel->getUserData(&data);
+        next->setUserData(data);
+        channel->stop();
+        for (auto& [id, held] : engine->m_channelIDToChannel) {
+            if (held == channel) {
+                held = next;
+            }
+        }
+        for (auto& [music_id, entry] : engine->m_fmodMusic) {
+            if (entry.m_sound == sound) {
+                entry.m_sound = sample;
+            }
+        }
+        for (auto& [name, entry] : engine->m_fmodSounds) {
+            if (entry.m_sound == sound) {
+                entry.m_sound = sample;
+            }
+        }
+        for (auto& [name, cached] : engine->m_soundPathToSound) {
+            if (cached == sound) {
+                cached = sample;
+            }
+        }
+        next->setPaused(paused);
+    }
+}
+
+void AudioTap::keep_song_on_time(FMODAudioEngine* engine) {
+    auto* channel = engine->getActiveMusicChannel(0);
+    bool playing = false;
+    unsigned position = 0;
+    if (!channel || channel->isPlaying(&playing) != FMOD_OK || !playing || channel->getPosition(&position, FMOD_TIMEUNIT_PCM) != FMOD_OK) {
+        song_tracked = false;
+        return;
+    }
+    bool paused = false;
+    channel->getPaused(&paused);
+    if (paused)
+        return;
+    size_t buffered = 0;
+    {
+        std::lock_guard guard(lock);
+        buffered = channels > 0 ? pending.size() / static_cast<size_t>(channels) : 0;
+    }
+    uint64_t mixed = written + buffered;
+    double now = (double)(position);
+    float frequency = 0.f;
+    if (song_tracked && rate > 0 && channel->getFrequency(&frequency) == FMOD_OK && frequency > 0.f) {
+        float pitch = 1.f;
+        channel->getPitch(&pitch);
+        double seconds = (double)(mixed - std::min(mixed, song_mixed)) / (double)(rate);
+        double expected = song_lead + seconds * (double)(frequency) * (double)(pitch);
+        double moved = std::abs(now - expected);
+        if (moved > 2.0 && moved < 0.15 * (double)(frequency) && expected >= 0.0 &&
+            channel->setPosition(static_cast<unsigned>(std::llround(expected)), FMOD_TIMEUNIT_PCM) == FMOD_OK)
+            now = expected;
+    }
+    song_lead = now;
+    song_mixed = mixed;
+    song_tracked = true;
+}
+
+void AudioTap::advance(float dt, float fade) {
+    log::debug("advance");
+    auto* engine = FMODAudioEngine::get();
+    if (!attached || !engine || !engine->m_system || rate <= 0)
+        return;
+    auto* play = PlayLayer::get();
+    bool opening = Logic::get().render_record_pause && play && !play->m_started;
+    if (opening) {
+        if (engine->m_backgroundMusicChannel) {
+            engine->m_backgroundMusicChannel->setPaused(true);
+        }
+        clock += (double)(dt);
+        uint64_t target = static_cast<uint64_t>(std::llround(clock * (double)(rate)));
+        int ch = channels > 0 ? channels : 2;
+        if (written < target) {
+            size_t frames = static_cast<size_t>(target - written);
+            std::vector<float> silence(frames * static_cast<size_t>(ch), 0.f);
+            out.write(reinterpret_cast<char const*>(silence.data()), static_cast<std::streamsize>(silence.size() * sizeof(float)));
+            written = target;
+        }
+        return;
+    }
+    clock += dt;
+    engine_open = true;
+    engine->update(dt);
+    engine_open = false;
+    hold_effects();
+    sample_streams(engine);
+    keep_song_on_time(engine);
+    uint64_t target = static_cast<uint64_t>(std::llround(clock * (double)(rate)));
+    auto buffered = [this] {
+        std::lock_guard guard(lock);
+        return channels > 0 ? pending.size() / static_cast<size_t>(channels) : 0;
+    };
+    mixing = true;
+    freeze(false);
+    int stalls = 0;
+    while (written + buffered() < target && stalls < 64) {
+        size_t before = buffered();
+        engine->m_system->update();
+        stalls = buffered() == before ? stalls + 1 : 0;
+    }
+    freeze(true);
+    mixing = false;
+    std::lock_guard guard(lock);
+    if (channels <= 0)
+        return;
+    size_t take = static_cast<size_t>(std::min<uint64_t>(target - std::min(target, written), pending.size() / static_cast<size_t>(channels)));
+    size_t amt = take * static_cast<size_t>(channels);
+    float gain = std::clamp(fade, 0.f, 1.f);
+    for (size_t i = 0; i < amt; ++i)
+        pending[i] = std::clamp(pending[i] * gain, -1.f, 1.f);
+    for (size_t i = 0; i < amt; ++i)
+        loudest = std::max(loudest, std::abs(pending[i]));
+    if (written / static_cast<uint64_t>(rate) != (written + take) / static_cast<uint64_t>(rate)) {
+        if (heard.size() < 24) {
+            heard += fmt::format("{:.2f} ", loudest);
+        }
+        loudest = 0.f;
+    }
+    out.write(reinterpret_cast<char const*>(pending.data()), static_cast<std::streamsize>(amt * sizeof(float)));
+    pending.erase(pending.begin(), pending.begin() + static_cast<std::ptrdiff_t>(amt));
+    written += take;
+}
+
+void Recorder::close_handle(HANDLE& handle) {
+    if (handle == nullptr || handle == INVALID_HANDLE_VALUE) {
+        handle = INVALID_HANDLE_VALUE;
+        return;
+    }
+    CloseHandle(handle);
+    handle = INVALID_HANDLE_VALUE;
+}
+
+bool Recorder::connect_pipe(HANDLE pipe) {
+    OVERLAPPED wait{};
+    wait.hEvent = CreateEventA(nullptr, TRUE, FALSE, nullptr);
+    if (!wait.hEvent) {
+        return false;
+    }
+    BOOL ok = ConnectNamedPipe(pipe, &wait);
+    if (!ok && GetLastError() == ERROR_IO_PENDING) {
+        ok = WaitForSingleObject(wait.hEvent, 4000) == WAIT_OBJECT_0;
+    }
+    if (!ok && GetLastError() == ERROR_PIPE_CONNECTED) {
+        ok = TRUE;
+    }
+    CloseHandle(wait.hEvent);
+    return ok == TRUE;
+}
+
+bool Recorder::write_all(HANDLE pipe, void const* data, size_t size) {
+    if (pipe == nullptr || pipe == INVALID_HANDLE_VALUE) {
+        return false;
+    }
+    auto const* bytes = static_cast<uint8_t const*>(data);
+    HANDLE event = CreateEventA(nullptr, TRUE, FALSE, nullptr);
+    if (!event) {
+        return false;
+    }
+    size_t sent = 0;
+    while (sent < size) {
+        OVERLAPPED wait{};
+        wait.hEvent = event;
+        ResetEvent(event);
+        DWORD wrote = 0;
+        DWORD chunk = static_cast<DWORD>(std::min(size - sent, static_cast<size_t>(1 << 20)));
+        BOOL ok = WriteFile(pipe, bytes + sent, chunk, &wrote, &wait);
+        if (!ok && GetLastError() == ERROR_IO_PENDING) {
+            if (WaitForSingleObject(event, 5000) != WAIT_OBJECT_0) {
+                CancelIoEx(pipe, &wait);
+                CloseHandle(event);
+                return false;
+            }
+            if (!GetOverlappedResult(pipe, &wait, &wrote, FALSE)) {
+                CloseHandle(event);
+                return false;
+            }
+        }
+        else if (!ok || wrote == 0) {
+            CloseHandle(event);
+            return false;
+        }
+        sent += wrote;
+    }
+    CloseHandle(event);
+    return true;
+}
+
+fs::path Recorder::game_directory() {
+    char module[MAX_PATH] = {};
+    if (!GetModuleFileNameA(nullptr, module, MAX_PATH)) {
+        return {};
+    }
+    return fs::path(module).parent_path();
+}
+
+std::string Recorder::ffmpeg_path() {
+    log::debug("ffmpeg path");
+    auto beside = Recorder::get().game_directory() / "ffmpeg.exe";
+    if (fs::exists(beside)) {
+        return beside.string();
+    }
+    return "ffmpeg.exe";
+}
+
+std::string Recorder::run_hidden(std::string command, fs::path const& log_path) {
+    SECURITY_ATTRIBUTES security{};
+    security.nLength = sizeof(security);
+    security.bInheritHandle = TRUE;
+    HANDLE log = CreateFileA(log_path.string().c_str(), GENERIC_WRITE, FILE_SHARE_READ, &security, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    HANDLE input = CreateFileA("NUL", GENERIC_READ, FILE_SHARE_READ, &security, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (log == INVALID_HANDLE_VALUE) {
+        return "could not open the ffmpeg log";
+    }
+    STARTUPINFOA startup{};
+    startup.cb = sizeof(startup);
+    startup.dwFlags = STARTF_USESHOWWINDOW | STARTF_USESTDHANDLES;
+    startup.wShowWindow = SW_HIDE;
+    startup.hStdInput = input == INVALID_HANDLE_VALUE ? nullptr : input;
+    startup.hStdOutput = log;
+    startup.hStdError = log;
+    PROCESS_INFORMATION process{};
+    std::vector<char> mutable_command(command.begin(), command.end());
+    mutable_command.push_back('\0');
+    if (!CreateProcessA(nullptr, mutable_command.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW, nullptr, nullptr, &startup, &process)) {
+        CloseHandle(log);
+        if (input != INVALID_HANDLE_VALUE) {
+            CloseHandle(input);
+        }
+        return "could not start ffmpeg";
+    }
+    CloseHandle(process.hThread);
+    CloseHandle(log);
+    if (input != INVALID_HANDLE_VALUE) {
+        CloseHandle(input);
+    }
+    if (WaitForSingleObject(process.hProcess, 180000) == WAIT_TIMEOUT) {
+        TerminateProcess(process.hProcess, 1);
+    }
+    DWORD code = 1;
+    GetExitCodeProcess(process.hProcess, &code);
+    CloseHandle(process.hProcess);
+    if (code == 0) {
+        return {};
+    }
+    std::ifstream in(log_path);
+    std::string line;
+    std::string last;
+    while (std::getline(in, line)) {
+        if (!line.empty()) {
+            last = line;
+        }
+    }
+    if (last.empty()) {
+        last = "ffmpeg failed";
+    }
+    if (last.size() > 160) {
+        last = last.substr(last.size() - 160);
+    }
+    return last;
+}
+
+namespace {
+    std::string quote_arg(fs::path const& path) {
+        return "\"" + path.string() + "\"";
+    }
+
+    fs::path probe_binary() {
+        auto beside = fs::path(Recorder::get().ffmpeg_path()).replace_filename("ffprobe.exe");
+        if (fs::exists(beside))
+            return beside;
+        return "ffprobe.exe";
+    }
+
+    std::string run_logged(std::string command, fs::path const& log_path, fs::path const& capture) {
+        SECURITY_ATTRIBUTES security{};
+        security.nLength = sizeof(security);
+        security.bInheritHandle = TRUE;
+        HANDLE log = CreateFileA(log_path.string().c_str(), GENERIC_WRITE, FILE_SHARE_READ, &security, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+        HANDLE input = CreateFileA("NUL", GENERIC_READ, FILE_SHARE_READ, &security, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+        HANDLE out = capture.empty()
+                         ? log
+                         : CreateFileA(capture.string().c_str(), GENERIC_WRITE, FILE_SHARE_READ, &security, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (log == INVALID_HANDLE_VALUE || out == INVALID_HANDLE_VALUE) {
+            if (log != INVALID_HANDLE_VALUE)
+                CloseHandle(log);
+            if (out != INVALID_HANDLE_VALUE && out != log)
+                CloseHandle(out);
+            if (input != INVALID_HANDLE_VALUE)
+                CloseHandle(input);
+            return "could not open the ffmpeg log";
+        }
+        STARTUPINFOA startup{};
+        startup.cb = sizeof(startup);
+        startup.dwFlags = STARTF_USESHOWWINDOW | STARTF_USESTDHANDLES;
+        startup.wShowWindow = SW_HIDE;
+        startup.hStdInput = input == INVALID_HANDLE_VALUE ? nullptr : input;
+        startup.hStdOutput = out;
+        startup.hStdError = log;
+        PROCESS_INFORMATION process{};
+        std::vector<char> mutable_command(command.begin(), command.end());
+        mutable_command.push_back('\0');
+        if (!CreateProcessA(nullptr, mutable_command.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW | BELOW_NORMAL_PRIORITY_CLASS, nullptr, nullptr, &startup, &process)) {
+            CloseHandle(log);
+            if (out != log)
+                CloseHandle(out);
+            if (input != INVALID_HANDLE_VALUE)
+                CloseHandle(input);
+            return "could not start ffmpeg";
+        }
+        CloseHandle(process.hThread);
+        CloseHandle(log);
+        if (out != log)
+            CloseHandle(out);
+        if (input != INVALID_HANDLE_VALUE)
+            CloseHandle(input);
+        WaitForSingleObject(process.hProcess, INFINITE);
+        DWORD code = 1;
+        GetExitCodeProcess(process.hProcess, &code);
+        CloseHandle(process.hProcess);
+        if (code == 0)
+            return {};
+        std::ifstream in(log_path);
+        std::string line;
+        std::string last;
+        while (std::getline(in, line)) {
+            if (!line.empty())
+                last = line;
+        }
+        if (last.empty())
+            last = "ffmpeg failed";
+        if (last.size() > 180)
+            last = last.substr(last.size() - 180);
+        return last;
+    }
+
+    std::optional<double> probe_seconds(fs::path const& file, fs::path const& scratch, std::string& error) {
+        auto command = quote_arg(probe_binary()) + " -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 " + quote_arg(file);
+        auto capture = scratch / "echo-probe.txt";
+        auto log = scratch / "echo-probe.log";
+        error = run_logged(command, log, capture);
+        if (!error.empty())
+            return std::nullopt;
+        std::ifstream in(capture);
+        std::string text;
+        std::getline(in, text);
+        try {
+            size_t used = 0;
+            double seconds = std::stod(text, &used);
+            if (seconds > 0.0)
+                return seconds;
+        }
+        catch (...) {
+        }
+        error = "Could not read the video length";
+        return std::nullopt;
+    }
+
+    bool probe_audio(fs::path const& file, fs::path const& scratch) {
+        auto command = quote_arg(probe_binary()) + " -v error -select_streams a:0 -show_entries stream=index -of csv=p=0 " + quote_arg(file);
+        auto capture = scratch / "echo-probe-audio.txt";
+        auto log = scratch / "echo-probe.log";
+        if (!run_logged(command, log, capture).empty())
+            return false;
+        std::ifstream in(capture);
+        std::string text;
+        std::getline(in, text);
+        return !text.empty();
+    }
+
+    std::string join_films_in(fs::path const& first, fs::path const& second, fs::path const& dest, std::string const& encode);
+    std::string video_rate(std::string const& codec, int bitrate, std::string const& extra);
+
+    std::string join_films(fs::path const& first, fs::path const& second, fs::path const& dest, std::string const& encode) {
+        auto res = join_films_in(first, second, dest, encode);
+        auto scratch = dest.parent_path();
+        std::error_code error;
+        for (char const* name : { "echo-probe.txt", "echo-probe-audio.txt", "echo-probe.log", "echo-merge.log", "echo-merge-progress.txt" })
+            fs::remove(scratch / name, error);
+        return res;
+    }
+
+    // same codec & quality as a normal render
+    std::string merge_encode() {
+        auto& logic = Logic::get();
+        std::string codec = logic.render_codec.empty() ? "libx264" : logic.render_codec;
+        // -vf NOT allowed next to filter_complex
+        bool clash = logic.render_args.find("-vf") != std::string::npos || logic.render_args.find("-filter") != std::string::npos;
+        std::string extra = clash ? std::string() : logic.render_args;
+        bool hardware = codec.find("nvenc") != std::string::npos || codec.find("amf") != std::string::npos || codec.find("qsv") != std::string::npos;
+        std::string flags = " -c:v " + codec + video_rate(codec, logic.render_bitrate, extra);
+        if (extra.find("-pix_fmt") == std::string::npos)
+            flags += logic.render_bitrate <= 0 && !hardware ? " -pix_fmt yuv444p" : " -pix_fmt yuv420p";
+        if (!extra.empty())
+            flags += " " + extra;
+        return flags;
+    }
+
+    std::string join_films_in(fs::path const& first, fs::path const& second, fs::path const& dest, std::string const& encode) {
+        auto scratch = dest.parent_path();
+        std::string probe_error;
+        auto first_length = probe_seconds(first, scratch, probe_error);
+        if (!first_length) {
+            std::error_code error;
+            auto beside = fs::path(Recorder::get().ffmpeg_path()).replace_filename("ffprobe.exe");
+            if (!fs::exists(beside, error))
+                return "Merging needs ffprobe.exe next to ffmpeg.exe (" + probe_error + ")";
+            return probe_error;
+        }
+        auto second_length = probe_seconds(second, scratch, probe_error);
+        if (!second_length)
+            return probe_error;
+        double fade = std::min(1.0, std::min(*first_length, *second_length) * 0.45);
+        if (!(fade > 0.05))
+            return "The videos are too short to crossfade";
+        double offset = *first_length - fade;
+        Logic::get().merge_seconds = (float)(*first_length + *second_length - fade);
+        bool audio = probe_audio(first, scratch) && probe_audio(second, scratch);
+        std::string filter = fmt::format(
+            "[1:v][0:v]scale2ref[v1][v0];[v0][v1]xfade=transition=fadeblack:duration={:.3f}:offset={:.3f}[v]",
+            fade,
+            offset);
+        std::string maps = "-map [v]";
+        std::string audio_codec;
+        if (audio) {
+            filter += fmt::format(";[0:a][1:a]acrossfade=d={:.3f}[a]", fade);
+            maps += " -map [a]";
+            audio_codec = "-c:a aac -b:a 320k";
+        }
+        auto command = fmt::format(
+            "{} -y -nostdin -progress {} -i {} -i {} -filter_complex {} {}{} {} {}",
+            quote_arg(Recorder::get().ffmpeg_path()),
+            quote_arg(scratch / "echo-merge-progress.txt"),
+            quote_arg(first),
+            quote_arg(second),
+            filter,
+            maps,
+            encode,
+            audio_codec,
+            quote_arg(dest));
+        return run_logged(command, scratch / "echo-merge.log", {});
+    }
+}
+
+void Logic::merge_renders(fs::path const& first_path, fs::path const& second_path) {
+    // todo
+}
+
+// ffmpeg writes how far it is to a file, -1 = dont know yet
+float Logic::merge_progress() {
+    // TODO
+    return {};
+}
+
+// Taken directly from Silicate (https://git.silicate.dev/silicate/silicate), GPL-3.0.
+void Recorder::silent_change_size(CCSize size) {
+    // TODO
+}
+
+// Taken directly from Silicate (https://git.silicate.dev/silicate/silicate), GPL-3.0.
+void Recorder::resize_shader_layer(CCSize size) {
+    // later
+}
+
+std::optional<CCSize> Recorder::window_pixels() {
+    // later
+    return {};
+}
+
+// the bar & the % were placed for the screens width. a video of another shape has to move them or they sit off centre
+void Recorder::shift_ui(PlayLayer* play, float by) {
+    // later
+}
+
+void Recorder::hold_view() {
+    // TODO
+}
+
+void Recorder::release_view() {
+    // TODO
+}
+
+size_t Recorder::frame_bytes() const {
+    size_t pixels = static_cast<size_t>(width) * static_cast<size_t>(height);
+    return nv12 ? pixels + pixels / 2 : pixels * 4;
+}
+
+namespace {
+    GLuint compileShader(GLenum kind, char const* source) {
+        GLuint shader = glCreateShader(kind);
+        if (!shader)
+            return 0;
+        glShaderSource(shader, 1, &source, nullptr);
+        glCompileShader(shader);
+        GLint ok = 0;
+        glGetShaderiv(shader, GL_COMPILE_STATUS, &ok);
+        if (ok)
+            return shader;
+        glDeleteShader(shader);
+        return 0;
+    }
+
+    GLuint link_program(char const* vertex, char const* fragment) {
+        GLuint vs = compileShader(GL_VERTEX_SHADER, vertex);
+        GLuint frag = compileShader(GL_FRAGMENT_SHADER, fragment);
+        if (!vs || !frag) {
+            if (vs)
+                glDeleteShader(vs);
+            if (frag)
+                glDeleteShader(frag);
+            return 0;
+        }
+        GLuint program = glCreateProgram();
+        glAttachShader(program, vs);
+        glAttachShader(program, frag);
+        glLinkProgram(program);
+        glDeleteShader(vs);
+        glDeleteShader(frag);
+        GLint ok = 0;
+        glGetProgramiv(program, GL_LINK_STATUS, &ok);
+        if (ok)
+            return program;
+        glDeleteProgram(program);
+        return 0;
+    }
+
+    GLuint make_color_target(GLint internal, GLenum format, int width, int height) {
+        GLuint texture = 0;
+        glGenTextures(1, &texture);
+        glBindTexture(GL_TEXTURE_2D, texture);
+        glTexImage2D(GL_TEXTURE_2D, 0, internal, width, height, 0, format, GL_UNSIGNED_BYTE, nullptr);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        return texture;
+    }
+
+    GLuint make_framebuffer(GLuint texture) {
+        GLuint buf = 0;
+        glGenFramebuffers(1, &buf);
+        glBindFramebuffer(GL_FRAMEBUFFER, buf);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, 0);
+        if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+            glDeleteFramebuffers(1, &buf);
+            return 0;
+        }
+        return buf;
+    }
+
+    std::string encoder_flags(std::string const& codec, std::string const& extra, bool with_rate) {
+        auto has = [&](char const* key) {
+            return extra.find(key) != std::string::npos;
+        };
+        std::string flags;
+        if (!has("-preset") && !has("-quality")) {
+            if (codec.find("nvenc") != std::string::npos)
+                flags += " -preset p1";
+            else if (codec.find("amf") != std::string::npos)
+                flags += " -quality speed";
+            else if (codec.find("qsv") != std::string::npos)
+                flags += " -preset veryfast";
+            else if (codec == "libx264" || codec == "libx265")
+                flags += " -preset " + Logic::get().render_preset;
+        }
+        if (with_rate && codec.find("nvenc") != std::string::npos && !has("-rc "))
+            flags += " -rc vbr";
+        return flags;
+    }
+
+    std::string video_rate(std::string const& codec, int bitrate, std::string const& extra) {
+        auto has = [&](char const* key) {
+            return extra.find(key) != std::string::npos;
+        };
+        bool own_rate = has("-crf") || has("-qp") || has("-b:v") || has("-q:v") || has("-cq") || has("-global_quality") || has("-qscale") || has("-rc ");
+        if (own_rate)
+            return encoder_flags(codec, extra, false);
+        if (bitrate > 0)
+            return encoder_flags(codec, extra, true) + fmt::format(" -b:v {}", bitrate);
+        std::string flags;
+        if (!has("-preset") && !has("-quality")) {
+            if (codec.find("nvenc") != std::string::npos)
+                flags += " -preset p1";
+            else if (codec.find("amf") != std::string::npos)
+                flags += " -quality speed";
+            else if (codec.find("qsv") != std::string::npos)
+                flags += " -preset veryfast";
+            else if (codec == "libx264" || codec == "libx265")
+                flags += " -preset " + Logic::get().render_preset;
+        }
+        if (codec.find("nvenc") != std::string::npos)
+            flags += " -rc constqp -qp 0";
+        else if (codec.find("amf") != std::string::npos)
+            flags += " -rc cqp -qp_i 0 -qp_p 0";
+        else if (codec.find("qsv") != std::string::npos)
+            flags += " -global_quality 1";
+        else
+            flags += " -qp 0";
+        return flags;
+    }
+
+    using SwapIntervalFn = BOOL(WINAPI*)(int);
+    using GetSwapIntervalFn = int(WINAPI*)();
+}
+
+void Recorder::draw_full_quad() {
+    // todo
+}
+
+bool Recorder::setup_nv12() {
+    // port this
+    return {};
+}
+
+void Recorder::close_nv12() {
+    // TODO
+}
+
+void Recorder::convert_nv12() {
+    // TODO
+}
+
+void Recorder::uncap_pace() {
+    // todo
+}
+
+void Recorder::restore_pace() {
+    // todo
+}
+
+bool Recorder::open_target() {
+    // TODO
+    return {};
+}
+
+void Recorder::close_target() {
+    // TODO
+}
+
+void Recorder::drawFrame() {
+    // TODO
+}
+
+void Recorder::show_overlay() {
+    // port this
+}
+
+void Recorder::draw_preview(CCSize pixels) {
+    // TODO
+}
+
+void Recorder::draw_progress() {
+    // TODO
+}
+
+bool Recorder::harvest(bool wait) {
+    // TODO
+    return {};
+}
+
+std::vector<uint8_t> Recorder::acquire_frame() {
+    // later
+    return {};
+}
+
+void Recorder::queue_frame(std::vector<uint8_t> frame) {
+    // later
+}
+
+void Recorder::encode_loop() {
+    // TODO
+}
+
+void Recorder::finish_video() {
+    // TODO
+}
+
+bool Recorder::api_available() {
+    // todo
+    return {};
+}
+
+bool Recorder::prefer_api() {
+    // port this
+    return {};
+}
+
+bool Recorder::idle() const {
+    // TODO
+    return {};
+}
+
+bool Recorder::write_out(std::vector<uint8_t> const& frame) {
+    // TODO
+    return {};
+}
+
+void Recorder::go_live() {
+    // TODO
+}
+
+#ifdef ECHO_FFMPEG_API
+std::string Recorder::open_api(int fps) {
+    // port this
+    return {};
+}
+#endif
+
+namespace {
+    bool write_wav(fs::path const& raw, fs::path const& wav, int rate, int channels) {
+        std::ifstream in(raw, std::ios::binary);
+        std::ofstream out(wav, std::ios::binary | std::ios::trunc);
+        if (!in || !out || rate <= 0 || channels <= 0)
+            return false;
+        auto put = [&](auto value) {
+            out.write(reinterpret_cast<char const*>(&value), sizeof(value));
+        };
+        out.write("RIFF", 4);
+        put(uint32_t{ 0 });
+        out.write("WAVEfmt ", 8);
+        put(uint32_t{ 16 });
+        put(uint16_t{ 1 });
+        put(uint16_t{ 2 });
+        put(static_cast<uint32_t>(rate));
+        put(static_cast<uint32_t>(rate) * 4u);
+        put(uint16_t{ 4 });
+        put(uint16_t{ 16 });
+        out.write("data", 4);
+        put(uint32_t{ 0 });
+        auto sample = [](float value) {
+            return static_cast<int16_t>(std::lround((std::isfinite(value) ? std::clamp(value, -1.f, 1.f) : 0.f) * 32767.f));
+        };
+        size_t width = static_cast<size_t>(channels);
+        std::vector<float> block(width * 65536);
+        uint64_t bytes = 0;
+        while (in) {
+            in.read(reinterpret_cast<char*>(block.data()), static_cast<std::streamsize>(block.size() * sizeof(float)));
+            size_t amt = static_cast<size_t>(in.gcount()) / (sizeof(float) * width);
+            if (amt == 0)
+                break;
+            auto pcm = std::views::iota(size_t{ 0 }, amt) | std::views::transform([&](size_t i) {
+                float const* frame = block.data() + i * width;
+                return std::array<int16_t, 2>{ sample(frame[0]), sample(width > 1 ? frame[1] : frame[0]) };
+            }) | std::ranges::to<std::vector>();
+            out.write(reinterpret_cast<char const*>(pcm.data()), static_cast<std::streamsize>(pcm.size() * sizeof(pcm[0])));
+            bytes += amt * 4;
+        }
+        auto size = static_cast<uint32_t>(std::min<uint64_t>(bytes, 0xFFFFFFFFull - 36));
+        out.seekp(4);
+        put(36u + size);
+        out.seekp(40);
+        put(size);
+        return bytes > 0 && out.good();
+    }
+}
+
+void Recorder::save_api_render() {
+    // todo
+}
+
+bool Recorder::mux_audio() {
+    // TODO
+    return {};
+}
+
+namespace {
+    float lvl_fraction(PlayLayer* play, int last_input_frame) {
+        if (!play)
+            return -1.f;
+        if (!play->m_isPlatformer && play->m_player1 && play->m_endPortal) {
+            float end_x = play->m_endPortal->getPositionX();
+            if (end_x > 0.f)
+                return std::clamp(play->m_player1->getPositionX() / end_x, 0.f, 1.f);
+        }
+        if (Logic::get().is_playing() && last_input_frame > 0) {
+            return std::clamp((float)(Logic::get().step_frame) / (float)(last_input_frame), 0.f, 1.f);
+        }
+        return -1.f;
+    }
+
+    std::string clock_text(double seconds) {
+        int total = static_cast<int>(std::max(seconds, 0.0) + 0.5);
+        if (total >= 3600)
+            return fmt::format("{}:{:02}:{:02}", total / 3600, total / 60 % 60, total % 60);
+        return fmt::format("{}:{:02}", total / 60, total % 60);
+    }
+}
+
+RenderStatus Logic::render_status() {
+    // TODO
+    return {};
+}
+
+float Logic::render_wall_delta() {
+    return Recorder::get().wall_delta;
+}
+
+void Logic::sync_render_pause_button() {
+    // TODO
+}
+
+bool Logic::render_uses_screen_shape() {
+    // TODO
+    return {};
+}
+
+int Logic::render_width_for(int width, int height) {
+    // todo
+    return {};
+}
+
+bool Logic::render_active() {
+    return Recorder::get().active || Recorder::get().starting;
+}
+
+bool Logic::render_capturing() {
+    return Recorder::get().active;
+}
+
+bool Logic::render_paused() {
+    return Recorder::get().active && Recorder::get().paused;
+}
+
+bool Logic::render_holds_view() {
+    return Recorder::get().holding;
+}
+
+bool Logic::render_blocks_engine() {
+    return AudioTap::get().attached && !AudioTap::get().engine_open;
+}
+
+bool Logic::render_blocks_mixer() {
+    return AudioTap::get().attached && !AudioTap::get().mixing;
+}
+
+bool Logic::render_should_skip() {
+    // TODO
+    return {};
+}
+
+bool Logic::begin_render_frame() {
+    // TODO
+    return {};
+}
+
+void Logic::hold_render_effects() {
+    AudioTap::get().hold_effects();
+}
+
+void Logic::show_render_overlay() {
+    Recorder::get().show_overlay();
+}
+
+bool Logic::capture_frame() {
+    // TODO
+    return {};
+}
+
+bool Logic::render_batch_more(chrono::steady_clock::time_point started) {
+    // TODO
+    return {};
+}
+
+bool Logic::ffmpeg_ready() {
+    // TODO
+    return {};
+}
+
+void Logic::stop_render() {
+    // TODO
+}
+
+void Logic::start_render() {
+    // port this
+}

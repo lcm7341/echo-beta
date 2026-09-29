@@ -372,6 +372,9 @@ void Logic::sync_death_label(PlayLayer* play) {
     auto const& logic = Logic::get();
     bool dead = play->m_playerDied || (play->m_player1 && play->m_player1->m_isDead) || (play->m_player2 && play->m_player2->m_isDead);
     bool show = !dead && logic.show_death_next && (logic.death_next_p1 || logic.death_next_p2);
+    if (logic.render_hide_labels && Logic::get().render_capturing()) {
+        show = false;
+    }
     std::string text = "Death next frame";
     if (logic.death_next_p1 && logic.death_next_p2)
         text = "Death next frame";

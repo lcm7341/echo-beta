@@ -346,6 +346,9 @@ void Logic::play_click(PlayLayer* play, bool down, bool player1) {
     if (!sounds(kind))
         return;
     float volume = player1 ? logic.clickbot_volume : logic.clickbot_volume_p2;
+    if (Logic::get().render_capturing()) {
+        volume *= std::max(logic.render_sfx, 0.f);
+    }
     Clickbot::get().queued.push_back({ kind_slot(kind, down), volume, player1 });
 }
 

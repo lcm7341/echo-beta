@@ -650,6 +650,9 @@ void GUI::sync_menu_scale() {
         gui.scale_cap = std::min(3.f, gui.max_fitting_scale());
     }
     float scale = value.menu_scale;
+    if (Logic::get().render_active()) scale = std::clamp(scale, 0.35f, gui.scale_cap);
+    else if (!gui.scale_dragging) scale = value.menu_scale = std::clamp(value.menu_scale, 0.35f, gui.scale_cap);
+    else scale = value.menu_scale = std::clamp(value.menu_scale, 0.35f, 3.f);
     if (!GUI::get().has_base) {
         GUI::get().base_style = ImGui::GetStyle();
         GUI::get().base_style._MainScale = 1.f;

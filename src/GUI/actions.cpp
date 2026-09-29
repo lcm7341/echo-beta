@@ -173,6 +173,7 @@ void GUI::apply_no_mirror() {
 }
 
 std::string GUI::render_blocker() {
+    if (Logic::get().ffmpeg_ready()) return {};
 #if ECHO_FFMPEG_API_ENABLED
     return "ffmpeg.exe was not found. Place it next to Geometry Dash, or install the FFmpeg API mod (eclipse.ffmpeg-api).";
 #else

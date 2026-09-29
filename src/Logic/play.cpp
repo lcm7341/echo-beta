@@ -455,6 +455,8 @@ void Logic::poll_advance_hold() {
 }
 
 void Logic::check_advance_pause(PlayLayer* play) {
+    if (!play || play->m_playerDied || Logic::get().render_capturing())
+        return;
     auto& logic = Logic::get();
     if (!logic.pause_before_kill || !logic.is_recording())
         return;
@@ -718,6 +720,17 @@ void Logic::after_frame(PlayLayer* play, float dt) {
     }
     if (play->m_endPortal)
         logic.end_x = play->m_endPortal->getPositionX();
+    if (logic.arm_immediate_restart && play->m_uiLayer && play->m_attemptLabel && !Logic::get().pause_menu_open()) {
+        logic.arm_immediate_restart = false;
+        Loader::get()->queueInMainThread([] {
+            auto* layer = PlayLayer::get();
+            if (!layer || Logic::get().pause_menu_open() || !layer->m_uiLayer || !layer->m_attemptLabel)
+                return;
+            layer->resetLevel();
+        });
+    }
+    if (!Logic::get().render_capturing())
+        Logic::get().update_cps(play);
     if (!logic.present)
         return;
     if (!logic.in_scheduler)
@@ -772,6 +785,7 @@ void Logic::on_play_init(PlayLayer* play) {
         logic.display_fps_locked = true;
     }
     Logic::get().sync_time_scale();
+    Logic::get().reset_opening_music_hold();
     if (logic.seed_override) {
         logic.lvl_seed = logic.seed_override_value;
         logic.lvl_seed_known = true;
@@ -944,6 +958,7 @@ void Logic::onReset(PlayLayer* play) {
     Logic::get().clear_click_hitbox();
     logic.trail_p1.clear();
     logic.trail_p2.clear();
+    Logic::get().reset_opening_music_hold();
     logic.currently_pressing = false;
     logic.death_next_p1 = false;
     logic.death_next_p2 = false;
@@ -1045,6 +1060,8 @@ void Logic::onReset(PlayLayer* play) {
         logic.resume_pending = false;
         play->m_extraDelta = 0.0;
         play->m_resumeTimer = 0;
+        if (!Logic::get().pause_menu_open())
+            play->m_isPaused = false;
         Logic::get().clear_stuck_death(play);
         Logic::get().sync_time_scale();
     }
@@ -1422,6 +1439,7 @@ void Logic::onQuit(PlayLayer*) {
     }
     if (auto* scheduler = CCDirector::sharedDirector()->getScheduler())
         scheduler->setTimeScale(1.f);
+    Logic::get().stop_render();
     Logic::get().save_settings_file();
 }
 
@@ -1476,7 +1494,11 @@ bool Logic::defer_physics() const {
     auto const& logic = Logic::get();
     if (logic.refresh_only)
         return false;
+    if (auto* play = PlayLayer::get(); play && !play->m_started && !Logic::get().render_capturing())
+        return true;
     if (logic.physics_locked())
+        return false;
+    if (Logic::get().render_capturing())
         return false;
     return Logic::get().vanilla_click_physics();
 }
@@ -2167,6 +2189,10 @@ void Logic::apply_rate(int frame) {
     if (next == logic.fps)
         return;
     logic.fps = next;
+    if (logic.display_fps_locked && logic.playback_fps < 1.f && !Logic::get().render_capturing()) {
+        if (auto* director = CCDirector::sharedDirector())
+            director->setAnimationInterval(1.f / next);
+    }
 }
 
 void Logic::normalize_rates() {

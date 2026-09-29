@@ -3,6 +3,7 @@
 // 2 fake players get the real players state copied on & run physics steps, once as if the button is held & once released
 // each path is drawn as lines w/ a marker where it dies
 // predicting must NEVER touch the real attempt: triggers dont fire for real, deaths stay on the fake, the random state is put back after
+// the same thing answers "does the next step kill me" (pause before kill, the autoclicker) & "how long do i live if i flip now" (find best frame)
 #include "Hack/trajectory.hpp"
 #include "Hack/trajectory_path.hpp"
 #include "Logic/logic.hpp"
@@ -460,7 +461,240 @@ void Trajectory::simulate(PlayLayer* play, bool player1, Click click, bool both,
 }
 
 void Trajectory::refresh(PlayLayer* play) {
-    // TODO
+    if (!play || !play->m_started || !play->m_player1 || !node || !fake1 || !fake2)
+        return;
+    auto& logic = Logic::get();
+    if (play->m_hasCompletedLevel || play->m_levelEndAnimationStarted) {
+        if (node->isVisible()) {
+            node->setVisible(false);
+        }
+        park(fake1);
+        park(fake2);
+        if (cached || logic.death_next_p1 || logic.death_next_p2) {
+            cached = false;
+            logic.death_next_p1 = false;
+            logic.death_next_p2 = false;
+            Logic::get().sync_death_label(play);
+        }
+        return;
+    }
+    bool rendering = Logic::get().render_capturing();
+    bool draw = logic.show_traj;
+    bool need_predict = draw;
+    if (!need_predict) {
+        if (node->isVisible()) {
+            node->setVisible(false);
+        }
+        bool pause_kill = logic.pause_before_kill && logic.is_recording();
+        if (!rendering && (logic.show_death_next || pause_kill)) {
+            lookahead(play);
+            Logic::get().check_advance_pause(play);
+            Logic::get().sync_death_label(play);
+            return;
+        }
+        if (cached || logic.death_next_p1 || logic.death_next_p2 || logic.traj_dies_p1 || logic.traj_dies_p2) {
+            cached = false;
+            logic.death_next_p1 = false;
+            logic.death_next_p2 = false;
+            logic.traj_alive_p1 = 0.f;
+            logic.traj_alive_p2 = 0.f;
+            logic.traj_dies_p1 = false;
+            logic.traj_dies_p2 = false;
+            logic.traj_hold_alive_p1 = 0.f;
+            logic.traj_hold_alive_p2 = 0.f;
+            logic.traj_release_alive_p1 = 0.f;
+            logic.traj_release_alive_p2 = 0.f;
+            Logic::get().sync_death_label(play);
+        }
+        return;
+    }
+    Logic::get().seat_overlay(node, play);
+    if (play->m_objectLayer) {
+        if (!fake1->getParent()) {
+            play->m_objectLayer->addChild(fake1);
+        }
+        if (!fake2->getParent()) {
+            play->m_objectLayer->addChild(fake2);
+        }
+    }
+    if (rendering && !logic.show_traj) {
+        node->setVisible(false);
+        park(fake1);
+        park(fake2);
+        Logic::get().death_next_p1 = false;
+        Logic::get().death_next_p2 = false;
+        logic.traj_alive_p1 = 0.f;
+        logic.traj_alive_p2 = 0.f;
+        logic.traj_dies_p1 = false;
+        logic.traj_dies_p2 = false;
+        logic.traj_hold_alive_p1 = 0.f;
+        logic.traj_hold_alive_p2 = 0.f;
+        logic.traj_release_alive_p1 = 0.f;
+        logic.traj_release_alive_p2 = 0.f;
+        Logic::get().sync_death_label(play);
+        return;
+    }
+    park(fake1);
+    park(fake2);
+
+    node->setVisible(draw);
+
+    float saved_seconds = logic.traj_length;
+    int step_limit = 0;
+
+    Key key = make_key(play);
+    key.hold = draw && logic.traj_hold;
+    key.swift = draw && logic.traj_swift;
+    key.release = draw && logic.traj_release;
+    if (cached && key == last_key) {
+        logic.traj_length = saved_seconds;
+        Logic::get().check_advance_pause(play);
+        return;
+    }
+
+    busy = true;
+    phys::prepare_prediction_art();
+    logic.predicting = true;
+    Logic::get().sync_predict_hooks();
+    node->clear();
+    auto snap = [](PlayerObject* body) {
+        return body ? std::pair{ body->m_jumpBuffered, body->m_holdingButtons } : std::pair{ false, gd::map<int, bool>{} };
+    };
+    auto p1_hold = snap(play->m_player1);
+    auto p2_hold = snap(play->m_player2);
+    bool ui1 = false, ui2 = false;
+    int touch1 = -1, touch2 = -1;
+    if (auto* ui = play->m_uiLayer) {
+        ui1 = ui->m_p1Jumping;
+        ui2 = ui->m_p2Jumping;
+        touch1 = ui->m_p1TouchId;
+        touch2 = ui->m_p2TouchId;
+    }
+    auto restore = [&] {
+        auto put = [](PlayerObject* body, std::pair<bool, gd::map<int, bool>> const& hold) {
+            if (!body)
+                return;
+            body->m_jumpBuffered = hold.first;
+            body->m_holdingButtons = hold.second;
+        };
+        put(play->m_player1, p1_hold);
+        put(play->m_player2, p2_hold);
+        if (auto* ui = play->m_uiLayer) {
+            ui->m_p1Jumping = ui1;
+            ui->m_p2Jumping = ui2;
+            ui->m_p1TouchId = touch1;
+            ui->m_p2TouchId = touch2;
+        }
+    };
+
+    bool twoPlayer = play->m_levelSettings && play->m_levelSettings->m_twoPlayerMode;
+    bool dual = play->m_gameState.m_isDualMode && play->m_player2;
+    auto live = [&](bool player2) {
+        if (logic.plays_player(player2)) {
+            return false;
+        }
+        return true;
+    };
+    logic.death_next_p1 = false;
+    logic.death_next_p2 = false;
+    logic.traj_alive_p1 = 0.f;
+    logic.traj_alive_p2 = 0.f;
+    logic.traj_dies_p1 = false;
+    logic.traj_dies_p2 = false;
+    logic.traj_hold_alive_p1 = 0.f;
+    logic.traj_hold_alive_p2 = 0.f;
+    logic.traj_release_alive_p1 = 0.f;
+    logic.traj_release_alive_p2 = 0.f;
+    auto jump_held = [](PlayerObject* body) {
+        if (!body) {
+            return false;
+        }
+        int jump = static_cast<int>(PlayerButton::Jump);
+        auto it = body->m_holdingButtons.find(jump);
+        return it != body->m_holdingButtons.end() && it->second;
+    };
+    auto actual = [&](bool player1) {
+        if (logic.plays_player(!player1)) {
+            return Click::Replay;
+        }
+        PlayerObject* body = player1 ? play->m_player1 : play->m_player2;
+        if (logic.maintain_gravity && logic.records_player(!player1) && body && body->m_isDart) {
+            return Logic::get().physical_hold(play, !player1) ? Click::Hold : Click::Release;
+        }
+        return jump_held(body) ? Click::Hold : Click::Release;
+    };
+    constexpr int MEASURE_LIVE = 1, MEASURE_HOLD = 2, MEASURE_RELEASE = 4;
+    auto run = [&](bool player1, Click click, bool both, bool show, int measure) {
+        simulate(play, player1, click, both, show, step_limit, measure);
+    };
+    auto modes = [&](bool player1, bool both) {
+        auto act = actual(player1);
+        auto fire = [&](Click click, bool show) {
+            int measure = 0;
+            if (click == act) {
+                measure |= MEASURE_LIVE;
+            }
+            if (logic.pause_at_traj_length && click == Click::Hold) {
+                measure |= MEASURE_HOLD;
+            }
+            if (logic.pause_at_traj_length && click == Click::Release) {
+                measure |= MEASURE_RELEASE;
+            }
+            if (!show && measure == 0)
+                return;
+            run(player1, click, both, show, measure);
+        };
+        if (play->m_playerDied || rendering) {
+            fire(act, draw);
+            return;
+        }
+        bool show_hold = draw && logic.traj_hold, show_swift = draw && logic.traj_swift;
+        bool show_release = draw && logic.traj_release;
+        bool need_hold = show_hold || logic.pause_at_traj_length;
+        bool need_release = show_release || logic.pause_at_traj_length;
+        if (need_hold) {
+            fire(Click::Hold, show_hold);
+        }
+        if (show_swift) {
+            fire(Click::Swift, true);
+        }
+        if (need_release) {
+            fire(Click::Release, show_release);
+        }
+        bool covered = (act == Click::Hold && need_hold) || (act == Click::Swift && show_swift) || (act == Click::Release && need_release);
+        if (!covered) {
+            fire(act, draw);
+        }
+    };
+    bool hide1 = Logic::get().traj_player_hidden(false), hide2 = Logic::get().traj_player_hidden(true);
+    bool linked = dual && !twoPlayer && !hide1 && !hide2;
+    if (!hide1) {
+        if (!rendering && !play->m_playerDied && logic.plays_player(false)) {
+            run(true, Click::Replay, linked, draw, MEASURE_LIVE);
+        }
+        if (live(false) || rendering || play->m_playerDied) {
+            modes(true, linked);
+        }
+    }
+    bool second = dual && !hide2 && !linked && (twoPlayer || live(true) || logic.plays_player(true) || play->m_playerDied);
+    if (second) {
+        if (!rendering && !play->m_playerDied && logic.plays_player(true)) {
+            run(false, Click::Replay, false, draw, MEASURE_LIVE);
+        }
+        if (live(true) || rendering || play->m_playerDied) {
+            modes(false, false);
+        }
+    }
+    restore();
+    Logic::get().sync_death_label(play);
+    Logic::get().check_advance_pause(play);
+
+    busy = false;
+    logic.predicting = false;
+    Logic::get().sync_predict_hooks();
+    cached = true;
+    last_key = key;
+    logic.traj_length = saved_seconds;
 }
 
 Trajectory::Click Trajectory::next_click(PlayLayer* play, bool player1) const {

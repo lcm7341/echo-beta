@@ -420,6 +420,7 @@ class $modify(EchoPlayLayer, PlayLayer) {
             return false;
         if (Logic::get().practice_music_hack)
             m_practiceMusicSync = true;
+        Logic::get().prepare_lvl_view(this);
         Trajectory::get().attach(this);
         Logic::get().on_play_init(this);
         phys::prepare_prediction_art();
@@ -451,6 +452,7 @@ class $modify(EchoPlayLayer, PlayLayer) {
         PlayLayer::setupHasCompleted();
         if (Logic::get().render_queued) {
             Logic::get().render_queued = false;
+            Logic::get().start_render();
         }
     }
 
@@ -584,7 +586,11 @@ class $modify(EchoPlayLayer, PlayLayer) {
     }
 
     void showCompleteEffect() {
+        if (Logic::get().render_capturing())
+            Logic::get().hold_render_effects();
         PlayLayer::showCompleteEffect();
+        if (Logic::get().render_capturing())
+            Logic::get().hold_render_effects();
     }
 
     void playEndAnimationToPos(CCPoint position) {
@@ -1143,6 +1149,8 @@ class $modify(EchoGameLayer, GJBaseGameLayer) {
             player1 = !player1;
         echo::step::trace_button('H', down, player1);
         auto* live = Logic::as_play(this);
+        if (!down && ((live && live->m_isPaused) || Logic::get().pause_menu_open()) && (value.is_playing() || value.is_recording()))
+            return;
         int jump_early = static_cast<int>(PlayerButton::Jump);
         bool jump_button_early = button == 0 || button == jump_early;
         if (value.suppress_auto_hold && jump_button_early && !value.applying_playback && !value.restoring_holds && !value.maintaining_gravity) {
@@ -1357,6 +1365,8 @@ class $modify(EchoGameLayer, GJBaseGameLayer) {
 class $modify(EchoUILayer, UILayer) {
 
     bool ccTouchBegan(CCTouch* touch, CCEvent* event) {
+        if (Logic::get().pause_menu_open())
+            return false;
         if (Logic::get().suppress_auto_hold)
             return false;
         return UILayer::ccTouchBegan(touch, event);
@@ -1560,6 +1570,8 @@ class $modify(EchoPlayerObject, PlayerObject) {
     void releaseButton(PlayerButton button) {
         auto* play = PlayLayer::get();
         auto& logic = Logic::get();
+        if (play && !Trajectory::get().isFake(this) && (logic.is_playing() || logic.is_recording()) && (play->m_isPaused || Logic::get().pause_menu_open()))
+            return;
         if (!Trajectory::get().isFake(this))
             echo::step::trace_button('R', false, static_cast<int>(button));
         note_partner();
@@ -1633,6 +1645,8 @@ class $modify(EchoPlayerObject, PlayerObject) {
             PlayerObject::releaseAllButtons();
             return;
         }
+        if ((logic.is_playing() || logic.is_recording()) && (play->m_isPaused || Logic::get().pause_menu_open()))
+            return;
         bool second = this == play->m_player2;
         bool only2 = logic.records_player(true) && !logic.records_player(false);
         bool only1 = logic.records_player(false) && !logic.records_player(true);
@@ -1736,6 +1750,96 @@ class $modify(EchoSchedulerDepth, CCScheduler) {
 };
 
 class $modify(EchoScheduler, CCScheduler) {
+    void update(float dt) {
+        Logic::get().sync_predict_hooks();
+        keep_menu_cursor();
+        auto& logic = Logic::get();
+        if (logic.refresh_only) {
+            CCScheduler::update(dt);
+            return;
+        }
+        auto* play = PlayLayer::get();
+        if (logic.editor_testing && !LevelEditorLayer::get()) {
+            logic.editor_testing = false;
+            logic.editor_paused = false;
+        }
+        GJBaseGameLayer* layer = play;
+        if (!layer && logic.editor_testing)
+            layer = LevelEditorLayer::get();
+        if (layer) {
+            restore_tilt(layer->m_player1);
+            restore_tilt(layer->m_player2);
+        }
+        bool pause_menu = Logic::get().pause_menu_open();
+        // releasing every frame broke dragging in the menu
+        static bool was_paused = false;
+        if (pause_menu && play) {
+            play->m_isPaused = true;
+            if (!was_paused)
+                GUI::get().release_stuck_mouse();
+        }
+        was_paused = pause_menu && play;
+        if (logic.resume_pending && play && !pause_menu) {
+            logic.resume_pending = false;
+            play->m_isPaused = false;
+            play->m_resumeTimer = 0;
+            play->m_extraDelta = 0.0;
+            logic.carry = 0.f;
+            if (auto* director = CCDirector::sharedDirector())
+                director->setNextDeltaTimeZero(false);
+            Logic::get().retain_playback_hold(play);
+        }
+        if (Logic::get().render_capturing() && logic.frame_advance) {
+            logic.frame_advance = false;
+            logic.holding_advance = false;
+            logic.advance_queued = false;
+        }
+        Logic::get().poll_advance_hold();
+        Logic::get().poll_hold_block();
+        Logic::get().poll_autosave();
+        Logic::get().sync_time_scale();
+        Logic::get().sync_playback_fps();
+        Logic::get().sync_music_pitch();
+
+        if (play && !pause_menu && play->m_tryPlaceCheckpoint && play->m_started && play->m_player1 && !play->m_playerDied) {
+            play->m_tryPlaceCheckpoint = false;
+            play->markCheckpoint();
+        }
+
+        logic.save_shown_step = logic.frame_advance && logic.backstep;
+        int frames_before = logic.step_frame;
+        logic.in_scheduler = true;
+        Logic::get().run_frame(layer, dt, [this](float delta) {
+            CCScheduler::update(delta);
+        });
+        logic.in_scheduler = false;
+        logic.save_shown_step = false;
+        if (layer) {
+            bool paused = logic.editor_paused;
+            bool dead = false;
+            if (auto* live = Logic::as_play(layer)) {
+                paused = paused || live->m_isPaused;
+                dead = live->m_playerDied;
+            }
+            if (!paused) {
+                if (logic.hitbox_trail_visual && !dead && logic.step_frame != frames_before) {
+                    ++logic.visual_frame;
+                    Logic::get().add_trail_point(layer);
+                }
+            }
+            Logic::get().draw_hitboxes(layer);
+        }
+        else if (auto* editor = LevelEditorLayer::get(); editor && logic.show_hitboxes) {
+            Logic::get().draw_hitboxes(editor);
+        }
+        if (logic.refresh_queued)
+            Logic::get().flush_visual_refresh();
+        Logic::get().flush_clicks();
+        if (layer) {
+            present_tilt(layer->m_player1);
+            present_tilt(layer->m_player2);
+        }
+    }
 };
 
 class $modify(EchoGameObject, GameObject) {
@@ -2003,18 +2107,57 @@ class $modify(EchoHardStreak, HardStreak) {
 };
 
 class $modify(EchoDirector, CCDirector) {
+    void drawScene() {
+        auto& logic = Logic::get();
+        logic.sync_render_pause_button();
+        if (auto* play = PlayLayer::get(); play && (logic.show_hitboxes || logic.show_traj)) {
+            logic.sync_overlay_seats(play);
+        }
+        if (!logic.render_capturing()) {
+            auto started = chrono::steady_clock::now();
+            CCDirector::drawScene();
+            logic.note_frame_work(chrono::duration<double>(chrono::steady_clock::now() - started).count());
+            return;
+        }
+        auto started = chrono::steady_clock::now();
+        auto advance = [&] {
+            bool capture = logic.begin_render_frame();
+            if (capture)
+                logic.render_frame_game_step = logic.render_game_step();
+            if (!m_bPaused && m_pScheduler)
+                m_pScheduler->update(capture ? logic.render_frame_game_step : logic.render_paused() ? 0.f
+                                                                                                    : logic.render_wall_delta());
+            if (auto* play = PlayLayer::get(); play && capture && (logic.show_hitboxes || logic.show_traj)) {
+                logic.sync_overlay_seats(play);
+            }
+            bool switched = m_pNextScene != nullptr;
+            if (switched)
+                setNextScene();
+            return capture && logic.capture_frame() && !switched;
+        };
+        while (advance() && logic.render_batch_more(started)) {
+        }
+        logic.show_render_overlay();
+        m_pobOpenGLView->swapBuffers();
+    }
 };
 
 class $modify(EchoEGLView, CCEGLView) {
     void setFrameSize(float width, float height) {
+        if (Logic::get().render_holds_view())
+            return;
         CCEGLView::setFrameSize(width, height);
     }
 
     void onGLFWframebuffersize(GLFWwindow* window, int width, int height) {
+        if (Logic::get().render_holds_view())
+            return;
         CCEGLView::onGLFWframebuffersize(window, width, height);
     }
 
     void onGLFWWindowSizeFunCallback(GLFWwindow* window, int width, int height) {
+        if (Logic::get().render_holds_view())
+            return;
         CCEGLView::onGLFWWindowSizeFunCallback(window, width, height);
     }
 
@@ -2027,11 +2170,15 @@ class $modify(EchoEGLView, CCEGLView) {
 
 class $modify(EchoAudioEngine, FMODAudioEngine) {
     void update(float dt) {
+        if (Logic::get().render_blocks_engine())
+            return;
         FMODAudioEngine::update(dt);
     }
 };
 
 FMOD_RESULT echo_mixer_update(FMOD::System* self) {
+    if (Logic::get().render_blocks_mixer())
+        return FMOD_OK;
     return self->update();
 }
 
