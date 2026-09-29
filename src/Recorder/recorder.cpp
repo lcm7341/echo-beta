@@ -1792,8 +1792,60 @@ void Recorder::save_api_render() {
 }
 
 bool Recorder::mux_audio() {
-    // TODO
-    return {};
+    auto& tap = AudioTap::get();
+    std::error_code error;
+    if (audio.empty()) {
+        return true;
+    }
+    bool has_audio = frames > 0 && tap.written > 0 && tap.rate > 0 && tap.channels > 0 && fs::exists(output, error);
+    if (!has_audio) {
+        fs::remove(audio, error);
+        return true;
+    }
+    auto folder = output.parent_path();
+    auto log = folder / "echo-ffmpeg.log";
+    auto temp = folder / (output.stem().string() + ".part" + output.extension().string());
+    bool lossless = Logic::get().render_bitrate <= 0;
+    auto extension = output.extension().string();
+    std::transform(extension.begin(), extension.end(), extension.begin(), [](unsigned char c) {
+        return static_cast<char>(std::tolower(c));
+    });
+    std::string audio_codec = extension == ".webm" ? "-c:a libopus -b:a 320k" : lossless ? "-c:a flac"
+                                                                                         : "-c:a aac -b:a 320k";
+    long long source_rate = std::max(1ll, std::llround((double)(tap.rate) * std::max(audio_speed, 0.01f)));
+    std::string command = fmt::format(
+        "\"{}\" -y -nostdin -loglevel error -i \"{}\" -f f32le -ar {} -ac {} -i \"{}\" -map 0:v:0 -map 1:a:0 -c:v copy {} -ar {} -ac 2 -muxdelay 0 -muxpreload 0 -shortest \"{}\"",
+        Recorder::get().ffmpeg_path(),
+        output.string(),
+        source_rate,
+        tap.channels,
+        audio.string(),
+        audio_codec,
+        tap.rate,
+        temp.string());
+    std::string failed = Recorder::get().run_hidden(command, log);
+    fs::remove(log, error);
+    if (failed.empty()) {
+        fs::rename(temp, output, error);
+        if (error) {
+            failed = "could not replace the video";
+        }
+    }
+    if (failed.empty()) {
+        fs::remove(audio, error);
+        return true;
+    }
+    fs::remove(temp, error);
+    auto wav = output.parent_path() / (output.stem().string() + ".wav");
+    if (write_wav(audio, wav, static_cast<int>(source_rate), tap.channels)) {
+        fs::remove(audio, error);
+        failed += "; audio kept in " + wav.filename().string();
+    }
+    else {
+        failed += "; raw audio kept in " + audio.filename().string();
+    }
+    Logic::get().message = "Video saved, audio mux failed: " + failed;
+    return false;
 }
 
 namespace {
