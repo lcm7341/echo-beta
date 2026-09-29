@@ -3,6 +3,7 @@
 // gd draws into a texture at the videos size, 1 fixed step per frame, so the video is smooth no matter how slow the pc is
 // the window keeps its real size while gd is told it has the videos size, & the shader layer is resized to match (silicate)
 // audio is tapped off gds own mixer (AudioTap): frozen between frames & moved on by exactly 1 frame of sound each time,
+//   so it cant drift from the picture. it is muxed into the video in a 2nd pass
 #include "GUI/gui.hpp"
 #include "Recorder/stereo_audio.hpp"
 #include "Logic/conversions/codecs.hpp"
@@ -1950,8 +1951,25 @@ bool Logic::render_should_skip() {
 }
 
 bool Logic::begin_render_frame() {
-    // TODO
-    return {};
+    log::debug("begin render frame");
+    auto& film = Recorder::get();
+    if (!film.active) {
+        return false;
+    }
+    auto now = chrono::steady_clock::now();
+    double gap = film.ticked ? chrono::duration<double>(now - film.last_tick).count() : 0.0;
+    film.last_tick = now;
+    film.ticked = true;
+    film.wall_delta = (float)(std::clamp(gap, 0.0, 0.25));
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &film.screen_fbo);
+    ++film.seen_frames;
+    film.hold_view();
+    bool capture = !Logic::get().render_should_skip();
+    if (capture) {
+        film.busy_seconds += film.wall_delta;
+        AudioTap::get().hold_effects();
+    }
+    return capture;
 }
 
 void Logic::hold_render_effects() {
@@ -1963,24 +1981,263 @@ void Logic::show_render_overlay() {
 }
 
 bool Logic::capture_frame() {
-    // TODO
-    return {};
+    auto& film = Recorder::get();
+    auto* play = PlayLayer::get();
+    if (!film.active || !play) {
+        return false;
+    }
+    auto const& logic = Logic::get();
+    float dt = Logic::get().render_step();
+    if (play->m_hasCompletedLevel) {
+        film.endTime += dt;
+        if (film.endTime >= logic.render_after_end) {
+            bool leave = logic.render_auto_exit;
+            Logic::get().stop_render();
+            if (leave) {
+                Loader::get()->queueInMainThread([] {
+                    if (auto* layer = PlayLayer::get()) {
+                        layer->onQuit();
+                    }
+                });
+            }
+            return false;
+        }
+    }
+    float fadeIn = logic.render_fade_in <= 0.f ? 1.f : std::clamp((float)(film.frames) * dt / logic.render_fade_in, 0.f, 1.f);
+    float fadeOut = 1.f;
+    if (play->m_hasCompletedLevel && logic.render_fade_out > 0.f) {
+        fadeOut = std::clamp((logic.render_after_end - film.endTime) / logic.render_fade_out, 0.f, 1.f);
+    }
+    film.fade = std::min(fadeIn, fadeOut);
+    if (film.start_fraction < 0.f) {
+        film.start_fraction = lvl_fraction(play, film.last_input_frame);
+    }
+    AudioTap::get().advance(dt * film.audio_speed, film.fade);
+    film.drawFrame();
+    ++film.frames;
+    if (film.broken) {
+        std::string reason = film.use_api ? "Encoding failed: " + film.failure : std::string("The render pipe closed");
+        Logic::get().stop_render();
+        Logic::get().notify(reason, false);
+    }
+    return true;
 }
 
 bool Logic::render_batch_more(chrono::steady_clock::time_point started) {
-    // TODO
-    return {};
+    return false;
 }
 
 bool Logic::ffmpeg_ready() {
-    // TODO
-    return {};
+    log::debug("ffmpeg ready");
+    return fs::exists(Recorder::get().game_directory() / "ffmpeg.exe") || Recorder::api_available();
 }
 
 void Logic::stop_render() {
-    // TODO
+    log::debug("stop render");
+    auto& film = Recorder::get();
+    if (film.active && film.frames > 0) {
+        double frames = (double)(film.frames);
+        double wall = chrono::duration<double>(chrono::steady_clock::now() - g_timing.began).count();
+        auto each = [frames](std::atomic<long long> const& ns) {
+            return (double)(ns.load()) / 1e6 / frames;
+        };
+    }
+    if (film.starting && !film.active) {
+        film.cancel = true;
+        if (film.video != INVALID_HANDLE_VALUE) {
+            CancelIoEx(film.video, nullptr);
+        }
+        Logic::get().message = "Render canceled";
+        return;
+    }
+    if (film.idle())
+        return;
+    film.starting = false;
+    film.cancel = false;
+    film.active = false;
+    Logic::get().render_speed_locked = 0.f;
+    film.restore_pace();
+    AudioTap::get().detach();
+    film.finish_video();
+    film.close_target();
+    film.release_view();
+    if (film.use_api) {
+        film.save_api_render();
+        return;
+    }
+    bool muxed = film.mux_audio();
+    if (muxed) {
+        Logic::get().message = "Render stopped";
+    }
 }
 
 void Logic::start_render() {
-    // port this
+    auto& film = Recorder::get();
+    if (film.active || film.starting)
+        return;
+    if (film.saving) {
+        Logic::get().notify("Still saving the last render", false);
+        return;
+    }
+    auto* play = PlayLayer::get();
+    auto* director = CCDirector::sharedDirector();
+    auto* view = director ? director->getOpenGLView() : nullptr;
+    if (!play || !view) {
+        Logic::get().render_queued = true;
+        Logic::get().notify("Rendering starts when you enter a level", true);
+        return;
+    }
+    auto& logic = Logic::get();
+    int height = std::max(logic.render_height, 2) & ~1;
+    int width = std::max(Logic::get().render_width_for(logic.render_width, height), 2) & ~1;
+    if (width > 7680 || height > 4320) {
+        Logic::get().notify("Render size is too large. Use 7680x4320 or smaller.", false);
+        return;
+    }
+    int fps = std::max(logic.render_fps, 1);
+    std::string ext = logic.render_extension.empty() ? "mp4" : logic.render_extension;
+    if (ext.front() == '.') {
+        ext.erase(ext.begin());
+    }
+    logic.render_speed_locked = 0.f;
+    film.audio_speed = Logic::get().render_speed();
+    auto folder = Logic::get().save_root() / "renders";
+    std::error_code folder_error;
+    fs::create_directories(folder, folder_error);
+    if (folder_error || !fs::is_directory(folder, folder_error)) {
+        Logic::get().notify("Could not create the renders folder", false);
+        return;
+    }
+    auto output = ReplayIO::unique_file(folder, ReplayIO::sanitize(Logic::get().render_file_stem()), "." + ext);
+    film.width = width;
+    film.height = height;
+    film.use_api = Recorder::prefer_api();
+#ifdef ECHO_FFMPEG_API
+    if (film.use_api && !Recorder::api_available()) {
+        logic.ffmpeg_missing = true;
+        logic.message = "FFmpeg API is not installed";
+        Logic::get().notify("Rendering needs the FFmpeg API mod. Install it from the Geode mod index.", false);
+        return;
+    }
+#endif
+    if (!film.open_target()) {
+        film.close_target();
+        Logic::get().notify("Could not create the render target", false);
+        return;
+    }
+    auto arm = [&] {
+        film.output = output;
+        film.audio = folder / (output.stem().string() + ".audio.raw");
+        film.paused = false;
+        film.frames = 0;
+        g_timing.reset();
+        film.seen_frames = 0;
+        film.endTime = 0.f;
+        film.fade = 1.f;
+        film.cancel = false;
+        film.broken = false;
+        film.failure.clear();
+        film.ticked = false;
+        film.wall_delta = 0.f;
+        film.busy_seconds = 0.0;
+        film.start_fraction = -1.f;
+        film.last_input_frame = logic.inputs.empty() ? 0 : std::ranges::max(logic.inputs, {}, &Frame::number).number;
+        logic.ffmpeg_missing = false;
+        logic.render_queued = false;
+        logic.frame_advance = false;
+        logic.holding_advance = false;
+        logic.advance_queued = false;
+    };
+#ifdef ECHO_FFMPEG_API
+    if (film.use_api) {
+        film.output = output;
+        if (auto failed = film.open_api(fps); !failed.empty()) {
+            film.close_target();
+            logic.message = "FFmpeg API failed: " + failed;
+            Logic::get().notify(logic.message, false);
+            return;
+        }
+        arm();
+        film.go_live();
+        return;
+    }
+#endif
+    DWORD id = GetTickCount();
+    std::string video_name = fmt::format("\\\\.\\pipe\\echo-film-v-{}", id);
+    DWORD pipe_mode = PIPE_ACCESS_OUTBOUND | FILE_FLAG_OVERLAPPED;
+    size_t frame_bytes = film.frame_bytes();
+    DWORD video_cap = static_cast<DWORD>(std::min(std::max(frame_bytes * 4, frame_bytes), static_cast<size_t>(256u << 20)));
+    film.video = CreateNamedPipeA(video_name.c_str(), pipe_mode, PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT, 1, video_cap, 0, 0, nullptr);
+    if (film.video == INVALID_HANDLE_VALUE) {
+        film.close_target();
+        Logic::get().notify("Could not open the render pipe", false);
+        return;
+    }
+    std::string codec = logic.render_codec.empty() ? "libx264" : logic.render_codec;
+    bool hardware = codec.find("nvenc") != std::string::npos || codec.find("amf") != std::string::npos || codec.find("qsv") != std::string::npos;
+    char const* out_pix = logic.render_bitrate <= 0 && !hardware ? "yuv444p" : "yuv420p";
+    std::string color_fix = logic.render_color_fix && !film.nv12 ? "-vf colorspace=all=bt709:iall=bt470bg:fast=1 " : "";
+    auto has_arg = [&](char const* key) {
+        return logic.render_args.find(key) != std::string::npos;
+    };
+    std::string pix = has_arg("-pix_fmt") ? std::string() : fmt::format(" -pix_fmt {}", out_pix);
+    std::string color = has_arg("-colorspace") || has_arg("-color_primaries") || has_arg("-color_trc") || has_arg("-color_range")
+                            ? std::string()
+                            : " -colorspace bt709 -color_primaries bt709 -color_trc bt709 -color_range tv";
+    std::string extra = logic.render_args.empty() ? std::string() : " " + logic.render_args;
+    std::string command = fmt::format(
+        "\"{}\" -y -nostdin -loglevel error -f rawvideo -pix_fmt {} -s {}x{} -r {} -probesize 32 -analyzeduration 0 -fflags nobuffer -i {} -an "
+        "{}-c:v {}{}{}{}{} \"{}\"",
+        Recorder::get().ffmpeg_path(),
+        film.nv12 ? "nv12" : "bgra",
+        width,
+        height,
+        fps,
+        video_name,
+        color_fix,
+        codec,
+        video_rate(codec, logic.render_bitrate, logic.render_args),
+        pix,
+        color,
+        extra,
+        output.string());
+    STARTUPINFOA startup{};
+    startup.cb = sizeof(startup);
+    startup.dwFlags = STARTF_USESHOWWINDOW;
+    startup.wShowWindow = SW_HIDE;
+    PROCESS_INFORMATION process{};
+    std::vector<char> mutable_command(command.begin(), command.end());
+    mutable_command.push_back('\0');
+    if (!CreateProcessA(nullptr, mutable_command.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, nullptr, &startup, &process)) {
+        film.close_target();
+        Recorder::get().close_handle(film.video);
+        Logic::get().ffmpeg_missing = true;
+        Logic::get().message = "ffmpeg.exe was not found";
+        Logic::get().notify("ffmpeg.exe was not found. Use the download link on the Render tab, then place ffmpeg.exe next to Geometry Dash.", false);
+        GUI::get().reveal_menu();
+        return;
+    }
+    CloseHandle(process.hThread);
+    film.process = process.hProcess;
+    arm();
+    film.starting = true;
+    logic.message = "Starting render...";
+    std::thread([] {
+        bool ok = Recorder::get().connect_pipe(Recorder::get().video);
+        Loader::get()->queueInMainThread([ok] {
+            auto& film = Recorder::get();
+            bool canceled = film.cancel;
+            film.starting = false;
+            film.cancel = false;
+            if (!ok || canceled) {
+                Logic::get().stop_render();
+                if (!ok && !canceled) {
+                    Logic::get().message = "ffmpeg did not connect";
+                    Logic::get().notify("ffmpeg did not connect", false);
+                }
+                return;
+            }
+            film.go_live();
+        });
+    }).detach();
 }
