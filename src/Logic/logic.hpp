@@ -831,7 +831,15 @@ public:
 	double frame_work = 0.0;
 	void draw_overlay(PlayLayer* play);
 	void sync_death_label(PlayLayer* play);
+	void apply_layout(PlayLayer* play);
+	void draw_layout_art(PlayLayer* play);
 	static CCRect object_hitbox(GameObject* object);
+	void clear_layout_hidden();
+	bool layout_active();
+	void paint_layout_colors(PlayLayer* play);
+	void paint_layout_channels(GJEffectManager* effects);
+	void style_layout_object(GameObject* object);
+	void style_layout_glow(GameObject* object);
 	void draw_hitboxes(GJBaseGameLayer* play);
 	void seat_overlay(CCNode* node, GJBaseGameLayer* play);
 	void sync_overlay_seats(GJBaseGameLayer* play);

@@ -416,6 +416,7 @@ class $modify(EchoPlayLayer, PlayLayer) {
         clear_tilt();
         if (Trajectory::get().attached())
             Trajectory::get().detach();
+        Logic::get().clear_layout_hidden();
         if (!PlayLayer::init(level, useReplay, dontCreateObjects))
             return false;
         if (Logic::get().practice_music_hack)
@@ -442,9 +443,16 @@ class $modify(EchoPlayLayer, PlayLayer) {
 
     void updateVisibility(float dt) {
         PlayLayer::updateVisibility(dt);
+        Logic::get().paint_layout_colors(this);
+        Logic::get().draw_layout_art(this);
     }
 
     void addObject(GameObject* object) {
+        if (!Logic::get().layout_active()) {
+            PlayLayer::addObject(object);
+            return;
+        }
+        Logic::get().style_layout_object(object);
         PlayLayer::addObject(object);
     }
 
@@ -457,6 +465,8 @@ class $modify(EchoPlayLayer, PlayLayer) {
     }
 
     void updateColor(ccColor3B& color, float fadeTime, int colorID, bool blending, float opacity, ccHSVValue& copyHSV, int colorIDToCopy, bool copyOpacity, EffectGameObject* callerObject, int unk1, int unk2) {
+        if (Logic::get().layout_active())
+            return;
         PlayLayer::updateColor(color, fadeTime, colorID, blending, opacity, copyHSV, colorIDToCopy, copyOpacity, callerObject, unk1, unk2);
     }
 
@@ -1339,10 +1349,16 @@ class $modify(EchoGameLayer, GJBaseGameLayer) {
     }
 
     void createBackground(int background) {
+        if (Logic::get().layout_active() && !Logic::get().layout_use_regular_bg)
+            background = 13;
         GJBaseGameLayer::createBackground(background);
     }
 
     void createMiddleground(int middleground) {
+        if (!Logic::get().layout_active() || !Logic::get().layout_use_regular_bg) {
+            GJBaseGameLayer::createMiddleground(middleground);
+            return;
+        }
         if (m_middleground) {
             m_middleground->removeFromParent();
             m_middleground = nullptr;
@@ -1350,14 +1366,22 @@ class $modify(EchoGameLayer, GJBaseGameLayer) {
     }
 
     void createGroundLayer(int ground, int line) {
+        if (!Logic::get().layout_active() || !Logic::get().layout_use_regular_bg) {
+            GJBaseGameLayer::createGroundLayer(ground, line);
+            return;
+        }
         GJBaseGameLayer::createGroundLayer(18, 2);
     }
 
     void updateColor(ccColor3B& color, float fadeTime, int colorID, bool blending, float opacity, ccHSVValue& copyHSV, int colorIDToCopy, bool copyOpacity, EffectGameObject* callerObject, int unk1, int unk2) {
+        if (Logic::get().layout_active())
+            return;
         GJBaseGameLayer::updateColor(color, fadeTime, colorID, blending, opacity, copyHSV, colorIDToCopy, copyOpacity, callerObject, unk1, unk2);
     }
 
     void triggerGradientCommand(GradientTriggerObject* object) {
+        if (Logic::get().layout_active())
+            return;
         GJBaseGameLayer::triggerGradientCommand(object);
     }
 };
@@ -1869,6 +1893,7 @@ class $modify(EchoGameObject, GameObject) {
 
     void addGlow(gd::string frame) {
         GameObject::addGlow(std::move(frame));
+        Logic::get().style_layout_glow(this);
     }
 };
 
@@ -2073,16 +2098,29 @@ $execute {
 
 class $modify(EchoShaderLayer, ShaderLayer) {
     void performCalculations() {
+        if (Logic::get().layout_active()) {
+            m_state.m_usesShaders = false;
+            return;
+        }
         ShaderLayer::performCalculations();
     }
 };
 
 class $modify(EchoEffectManager, GJEffectManager) {
     void updateEffects(float dt) {
+        if (Logic::get().layout_active()) {
+            m_pulseEffectMap.clear();
+            m_pulseEffectVector.clear();
+            m_opacityEffectMap.clear();
+        }
         GJEffectManager::updateEffects(dt);
+        if (Logic::get().layout_active())
+            Logic::get().paint_layout_channels(this);
     }
 
     float opacityModForGroup(int id) {
+        if (Logic::get().layout_active())
+            return 1.f;
         return GJEffectManager::opacityModForGroup(id);
     }
 };

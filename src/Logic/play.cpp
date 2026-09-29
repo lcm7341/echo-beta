@@ -733,6 +733,7 @@ void Logic::after_frame(PlayLayer* play, float dt) {
         Logic::get().update_cps(play);
     if (!logic.present)
         return;
+    Logic::get().apply_layout(play);
     if (!logic.in_scheduler)
         Logic::get().draw_hitboxes(play);
     Logic::get().draw_overlay(play);
@@ -959,6 +960,14 @@ void Logic::onReset(PlayLayer* play) {
     logic.trail_p1.clear();
     logic.trail_p2.clear();
     Logic::get().reset_opening_music_hold();
+    if (!Logic::get().layout_active()) {
+        for (auto* obj : logic.hidden_decorations) {
+            if (obj)
+                obj->m_isHide = false;
+        }
+        logic.hidden_decorations.clear();
+        logic.layout_styled = false;
+    }
     logic.currently_pressing = false;
     logic.death_next_p1 = false;
     logic.death_next_p2 = false;

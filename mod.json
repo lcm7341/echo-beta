@@ -85,6 +85,13 @@
 			"default": "None",
 			"category": "gameplay"
 		},
+		"key-layout": {
+			"type": "keybind",
+			"platforms": ["win"],
+			"name": "Layout mode",
+			"default": "None",
+			"category": "gameplay"
+		},
 		"key-hitboxes": {
 			"type": "keybind",
 			"platforms": ["win"],
