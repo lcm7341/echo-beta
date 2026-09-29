@@ -1005,5 +1005,113 @@ void GUI::draw_clickbot() {
 }
 
 void GUI::draw_render() {
-    // TODO
+    auto& value = Logic::get();
+    GUI::get().section_label("Capture");
+    if (auto blocker = GUI::get().render_blocker(); !blocker.empty()) {
+        value.ffmpeg_missing = true;
+        if (ImGui::BeginPopupModal("Render Settings", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+            ImGui::CloseCurrentPopup();
+            ImGui::EndPopup();
+        }
+        ImGui::TextWrapped("%s", blocker.c_str());
+        if (ImGui::Button("Download FFmpeg")) {
+            geode::utils::web::openLinkInBrowser("https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip");
+        }
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Place ffmpeg.exe next to Geometry Dash once downloaded!");
+        return;
+    }
+    value.ffmpeg_missing = false;
+    bool recording = Logic::get().render_active();
+    if (recording) {
+        if (ImGui::Button("Stop")) Logic::get().stop_render();
+    } else if (PlayLayer::get()) {
+        if (ImGui::Button("Start Here")) Logic::get().start_render();
+    } else if (value.render_queued) {
+        ImGui::TextUnformatted("Waiting to enter a level...");
+        if (ImGui::Button("Cancel")) value.render_queued = false;
+    } else if (ImGui::Button("Start")) {
+        Logic::get().start_render();
+    }
+    ImGui::SameLine();
+    ImGui::TextDisabled("(?)");
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Begins rendering from your current position.");
+    if (Logic::get().render_capturing()) {
+        auto status = Logic::get().render_status();
+        float fraction = status.known ? status.progress : -1.f * static_cast<float>(ImGui::GetTime());
+        ImGui::ProgressBar(fraction, ImVec2(GUI::get().px(380.f), 0.f), status.text.c_str());
+    }
+    ImGui::SameLine();
+    if (value.merge_busy) ImGui::BeginDisabled();
+    if (ImGui::Button("Merge Renders")) GUI::get().open_render_picker();
+    if (value.merge_busy) ImGui::EndDisabled();
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Joins two videos back to back with a crossfade. Needs ffprobe.exe next to ffmpeg.exe.");
+
+    ImGui::SetNextItemWidth(GUI::get().px(220.f));
+    ImGui::InputTextWithHint("Video Name", value.macro_name.empty() ? "Replay" : value.macro_name.c_str(), &value.render_name);
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Leave empty to name the video after the macro");
+    
+    ImGui::SetNextItemWidth(GUI::get().px(80.f));
+    ImGui::InputText("Extension", &value.render_extension);
+    if (ImGui::IsItemDeactivatedAfterEdit()) Logic::get().save_settings_file();
+    GUI::get().checkbox_setting("Auto Exit on Finish", value.render_auto_exit);
+    GUI::get().checkbox_setting("Record the Opening Pause", value.render_record_pause);
+    ImGui::SetNextItemWidth(GUI::get().px(160.f));
+    ImGui::InputText("Codec", &value.render_codec);
+    if (ImGui::IsItemDeactivatedAfterEdit()) Logic::get().save_settings_file();
+    if (ImGui::IsItemDeactivatedAfterEdit()) Logic::get().save_settings_file();
+    ImGui::SetNextItemWidth(GUI::get().px(160.f));
+    ImGui::InputText("FFmpeg Args", &value.render_args);
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Output options placed after the codec information. Leave blank if you don't know what this is");
+    if (ImGui::IsItemDeactivatedAfterEdit()) Logic::get().save_settings_file();
+
+    if (ImGui::Button("Render Settings")) ImGui::OpenPopup("Render Settings"); ImGui::SameLine();
+    GUI::get().checkbox_setting("Immediate Restart", value.immediate_restart);
+    GUI::get().offer_rebind("key-reset", "Restarts the level once as soon as you enter it");
+    if (!ImGui::BeginPopupModal("Render Settings", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) return;
+
+    GUI::get().section_label("Picture");
+    int width = value.render_width;
+    int height = value.render_height;
+    int fps = value.render_fps;
+    float mbps = static_cast<float>(value.render_bitrate) / 1000000.f;
+    ImGui::SetNextItemWidth(GUI::get().px(120.f));
+    if (ImGui::DragInt("Width", &width, 1.f, 2, 7680)) value.render_width = std::clamp(width, 2, 7680);
+    if (ImGui::IsItemDeactivatedAfterEdit()) Logic::get().save_settings_file();
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(GUI::get().px(120.f));
+    if (ImGui::DragInt("Height", &height, 1.f, 2, 4320)) value.render_height = std::clamp(height, 2, 4320);
+    if (ImGui::IsItemDeactivatedAfterEdit()) Logic::get().save_settings_file();
+    ImGui::SetNextItemWidth(GUI::get().px(120.f));
+    if (ImGui::DragInt("FPS", &fps, 1.f, 1, 1000)) value.render_fps = std::max(fps, 1);
+    if (ImGui::IsItemDeactivatedAfterEdit()) Logic::get().save_settings_file();
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(GUI::get().px(120.f));
+    char const* bitrateFormat = mbps <= 0.f ? "Lossless" : "%.1f Mbps";
+    if (ImGui::DragFloat("Bitrate", &mbps, 0.1f, 0.f, 200.f, bitrateFormat)) value.render_bitrate = mbps <= 0.f ? 0 : std::max(static_cast<int>(mbps * 1000000.f), 1000);
+    if (ImGui::IsItemDeactivatedAfterEdit()) Logic::get().save_settings_file();
+
+    GUI::get().section_label("Audio");
+    ImGui::SetNextItemWidth(GUI::get().px(140.f));
+    GUI::get().drag_float_setting("Fade In", value.render_fade_in, 0.05f, 0.f, 60.f, "%.2f s");
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(GUI::get().px(140.f));
+    GUI::get().drag_float_setting("Fade Out", value.render_fade_out, 0.05f, 0.f, 60.f, "%.2f s");
+    ImGui::SetNextItemWidth(GUI::get().px(140.f));
+    GUI::get().drag_float_setting("After End", value.render_after_end, 0.05f, 0.f, 120.f, "%.2f s");
+    ImGui::SetNextItemWidth(GUI::get().px(140.f));
+    GUI::get().drag_float_setting("Music Volume", value.render_music, 0.01f, 0.f, 1.f, "%.2f");
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(GUI::get().px(140.f));
+    GUI::get().drag_float_setting("SFX Volume", value.render_sfx, 0.01f, 0.f, 1.f, "%.2f");
+    GUI::get().checkbox_setting("Use Speedhack", value.render_speedhack);
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Renders at your speedhack value");
+    GUI::get().checkbox_setting("SSB Fix", value.render_ssb_fix);
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Fixes audio sync because of the game's scroll speed bug when rendering.");
+    ImGui::SameLine();
+    GUI::get().checkbox_setting("Color Fix", value.render_color_fix);
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Fixes video colors to be more accurate to the game.");
+    GUI::get().checkbox_setting("Hide Labels", value.render_hide_labels);
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Hides Echo's overlay labels while a render is capturing.");
+    if (ImGui::Button("Close")) ImGui::CloseCurrentPopup();
+    ImGui::EndPopup();
 }
