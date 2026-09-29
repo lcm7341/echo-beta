@@ -344,7 +344,18 @@ bool AudioTap::attach(float music, float sfx, fs::path const& file) {
     system->getSoftwareFormat(&rate, nullptr, nullptr);
     if (!song.empty()) {
         engine->stopAndRemoveMusic(0);
-        // fix later: song runs out on long renders
+        if (auto it = engine->m_fmodMusic.find(0); it != engine->m_fmodMusic.end() && it->second.m_sound) {
+            FMOD_MODE mode = 0;
+            it->second.m_sound->getMode(&mode);
+            if (mode & FMOD_CREATESTREAM) {
+                FMOD::Sound* sample = nullptr;
+                FMOD_MODE wanted = (mode & ~static_cast<FMOD_MODE>(FMOD_CREATESTREAM | FMOD_NONBLOCKING)) | FMOD_CREATESAMPLE;
+                auto res = system->createSound(it->second.m_filePath.c_str(), wanted, nullptr, &sample);
+                if (res == FMOD_OK && sample) {
+                    it->second.m_sound = sample;
+                }
+            }
+        }
         engine->queueStartMusic(song, 1.f, 0.f, std::clamp(music, 0.f, 1.f), false, static_cast<int>(song_ms), 0, 0, 0, 0, false, 0, false, false);
         engine->updateQueuedMusic();
         for (int tries = 0; tries < 600 && !engine->getActiveMusicChannel(0); ++tries) {
