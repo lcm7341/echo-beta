@@ -90,7 +90,6 @@ static int kind_slot(int kind, bool down) {
 }
 
 std::string Clickbot::lower_name(std::string text) {
-    log::debug("lower name");
     std::transform(text.begin(), text.end(), text.begin(), [](unsigned char c) {
         return static_cast<char>(std::tolower(c));
     });
@@ -100,20 +99,16 @@ std::string Clickbot::lower_name(std::string text) {
 fs::path Clickbot::pack_root(std::string const& stored) {
     fs::path path(stored);
     std::error_code error;
-    if (!stored.empty() && fs::is_directory(path, error)) {
+    if (!stored.empty() && fs::is_directory(path, error))
         return path;
-    }
-    if (stored.empty()) {
+    if (stored.empty())
         return {};
-    }
     auto nested = Logic::get().save_root() / "clickpacks" / stored;
-    if (fs::is_directory(nested, error)) {
+    if (fs::is_directory(nested, error))
         return nested;
-    }
     auto by_name = Logic::get().save_root() / "clickpacks" / fs::path(stored).filename();
-    if (fs::is_directory(by_name, error)) {
+    if (fs::is_directory(by_name, error))
         return by_name;
-    }
     return path;
 }
 
@@ -150,21 +145,18 @@ KindFolder const& Clickbot::kind_folder(bool player1, int slot) {
 
 fs::path Clickbot::find_folder(fs::path const& pack, std::initializer_list<char const*> names) {
     std::error_code error;
-    if (pack.empty() || !fs::is_directory(pack, error)) {
+    if (pack.empty() || !fs::is_directory(pack, error))
         return {};
-    }
     std::vector<std::string> want;
     for (char const* name : names)
         want.push_back(Clickbot::get().lower_name(name));
     for (auto const& entry : fs::directory_iterator(pack, error)) {
-        if (error || !entry.is_directory()) {
+        if (error || !entry.is_directory())
             continue;
-        }
         auto it = Clickbot::get().lower_name(geode::utils::string::pathToString(entry.path().filename()));
         for (auto const& name : want) {
-            if (it == name) {
+            if (it == name)
                 return entry.path();
-            }
         }
     }
     return {};
@@ -178,16 +170,13 @@ bool Clickbot::audio_file(fs::path const& path) {
 std::vector<fs::path> Clickbot::audio_files(fs::path const& directory) {
     std::vector<fs::path> files;
     std::error_code error;
-    if (directory.empty() || !fs::is_directory(directory, error)) {
+    if (directory.empty() || !fs::is_directory(directory, error))
         return files;
-    }
     for (auto const& entry : fs::directory_iterator(directory, error)) {
-        if (error) {
+        if (error)
             break;
-        }
-        if (entry.is_regular_file() && Clickbot::get().audio_file(entry.path())) {
+        if (entry.is_regular_file() && Clickbot::get().audio_file(entry.path()))
             files.push_back(entry.path());
-        }
     }
     return files;
 }
@@ -201,17 +190,15 @@ void Clickbot::reap_clicks() {
     auto& live = Clickbot::get().live_clicks();
     std::erase_if(live, [](LiveClick const& item) {
         bool playing = false;
-        if (item.channel) {
+        if (item.channel)
             item.channel->isPlaying(&playing);
-        }
         return !playing;
     });
     if (live.size() > LIVE_CLICKS) {
         auto extra = live.size() - LIVE_CLICKS;
         for (size_t i = 0; i < extra; ++i) {
-            if (live[i].channel) {
+            if (live[i].channel)
                 live[i].channel->stop();
-            }
         }
         live.erase(live.begin(), live.begin() + static_cast<std::ptrdiff_t>(extra));
     }
@@ -223,45 +210,40 @@ FMOD::Sound* Clickbot::sound_for(PackCache& cache, FMOD::System* system, fs::pat
         Clickbot::get().live_clicks().clear();
         cache.system = system;
     }
-    if (auto it = cache.sounds.find(file); it != cache.sounds.end()) {
+    if (auto it = cache.sounds.find(file); it != cache.sounds.end())
         return it->second;
-    }
     std::error_code error;
-    if (!fs::is_regular_file(file, error)) {
+    if (!fs::is_regular_file(file, error))
         return nullptr;
-    }
     FMOD::Sound* sound = nullptr;
+    // fmod #needdat utf8
     auto path = geode::utils::string::pathToString(file);
     FMOD_MODE mode = FMOD_LOOP_OFF | FMOD_2D | FMOD_ACCURATETIME;
-    if (system->createSound(path.c_str(), mode, nullptr, &sound) != FMOD_OK || !sound) {
+    if (system->createSound(path.c_str(), mode, nullptr, &sound) != FMOD_OK || !sound)
         return nullptr;
-    }
     cache.sounds.emplace(file, sound);
     return sound;
 }
 
 void Clickbot::drop_sounds(PackCache& cache) {
     for (auto& item : Clickbot::get().live_clicks()) {
-        if (item.channel) {
+        if (item.channel)
             item.channel->stop();
-        }
     }
     Clickbot::get().live_clicks().clear();
     auto* engine = FMODAudioEngine::get();
     bool alive = engine && engine->m_system && engine->m_system == cache.system;
     for (auto& [file, sound] : cache.sounds) {
-        if (alive && sound) {
+        if (alive && sound)
             sound->release();
-        }
     }
     cache.sounds.clear();
 }
 
 float Clickbot::click_gain(float volume) {
     float gain = std::clamp(volume, 0.f, 10.f);
-    if (gain <= 1.f) {
+    if (gain <= 1.f)
         return gain;
-    }
     return std::pow(2.f, gain / 2.f) / std::sqrt(2.f);
 }
 
@@ -275,6 +257,7 @@ void Clickbot::play_file(bool player1, fs::path const& file, float volume) {
     if (!sound)
         return;
 
+    // dont use sfx vol
     FMOD::ChannelGroup* group = nullptr;
     engine->m_system->getMasterChannelGroup(&group);
 
@@ -308,7 +291,6 @@ fs::path Clickbot::find_kind(fs::path const& pack, int kind, bool down) {
 }
 
 void Logic::play_click(PlayLayer* play, bool down, bool player1) {
-    log::debug("play click");
     auto& logic = Logic::get();
     if (!logic.clickbot || !play)
         return;
@@ -340,15 +322,13 @@ void Logic::play_click(PlayLayer* play, bool down, bool player1) {
     auto sounds = [&](int kind) {
         return !Clickbot::get().kind_folder(player1, kind_slot(kind, down)).files.empty();
     };
-    if (!sounds(kind)) {
+    if (!sounds(kind))
         kind = NORMAL_CLICK;
-    }
     if (!sounds(kind))
         return;
     float volume = player1 ? logic.clickbot_volume : logic.clickbot_volume_p2;
-    if (Logic::get().render_capturing()) {
+    if (Logic::get().render_capturing())
         volume *= std::max(logic.render_sfx, 0.f);
-    }
     Clickbot::get().queued.push_back({ kind_slot(kind, down), volume, player1 });
 }
 
@@ -361,9 +341,8 @@ void Logic::flush_clicks() {
     for (size_t i = from; i < queued.size(); ++i) {
         auto const& click = queued[i];
         auto const& files = Clickbot::get().kind_folder(click.player1, click.slot).files;
-        if (files.empty()) {
+        if (files.empty())
             continue;
-        }
         std::uniform_int_distribution<size_t> dist(0, files.size() - 1);
         Clickbot::get().play_file(click.player1, files[dist(rng)], click.volume);
     }
