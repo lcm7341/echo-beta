@@ -57,7 +57,7 @@ struct QueuedClick {
 };
 
 // TODO ehh maybe increase
-constexpr size_t LIVE_CLICKS = 16;
+constexpr size_t LIVE_CLICKS = 24;
 
 class Clickbot {
 public:
