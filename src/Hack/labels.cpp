@@ -2,7 +2,7 @@
 // auto position stacks the visible ones from a corner
 #include "Logic/logic.hpp"
 #include "Hack/trajectory.hpp"
-#include "Hack/label_types.hpp"
+#include "Hack/label_kinds.hpp"
 #include <Geode/binding/PlayLayer.hpp>
 #include <Geode/binding/PlayerObject.hpp>
 #include <Geode/binding/GameObject.hpp>
