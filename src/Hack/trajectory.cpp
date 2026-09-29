@@ -255,7 +255,7 @@ Trajectory::Key Trajectory::make_key(PlayLayer* play) const {
     key.pause_ms = logic.pause_traj_ms;
     key.hide_p1 = Logic::get().traj_player_hidden(false);
     key.hide_p2 = Logic::get().traj_player_hidden(true);
-    key.seconds = logic.traj_length;
+    key.seconds = logic.traj_seconds;
     key.width = logic.traj_width;
     key.zoom = play->m_gameState.m_cameraZoom;
     std::copy(std::begin(logic.traj_color), std::end(logic.traj_color), key.color);
@@ -539,7 +539,7 @@ void Trajectory::refresh(PlayLayer* play) {
 
     node->setVisible(draw);
 
-    float saved_seconds = logic.traj_length;
+    float saved_seconds = logic.traj_seconds;
     int step_limit = 0;
 
     Key key = make_key(play);
@@ -547,7 +547,7 @@ void Trajectory::refresh(PlayLayer* play) {
     key.swift = draw && logic.traj_swift;
     key.release = draw && logic.traj_release;
     if (cached && key == last_key) {
-        logic.traj_length = saved_seconds;
+        logic.traj_seconds = saved_seconds;
         Logic::get().check_advance_pause(play);
         return;
     }
@@ -694,7 +694,7 @@ void Trajectory::refresh(PlayLayer* play) {
     Logic::get().sync_predict_hooks();
     cached = true;
     last_key = key;
-    logic.traj_length = saved_seconds;
+    logic.traj_seconds = saved_seconds;
 }
 
 Trajectory::Click Trajectory::next_click(PlayLayer* play, bool player1) const {

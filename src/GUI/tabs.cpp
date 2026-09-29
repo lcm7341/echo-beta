@@ -305,9 +305,9 @@ void GUI::draw_visuals() {
         GUI::get().checkbox_setting("Release", value.traj_release);
         ImGui::SameLine();
         GUI::get().checkbox_setting("Swift", value.traj_swift);
-        float seconds = value.traj_length;
+        float seconds = value.traj_seconds;
         ImGui::SetNextItemWidth(GUI::get().px(160.f));
-        if (ImGui::DragFloat("Length (s)", &seconds, 0.05f, 0.1f, 4.f, "%.2f")) value.traj_length = std::clamp(seconds, 0.1f, 4.f);
+        if (ImGui::DragFloat("Length (s)", &seconds, 0.05f, 0.1f, 4.f, "%.2f")) value.traj_seconds = std::clamp(seconds, 0.1f, 4.f);
         if (ImGui::IsItemDeactivatedAfterEdit()) Logic::get().save_settings_file();
         ImGui::SetNextItemWidth(GUI::get().px(160.f));
         GUI::get().drag_float_setting("Width", value.traj_width, 0.05f, 0.1f, 4.f, "%.2f");

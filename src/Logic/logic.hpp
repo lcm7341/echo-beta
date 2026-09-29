@@ -422,7 +422,7 @@ struct Session {
 	bool predicting = false;
 	bool showed_new_best = false;
 	bool show_traj = false, traj_hold = true, traj_release = true, traj_swift = false;
-	float traj_length = 1.f, traj_width = 0.5f, traj_color[4] = { 0.f, 1.f, 0.f, 1.f };
+	float traj_seconds = 1.f, traj_width = 0.5f, traj_color[4] = { 0.f, 1.f, 0.f, 1.f };
 	float traj_swift_color[4] = { 1.f, 0.75f, 0.15f, 1.f };
 	float traj_release_color[4] = { 0.25f, 0.65f, 1.f, 1.f };
 	float editor_p1[4] = { 0.20f, 0.55f, 0.95f, 1.f }, editor_p2[4] = { 0.95f, 0.45f, 0.25f, 1.f };

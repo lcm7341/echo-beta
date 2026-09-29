@@ -423,11 +423,11 @@ void Logic::pull_settings() {
                 logic.traj_swift = flag.unwrap();
             bool had_seconds = false;
             if (auto number = json["trajectory_seconds"].asDouble()) {
-                logic.traj_length = std::clamp(static_cast<float>(number.unwrap()), 0.05f, 4.f);
+                logic.traj_seconds = std::clamp(static_cast<float>(number.unwrap()), 0.05f, 4.f);
                 had_seconds = true;
             }
             else if (auto frames = json["trajectory_length"].asInt()) {
-                logic.traj_length = std::clamp(static_cast<float>(frames.unwrap()) / 240.f, 0.05f, 4.f);
+                logic.traj_seconds = std::clamp(static_cast<float>(frames.unwrap()) / 240.f, 0.05f, 4.f);
             }
             if (auto number = json["trajectory_width"].asDouble())
                 logic.traj_width = static_cast<float>(number.unwrap());
@@ -893,7 +893,7 @@ void Logic::save_settings_file() {
     json["trajectory_hold"] = logic.traj_hold;
     json["trajectory_release"] = logic.traj_release;
     json["trajectory_swift"] = logic.traj_swift;
-    json["trajectory_seconds"] = logic.traj_length;
+    json["trajectory_seconds"] = logic.traj_seconds;
     json["trajectory_width"] = logic.traj_width;
     json["docked_menu"] = logic.docked_menu;
     json["floating_x"] = logic.floating_x;
