@@ -49,20 +49,16 @@ constexpr int HITBOX_TAG = 0xEC06;
 
 CCDrawNode* find_hitbox_node(GJBaseGameLayer* play) {
     auto find = [](CCNode* parent) -> CCDrawNode* {
-        if (!parent) {
+        if (!parent)
             return nullptr;
-        }
         return typeinfo_cast<CCDrawNode*>(parent->getChildByTag(HITBOX_TAG));
     };
-    if (auto* node = find(play)) {
+    if (auto* node = find(play))
         return node;
-    }
-    if (auto* node = find(play->m_objectLayer)) {
+    if (auto* node = find(play->m_objectLayer))
         return node;
-    }
-    if (auto* node = find(play->m_uiLayer)) {
+    if (auto* node = find(play->m_uiLayer))
         return node;
-    }
     return nullptr;
 }
 
@@ -106,6 +102,7 @@ namespace {
 void Logic::seat_overlay(CCNode* node, GJBaseGameLayer* play) {
     if (!node || !play || !play->m_objectLayer)
         return;
+    // goes on the game layer NOT shaderlayer oops
     int z = overlay_z_order(play);
     if (node->getParent() != play) {
         node->removeFromParentAndCleanup(false);
@@ -125,12 +122,10 @@ void Logic::seat_overlay(CCNode* node, GJBaseGameLayer* play) {
 void Logic::sync_overlay_seats(GJBaseGameLayer* play) {
     if (!play || !play->m_objectLayer)
         return;
-    if (auto* node = find_hitbox_node(play)) {
+    if (auto* node = find_hitbox_node(play))
         seat_overlay(node, play);
-    }
-    if (auto* live = Logic::as_play(play)) {
+    if (auto* live = Logic::as_play(play))
         Trajectory::get().sync_seat(live);
-    }
 }
 
 struct ClickBox {
@@ -156,15 +151,13 @@ struct PendingClick {
 std::vector<PendingClick> g_pendingClicks;
 
 float collision_radius(GameObject* object) {
-    if (!object || object->m_objectRadius <= 0.f) {
+    if (!object || object->m_objectRadius <= 0.f)
         return 0.f;
-    }
     float radius = object->m_objectRadius;
     float sx = std::abs(object->m_scaleX);
     float sy = std::abs(object->m_scaleY);
-    if (sx != 1.f || sy != 1.f) {
+    if (sx != 1.f || sy != 1.f)
         radius *= std::max(sx, sy);
-    }
     return radius;
 }
 
@@ -208,29 +201,26 @@ public:
 };
 
 OBB2D* live_oriented_box(GameObject* object) {
-    if (!object) {
+    if (!object)
         return nullptr;
-    }
     bool editor = LevelEditorLayer::get() && !PlayLayer::get();
     float saved_start = object->m_startRotationX;
-    if (editor) {
+    if (editor)
         object->m_startRotationX = object->getRotation() - object->m_rotationXOffset;
-    }
     object->m_isOrientedBoxDirty = true;
     object->m_isObjectRectDirty = true;
     object->updateOrientedBox();
-    if (editor) {
+    if (editor)
         object->m_startRotationX = saved_start;
-    }
-    if (auto* box = object->m_orientedBox) {
+    if (auto* box = object->m_orientedBox)
         return box;
-    }
     return object->getOrientedBox();
 }
 
 void refresh_object_hitbox(GameObject* object) {
     if (!object)
         return;
+    // objs with a box offset (teleport portals) keep the box gd already has, a redo moves it & that is NOT what the player hits
     if (object->m_customBoxOffset.x != 0.f || object->m_customBoxOffset.y != 0.f)
         return;
     // TODO hitboxes lag behind move triggers
@@ -239,9 +229,8 @@ void refresh_object_hitbox(GameObject* object) {
 
 // obj hitbox without touching its caches
 CCRect Logic::object_hitbox(GameObject* object) {
-    if (!object) {
+    if (!object)
         return {};
-    }
     HitboxStateGuard preserve(object);
     refresh_object_hitbox(object);
     return object->getObjectRect();
@@ -264,16 +253,14 @@ void Logic::capture_pending_click(PlayerObject* player) {
         return;
     bool player2 = player == play->m_player2;
     std::erase_if(g_pendingClicks, [&](PendingClick const& click) {
-        if (click.player2 != player2) {
+        if (click.player2 != player2)
             return false;
-        }
         Hitboxes::get().capture_click(play, player, click.down);
         return true;
     });
 }
 
 void Logic::flush_click_hitboxes(GJBaseGameLayer* play) {
-    log::debug("flush click hitboxes");
     if (!play) {
         g_pendingClicks.clear();
         return;
@@ -282,9 +269,8 @@ void Logic::flush_click_hitboxes(GJBaseGameLayer* play) {
     size_t from = g_pendingClicks.size() > 400 ? g_pendingClicks.size() - 400 : 0;
     for (auto const& click : std::span(g_pendingClicks).subspan(from)) {
         auto* player = click.player2 ? play->m_player2 : play->m_player1;
-        if ((click.player2 && Logic::get().hitbox_player_hidden(true)) || (!click.player2 && Logic::get().hitbox_player_hidden(false))) {
+        if ((click.player2 && Logic::get().hitbox_player_hidden(true)) || (!click.player2 && Logic::get().hitbox_player_hidden(false)))
             continue;
-        }
         Hitboxes::get().capture_click(play, player, click.down);
     }
     g_pendingClicks.clear();
@@ -331,9 +317,8 @@ void Hitboxes::draw_clicks(CCDrawNode* node, GJBaseGameLayer* play, float width,
         bool view_known = std::isfinite(view.origin.x) && std::isfinite(view.origin.y) && view.size.width > 1.f && view.size.height > 1.f;
         int limit = Hitboxes::get().trail_limit();
         std::erase_if(g_clicks, [&](ClickBox const& box) {
-            if (box.frame > now) {
+            if (box.frame > now)
                 return true;
-            }
             return view_known ? !view.intersectsRect(box.outer) : now - box.frame >= limit;
         });
     }
@@ -348,9 +333,8 @@ void Hitboxes::draw_clicks(CCDrawNode* node, GJBaseGameLayer* play, float width,
         if (logic.hitbox_player || (!logic.hitbox_rotated && !logic.hitbox_inner && !logic.hitbox_circle)) {
             node->drawRect(box.outer, tint, width, line, BorderAlignment::Inside);
         }
-        if (logic.hitbox_inner) {
+        if (logic.hitbox_inner)
             node->drawRect(box.inner, tint, width, line, BorderAlignment::Inside);
-        }
         if (logic.hitbox_circle && box.radius > 0.f) {
             node->drawCircle(box.center, box.radius, { 0.f, 0.f, 0.f, 0.f }, width, line, 24);
         }
@@ -382,6 +366,7 @@ void Hitboxes::draw_player_hitbox(CCDrawNode* node, GJBaseGameLayer* play, Playe
     }
     float radius = std::abs(rect.size.width) * 0.5f;
     float zoom = std::max(play->m_gameState.m_cameraZoom, 0.05f);
+    // with fix radius collision on gd uses a circle not the box
     bool fix_radius = play->m_levelSettings && play->m_levelSettings->m_fixRadiusCollision;
     if ((logic.hitbox_circle || fix_radius) && radius > 0.f) {
         unsigned segments = static_cast<unsigned>(std::max(radius, 8.f) * 2.f * std::sqrt(zoom));
@@ -604,12 +589,10 @@ void Hitboxes::draw_object_hitbox(CCDrawNode* node, GJBaseGameLayer* play, GameO
 
     switch (object->m_objectType) {
     case GameObjectType::Solid: {
-        if (!logic.hitbox_solid) {
+        if (!logic.hitbox_solid)
             break;
-        }
-        if (object->m_isPassable) {
+        if (object->m_isPassable)
             break;
-        }
         paint_rect(logic.hitbox_solid_color);
         break;
     }
@@ -637,10 +620,10 @@ void Hitboxes::draw_object_hitbox(CCDrawNode* node, GJBaseGameLayer* play, GameO
         default:
             break;
         }
+        // hazard slope = hazard color, hopefully that is what bro meant
         float const* slope_color = object->m_slopeIsHazard ? logic.hitbox_hazard_color : logic.hitbox_slope_color;
-        if (object->m_slopeIsHazard ? !logic.hitbox_hazard : !logic.hitbox_slope) {
+        if (object->m_slopeIsHazard ? !logic.hitbox_hazard : !logic.hitbox_slope)
             break;
-        }
         if (object->m_slopeIsHazard) {
             int dir = object->m_slopeDirection;
             bool ceiling = dir >= 0 && dir <= 6 && ((0x6a >> dir) & 1);
@@ -650,9 +633,8 @@ void Hitboxes::draw_object_hitbox(CCDrawNode* node, GJBaseGameLayer* play, GameO
                 auto const& a = verts[(k + 1) % 3];
                 auto const& b = verts[(k + 2) % 3];
                 auto const& c = verts[k];
-                if ((c.x == a.x && c.y == b.y) || (c.x == b.x && c.y == a.y)) {
+                if ((c.x == a.x && c.y == b.y) || (c.x == b.x && c.y == a.y))
                     corner = k;
-                }
             }
             std::array<CCPoint, 4> shape;
             int n = 0;
@@ -684,9 +666,8 @@ void Hitboxes::draw_object_hitbox(CCDrawNode* node, GJBaseGameLayer* play, GameO
     }
     case GameObjectType::Hazard:
     case GameObjectType::AnimatedHazard: {
-        if (!logic.hitbox_hazard) {
+        if (!logic.hitbox_hazard)
             break;
-        }
         float radius = hazard_radius(object);
         float zoom = std::max(play->m_gameState.m_cameraZoom, 0.05f);
         if (radius > 0.f) {
@@ -713,9 +694,8 @@ void Hitboxes::draw_object_hitbox(CCDrawNode* node, GJBaseGameLayer* play, GameO
                     return;
             }
         }
-        if (!logic.hitbox_interact) {
+        if (!logic.hitbox_interact)
             break;
-        }
         float radius = collision_radius(object);
         bool fix_radius = play->m_levelSettings && play->m_levelSettings->m_fixRadiusCollision;
         bool use_box = radius <= 0.f || (object->m_shouldUseOuterOb && !fix_radius);
@@ -793,9 +773,8 @@ CCRect trail_rect(PlayerObject* player, TrailFit& fit) {
         fit.height = std::clamp(finite ? raw.size.height : 30.f, 8.f, 36.f);
     }
     CCPoint pos = player->getPosition();
-    if (!std::isfinite(pos.x) || !std::isfinite(pos.y)) {
+    if (!std::isfinite(pos.x) || !std::isfinite(pos.y))
         pos = CCPoint{ raw.getMidX(), raw.getMidY() };
-    }
     CCRect held(pos.x - fit.width * 0.5f, pos.y - fit.height * 0.5f, fit.width, fit.height);
     return held;
 }
@@ -824,9 +803,8 @@ void Hitboxes::push_trail(std::deque<HitboxTrailPoint>& trail, HitboxTrailPoint 
 int Hitboxes::trail_limit() {
     auto const& logic = Logic::get();
     int len = logic.trail_length;
-    if (len <= 0) {
+    if (len <= 0)
         len = std::max(1, (int)(std::lround(logic.fps)));
-    }
     return std::max(1, len);
 }
 
@@ -862,12 +840,10 @@ void Logic::add_trail_point(GJBaseGameLayer* play) {
         return;
     int frame = Hitboxes::get().trail_now();
     static TrailFit fit_p1, fit_p2;
-    if (logic.trail_p1.empty()) {
+    if (logic.trail_p1.empty())
         fit_p1 = {};
-    }
-    if (logic.trail_p2.empty()) {
+    if (logic.trail_p2.empty())
         fit_p2 = {};
-    }
     auto capture = [&](PlayerObject* player, TrailFit& fit, std::deque<HitboxTrailPoint>& trail) {
         HitboxTrailPoint point;
         point.frame = frame;
@@ -896,25 +872,21 @@ void Logic::add_trail_point(GJBaseGameLayer* play) {
         }
         Hitboxes::get().push_trail(trail, point, play);
     };
-    if (play->m_player1 && !Logic::get().hitbox_player_hidden(false) && !Logic::get().is_traj_player(play->m_player1)) {
+    if (play->m_player1 && !Logic::get().hitbox_player_hidden(false) && !Logic::get().is_traj_player(play->m_player1))
         capture(play->m_player1, fit_p1, logic.trail_p1);
-    }
-    if (play->m_player2 && !Logic::get().hitbox_player_hidden(true) && !Logic::get().is_traj_player(play->m_player2)) {
+    if (play->m_player2 && !Logic::get().hitbox_player_hidden(true) && !Logic::get().is_traj_player(play->m_player2))
         capture(play->m_player2, fit_p2, logic.trail_p2);
-    }
 }
 
 void Logic::draw_hitboxes(GJBaseGameLayer* play) {
-    log::debug("draw hitboxes");
     auto& value = Logic::get();
     auto* layer = play->m_objectLayer;
     if (!layer)
         return;
     auto* node = find_hitbox_node(play);
     if (!value.show_hitboxes) {
-        if (node) {
+        if (node)
             node->setVisible(false);
-        }
         value.trail_p1.clear();
         value.trail_p2.clear();
         return;
@@ -927,18 +899,15 @@ void Logic::draw_hitboxes(GJBaseGameLayer* play) {
     node->setBlendFunc({ GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA });
     seat_overlay(node, play);
     node->clear();
-    if (value.hide_p1 && play->m_player1) {
+    if (value.hide_p1 && play->m_player1)
         play->m_player1->setVisible(false);
-    }
-    if (value.hide_p2 && play->m_player2) {
+    if (value.hide_p2 && play->m_player2)
         play->m_player2->setVisible(false);
-    }
     auto* player = play->m_player1;
     bool level = Logic::as_play(play) != nullptr;
     float view_scale = std::max(play->m_gameState.m_cameraZoom, 0.05f);
-    if (!level) {
+    if (!level)
         view_scale = std::max(std::abs(layer->getScaleX()), 0.05f);
-    }
     float width = std::max(value.hitbox_thickness, 0.f) / view_scale;
     Hitboxes::get().trim_trail(value.trail_p1, play);
     Hitboxes::get().trim_trail(value.trail_p2, play);
@@ -1008,12 +977,10 @@ void Logic::draw_hitboxes(GJBaseGameLayer* play) {
             drawn_rotated.insert(quantize_corners(corners));
         }
     };
-    if (!Logic::get().hitbox_player_hidden(false)) {
+    if (!Logic::get().hitbox_player_hidden(false))
         claim_live(play->m_player1);
-    }
-    if (play->m_gameState.m_isDualMode && !Logic::get().hitbox_player_hidden(true)) {
+    if (play->m_gameState.m_isDualMode && !Logic::get().hitbox_player_hidden(true))
         claim_live(play->m_player2);
-    }
     bool fill = value.fill_hitboxes;
     float trail_opacity = std::clamp(value.hitbox_trail_opacity, 0.f, 1.f);
     auto trail_line = [&](float const* color) {
@@ -1035,9 +1002,8 @@ void Logic::draw_hitboxes(GJBaseGameLayer* play) {
     if (value.hitbox_player) {
         each_trail([&](std::deque<HitboxTrailPoint> const& trail) {
             for (auto const& old : trail) {
-                if (!drawn_boxes.insert(quantize(old.rect)).second) {
+                if (!drawn_boxes.insert(quantize(old.rect)).second)
                     continue;
-                }
                 node->drawRect(old.rect, trail_fill(value.hitbox_outer_color), width, trail_line(value.hitbox_outer_color), BorderAlignment::Inside);
             }
         });
@@ -1045,9 +1011,8 @@ void Logic::draw_hitboxes(GJBaseGameLayer* play) {
     if (value.hitbox_rotated) {
         each_trail([&](std::deque<HitboxTrailPoint> const& trail) {
             for (auto const& old : trail) {
-                if (!old.rotated || !drawn_rotated.insert(quantize_corners(old.corners)).second) {
+                if (!old.rotated || !drawn_rotated.insert(quantize_corners(old.corners)).second)
                     continue;
-                }
                 auto corners = old.corners;
                 node->drawPolygon(corners.data(), 4, trail_fill(value.hitbox_rotated_color), width, trail_line(value.hitbox_rotated_color), BorderAlignment::Inside);
             }
@@ -1056,9 +1021,8 @@ void Logic::draw_hitboxes(GJBaseGameLayer* play) {
     if (value.hitbox_circle) {
         each_trail([&](std::deque<HitboxTrailPoint> const& trail) {
             for (auto const& old : trail) {
-                if (!(old.radius > 0.f) || !drawn_circles.insert(quantize_circle(old.center, old.radius)).second) {
+                if (!(old.radius > 0.f) || !drawn_circles.insert(quantize_circle(old.center, old.radius)).second)
                     continue;
-                }
                 node->drawCircle(old.center, old.radius, trail_fill(value.hitbox_circle_color), width, trail_line(value.hitbox_circle_color), 16);
             }
         });
@@ -1066,9 +1030,8 @@ void Logic::draw_hitboxes(GJBaseGameLayer* play) {
     if (value.hitbox_inner) {
         each_trail([&](std::deque<HitboxTrailPoint> const& trail) {
             for (auto const& old : trail) {
-                if (!drawn_inner.insert(quantize(old.inner)).second) {
+                if (!drawn_inner.insert(quantize(old.inner)).second)
                     continue;
-                }
                 node->drawRect(old.inner, trail_fill(value.hitbox_inner_color), width, trail_line(value.hitbox_inner_color), BorderAlignment::Inside);
             }
         });
@@ -1100,41 +1063,35 @@ void Logic::draw_hitboxes(GJBaseGameLayer* play) {
         for (int x = first_x; x <= last_x; ++x) {
             auto* column = grid[x];
             auto* counts = sizes[x];
-            if (!column || !counts) {
+            if (!column || !counts)
                 continue;
-            }
             int rows = (int)(std::min(column->size(), counts->size()));
         }
+        // moving objects arent actually in the grid
         auto const& moving = play->m_calcNonEffectObjects;
         int moving_count = std::min<int>(play->m_calcNonEffectObjectsSize, (int)(moving.size()));
         for (int i = 0; i < moving_count; ++i) {
             auto* obj = moving[static_cast<std::size_t>(i)];
-            if (!obj || obj->m_isDisabled) {
+            if (!obj || obj->m_isDisabled)
                 continue;
-            }
-            if (std::fabs(obj->getPositionX() - view_x) > reach) {
+            if (std::fabs(obj->getPositionX() - view_x) > reach)
                 continue;
-            }
             Hitboxes::get().draw_object_hitbox(node, play, obj, width, value.fill_hitboxes);
         }
     }
     else if (play->m_objects) {
         for (auto* obj : CCArrayExt<GameObject*>(play->m_objects)) {
-            if (!obj) {
+            if (!obj)
                 continue;
-            }
-            if (obj->m_isDisabled) {
+            if (obj->m_isDisabled)
                 continue;
-            }
-            if (std::fabs(obj->getPositionX() - view_x) > reach) {
+            if (std::fabs(obj->getPositionX() - view_x) > reach)
                 continue;
-            }
             Hitboxes::get().draw_object_hitbox(node, play, obj, width, value.fill_hitboxes);
         }
     }
-    if (outlines().collecting) {
+    if (outlines().collecting)
         flush_outlines(node, width);
-    }
     if (!Logic::get().hitbox_player_hidden(false))
         Hitboxes::get().draw_player_hitbox(node, play, play->m_player1, width, value.fill_hitboxes, nullptr);
     else
