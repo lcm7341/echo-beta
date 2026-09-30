@@ -687,8 +687,14 @@ namespace {
 }
 
 bool Logic::player_hidden(PlayerObject* player) const {
-    // TODO
-    return {};
+    auto* play = PlayLayer::get();
+    if (!play || !player)
+        return false;
+    if (player == play->m_player1)
+        return hide_p1;
+    if (player == play->m_player2)
+        return hide_p2;
+    return false;
 }
 
 bool Logic::hitbox_player_hidden(bool player2) const {
@@ -704,7 +710,44 @@ bool Logic::traj_player_hidden(bool player2) const {
 }
 
 void Logic::hide_icon(PlayerObject* player, bool hide) {
-    // port this
+    if (!player)
+        return;
+    auto& held = held_look(player);
+    if (!hide) {
+        if (!held.held)
+            return;
+        HeldLook saved = held;
+        held = {};
+        restore_player(player, saved);
+        return;
+    }
+    bool already = held.held;
+    held.held = true;
+    player->setVisible(false);
+    player->m_playEffects = false;
+    take_node(player->m_waveTrail, held.wave, already);
+    take_node(player->m_regularTrail, held.regular, already);
+    take_node(player->m_shipStreak, held.ship, already);
+    take_node(player->m_ghostTrail, held.ghost, already);
+    take_node(player->m_swingFireMiddle, held.fire_mid, already);
+    take_node(player->m_swingFireBottom, held.fire_bot, already);
+    take_node(player->m_swingFireTop, held.fire_top, already);
+    take_node(player->m_dashSpritesContainer, held.dash, already);
+    if (player->m_robotSprite)
+        player->m_robotSprite->hideGlow();
+    if (player->m_spiderSprite)
+        player->m_spiderSprite->hideGlow();
+    stop_particle(player->m_playerGroundParticles);
+    stop_particle(player->m_trailingParticles);
+    stop_particle(player->m_shipClickParticles);
+    stop_particle(player->m_vehicleGroundParticles);
+    stop_particle(player->m_ufoClickParticles);
+    stop_particle(player->m_robotBurstParticles);
+    stop_particle(player->m_dashParticles);
+    stop_particle(player->m_swingBurstParticles1);
+    stop_particle(player->m_swingBurstParticles2);
+    stop_particle(player->m_landParticles0);
+    stop_particle(player->m_landParticles1);
 }
 
 void Logic::after_frame(PlayLayer* play, float dt) {
