@@ -594,6 +594,7 @@ void Logic::draw_layout_art(PlayLayer* play) {
             }
             block_box = box;
         }
+        object->setOpacity(0);
         if (object->m_colorSprite) {
             object->m_colorSprite->setVisible(false);
         }
