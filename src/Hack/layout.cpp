@@ -601,6 +601,9 @@ void Logic::draw_layout_art(PlayLayer* play) {
             object->m_glowSprite->setVisible(false);
         }
         auto color = ccColor3B{ 255, 255, 255 };
+        if (piece == &art.saw) {
+            color = { 0, 0, 0 };
+        }
         (void)hazard;
         (void)block_color;
         float rotationX = object->getRotationX(), rotationY = object->getRotationY();
