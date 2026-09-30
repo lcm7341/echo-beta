@@ -1688,7 +1688,8 @@ void Logic::prepare_buttons(GJBaseGameLayer* play) {
         ensure(false, left);
         ensure(false, right);
     }
-    if (play->m_gameState.m_isDualMode) {
+    // normal dual follows p1. sending p2 every step clicks forever xd
+    if (play->m_levelSettings && play->m_levelSettings->m_twoPlayerMode && play->m_gameState.m_isDualMode) {
         ensure(true, jump);
         if (play->m_isPlatformer) {
             ensure(true, left);
