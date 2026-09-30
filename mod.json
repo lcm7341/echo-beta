@@ -198,6 +198,20 @@
 			"default": "None",
 			"category": "gameplay"
 		},
+		"key-pad-black-orb": {
+			"type": "keybind",
+			"platforms": ["win"],
+			"name": "Auto black orb on pad",
+			"default": "None",
+			"category": "gameplay"
+		},
+		"key-pad-blue-orb": {
+			"type": "keybind",
+			"platforms": ["win"],
+			"name": "Auto blue orb on pad",
+			"default": "None",
+			"category": "gameplay"
+		},
 		"key-pause-before-kill": {
 			"type": "keybind",
 			"platforms": ["win"],

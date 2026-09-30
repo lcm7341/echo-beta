@@ -417,7 +417,30 @@ void Orbs::clear() {
 }
 
 void Orbs::click_pads(PlayLayer* play, PlayerObject* player, int objectType, GameObject* pad) {
-    // TODO
+    if (!play || !player || Logic::get().predicting || !jump_or_gravity_pad(objectType))
+        return;
+    auto& logic = Logic::get();
+    if (!logic.pad_black_orb && !logic.pad_blue_orb)
+        return;
+    bool player2 = player == play->m_player2;
+    if (logic.plays_player(player2))
+        return;
+    if (pad && !jump_or_gravity_pad(static_cast<int>(pad->m_objectType))) {
+        pad = nullptr;
+    }
+    auto& step = player2 ? pad_p2 : pad_p1;
+    auto& spent_pads = player2 ? spent_pad_p2 : spent_pad_p1;
+    step.pending = true;
+    collect_pad_orbs(play, player, player2, step);
+    if (!pad) {
+        step.anon = true;
+        return;
+    }
+    if (spent_pads.contains(pad->m_uniqueID))
+        return;
+    if (std::ranges::find(step.pads, pad->m_uniqueID) == step.pads.end()) {
+        step.pads.push_back(pad->m_uniqueID);
+    }
 }
 
 bool Orbs::has_pending_pads() {
@@ -425,7 +448,53 @@ bool Orbs::has_pending_pads() {
 }
 
 void Orbs::flush_pads(PlayLayer* play) {
-    // port this
+    if (!play || Logic::get().predicting)
+        return;
+    if (!has_pending_pads())
+        return;
+    auto saved1 = std::move(pad_p1);
+    auto saved2 = std::move(pad_p2);
+    pad_p1 = {};
+    pad_p2 = {};
+    auto flush = [&](PlayerObject* player, bool player2, PadStep const& step) {
+        if (!step.pending || !player)
+            return;
+        auto& spent_pads = player2 ? spent_pad_p2 : spent_pad_p1;
+        auto& spent_blue = player2 ? spent_blue_p2 : spent_blue_p1;
+        if (step.black > 0) {
+            queue_pad_swift(play, player2, step.black, step.live_black);
+        }
+        if (step.blue.empty() || (step.pads.empty() && !step.anon))
+            return;
+        bool already_flipped = std::ranges::any_of(step.blue, [&](GameObject* orb) {
+            return orb_triggered(orb, player2);
+        });
+        if (already_flipped) {
+            if (!step.pads.empty()) {
+                spent_pads.insert(step.pads.front());
+            }
+            return;
+        }
+        auto waiting = std::ranges::find_if(step.blue, [&](GameObject* orb) {
+            return orb && !orb_triggered(orb, player2) && !spent_blue.contains(orb->m_uniqueID);
+        });
+        if (waiting == step.blue.end())
+            return;
+        arm_blue(player, *waiting);
+        spent_blue.insert((*waiting)->m_uniqueID);
+        if (!step.pads.empty()) {
+            spent_pads.insert(step.pads.front());
+        }
+        if (holding_jump(player)) {
+            queue_jump(play, player2, false);
+        }
+        queue_jump(play, player2, true);
+        queue_jump(play, player2, false);
+    };
+    flush(play->m_player1, false, saved1);
+    if (play->m_gameState.m_isDualMode) {
+        flush(play->m_player2, true, saved2);
+    }
 }
 
 namespace {
