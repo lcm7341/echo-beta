@@ -731,7 +731,7 @@ void Trajectory::simulate(PlayLayer* play, bool player1, Click click, bool both,
             step_delta = step_len * 60.f * std::min(warp, 1.f);
         }
         {
-            constexpr float REACH = 240.f;
+            constexpr float REACH = 360.f;
             auto at = fake->getPosition();
             float left = at.x, right = at.x, bottom = at.y, top = at.y;
             if (pair && partner) {
