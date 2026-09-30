@@ -10,6 +10,7 @@
 #include "Logic/logic.hpp"
 #include "Hooks/rotation.hpp"
 #include "Hooks/step.hpp"
+#include "Hack/orbs.hpp"
 #include "GUI/gui.hpp"
 #include "Hack/trajectory.hpp"
 #include "Physics/collisions.hpp"
@@ -694,6 +695,8 @@ int vanilla_physics_steps(float dt, float timeWarp);
 namespace echo::step {
     GJBaseGameLayer* begin(GJBaseGameLayer* self) {
         auto& logic = Logic::get();
+        if (!logic.predicting)
+            Orbs::begin_step();
         dash_spin_pre();
         auto* play = Logic::as_play(self);
         auto* editor = Logic::as_editor(self);
@@ -1221,7 +1224,10 @@ class $modify(EchoGameLayer, GJBaseGameLayer) {
         int swifts = 0;
         if (down && jump_button && !orb_swift && !value.applying_playback && !value.injecting && !value.restoring_holds && !value.maintaining_gravity) {
             PlayerObject* body = player1 ? m_player1 : m_player2;
+            swifts = Orbs::claim_click(this, body, !player1);
         }
+        if (swifts > 0)
+            Orbs::arm_tool(true);
         if ((button == 0 || button == jump) && !orb_swift && !value.applying_playback && !value.maintaining_gravity && !value.restoring_holds && !value.resetting && !down) {
             value.restart_hold_captured = false;
             value.death_jump_p1 = value.death_jump_p2 = false;
@@ -1274,6 +1280,7 @@ class $modify(EchoGameLayer, GJBaseGameLayer) {
             Logic::get().note_click_hitbox(this, player1, down);
         }
         if (swifts > 0) {
+            Orbs::arm_tool(false);
             orb_swift = true;
             bool was_routing = value.routing_input;
             value.routing_input = true;
@@ -1536,6 +1543,8 @@ class $modify(EchoPlayerObject, PlayerObject) {
     }
 
     void ringJump(RingObject* ring, bool skipCheck) {
+        if (Orbs::blockHoldRing(this, ring))
+            return;
         if (Trajectory::get().isFake(this)) {
             phys::ringJump(this, ring);
             return;
@@ -1553,20 +1562,28 @@ class $modify(EchoPlayerObject, PlayerObject) {
     void bumpPlayer(float force, int objectType, bool playEffect, GameObject* object) {
         if (Trajectory::get().isFake(this)) {
             if (Logic::get().predicting) {
+                if (auto* play = PlayLayer::get())
+                    Orbs::notePredictionPad(play, this, object);
             }
             phys::bumpPlayer(this, force, objectType, playEffect, object);
             return;
         }
+        if (auto* play = PlayLayer::get())
+            Orbs::click_pads(play, this, objectType, object);
         PlayerObject::bumpPlayer(force, objectType, playEffect, object);
     }
 
     void propellPlayer(float force, bool noEffects, int objectType) {
         if (Trajectory::get().isFake(this)) {
             if (Logic::get().predicting) {
+                if (auto* play = PlayLayer::get())
+                    Orbs::notePredictionPad(play, this, m_lastActivatedPortal);
             }
             phys::propellPlayer(this, force, noEffects, objectType);
             return;
         }
+        if (auto* play = PlayLayer::get())
+            Orbs::click_pads(play, this, objectType, m_lastActivatedPortal);
         PlayerObject::propellPlayer(force, noEffects, objectType);
     }
 
@@ -1611,7 +1628,11 @@ class $modify(EchoPlayerObject, PlayerObject) {
         }
         note_partner();
         bool track = button == PlayerButton::Jump && !Trajectory::get().isFake(this);
+        if (track)
+            Orbs::begin_push(this);
         auto finish = [&](bool pressed) {
+            if (track)
+                Orbs::end_push(this);
             return pressed;
         };
         // maintain gravity clicks here NOT thru handleButton
@@ -1622,8 +1643,11 @@ class $modify(EchoPlayerObject, PlayerObject) {
             layer = GJBaseGameLayer::get();
             if (layer) {
                 player1 = this != layer->m_player2;
+                swifts = Orbs::claim_click(layer, this, !player1);
             }
         }
+        if (swifts > 0)
+            Orbs::arm_tool(true);
         bool stash = logic.suppress_rings && button == PlayerButton::Jump && m_touchingRings && m_touchingRings->count() > 0;
         bool pressed = false;
         if (!stash) {
@@ -1647,6 +1671,7 @@ class $modify(EchoPlayerObject, PlayerObject) {
         }
         if (swifts <= 0)
             return pressed;
+        Orbs::arm_tool(false);
         orb_swift = true;
         int jump = static_cast<int>(PlayerButton::Jump);
         for (int i = 0; i < swifts; ++i) {

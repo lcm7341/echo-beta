@@ -8,6 +8,7 @@
 
 #include "Physics/gravity.hpp"
 #include "Physics/player.hpp"
+#include "Hack/orbs.hpp"
 #include "Hack/trajectory.hpp"
 #include "Logic/logic.hpp"
 
@@ -272,6 +273,7 @@ void bumpPlayerFromGJBGL(GJBaseGameLayer* pl, PlayerObject* player,
             }
         }
         player->m_lastActivatedPortal = object;
+        if (auto* play = PlayLayer::get()) Orbs::notePredictionPad(play, player, object);
         phys::bumpPlayer(player, force, static_cast<int>(object->m_objectType),
                          false, object);
     }
@@ -486,6 +488,7 @@ void collisionCheckObjects(GJBaseGameLayer* pl, PlayerObject* player,
 
                     phys::propellPlayer(player, 0.8, false, 10);
                     phys::flipGravity(player, !isFacingDown, true);
+                    if (auto* live = PlayLayer::get()) Orbs::notePredictionPad(live, player, obj);
                     player->m_padRingRelated = true;
                 }
                 break;

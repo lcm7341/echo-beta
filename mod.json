@@ -184,6 +184,20 @@
 			"default": "None",
 			"category": "gameplay"
 		},
+		"key-click-dash-orbs": {
+			"type": "keybind",
+			"platforms": ["win"],
+			"name": "Click dash orbs",
+			"default": "None",
+			"category": "gameplay"
+		},
+		"key-click-black-orbs": {
+			"type": "keybind",
+			"platforms": ["win"],
+			"name": "Click black orbs",
+			"default": "None",
+			"category": "gameplay"
+		},
 		"key-pause-before-kill": {
 			"type": "keybind",
 			"platforms": ["win"],

@@ -1,5 +1,6 @@
 // Taken directly from Silicate (https://git.silicate.dev/silicate/silicate), GPL-3.0.
 #include "Physics/player.hpp"
+#include "Hack/orbs.hpp"
 
 #include <Geode/Geode.hpp>
 
@@ -193,6 +194,7 @@ void ringJump(PlayerObject* player, RingObject* ring) {
         (ring->m_objectType == GameObjectType::CustomRing) ||
         (ring->m_objectType == GameObjectType::TeleportOrb);
 
+    if (Orbs::blockHoldRing(player, ring)) return;
     if (!player->m_stateRingJump2) return;
     if (player->m_isDashing) return;
     if (!player->m_stateJumpBuffered) return;

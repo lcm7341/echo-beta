@@ -10,6 +10,7 @@
 #include "Hooks/step.hpp"
 #include "GUI/gui.hpp"
 #include "Hack/trajectory.hpp"
+#include "Hack/orbs.hpp"
 #include <Geode/binding/PlayerButtonCommand.hpp>
 #include <Geode/binding/GameManager.hpp>
 #include <Geode/binding/GJRobotSprite.hpp>
@@ -973,6 +974,7 @@ void Logic::onReset(PlayLayer* play) {
     logic.death_next_p2 = false;
     logic.noclip_dead_p1 = false;
     logic.noclip_dead_p2 = false;
+    Orbs::clear();
     logic.showed_new_best = false;
     logic.over_max_cps = false;
     logic.cps_breaking = false;
@@ -1667,8 +1669,14 @@ void run_orb_clicks(GJBaseGameLayer* play, GJBaseGameLayer* layer, float dt) {
     auto* live = Logic::as_play(play);
     if (!live || !layer || Logic::get().predicting)
         return;
+    if (!Orbs::has_pending_pads()) {
+        Orbs::commit_tool_hits();
+        Logic::get().suppress_click_hitbox = false;
+        return;
+    }
     auto saved = std::move(play->m_queuedButtons);
     play->m_queuedButtons.clear();
+    Orbs::flush_pads(live);
     auto& logic = Logic::get();
     logic.suppress_click_hitbox = true;
     if (!play->m_queuedButtons.empty()) {
@@ -1681,6 +1689,7 @@ void run_orb_clicks(GJBaseGameLayer* play, GJBaseGameLayer* layer, float dt) {
         layer->GJBaseGameLayer::processQueuedButtons(dt, true);
         logic.injecting = false;
     }
+    Orbs::commit_tool_hits();
     logic.suppress_click_hitbox = false;
     play->m_queuedButtons = std::move(saved);
 }
@@ -1695,7 +1704,9 @@ void Logic::play_macro(GJBaseGameLayer* play, GJBaseGameLayer* layer, float dt, 
             drop_ignored_inputs(play);
             gd::vector<PlayerButtonCommand> orbs;
             if (auto* live = Logic::as_play(play); live && !logic.predicting) {
+                Orbs::note_jump_presses(live);
                 size_t before = play->m_queuedButtons.size();
+                Orbs::flush_pads(live);
                 for (size_t i = before; i < play->m_queuedButtons.size(); ++i)
                     orbs.push_back(play->m_queuedButtons[i]);
                 if (play->m_queuedButtons.size() > before)
@@ -1715,12 +1726,15 @@ void Logic::play_macro(GJBaseGameLayer* play, GJBaseGameLayer* layer, float dt, 
                 logic.injecting = false;
                 logic.suppress_click_hitbox = false;
             }
+            Orbs::commit_tool_hits();
             if (logic.is_recording() && logic.maintain_gravity && logic.same_gravity && !logic.restoring_holds && !logic.resetting)
                 Logic::get().sync_same_gravity(play);
         }
         return;
     }
     Logic::get().prepare_buttons(play);
+    if (auto* live = Logic::as_play(play))
+        Orbs::note_jump_presses(live);
     int replay = logic.replay_clicks_left;
     if (play->m_queuedButtons.empty()) {
         logic.applying_playback = false;
@@ -1737,6 +1751,26 @@ void Logic::play_macro(GJBaseGameLayer* play, GJBaseGameLayer* layer, float dt, 
     }
     bool correct_gravity = logic.is_recording() && logic.maintain_gravity && !logic.restoring_holds;
     bool single_dual = play->m_gameState.m_isDualMode && !(play->m_levelSettings && play->m_levelSettings->m_twoPlayerMode);
+    if (clearInputQueue && play->m_queuedButtons.size() == 1 && (replay == 0 || replay == 1) &&
+        !correct_gravity && (replay == 0 || !single_dual) && !Orbs::has_pending_pads()) {
+        logic.applying_playback = false;
+        if (replay == 1) {
+            Orbs::commit_tool_hits();
+            logic.suppress_click_hitbox = false;
+            logic.applying_playback = true;
+        }
+        layer->GJBaseGameLayer::processQueuedButtons(dt, true);
+        logic.applying_playback = false;
+        if (replay == 0) {
+            if (logic.is_recording() && logic.maintain_gravity && !logic.restoring_holds)
+                Logic::get().apply_maintain_gravity(play);
+            run_orb_clicks(play, layer, dt);
+        }
+        if (logic.is_recording() && logic.maintain_gravity && logic.same_gravity && !logic.restoring_holds)
+            Logic::get().sync_same_gravity(play);
+        logic.buttons_prepared = false;
+        return;
+    }
     replay::SmallSnapshot<PlayerButtonCommand, 8> queued(play->m_queuedButtons);
     if (logic.is_recording() && logic.maintain_gravity && !logic.restoring_holds) {
         int jump = static_cast<int>(PlayerButton::Jump);
