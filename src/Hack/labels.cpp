@@ -72,18 +72,15 @@ LabelInfo const* label_info(std::string const& key) {
 }
 
 std::vector<LabelInfo const*> ordered_labels(Session const& value) {
-    log::debug("ordered labels");
     std::vector<LabelInfo const*> out;
     for (auto const& key : value.label_order) {
         auto* info = label_info(key);
-        if (info && std::ranges::find(out, info) == out.end()) {
+        if (info && std::ranges::find(out, info) == out.end())
             out.push_back(info);
-        }
     }
     for (auto const& info : LABELS) {
-        if (std::ranges::find(out, &info) == out.end()) {
+        if (std::ranges::find(out, &info) == out.end())
             out.push_back(&info);
-        }
     }
     return out;
 }
@@ -118,9 +115,8 @@ int label_font_index(std::string const& file) {
 void Labels::sync_label(PlayLayer* play, int tag, bool visible, LabelPlacement const& place, std::string const& text, ccColor3B color) {
     auto* label = typeinfo_cast<CCLabelBMFont*>(play->getChildByTag(tag));
     if (!visible) {
-        if (label) {
+        if (label)
             label->removeFromParent();
-        }
         return;
     }
     auto const& logic = Logic::get();
@@ -132,9 +128,9 @@ void Labels::sync_label(PlayLayer* play, int tag, bool visible, LabelPlacement c
         alignments[tag] = kCCTextAlignmentLeft;
         play->addChild(label, 999, tag);
     }
-    if (text != label->getString()) {
+    // cocos rebuilds the whole label even if unchanged .......... w optimization?
+    if (text != label->getString())
         label->setString(text.c_str());
-    }
     if (!logic.labels_auto) {
         if (label->getAnchorPoint() != CCPoint{ 0.f, 0.5f })
             label->setAnchorPoint({ 0.f, 0.5f });
@@ -144,22 +140,18 @@ void Labels::sync_label(PlayLayer* play, int tag, bool visible, LabelPlacement c
             label->setAlignment(alignment);
         }
         auto position = label->getPosition();
-        if (position.x != place.x || position.y != place.y) {
+        if (position.x != place.x || position.y != place.y)
             label->setPosition({ place.x, place.y });
-        }
     }
     float scale = place.scale * logic.labelScale;
-    if (label->getScaleX() != scale || label->getScaleY() != scale) {
+    if (label->getScaleX() != scale || label->getScaleY() != scale)
         label->setScale(scale);
-    }
     auto opacity = static_cast<GLubyte>(std::lround(std::clamp(place.opacity, 0, 100) * 2.55f));
-    if (label->getOpacity() != opacity) {
+    if (label->getOpacity() != opacity)
         label->setOpacity(opacity);
-    }
     auto cur = label->getColor();
-    if (cur.r != color.r || cur.g != color.g || cur.b != color.b) {
+    if (cur.r != color.r || cur.g != color.g || cur.b != color.b)
         label->setColor(color);
-    }
 }
 
 void Labels::layout(PlayLayer* play) {
@@ -175,16 +167,14 @@ std::string Labels::format_clock(double seconds) {
 }
 
 void Logic::draw_overlay(PlayLayer* play) {
-    log::debug("draw overlay");
     auto const& logic = Logic::get();
     auto& labels = Labels::get();
     auto font = label_font_file(label_font_index(logic.labelFont));
     if (labels.font != font) {
         labels.font = font;
         for (auto const& info : label_infos()) {
-            if (auto* old = play->getChildByTag(info.tag)) {
+            if (auto* old = play->getChildByTag(info.tag))
                 old->removeFromParent();
-            }
         }
     }
     bool show_labels = !(logic.render_hide_labels && Logic::get().render_capturing());
@@ -219,9 +209,8 @@ void Logic::draw_overlay(PlayLayer* play) {
         bool counted = colon != std::string::npos;
         int macro_best = counted ? std::atoi(max_cps_text.c_str() + colon + 2) : 0;
         unsigned live = std::max(peak_p1, peak_p2);
-        if ((counted || max_cps_text.empty()) && (int)(live) > macro_best) {
+        if ((counted || max_cps_text.empty()) && (int)(live) > macro_best)
             max_cps_text = fmt::format("{}: {}", peak_p2 > peak_p1 ? "P2" : "P1", live);
-        }
     }
 
     std::string percent = "0%";
@@ -242,6 +231,7 @@ void Logic::draw_overlay(PlayLayer* play) {
         Labels::get().format_clock(play->m_gameState.m_levelTime),
         { 255, 255, 255 });
 
+    // backstep is playing but ehhh no its not
     bool recording_shown = show_labels && ((logic).is_recording() || (logic.backstep_target >= 0 && logic.backstep_state != RunState::Playing && logic.backstep_state != RunState::Idle)) && logic.show_recording;
     auto [holds, releases] = recording_shown ? Logic::get().count_holds(logic) : std::pair<int, int>{ 0, 0 };
     Labels::get().sync_label(
@@ -252,36 +242,31 @@ void Logic::draw_overlay(PlayLayer* play) {
         fmt::format("Recording: {}/{}", holds, releases),
         { 255, 255, 255 });
 
-    if (auto* debug = typeinfo_cast<CCLabelBMFont*>(play->getChildByTag(DEBUG_TAG))) {
+    if (auto* debug = typeinfo_cast<CCLabelBMFont*>(play->getChildByTag(DEBUG_TAG)))
         debug->removeFromParent();
-    }
 
     bool dual = play->m_gameState.m_isDualMode && play->m_player2;
     auto body_text = [&](auto&& text_for) {
         std::string text = text_for(play->m_player1, false);
-        if (dual) {
+        if (dual)
             text += "   " + text_for(play->m_player2, true);
-        }
         return text;
     };
     auto named = [&](bool second, std::string text) {
-        if (!dual) {
+        if (!dual)
             return text;
-        }
         return std::string(second ? "P2 " : "P1 ") + text;
     };
     Labels::get().sync_label(play, POS_TAG, show_labels && logic.show_pos, logic.pos_label, body_text([&](PlayerObject* body, bool second) {
-        if (!body) {
+        if (!body)
             return named(second, "--");
-        }
         auto pos = body->getPosition();
         return named(second, fmt::format("{:.2f}, {:.2f}", pos.x, pos.y));
     }),
         { 255, 255, 255 });
     Labels::get().sync_label(play, VELOCITY_TAG, show_labels && logic.show_velocity, logic.velocity_label, body_text([&](PlayerObject* body, bool second) {
-        if (!body) {
+        if (!body)
             return named(second, "--");
-        }
         float forward = body->m_playerSpeed * (float)(body->m_speedMultiplier) * 5.77f;
         if (body->m_isGoingLeft)
             forward = -forward;
@@ -307,25 +292,23 @@ void Logic::draw_overlay(PlayLayer* play) {
         return named(second, flipped ? "Flipped" : "Normal");
     }),
         { 255, 255, 255 });
+    // so were in copper
     std::string utilities;
     if (show_labels && logic.show_utilities) {
         auto add = [&](bool on, std::string_view name) {
             if (!on)
                 return;
-            if (!utilities.empty()) {
+            if (!utilities.empty())
                 utilities += '\n';
-            }
             utilities += name;
         };
         auto pair = [](bool p1, bool p2, std::string_view name) {
-            if (p1 && p2) {
+            if (p1 && p2)
                 return std::string(name);
-            }
             return std::string(name) + (p1 ? " P1" : " P2");
         };
-        if (logic.noclip_p1 || logic.noclip_p2) {
+        if (logic.noclip_p1 || logic.noclip_p2)
             add(true, pair(logic.noclip_p1, logic.noclip_p2, "Noclip"));
-        }
         add(logic.maintain_gravity, "Maintain Gravity");
         add(logic.same_gravity, "Same Gravity");
         add(logic.pause_before_kill, "Prevent Death");
@@ -335,9 +318,8 @@ void Logic::draw_overlay(PlayLayer* play) {
         add(logic.click_both, "Click Both");
         add(logic.follow_mode != 0, "Follow Player");
         add(logic.swap_players, "Swap Player Inputs");
-        if (logic.inverse_p1 || logic.inverse_p2) {
+        if (logic.inverse_p1 || logic.inverse_p2)
             add(true, pair(logic.inverse_p1, logic.inverse_p2, "Inverse Inputs"));
-        }
         add(logic.click_dash_orbs, "Click Dash Orbs");
         add(logic.click_black_orbs, "Click Black Orbs");
         add(logic.pad_black_orb, "Auto Black Orb on Pad");
@@ -348,9 +330,8 @@ void Logic::draw_overlay(PlayLayer* play) {
         add(logic.backstep, "Backstep");
         add(logic.unrounded_physics(), "Velocity Unrounding");
         add(logic.layout_mode, "Layout");
-        if (logic.hide_p1 || logic.hide_p2) {
+        if (logic.hide_p1 || logic.hide_p2)
             add(true, pair(logic.hide_p1, logic.hide_p2, "Hide Player"));
-        }
         add(logic.no_mirror_portals, "No Mirror Portals");
         add(logic.seed_override, "Seed Override");
         add(logic.safeMode, "Safe Mode");
@@ -359,9 +340,8 @@ void Logic::draw_overlay(PlayLayer* play) {
     std::string blocked;
     Labels::get().sync_label(play, SAFE_MODE_TAG, !blocked.empty(), logic.safe_mode_label, blocked, { 255, 60, 60 });
     for (int tag = 0xEC10; tag <= 0xEC1F; ++tag) {
-        if (auto* leftover = play->getChildByTag(tag)) {
+        if (auto* leftover = play->getChildByTag(tag))
             leftover->removeFromParent();
-        }
     }
     Logic::get().sync_death_label(play);
 }
@@ -372,9 +352,8 @@ void Logic::sync_death_label(PlayLayer* play) {
     auto const& logic = Logic::get();
     bool dead = play->m_playerDied || (play->m_player1 && play->m_player1->m_isDead) || (play->m_player2 && play->m_player2->m_isDead);
     bool show = !dead && logic.show_death_next && (logic.death_next_p1 || logic.death_next_p2);
-    if (logic.render_hide_labels && Logic::get().render_capturing()) {
+    if (logic.render_hide_labels && Logic::get().render_capturing())
         show = false;
-    }
     std::string text = "Death next frame";
     if (logic.death_next_p1 && logic.death_next_p2)
         text = "Death next frame";
