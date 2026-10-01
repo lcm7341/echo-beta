@@ -236,14 +236,12 @@ FMOD_RESULT F_CALLBACK AudioTap::read(FMOD_DSP_STATE*, float* in, float* out, un
     auto& tap = AudioTap::get();
     size_t amt = static_cast<size_t>(length) * static_cast<size_t>(in_channels);
     std::memcpy(out, in, amt * sizeof(float));
-    if (out_channels) {
+    if (out_channels)
         *out_channels = in_channels;
-    }
     std::lock_guard guard(tap.lock);
     if (!tap.mixing) {
-        if (tap.attached) {
+        if (tap.attached)
             ++tap.stray_blocks;
-        }
         return FMOD_OK;
     }
     tap.channels = in_channels;
@@ -259,15 +257,13 @@ void AudioTap::bind_bus() {
     if (engine->m_system->getMasterChannelGroup(&live) != FMOD_OK || !live)
         return;
     if (live != master) {
-        if (master && attached) {
+        // DONT leave it frozen
+        if (master && attached)
             master->setPaused(false);
-        }
-        if (master) {
+        if (master)
             master->removeDSP(dsp);
-        }
-        if (live->addDSP(FMOD_CHANNELCONTROL_DSP_TAIL, dsp) == FMOD_OK) {
+        if (live->addDSP(FMOD_CHANNELCONTROL_DSP_TAIL, dsp) == FMOD_OK)
             master = live;
-        }
     }
     if (!master)
         return;
@@ -279,13 +275,11 @@ void AudioTap::bind_bus() {
     };
     adopt(engine->m_backgroundMusicChannel);
     adopt(engine->m_globalChannel);
-    if (engine->m_globalChannel && engine->m_reverbChannel) {
+    if (engine->m_globalChannel && engine->m_reverbChannel)
         engine->m_globalChannel->addGroup(engine->m_reverbChannel, true, nullptr);
-    }
 }
 
 void AudioTap::hold_effects() {
-    log::debug("hold effects");
     if (!attached)
         return;
     auto* engine = FMODAudioEngine::get();
@@ -297,16 +291,14 @@ void AudioTap::hold_effects() {
         engine->m_globalChannel->setVolume(volume);
         engine->m_globalChannel->setPaused(false);
     }
-    if (engine->m_reverbChannel) {
+    if (engine->m_reverbChannel)
         engine->m_reverbChannel->setPaused(false);
-    }
 }
 
 bool AudioTap::attach(float music, float sfx, fs::path const& file) {
     auto* engine = FMODAudioEngine::get();
-    if (attached || !engine || !engine->m_system) {
+    if (attached || !engine || !engine->m_system)
         return false;
-    }
     auto* system = engine->m_system;
     FMOD_DSP_DESCRIPTION description{};
     description.pluginsdkversion = FMOD_PLUGIN_SDK_VERSION;
@@ -314,9 +306,8 @@ bool AudioTap::attach(float music, float sfx, fs::path const& file) {
     description.numinputbuffers = 1;
     description.numoutputbuffers = 1;
     description.read = &AudioTap::read;
-    if (system->createDSP(&description, &dsp) != FMOD_OK || !dsp) {
+    if (system->createDSP(&description, &dsp) != FMOD_OK || !dsp)
         return false;
-    }
     if (system->getMasterChannelGroup(&master) != FMOD_OK || !master || master->addDSP(FMOD_CHANNELCONTROL_DSP_TAIL, dsp) != FMOD_OK) {
         dsp->release();
         dsp = nullptr;
@@ -344,6 +335,8 @@ bool AudioTap::attach(float music, float sfx, fs::path const& file) {
     system->getSoftwareFormat(&rate, nullptr, nullptr);
     if (!song.empty()) {
         engine->stopAndRemoveMusic(0);
+        // gd loads songs bit by bit & render is faster than that so the song ran out
+        // i just load the whole thing
         if (auto it = engine->m_fmodMusic.find(0); it != engine->m_fmodMusic.end() && it->second.m_sound) {
             FMOD_MODE mode = 0;
             it->second.m_sound->getMode(&mode);
@@ -351,9 +344,9 @@ bool AudioTap::attach(float music, float sfx, fs::path const& file) {
                 FMOD::Sound* sample = nullptr;
                 FMOD_MODE wanted = (mode & ~static_cast<FMOD_MODE>(FMOD_CREATESTREAM | FMOD_NONBLOCKING)) | FMOD_CREATESAMPLE;
                 auto res = system->createSound(it->second.m_filePath.c_str(), wanted, nullptr, &sample);
-                if (res == FMOD_OK && sample) {
+                // DONT free ts gd might still use it
+                if (res == FMOD_OK && sample)
                     it->second.m_sound = sample;
-                }
             }
         }
         engine->queueStartMusic(song, 1.f, 0.f, std::clamp(music, 0.f, 1.f), false, static_cast<int>(song_ms), 0, 0, 0, 0, false, 0, false, false);
@@ -364,18 +357,16 @@ bool AudioTap::attach(float music, float sfx, fs::path const& file) {
             engine->updateQueuedMusic();
         }
         sample_streams(engine);
+        // play once NOT loop
         auto* channel = engine->getActiveMusicChannel(0);
-        if (channel) {
+        if (channel)
             channel->setLoopCount(0);
-        }
         bool playing = false;
-        if (channel) {
+        if (channel)
             channel->isPlaying(&playing);
-        }
     }
-    if (engine->m_backgroundMusicChannel) {
+    if (engine->m_backgroundMusicChannel)
         engine->m_backgroundMusicChannel->setPaused(false);
-    }
     old_music = engine->getBackgroundMusicVolume();
     old_sfx = engine->getEffectsVolume();
     effects = std::clamp(sfx, 0.f, 1.f);
@@ -408,12 +399,10 @@ void AudioTap::detach() {
     auto* engine = FMODAudioEngine::get();
     if (!engine || !engine->m_system)
         return;
-    if (master && dsp) {
+    if (master && dsp)
         master->removeDSP(dsp);
-    }
-    if (dsp) {
+    if (dsp)
         dsp->release();
-    }
     dsp = nullptr;
     master = nullptr;
     engine->setBackgroundMusicVolume(old_music);
@@ -432,9 +421,8 @@ void AudioTap::sample_streams(FMODAudioEngine* engine) {
     auto* system = engine->m_system;
     std::vector<FMOD::Channel*> playing;
     auto add = [&](FMOD::Channel* channel) {
-        if (channel && std::ranges::find(playing, channel) == playing.end()) {
+        if (channel && std::ranges::find(playing, channel) == playing.end())
             playing.push_back(channel);
-        }
     };
     for (auto& [id, channel] : engine->m_channelIDToChannel)
         add(channel);
@@ -445,9 +433,8 @@ void AudioTap::sample_streams(FMODAudioEngine* engine) {
         if (group->getNumChannels(&amt) == FMOD_OK) {
             for (int i = 0; i < amt; ++i) {
                 FMOD::Channel* channel = nullptr;
-                if (group->getChannel(i, &channel) == FMOD_OK) {
+                if (group->getChannel(i, &channel) == FMOD_OK)
                     add(channel);
-                }
             }
         }
         int groups = 0;
@@ -455,15 +442,13 @@ void AudioTap::sample_streams(FMODAudioEngine* engine) {
             return;
         for (int i = 0; i < groups; ++i) {
             FMOD::ChannelGroup* child = nullptr;
-            if (group->getGroup(i, &child) == FMOD_OK) {
+            if (group->getGroup(i, &child) == FMOD_OK)
                 self(self, child, depth + 1);
-            }
         }
     };
     FMOD::ChannelGroup* root = nullptr;
-    if (system->getMasterChannelGroup(&root) == FMOD_OK) {
+    if (system->getMasterChannelGroup(&root) == FMOD_OK)
         walk(walk, root, 0);
-    }
 
     for (auto* channel : playing) {
         bool active = false;
@@ -474,23 +459,19 @@ void AudioTap::sample_streams(FMODAudioEngine* engine) {
             continue;
         std::string path;
         for (auto& [music_id, entry] : engine->m_fmodMusic) {
-            if (entry.m_sound == sound) {
+            if (entry.m_sound == sound)
                 path = entry.m_filePath;
-            }
         }
         for (auto& [name, entry] : engine->m_fmodSounds) {
-            if (path.empty() && entry.m_sound == sound) {
+            if (path.empty() && entry.m_sound == sound)
                 path = entry.m_filePath.empty() ? std::string(name) : std::string(entry.m_filePath);
-            }
         }
         for (auto& [name, cached] : engine->m_soundPathToSound) {
-            if (path.empty() && cached == sound) {
+            if (path.empty() && cached == sound)
                 path = name;
-            }
         }
-        if (path.empty() || undecodable.contains(path)) {
+        if (path.empty() || undecodable.contains(path))
             continue;
-        }
         FMOD::Sound* sample = nullptr;
         FMOD_MODE wanted = (mode & ~static_cast<FMOD_MODE>(FMOD_CREATESTREAM | FMOD_NONBLOCKING)) | FMOD_CREATESAMPLE;
         auto res = system->createSound(path.c_str(), wanted, nullptr, &sample);
@@ -529,9 +510,8 @@ void AudioTap::sample_streams(FMODAudioEngine* engine) {
         next->setPosition(position, FMOD_TIMEUNIT_PCM);
         next->setVolume(volume);
         next->setPitch(pitch);
-        if (frequency > 0.f) {
+        if (frequency > 0.f)
             next->setFrequency(frequency);
-        }
         for (unsigned i = 0; i < fades; ++i)
             next->addFadePoint(fade_clocks[i], fade_volumes[i]);
         void* data = nullptr;
@@ -539,24 +519,20 @@ void AudioTap::sample_streams(FMODAudioEngine* engine) {
         next->setUserData(data);
         channel->stop();
         for (auto& [id, held] : engine->m_channelIDToChannel) {
-            if (held == channel) {
+            if (held == channel)
                 held = next;
-            }
         }
         for (auto& [music_id, entry] : engine->m_fmodMusic) {
-            if (entry.m_sound == sound) {
+            if (entry.m_sound == sound)
                 entry.m_sound = sample;
-            }
         }
         for (auto& [name, entry] : engine->m_fmodSounds) {
-            if (entry.m_sound == sound) {
+            if (entry.m_sound == sound)
                 entry.m_sound = sample;
-            }
         }
         for (auto& [name, cached] : engine->m_soundPathToSound) {
-            if (cached == sound) {
+            if (cached == sound)
                 cached = sample;
-            }
         }
         next->setPaused(paused);
     }
@@ -598,16 +574,14 @@ void AudioTap::keep_song_on_time(FMODAudioEngine* engine) {
 }
 
 void AudioTap::advance(float dt, float fade) {
-    log::debug("advance");
     auto* engine = FMODAudioEngine::get();
     if (!attached || !engine || !engine->m_system || rate <= 0)
         return;
     auto* play = PlayLayer::get();
     bool opening = Logic::get().render_record_pause && play && !play->m_started;
     if (opening) {
-        if (engine->m_backgroundMusicChannel) {
+        if (engine->m_backgroundMusicChannel)
             engine->m_backgroundMusicChannel->setPaused(true);
-        }
         clock += (double)(dt);
         uint64_t target = static_cast<uint64_t>(std::llround(clock * (double)(rate)));
         int ch = channels > 0 ? channels : 2;
@@ -652,9 +626,8 @@ void AudioTap::advance(float dt, float fade) {
     for (size_t i = 0; i < amt; ++i)
         loudest = std::max(loudest, std::abs(pending[i]));
     if (written / static_cast<uint64_t>(rate) != (written + take) / static_cast<uint64_t>(rate)) {
-        if (heard.size() < 24) {
+        if (heard.size() < 24)
             heard += fmt::format("{:.2f} ", loudest);
-        }
         loudest = 0.f;
     }
     out.write(reinterpret_cast<char const*>(pending.data()), static_cast<std::streamsize>(amt * sizeof(float)));
@@ -674,29 +647,24 @@ void Recorder::close_handle(HANDLE& handle) {
 bool Recorder::connect_pipe(HANDLE pipe) {
     OVERLAPPED wait{};
     wait.hEvent = CreateEventA(nullptr, TRUE, FALSE, nullptr);
-    if (!wait.hEvent) {
+    if (!wait.hEvent)
         return false;
-    }
     BOOL ok = ConnectNamedPipe(pipe, &wait);
-    if (!ok && GetLastError() == ERROR_IO_PENDING) {
+    if (!ok && GetLastError() == ERROR_IO_PENDING)
         ok = WaitForSingleObject(wait.hEvent, 4000) == WAIT_OBJECT_0;
-    }
-    if (!ok && GetLastError() == ERROR_PIPE_CONNECTED) {
+    if (!ok && GetLastError() == ERROR_PIPE_CONNECTED)
         ok = TRUE;
-    }
     CloseHandle(wait.hEvent);
     return ok == TRUE;
 }
 
 bool Recorder::write_all(HANDLE pipe, void const* data, size_t size) {
-    if (pipe == nullptr || pipe == INVALID_HANDLE_VALUE) {
+    if (pipe == nullptr || pipe == INVALID_HANDLE_VALUE)
         return false;
-    }
     auto const* bytes = static_cast<uint8_t const*>(data);
     HANDLE event = CreateEventA(nullptr, TRUE, FALSE, nullptr);
-    if (!event) {
+    if (!event)
         return false;
-    }
     size_t sent = 0;
     while (sent < size) {
         OVERLAPPED wait{};
@@ -728,18 +696,15 @@ bool Recorder::write_all(HANDLE pipe, void const* data, size_t size) {
 
 fs::path Recorder::game_directory() {
     char module[MAX_PATH] = {};
-    if (!GetModuleFileNameA(nullptr, module, MAX_PATH)) {
+    if (!GetModuleFileNameA(nullptr, module, MAX_PATH))
         return {};
-    }
     return fs::path(module).parent_path();
 }
 
 std::string Recorder::ffmpeg_path() {
-    log::debug("ffmpeg path");
     auto beside = Recorder::get().game_directory() / "ffmpeg.exe";
-    if (fs::exists(beside)) {
+    if (fs::exists(beside))
         return beside.string();
-    }
     return "ffmpeg.exe";
 }
 
@@ -749,9 +714,8 @@ std::string Recorder::run_hidden(std::string command, fs::path const& log_path) 
     security.bInheritHandle = TRUE;
     HANDLE log = CreateFileA(log_path.string().c_str(), GENERIC_WRITE, FILE_SHARE_READ, &security, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
     HANDLE input = CreateFileA("NUL", GENERIC_READ, FILE_SHARE_READ, &security, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (log == INVALID_HANDLE_VALUE) {
+    if (log == INVALID_HANDLE_VALUE)
         return "could not open the ffmpeg log";
-    }
     STARTUPINFOA startup{};
     startup.cb = sizeof(startup);
     startup.dwFlags = STARTF_USESHOWWINDOW | STARTF_USESTDHANDLES;
@@ -764,39 +728,32 @@ std::string Recorder::run_hidden(std::string command, fs::path const& log_path) 
     mutable_command.push_back('\0');
     if (!CreateProcessA(nullptr, mutable_command.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW, nullptr, nullptr, &startup, &process)) {
         CloseHandle(log);
-        if (input != INVALID_HANDLE_VALUE) {
+        if (input != INVALID_HANDLE_VALUE)
             CloseHandle(input);
-        }
         return "could not start ffmpeg";
     }
     CloseHandle(process.hThread);
     CloseHandle(log);
-    if (input != INVALID_HANDLE_VALUE) {
+    if (input != INVALID_HANDLE_VALUE)
         CloseHandle(input);
-    }
-    if (WaitForSingleObject(process.hProcess, 180000) == WAIT_TIMEOUT) {
+    if (WaitForSingleObject(process.hProcess, 180000) == WAIT_TIMEOUT)
         TerminateProcess(process.hProcess, 1);
-    }
     DWORD code = 1;
     GetExitCodeProcess(process.hProcess, &code);
     CloseHandle(process.hProcess);
-    if (code == 0) {
+    if (code == 0)
         return {};
-    }
     std::ifstream in(log_path);
     std::string line;
     std::string last;
     while (std::getline(in, line)) {
-        if (!line.empty()) {
+        if (!line.empty())
             last = line;
-        }
     }
-    if (last.empty()) {
+    if (last.empty())
         last = "ffmpeg failed";
-    }
-    if (last.size() > 160) {
+    if (last.size() > 160)
         last = last.substr(last.size() - 160);
-    }
     return last;
 }
 
@@ -1038,12 +995,10 @@ std::optional<CCSize> Recorder::window_pixels() {
     HDC context = wglGetCurrentDC();
     HWND window = context ? WindowFromDC(context) : nullptr;
     RECT client{};
-    if (!window || !GetClientRect(window, &client)) {
+    if (!window || !GetClientRect(window, &client))
         return std::nullopt;
-    }
-    if (client.right <= client.left || client.bottom <= client.top) {
+    if (client.right <= client.left || client.bottom <= client.top)
         return std::nullopt;
-    }
     return CCSize((float)(client.right - client.left), (float)(client.bottom - client.top));
 }
 
@@ -1051,15 +1006,12 @@ std::optional<CCSize> Recorder::window_pixels() {
 void Recorder::shift_ui(PlayLayer* play, float by) {
     if (!play || by == 0.f)
         return;
-    if (play->m_progressBar) {
+    if (play->m_progressBar)
         play->m_progressBar->setPositionX(play->m_progressBar->getPositionX() + by * .5f);
-    }
-    if (play->m_percentageLabel) {
+    if (play->m_percentageLabel)
         play->m_percentageLabel->setPositionX(play->m_percentageLabel->getPositionX() + by * .5f);
-    }
-    if (play->m_uiLayer && play->m_uiLayer->m_pauseBtn) {
+    if (play->m_uiLayer && play->m_uiLayer->m_pauseBtn)
         play->m_uiLayer->m_pauseBtn->setPositionX(play->m_uiLayer->m_pauseBtn->getPositionX() + by);
-    }
 }
 
 void Recorder::hold_view() {
@@ -1070,9 +1022,8 @@ void Recorder::hold_view() {
         saved_pixels = window_pixels().value_or(saved_frame);
         holding = true;
     }
-    if (!CCEGLView::sharedOpenGLView()->getFrameSize().equals(size)) {
+    if (!CCEGLView::sharedOpenGLView()->getFrameSize().equals(size))
         Recorder::get().silent_change_size(size);
-    }
     if (auto* play = PlayLayer::get(); play && !ui_owner) {
         float by = CCDirector::sharedDirector()->getWinSize().width - saved_win_width;
         if (std::fabs(by) > .5f) {
@@ -1083,9 +1034,8 @@ void Recorder::hold_view() {
     }
     auto* layer = GJBaseGameLayer::get();
     auto* shader = layer ? layer->m_shaderLayer : nullptr;
-    if (shader && (!shader->m_screenSize.equals(size) || !shader->m_targetTextureSize.equals(size))) {
+    if (shader && (!shader->m_screenSize.equals(size) || !shader->m_targetTextureSize.equals(size)))
         Recorder::get().resize_shader_layer(size);
-    }
 }
 
 void Recorder::release_view() {
@@ -1098,9 +1048,9 @@ void Recorder::release_view() {
         saved_frame.height * pixels.height / std::max(saved_pixels.height, 1.f));
     Recorder::get().silent_change_size(restore);
     Recorder::get().resize_shader_layer(restore);
-    if (ui_owner && ui_owner == PlayLayer::get()) {
+    // only the level that got moved, a new one was built at the videos shape already
+    if (ui_owner && ui_owner == PlayLayer::get())
         shift_ui(ui_owner, -ui_shift);
-    }
     ui_owner = nullptr;
     ui_shift = 0.f;
     CCDirector::sharedDirector()->setNextDeltaTimeZero(true);
@@ -1274,9 +1224,8 @@ void main() {
 )";
     y_prog = link_program(vertex, luma);
     uv_prog = link_program(vertex, chroma);
-    if (!y_prog || !uv_prog) {
+    if (!y_prog || !uv_prog)
         return false;
-    }
     GLint old_texture = 0, old_fbo = 0;
     glGetIntegerv(GL_TEXTURE_BINDING_2D, &old_texture);
     glGetIntegerv(GL_FRAMEBUFFER_BINDING, &old_fbo);
@@ -1290,24 +1239,18 @@ void main() {
 }
 
 void Recorder::close_nv12() {
-    if (y_prog) {
+    if (y_prog)
         glDeleteProgram(y_prog);
-    }
-    if (uv_prog) {
+    if (uv_prog)
         glDeleteProgram(uv_prog);
-    }
-    if (y_fbo) {
+    if (y_fbo)
         glDeleteFramebuffers(1, &y_fbo);
-    }
-    if (uv_fbo) {
+    if (uv_fbo)
         glDeleteFramebuffers(1, &uv_fbo);
-    }
-    if (y_color) {
+    if (y_color)
         glDeleteTextures(1, &y_color);
-    }
-    if (uv_color) {
+    if (uv_color)
         glDeleteTextures(1, &uv_color);
-    }
     y_prog = 0;
     uv_prog = 0;
     y_fbo = 0;
@@ -1326,12 +1269,10 @@ void Recorder::convert_nv12() {
     glGetIntegerv(GL_VIEWPORT, viewport);
     GLboolean blend = glIsEnabled(GL_BLEND);
     GLboolean depth = glIsEnabled(GL_DEPTH_TEST);
-    if (blend) {
+    if (blend)
         glDisable(GL_BLEND);
-    }
-    if (depth) {
+    if (depth)
         glDisable(GL_DEPTH_TEST);
-    }
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, color);
     glBindFramebuffer(GL_FRAMEBUFFER, y_fbo);
@@ -1348,12 +1289,10 @@ void Recorder::convert_nv12() {
     glBindTexture(GL_TEXTURE_2D, old_texture);
     glBindFramebuffer(GL_FRAMEBUFFER, old_fbo);
     glViewport(viewport[0], viewport[1], viewport[2], viewport[3]);
-    if (blend) {
+    if (blend)
         glEnable(GL_BLEND);
-    }
-    if (depth) {
+    if (depth)
         glEnable(GL_DEPTH_TEST);
-    }
 }
 
 void Recorder::uncap_pace() {
@@ -1361,18 +1300,15 @@ void Recorder::uncap_pace() {
         return;
     if (auto* director = CCDirector::sharedDirector()) {
         saved_interval = director->getAnimationInterval();
-        if (!(saved_interval > 0.f)) {
+        if (!(saved_interval > 0.f))
             saved_interval = 1.f / 60.f;
-        }
         director->setAnimationInterval(1.f / 10000.f);
     }
     saved_swap = 1;
-    if (auto get_swap = reinterpret_cast<GetSwapIntervalFn>(wglGetProcAddress("wglGetSwapIntervalEXT"))) {
+    if (auto get_swap = reinterpret_cast<GetSwapIntervalFn>(wglGetProcAddress("wglGetSwapIntervalEXT")))
         saved_swap = get_swap();
-    }
-    if (auto set_swap = reinterpret_cast<SwapIntervalFn>(wglGetProcAddress("wglSwapIntervalEXT"))) {
+    if (auto set_swap = reinterpret_cast<SwapIntervalFn>(wglGetProcAddress("wglSwapIntervalEXT")))
         set_swap(0);
-    }
     pace_held = true;
 }
 
@@ -1380,12 +1316,10 @@ void Recorder::restore_pace() {
     if (!pace_held)
         return;
     pace_held = false;
-    if (auto* director = CCDirector::sharedDirector()) {
+    if (auto* director = CCDirector::sharedDirector())
         director->setAnimationInterval(saved_interval > 0.f ? saved_interval : 1.f / 60.f);
-    }
-    if (auto set_swap = reinterpret_cast<SwapIntervalFn>(wglGetProcAddress("wglSwapIntervalEXT"))) {
+    if (auto set_swap = reinterpret_cast<SwapIntervalFn>(wglGetProcAddress("wglSwapIntervalEXT")))
         set_swap(saved_swap);
-    }
 }
 
 bool Recorder::open_target() {
@@ -1407,9 +1341,8 @@ bool Recorder::open_target() {
     glBindTexture(GL_TEXTURE_2D, old_texture);
 
     nv12 = !use_api && Recorder::get().setup_nv12();
-    if (!nv12) {
+    if (!nv12)
         Recorder::get().close_nv12();
-    }
     auto bytes = static_cast<GLsizeiptr>(Recorder::get().frame_bytes());
     glGenBuffers(RING, pbo.data());
     for (auto buf : pbo) {
@@ -1428,9 +1361,8 @@ bool Recorder::open_target() {
     bar_fill = CCLayerColor::create(ccc4(80, 210, 130, 255));
     bar_fill->retain();
     bar_text = CCLabelBMFont::create("Rendering", "bigFont.fnt");
-    if (bar_text) {
+    if (bar_text)
         bar_text->retain();
-    }
     bar_shown.clear();
     text_clock = 0.0;
     return complete;
@@ -1438,38 +1370,30 @@ bool Recorder::open_target() {
 
 void Recorder::close_target() {
     for (auto& fence : fences) {
-        if (fence) {
+        if (fence)
             glDeleteSync(fence);
-        }
         fence = nullptr;
     }
     in_flight.clear();
-    if (pbo[0]) {
+    if (pbo[0])
         glDeleteBuffers(RING, pbo.data());
-    }
     pbo.fill(0);
     Recorder::get().close_nv12();
-    if (fbo) {
+    if (fbo)
         glDeleteFramebuffers(1, &fbo);
-    }
-    if (color) {
+    if (color)
         glDeleteTextures(1, &color);
-    }
     fbo = 0;
     color = 0;
-    if (shade) {
+    if (shade)
         shade->release();
-    }
     shade = nullptr;
-    if (bar_back) {
+    if (bar_back)
         bar_back->release();
-    }
-    if (bar_fill) {
+    if (bar_fill)
         bar_fill->release();
-    }
-    if (bar_text) {
+    if (bar_text)
         bar_text->release();
-    }
     bar_back = nullptr;
     bar_fill = nullptr;
     bar_text = nullptr;
@@ -1494,9 +1418,8 @@ void Recorder::drawFrame() {
     }
     kmGLPopMatrix();
 
-    if (nv12) {
+    if (nv12)
         Recorder::get().convert_nv12();
-    }
     int slot = next_slot;
     while (fences[slot] && Recorder::get().harvest(true)) {
     }
@@ -1525,32 +1448,27 @@ void Recorder::show_overlay() {
     if (!active)
         return;
     auto pixels = window_pixels().value_or(saved_pixels);
-    if (pixels.width < 1.f || pixels.height < 1.f) {
+    if (pixels.width < 1.f || pixels.height < 1.f)
         pixels = CCSize(1.f, 1.f);
-    }
     GLfloat clear[4] = {};
     glGetFloatv(GL_COLOR_CLEAR_VALUE, clear);
     GLboolean scissor = glIsEnabled(GL_SCISSOR_TEST);
-    if (scissor) {
+    if (scissor)
         glDisable(GL_SCISSOR_TEST);
-    }
 
     glBindFramebuffer(GL_FRAMEBUFFER, static_cast<GLuint>(screen_fbo));
     glViewport(0, 0, static_cast<GLsizei>(pixels.width), static_cast<GLsizei>(pixels.height));
     glClearColor(0.f, 0.f, 0.f, 1.f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-    if (Logic::get().render_show_lvl) {
+    if (Logic::get().render_show_lvl)
         Recorder::get().draw_preview(pixels);
-    }
     PauseLayer* pause = nullptr;
-    if (auto* scene = CCDirector::sharedDirector()->getRunningScene()) {
+    if (auto* scene = CCDirector::sharedDirector()->getRunningScene())
         pause = scene->getChildByType<PauseLayer>(0);
-    }
     if (!pause) {
-        if (auto* play = PlayLayer::get()) {
+        if (auto* play = PlayLayer::get())
             pause = play->getChildByType<PauseLayer>(0);
-        }
     }
     if (pause) {
         kmGLPushMatrix();
@@ -1558,6 +1476,7 @@ void Recorder::show_overlay() {
         kmGLPopMatrix();
     }
     Recorder::get().draw_progress();
+    // geode stuff on top goes on screen NOT in the video
     if (auto* overlay = OverlayManager::get()) {
         kmGLPushMatrix();
         overlay->visit();
@@ -1565,9 +1484,8 @@ void Recorder::show_overlay() {
     }
 
     glClearColor(clear[0], clear[1], clear[2], clear[3]);
-    if (scissor) {
+    if (scissor)
         glEnable(GL_SCISSOR_TEST);
-    }
 }
 
 void Recorder::draw_preview(CCSize pixels) {
@@ -1601,14 +1519,12 @@ void Recorder::draw_progress() {
 }
 
 bool Recorder::harvest(bool wait) {
-    if (in_flight.empty()) {
+    if (in_flight.empty())
         return false;
-    }
     int slot = in_flight.front();
     GLenum state = glClientWaitSync(fences[slot], wait ? GL_SYNC_FLUSH_COMMANDS_BIT : 0, wait ? 5'000'000'000ull : 0);
-    if (!wait && state != GL_ALREADY_SIGNALED && state != GL_CONDITION_SATISFIED) {
+    if (!wait && state != GL_ALREADY_SIGNALED && state != GL_CONDITION_SATISFIED)
         return false;
-    }
     glDeleteSync(fences[slot]);
     fences[slot] = nullptr;
     in_flight.pop_front();
@@ -1651,7 +1567,6 @@ void Recorder::queue_frame(std::vector<uint8_t> frame) {
 }
 
 void Recorder::encode_loop() {
-    log::debug("encode loop");
     while (true) {
         std::vector<uint8_t> frame;
         {
@@ -1671,9 +1586,8 @@ void Recorder::encode_loop() {
         }
         {
             std::lock_guard guard(lock);
-            if (spare_frames.size() < QUEUE + 1) {
+            if (spare_frames.size() < QUEUE + 1)
                 spare_frames.push_back(std::move(frame));
-            }
         }
     }
 }
@@ -1693,16 +1607,14 @@ void Recorder::finish_video() {
     spare_frames.clear();
     closing = false;
 #ifdef ECHO_FFMPEG_API
-    if (api) {
+    if (api)
         api->stop();
-    }
     api.reset();
 #endif
     Recorder::get().close_handle(video);
     if (process) {
-        if (WaitForSingleObject(process, 30000) != WAIT_OBJECT_0) {
+        if (WaitForSingleObject(process, 30000) != WAIT_OBJECT_0)
             TerminateProcess(process, 0);
-        }
         CloseHandle(process);
         process = nullptr;
     }
@@ -1719,14 +1631,11 @@ bool Recorder::prefer_api() {
 }
 
 bool Recorder::idle() const {
-    log::debug("idle");
-    if (active) {
+    if (active)
         return false;
-    }
 #ifdef ECHO_FFMPEG_API
-    if (api) {
+    if (api)
         return false;
-    }
 #endif
     return process == nullptr && video == INVALID_HANDLE_VALUE;
 }
@@ -1827,9 +1736,8 @@ void Recorder::save_api_render() {
 bool Recorder::mux_audio() {
     auto& tap = AudioTap::get();
     std::error_code error;
-    if (audio.empty()) {
+    if (audio.empty())
         return true;
-    }
     bool has_audio = frames > 0 && tap.written > 0 && tap.rate > 0 && tap.channels > 0 && fs::exists(output, error);
     if (!has_audio) {
         fs::remove(audio, error);
@@ -1860,9 +1768,8 @@ bool Recorder::mux_audio() {
     fs::remove(log, error);
     if (failed.empty()) {
         fs::rename(temp, output, error);
-        if (error) {
+        if (error)
             failed = "could not replace the video";
-        }
     }
     if (failed.empty()) {
         fs::remove(audio, error);
@@ -1907,9 +1814,8 @@ namespace {
 RenderStatus Logic::render_status() {
     auto const& film = Recorder::get();
     RenderStatus status;
-    if (!film.active) {
+    if (!film.active)
         return status;
-    }
     status.active = true;
     if (film.paused) {
         status.text = "Render paused";
@@ -1917,9 +1823,8 @@ RenderStatus Logic::render_status() {
     }
     auto* play = PlayLayer::get();
     double video = (double)(film.frames) * (double)(Logic::get().render_step());
-    if (film.busy_seconds > 0.05) {
+    if (film.busy_seconds > 0.05)
         status.speed = (float)(video / film.busy_seconds);
-    }
     std::string speed = status.speed > 0.f ? fmt::format("{:.1f}x realtime", status.speed) : std::string("measuring speed");
     if (play && play->m_hasCompletedLevel) {
         status.known = true;
@@ -1956,9 +1861,8 @@ void Logic::sync_render_pause_button() {
     CCNode* button = play && play->m_uiLayer ? play->m_uiLayer->m_pauseBtn : nullptr;
     bool hide = button && render_hide_pause && Recorder::get().active;
     hide = false;
-    if (hidden && hidden != button) {
+    if (hidden && hidden != button)
         hidden = nullptr;
-    }
     if (hide && !hidden && button->isVisible()) {
         button->setVisible(false);
         hidden = button;
@@ -1974,20 +1878,16 @@ bool Logic::render_uses_screen_shape() {
 }
 
 int Logic::render_width_for(int width, int height) {
-    if (!render_uses_screen_shape()) {
+    if (!render_uses_screen_shape())
         return width;
-    }
     auto* view = CCEGLView::get();
-    if (!view) {
+    if (!view)
         return width;
-    }
     auto frame = view->getFrameSize();
-    if (Recorder::get().holding) {
+    if (Recorder::get().holding)
         frame = Recorder::get().saved_frame;
-    }
-    if (frame.width <= 1.f || frame.height <= 1.f) {
+    if (frame.width <= 1.f || frame.height <= 1.f)
         return width;
-    }
     float wide = std::max(frame.width, frame.height);
     float tall = std::min(frame.width, frame.height);
     return std::max(static_cast<int>(std::lround((float)(height) * wide / tall)), 2) & ~1;
@@ -2019,28 +1919,22 @@ bool Logic::render_blocks_mixer() {
 
 bool Logic::render_should_skip() {
     auto* play = PlayLayer::get();
-    if (!play || Logic::get().render_paused()) {
+    if (!play || Logic::get().render_paused())
         return true;
-    }
-    if (Logic::get().pause_menu_open()) {
+    if (Logic::get().pause_menu_open())
         return true;
-    }
     bool started = play->m_started || (Logic::get().render_record_pause && Recorder::get().seen_frames >= 2);
-    if (!started) {
+    if (!started)
         return true;
-    }
-    if (play->m_isPaused) {
+    if (play->m_isPaused)
         return true;
-    }
     return false;
 }
 
 bool Logic::begin_render_frame() {
-    log::debug("begin render frame");
     auto& film = Recorder::get();
-    if (!film.active) {
+    if (!film.active)
         return false;
-    }
     auto now = chrono::steady_clock::now();
     double gap = film.ticked ? chrono::duration<double>(now - film.last_tick).count() : 0.0;
     film.last_tick = now;
@@ -2068,9 +1962,8 @@ void Logic::show_render_overlay() {
 bool Logic::capture_frame() {
     auto& film = Recorder::get();
     auto* play = PlayLayer::get();
-    if (!film.active || !play) {
+    if (!film.active || !play)
         return false;
-    }
     auto const& logic = Logic::get();
     float dt = Logic::get().render_step();
     if (play->m_hasCompletedLevel) {
@@ -2080,9 +1973,8 @@ bool Logic::capture_frame() {
             Logic::get().stop_render();
             if (leave) {
                 Loader::get()->queueInMainThread([] {
-                    if (auto* layer = PlayLayer::get()) {
+                    if (auto* layer = PlayLayer::get())
                         layer->onQuit();
-                    }
                 });
             }
             return false;
@@ -2094,9 +1986,8 @@ bool Logic::capture_frame() {
         fadeOut = std::clamp((logic.render_after_end - film.endTime) / logic.render_fade_out, 0.f, 1.f);
     }
     film.fade = std::min(fadeIn, fadeOut);
-    if (film.start_fraction < 0.f) {
+    if (film.start_fraction < 0.f)
         film.start_fraction = lvl_fraction(play, film.last_input_frame);
-    }
     AudioTap::get().advance(dt * film.audio_speed, film.fade);
     film.drawFrame();
     ++film.frames;
@@ -2113,12 +2004,10 @@ bool Logic::render_batch_more(chrono::steady_clock::time_point started) {
 }
 
 bool Logic::ffmpeg_ready() {
-    log::debug("ffmpeg ready");
     return fs::exists(Recorder::get().game_directory() / "ffmpeg.exe") || Recorder::api_available();
 }
 
 void Logic::stop_render() {
-    log::debug("stop render");
     auto& film = Recorder::get();
     if (film.active && film.frames > 0) {
         double frames = (double)(film.frames);
@@ -2129,9 +2018,8 @@ void Logic::stop_render() {
     }
     if (film.starting && !film.active) {
         film.cancel = true;
-        if (film.video != INVALID_HANDLE_VALUE) {
+        if (film.video != INVALID_HANDLE_VALUE)
             CancelIoEx(film.video, nullptr);
-        }
         Logic::get().message = "Render canceled";
         return;
     }
@@ -2151,9 +2039,8 @@ void Logic::stop_render() {
         return;
     }
     bool muxed = film.mux_audio();
-    if (muxed) {
+    if (muxed)
         Logic::get().message = "Render stopped";
-    }
 }
 
 void Logic::start_render() {
@@ -2181,9 +2068,8 @@ void Logic::start_render() {
     }
     int fps = std::max(logic.render_fps, 1);
     std::string ext = logic.render_extension.empty() ? "mp4" : logic.render_extension;
-    if (ext.front() == '.') {
+    if (ext.front() == '.')
         ext.erase(ext.begin());
-    }
     logic.render_speed_locked = 0.f;
     film.audio_speed = Logic::get().render_speed();
     auto folder = Logic::get().save_root() / "renders";
@@ -2261,6 +2147,7 @@ void Logic::start_render() {
     std::string codec = logic.render_codec.empty() ? "libx264" : logic.render_codec;
     bool hardware = codec.find("nvenc") != std::string::npos || codec.find("amf") != std::string::npos || codec.find("qsv") != std::string::npos;
     char const* out_pix = logic.render_bitrate <= 0 && !hardware ? "yuv444p" : "yuv420p";
+    // shader already did bt709 DONT do it twice
     std::string color_fix = logic.render_color_fix && !film.nv12 ? "-vf colorspace=all=bt709:iall=bt470bg:fast=1 " : "";
     auto has_arg = [&](char const* key) {
         return logic.render_args.find(key) != std::string::npos;
