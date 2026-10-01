@@ -941,13 +941,60 @@ namespace {
 }
 
 void Logic::merge_renders(fs::path const& first_path, fs::path const& second_path) {
-    // todo
+    if (merge_busy)
+        return;
+    auto folder = save_root() / "renders";
+    std::error_code error;
+    fs::create_directories(folder, error);
+    merge_busy = true;
+    merge_seconds = 0.f;
+    merge_folder = folder;
+    merge_label = fmt::format("{} & {}", first_path.stem().string(), second_path.stem().string());
+    notify("Joining in the background", true);
+    std::thread([this, folder, first_path, second_path, encode = merge_encode()] {
+        std::string failure;
+        fs::path dest;
+        try {
+            dest = ReplayIO::unique_file(folder, ReplayIO::sanitize(first_path.stem().string() + "_" + second_path.stem().string()), ".mp4");
+            failure = join_films(first_path, second_path, dest, encode);
+        }
+        catch (std::exception const& ex) {
+            failure = ex.what();
+        }
+        Loader::get()->queueInMainThread([this, failure, dest] {
+            merge_busy = false;
+            if (failure.empty())
+                notify(fmt::format("Joined {}", dest.filename().string()), true);
+            else
+                notify(failure, false);
+        });
+    }).detach();
 }
 
 // ffmpeg writes how far it is to a file, -1 = dont know yet
 float Logic::merge_progress() {
-    // TODO
-    return {};
+    static float shown = -1.f;
+    static chrono::steady_clock::time_point last;
+    if (!merge_busy)
+        return shown = -1.f;
+    auto now = chrono::steady_clock::now();
+    if (now - last < chrono::milliseconds(250))
+        return shown;
+    last = now;
+    float total = merge_seconds;
+    std::ifstream in(merge_folder / "echo-merge-progress.txt", std::ios::binary | std::ios::ate);
+    if (!in || total <= 0.f)
+        return shown = -1.f;
+    auto size = static_cast<std::streamoff>(in.tellg());
+    std::streamoff len = std::min<std::streamoff>(size, 600);
+    std::string tail(static_cast<size_t>(len), '\0');
+    in.seekg(size - len);
+    in.read(tail.data(), len);
+    auto at = tail.rfind("out_time_us=");
+    if (at == std::string::npos)
+        return shown;
+    double micro = std::strtod(tail.c_str() + at + 12, nullptr);
+    return shown = std::clamp((float)(micro / 1e6 / total), 0.f, 1.f);
 }
 
 // Taken directly from Silicate (https://git.silicate.dev/silicate/silicate), GPL-3.0.
