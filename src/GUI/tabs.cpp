@@ -167,13 +167,184 @@ void GUI::draw_main() {
 
 namespace {
 float tool_column() {
-    // TODO
-    return {};
+    float spacing = ImGui::GetStyle().ItemSpacing.x;
+    auto checkW = [](char const* text) {
+        return ImGui::GetFrameHeight() + ImGui::GetStyle().ItemInnerSpacing.x + ImGui::CalcTextSize(text).x;
+    };
+    auto fieldW = [](char const* text, float widget) {
+        return widget + ImGui::GetStyle().ItemInnerSpacing.x + ImGui::CalcTextSize(text).x;
+    };
+    float settingsNeed = GUI::get().label_width("Settings");
+    float advanceNeed = GUI::get().label_width("Advance");
+    float tools = checkW("Auto Black Orb on Pad");
+    tools = std::max(tools, fieldW("Noclip", GUI::get().px(150.f)));
+    tools = std::max(tools, fieldW("Inverse Inputs", GUI::get().px(200.f)));
+    tools = std::max(tools, fieldW("Follow Player", GUI::get().px(150.f)));
+    tools = std::max(tools, fieldW("Hide Player", GUI::get().px(150.f)));
+    tools = std::max(tools, checkW("Click Both Players") + spacing + checkW("Swap Player Input"));
+    tools = std::max(tools, checkW("Maintain Gravity"));
+    tools = std::max(tools, checkW("Disable Shake Effects"));
+    tools = std::max(tools, checkW("Disable Death Effect"));
+    tools = std::max(tools, checkW("No Mirror Portals"));
+    tools = std::max(tools, checkW("Fix Rotation Bug"));
+    tools = std::max(tools, checkW("Autoclicker") + spacing + settingsNeed);
+    tools = std::max(tools, checkW("Frame Advance") + spacing + advanceNeed + spacing + settingsNeed);
+    tools = std::max(tools, checkW("Layout") + spacing + settingsNeed);
+    tools = std::max(tools, checkW("Hitboxes") + spacing + settingsNeed);
+    tools = std::max(tools, checkW("Trajectory") + spacing + settingsNeed);
+    return tools;
 }
 }
 
 void GUI::draw_tools() {
-    // TODO
+    auto& value = Logic::get();
+    float spacing = ImGui::GetStyle().ItemSpacing.x;
+    float settingsNeed = GUI::get().label_width("Settings");
+    float advanceNeed = GUI::get().label_width("Advance");
+    float tools = tool_column();
+    auto settingsWidth = [&]() {
+        float used = ImGui::GetItemRectSize().x + spacing;
+        return std::max(settingsNeed, tools - used);
+    };
+    char const* noclip[] = {"Off", "Player 1", "Player 2", "Both"};
+    int noclipSel = GUI::get().quad_index(value.noclip_p1, value.noclip_p2);
+    ImGui::SetNextItemWidth(GUI::get().px(150.f));
+    if (GUI::get().combo_items("Noclip##dropdown_noclip", noclip, 4, noclipSel)) {
+        GUI::get().apply_quad(noclipSel, value.noclip_p1, value.noclip_p2);
+        GUI::get().persist();
+    }
+    GUI::get().checkbox_setting("Click Both Players", value.click_both);
+    GUI::get().offer_rebind("key-click-both");
+    ImGui::SameLine();
+    GUI::get().checkbox_setting("Swap Player Input", value.swap_players);
+    {
+        char const* follow[] = {"Off", "P2 follows P1", "P1 follows P2"};
+        ImGui::SetNextItemWidth(GUI::get().px(150.f));
+        if (GUI::get().combo_items("Follow Player##dropdown_follow", follow, 3, value.follow_mode)) GUI::get().persist();
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("For two player levels, the following player will copy the followed player after that many frames or milliseconds.");
+        if (value.follow_mode != 0) {
+            ImGui::SetNextItemWidth(GUI::get().px(80.f));
+            if (ImGui::DragFloat("##follow_delay", &value.follow_delay, value.follow_delay_ms ? 1.f : 0.25f, 0.f, 100000.f, value.follow_delay_ms ? "%.1f" : "%.0f")) value.follow_delay = std::max(value.follow_delay, 0.f);
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("How far behind the follower is. %d steps at the current TPS.", Logic::get().follow_steps());
+            if (ImGui::IsItemDeactivatedAfterEdit()) GUI::get().persist();
+            ImGui::SameLine();
+            char const* units[] = {"frames", "ms"};
+            int unit = value.follow_delay_ms ? 1 : 0;
+            if (GUI::get().combo_items("Delay##dropdown_follow_unit", units, 2, unit, GUI::get().px(90.f))) {
+                value.follow_delay_ms = unit == 1;
+                GUI::get().persist();
+            }
+        }
+    }
+    {
+        bool locked = value.is_recording() || value.is_playing();
+        bool unrounded = value.shown_unrounded();
+        ImGui::BeginDisabled(locked);
+        if (ImGui::Checkbox("Velocity Unrounding", &unrounded)) {
+            value.set_unrounded(unrounded);
+            GUI::get().persist();
+        }
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Stops GD rounding the player's y velocity to three decimals (it's chizz's Velocity Unrounding mod). CHANGES PHYSICS!");
+        ImGui::EndDisabled();
+    }
+
+    GUI::get().checkbox_setting("Maintain Gravity", value.maintain_gravity);
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("While recording, the wave is controlled as if gravity were always normal.");
+    if (value.maintain_gravity && GUI::get().two_player_dual()) {
+        ImGui::SameLine();
+        GUI::get().checkbox_setting("Same Gravity", value.same_gravity);
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Ensures that Maintain Gravity keeps both players on the same gravity.");
+    }
+
+    char const* inverse[] = {"Off", "Player 1", "Player 2", "Both"};
+    int inverseSel = GUI::get().quad_index(value.inverse_p1, value.inverse_p2);
+    ImGui::SetNextItemWidth(GUI::get().px(200.f));
+    if (GUI::get().combo_items("Inverse Inputs##dropdown_inverse", inverse, 4, inverseSel)) {
+        GUI::get().apply_quad(inverseSel, value.inverse_p1, value.inverse_p2);
+        GUI::get().persist();
+    }
+    
+    GUI::get().checkbox_setting("Autoclicker###autoclick_checkbox", value.autoclicker);
+    GUI::get().offer_rebind("key-autoclick");
+    ImGui::SameLine();
+    if (ImGui::Button("Settings###autoclick_settings", ImVec2(settingsWidth(), 0.f))) ImGui::OpenPopup("Autoclicker Settings");
+    if (ImGui::BeginPopupModal("Autoclicker Settings", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        GUI::get().checkbox_setting("Enable Autoclicker", value.autoclicker);
+        char const* autoPlayers[] = {"Player 1", "Player 2", "Both"};
+        int autoSel = value.autoclick_p1 && value.autoclick_p2 ? 2 : value.autoclick_p2 ? 1 : 0;
+        if (GUI::get().combo_items("Player##dropdown_autoclicker", autoPlayers, 3, autoSel)) {
+            value.autoclick_p1 = autoSel != 1;
+            value.autoclick_p2 = autoSel != 0;
+            GUI::get().persist();
+        }
+        int press = value.auto_click.press_interval;
+        int release = value.auto_click.release_interval;
+        ImGui::SetNextItemWidth(GUI::get().px(90.f));
+        if (ImGui::DragInt("Click Length", &press, 1.f, 0, 10000)) value.auto_click.press_interval = std::max(press, 0);
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("0 makes every click a swift click.");
+        if (ImGui::IsItemDeactivatedAfterEdit()) GUI::get().persist();
+        ImGui::SetNextItemWidth(GUI::get().px(90.f));
+        if (ImGui::DragInt("Release Length", &release, 1.f, 1, 10000)) value.auto_click.release_interval = std::max(release, 1);
+        if (ImGui::IsItemDeactivatedAfterEdit()) GUI::get().persist();
+        GUI::get().checkbox_setting("Auto Disable", value.autoclick_auto_disable);
+        int disable_in = value.auto_click.disable_in;
+        if (!value.autoclick_auto_disable) ImGui::BeginDisabled();
+        ImGui::SetNextItemWidth(GUI::get().px(90.f));
+        if (ImGui::DragInt("Frames", &disable_in, 1.f, 1, 10000)) value.auto_click.disable_in = std::max(disable_in, 1);
+        if (ImGui::IsItemDeactivatedAfterEdit()) Logic::get().save_settings_file();
+        if (!value.autoclick_auto_disable) ImGui::EndDisabled();
+        if (ImGui::Button("Close")) ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+    }
+
+    bool advancing = value.frame_advance;
+    if (ImGui::Checkbox("Frame Advance###advance_checkbox", &advancing)) GUI::get().set_frame_advance(advancing);
+    GUI::get().offer_rebind("toggle-advance");
+    ImGui::SameLine();
+    float advanceRoom = std::max(advanceNeed + spacing + settingsNeed, tools - ImGui::GetItemRectSize().x - spacing);
+    float advanceW = std::max(advanceNeed, (advanceRoom - spacing) * 0.5f);
+    float advanceSettingsW = std::max(settingsNeed, advanceRoom - spacing - advanceW);
+    GUI::get().offer_rebind("step-frame");
+    ImGui::SameLine();
+    if (ImGui::Button("Settings###advance_settings", ImVec2(advanceSettingsW, 0.f))) ImGui::OpenPopup("Frame Advance Settings");
+    if (ImGui::BeginPopupModal("Frame Advance Settings", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        bool advancingHere = value.frame_advance;
+        if (ImGui::Checkbox("Frame Advance", &advancingHere)) GUI::get().set_frame_advance(advancingHere);
+        int hold = static_cast<int>(value.advance_hold_ms);
+        int speed = static_cast<int>(std::lround(value.advance_speed));
+        ImGui::SetNextItemWidth(GUI::get().px(90.f));
+        if (ImGui::DragInt("Hold Time (ms)", &hold, 1.f, 0, 5000)) value.advance_hold_ms = static_cast<unsigned>(std::max(hold, 0));
+        if (ImGui::IsItemDeactivatedAfterEdit()) Logic::get().save_settings_file();
+        ImGui::SetNextItemWidth(GUI::get().px(90.f));
+        if (ImGui::DragInt("Speed", &speed, 1.f, 1, 200, "%d%%")) value.advance_speed = static_cast<float>(std::clamp(speed, 1, 200));
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Percent of your TPS, scaled with speedhack. 100%% at 1x will advance you in real time.");
+        if (ImGui::IsItemDeactivatedAfterEdit()) Logic::get().save_settings_file();
+        ImGui::Separator();
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("While recording, keeps saved states to step backwards to. Saves every step at 240 TPS; at higher TPS it saves less often and replays your inputs from the last save.");
+        ImGui::SameLine();
+        GUI::get().offer_rebind("step-back");
+        ImGui::SetNextItemWidth(GUI::get().px(90.f));
+        if (ImGui::DragInt("Saved States", &value.backstep_percent, 1.f, 1, 10000, "%d%%")) value.backstep_percent = std::clamp(value.backstep_percent, 1, 10000);
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("How many states to keep, in percent of your TPS. 100%% keeps as many as your TPS (240 at 240 TPS).");
+        if (ImGui::IsItemDeactivatedAfterEdit()) Logic::get().save_settings_file();
+        if (ImGui::Button("Close")) ImGui::CloseCurrentPopup();
+        GUI::get().draw_keybind_prompt(true);
+        ImGui::EndPopup();
+    }
+
+    if (GUI::get().checkbox_setting("Prevent Death", value.pause_before_kill)) Logic::get().reset_traj();
+    GUI::get().offer_rebind("key-pause-before-kill", "While recording, frame advance stops on the frame before a death instead of dying. Works without Show Trajectory.");
+    if (GUI::get().checkbox_setting("Trajectory Autoclicker", value.traj_autoclicker)) Logic::get().reset_traj();
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("When the next frame would kill you, starts holding if released or releases if held. Works without Show Trajectory.");
+    GUI::get().section_label("Orb Assists (while recording)");
+    if (GUI::get().checkbox_setting("Click Dash Orbs", value.click_dash_orbs)) Logic::get().reset_traj();
+    GUI::get().offer_rebind("key-click-dash-orbs", "Swift-clicks each stacked dash orb and stores those clicks. Does not affect playback.");
+    if (GUI::get().checkbox_setting("Click Black Orbs", value.click_black_orbs)) Logic::get().reset_traj();
+    GUI::get().offer_rebind("key-click-black-orbs", "Swift-clicks black orbs during UFO sections. Does not affect playback.");
+    if (GUI::get().checkbox_setting("Auto Black Orb on Pad", value.pad_black_orb)) Logic::get().reset_traj();
+    GUI::get().offer_rebind("key-pad-black-orb", "When the player hits a pad, swift-clicks the black orbs it is touching. Stored in the recording.");
+    if (GUI::get().checkbox_setting("Auto Blue Orb on Pad", value.pad_blue_orb)) Logic::get().reset_traj();
+    GUI::get().offer_rebind("key-pad-blue-orb", "When the player hits a pad, swift-clicks a blue orb it is touching. Stored in the recording.");
 }
 
 void GUI::draw_visuals() {
