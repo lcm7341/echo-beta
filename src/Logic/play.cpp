@@ -386,7 +386,116 @@ void Logic::match_live_holds(PlayLayer* play) {
 }
 
 void Logic::apply_maintain_gravity(GJBaseGameLayer* play) {
-    // TODO
+    if (!play || !play->m_uiLayer || play->m_levelEndAnimationStarted || applying_playback || restoring_holds)
+        return;
+    if (!maintain_gravity)
+        return;
+    int jump_key = static_cast<int>(PlayerButton::Jump);
+    bool two = play->m_levelSettings && play->m_levelSettings->m_twoPlayerMode;
+    bool dual = play->m_gameState.m_isDualMode || two;
+    auto eligible = [&](PlayerObject* body, bool icon2) {
+        if (!body || !body->m_isDart || plays_player(icon2) || (icon2 && !dual) || body->m_controlsDisabled)
+            return false;
+        if (records_player(icon2))
+            return true;
+        bool one_dual = play->m_gameState.m_isDualMode && !two;
+        return one_dual && !icon2 && records_player(true);
+    };
+    auto mismatch = [&](PlayerObject* body, bool icon2, bool& push) {
+        push = false;
+        if (!eligible(body, icon2))
+            return false;
+        bool physical = physical_hold(play, icon2);
+        if (body->m_isUpsideDown != (physical == body->m_jumpBuffered))
+            return false;
+        push = physical != body->m_isUpsideDown;
+        return true;
+    };
+    auto apply = [&](PlayerObject* body, bool icon2, bool push, bool record) {
+        if (!body)
+            return;
+        if (record) {
+            Frame input;
+            input.number = step_frame + 1;
+            input.holding = push;
+            input.player2 = icon2;
+            input.button = static_cast<uint8_t>(jump_key);
+            size_t at = Logic::get().add_input(*this, input);
+            if (at != static_cast<size_t>(-1) && save_debug)
+                set_pose_at(at, Logic::get().capture_pose(body));
+        }
+        body->m_isLocked = false;
+        if (!record)
+            mirror_click = true;
+        Logic::get().play_input(play, icon2, push, jump_key);
+        mirror_click = false;
+    };
+    auto correct = [&](PlayerObject* body, bool icon2) {
+        maintaining_gravity = true;
+        int limit = 8;
+        for (int step = 0; step < limit; ++step) {
+            bool push = false;
+            if (!mismatch(body, icon2, push))
+                break;
+            bool before_flip = body->m_isUpsideDown, before_buffer = body->m_jumpBuffered;
+            apply(body, icon2, push, true);
+            if (body->m_isUpsideDown == before_flip && body->m_jumpBuffered == before_buffer)
+                break;
+        }
+        maintaining_gravity = false;
+    };
+    if (!is_recording())
+        return;
+    if (click_both && dual) {
+        bool held = physical_hold(play, false);
+        Trajectory::get().note_button(true, held);
+        Trajectory::get().note_button(false, held);
+    }
+    bool one_dual = play->m_gameState.m_isDualMode && !two;
+    if (one_dual) {
+        maintaining_gravity = true;
+        int limit = same_gravity ? 1 : 8;
+        for (int step = 0; step < limit; ++step) {
+            bool push = false;
+            if (!mismatch(play->m_player1, false, push))
+                break;
+            bool before_flip = play->m_player1->m_isUpsideDown;
+            bool before_buffer = play->m_player1->m_jumpBuffered;
+            apply(play->m_player1, false, push, true);
+            if (play->m_player1->m_isUpsideDown == before_flip && play->m_player1->m_jumpBuffered == before_buffer)
+                break;
+            apply(play->m_player2, true, push, false);
+        }
+        maintaining_gravity = false;
+        return;
+    }
+    bool paired = click_both && dual && !two;
+    if (!paired) {
+        correct(play->m_player1, false);
+        correct(play->m_player2, true);
+        return;
+    }
+    maintaining_gravity = true;
+    int limit = same_gravity ? 1 : 8;
+    for (int step = 0; step < limit; ++step) {
+        bool push1 = false, push2 = false;
+        bool need1 = mismatch(play->m_player1, false, push1), need2 = mismatch(play->m_player2, true, push2);
+        if (!need1 && !need2)
+            break;
+        bool flip1 = play->m_player1 && play->m_player1->m_isUpsideDown;
+        bool buffer1 = play->m_player1 && play->m_player1->m_jumpBuffered;
+        bool flip2 = play->m_player2 && play->m_player2->m_isUpsideDown;
+        bool buffer2 = play->m_player2 && play->m_player2->m_jumpBuffered;
+        if (need1)
+            apply(play->m_player1, false, push1, true);
+        if (need2)
+            apply(play->m_player2, true, push2, true);
+        bool changed1 = need1 && play->m_player1 && (play->m_player1->m_isUpsideDown != flip1 || play->m_player1->m_jumpBuffered != buffer1);
+        bool changed2 = need2 && play->m_player2 && (play->m_player2->m_isUpsideDown != flip2 || play->m_player2->m_jumpBuffered != buffer2);
+        if (!changed1 && !changed2)
+            break;
+    }
+    maintaining_gravity = false;
 }
 
 void Logic::sync_same_gravity(GJBaseGameLayer* play) {
