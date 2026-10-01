@@ -558,7 +558,8 @@ namespace {
 void Hitboxes::draw_object_hitbox(CCDrawNode* node, GJBaseGameLayer* play, GameObject* object, float width, bool fill) {
     if (!object || object->m_isGroupDisabled)
         return;
-    if (!object->m_isActivated || object->m_objectType == GameObjectType::Decoration)
+    // DONT check m_isActivated its late on some lvls fsr
+    if (object->m_objectType == GameObjectType::Decoration)
         return;
     if (object == play->m_player1 || object == play->m_player2 || Logic::get().is_traj_player(object))
         return;
