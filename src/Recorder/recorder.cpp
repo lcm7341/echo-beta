@@ -4,6 +4,7 @@
 // the window keeps its real size while gd is told it has the videos size, & the shader layer is resized to match (silicate)
 // audio is tapped off gds own mixer (AudioTap): frozen between frames & moved on by exactly 1 frame of sound each time,
 //   so it cant drift from the picture. it is muxed into the video in a 2nd pass
+// gd streams songs off disk in pieces, too slow for a render that runs faster than real time. render_song loads the whole song
 #include "GUI/gui.hpp"
 #include "Recorder/stereo_audio.hpp"
 #include "Logic/conversions/codecs.hpp"
@@ -1515,7 +1516,33 @@ void Recorder::draw_preview(CCSize pixels) {
 }
 
 void Recorder::draw_progress() {
-    // TODO
+    if (!bar_back || !bar_fill || !bar_text)
+        return;
+    auto status = Logic::get().render_status();
+    if (!status.active)
+        return;
+    auto win = CCDirector::sharedDirector()->getWinSize();
+    float bar_w = win.width * 0.6f, bar_h = std::max(win.height * 0.014f, 2.f);
+    float x = (win.width - bar_w) * 0.5f, y = win.height * 0.08f;
+    bar_back->setContentSize({ bar_w, bar_h });
+    bar_back->setPosition({ x, y });
+    bar_fill->setContentSize({ bar_w * (status.known ? status.progress : 0.f), bar_h });
+    bar_fill->setPosition({ x, y });
+    text_clock += wall_delta;
+    if (bar_shown.empty() || text_clock >= 0.2) {
+        text_clock = 0.0;
+        if (status.text != bar_shown) {
+            bar_shown = status.text;
+            bar_text->setString(bar_shown.c_str());
+        }
+    }
+    bar_text->setScale(0.4f * win.height / 320.f);
+    bar_text->setPosition({ win.width * 0.5f, y + bar_h + win.height * 0.04f });
+    kmGLPushMatrix();
+    bar_back->visit();
+    bar_fill->visit();
+    bar_text->visit();
+    kmGLPopMatrix();
 }
 
 bool Recorder::harvest(bool wait) {
