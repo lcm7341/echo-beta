@@ -990,7 +990,10 @@ float Logic::merge_progress() {
     std::string tail(static_cast<size_t>(len), '\0');
     in.seekg(size - len);
     in.read(tail.data(), len);
+    // old ffmpeg calls it out_time_ms but its STILL microseconds
     auto at = tail.rfind("out_time_us=");
+    if (at == std::string::npos)
+        at = tail.rfind("out_time_ms=");
     if (at == std::string::npos)
         return shown;
     double micro = std::strtod(tail.c_str() + at + 12, nullptr);
