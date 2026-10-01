@@ -27,9 +27,9 @@ namespace {
 }
 
 void Logic::prepare_lvl_view(PlayLayer* play) {
-    log::debug("prepare lvl view");
     if (!play || !play->m_shaderLayer || Logic::get().render_holds_view())
         return;
+    // DONT use win size here shaders go pixelated
     play->m_shaderLayer->performCalculations();
 }
 
@@ -40,9 +40,8 @@ float Logic::render_step() {
 float Logic::scroll_speed_factor() {
     auto* layer = GJBaseGameLayer::get();
     auto* player = layer ? layer->m_player1 : nullptr;
-    if (!player) {
+    if (!player)
         return 1.f;
-    }
     static float const speeds[5] = { 251.1601f, 311.5801f, 387.4201f, 468.0002f, 576.0002f };
     float speed = player->m_playerSpeed;
     int idx = 1;
@@ -57,9 +56,8 @@ float Logic::scroll_speed_factor() {
     float step = speeds[idx] / static_cast<float>(std::max(Logic::get().sample_rate(), 1.0));
     float moved = (player->getPositionX() + step) - player->getPositionX();
     float factor = step > 0.f ? moved / step : 1.f;
-    if (!(factor > 0.f) || layer->m_levelEndAnimationStarted) {
+    if (!(factor > 0.f) || layer->m_levelEndAnimationStarted)
         return 1.f;
-    }
     return factor;
 }
 
@@ -72,9 +70,8 @@ float Logic::render_game_step() {
     float dt = Logic::get().render_step() * Logic::get().render_speed();
     if (Logic::get().render_ssb_fix) {
         float factor = Logic::get().scroll_speed_factor();
-        if (factor > 0.f) {
+        if (factor > 0.f)
             dt /= factor;
-        }
     }
     return dt;
 }
@@ -100,17 +97,14 @@ void sync_effect_group(FMOD::ChannelGroup* group, double level, std::unordered_m
     group->getNumChannels(&amt);
     for (int i = 0; i < amt; ++i) {
         FMOD::Channel* channel = nullptr;
-        if (group->getChannel(i, &channel) != FMOD_OK || !channel) {
+        if (group->getChannel(i, &channel) != FMOD_OK || !channel)
             continue;
-        }
         bool playing = false;
-        if (channel->isPlaying(&playing) != FMOD_OK || !playing) {
+        if (channel->isPlaying(&playing) != FMOD_OK || !playing)
             continue;
-        }
         unsigned pos = 0;
-        if (channel->getPosition(&pos, FMOD_TIMEUNIT_MS) != FMOD_OK) {
+        if (channel->getPosition(&pos, FMOD_TIMEUNIT_MS) != FMOD_OK)
             continue;
-        }
         seen.insert(channel);
         auto it = marks.find(channel);
         bool fresh = it == marks.end() || level + 0.0005 < it->second.level || pos + 80 < it->second.pos;
@@ -119,25 +113,21 @@ void sync_effect_group(FMOD::ChannelGroup* group, double level, std::unordered_m
             continue;
         }
         double expected_d = (double)(it->second.pos) + (level - it->second.level) * 1000.0;
-        if (expected_d < 0.0) {
+        if (expected_d < 0.0)
             expected_d = 0.0;
-        }
         auto expected = static_cast<unsigned>(std::llround(expected_d));
         int drift = static_cast<int>(pos) - static_cast<int>(expected);
-        if (std::abs(drift) < 250) {
+        if (std::abs(drift) < 250)
             continue;
-        }
-        if (channel->setPosition(expected, FMOD_TIMEUNIT_MS) == FMOD_OK) {
+        if (channel->setPosition(expected, FMOD_TIMEUNIT_MS) == FMOD_OK)
             it->second.pos = expected;
-        }
     }
     int groups = 0;
     group->getNumGroups(&groups);
     for (int i = 0; i < groups; ++i) {
         FMOD::ChannelGroup* child = nullptr;
-        if (group->getGroup(i, &child) == FMOD_OK) {
+        if (group->getGroup(i, &child) == FMOD_OK)
             sync_effect_group(child, level, marks, seen);
-        }
     }
 }
 
@@ -169,18 +159,15 @@ void play_group_slice(FMOD::ChannelGroup* group, unsigned long long samples) {
 }
 
 bool slice_still_running(FMOD::ChannelGroup* group) {
-    if (!group) {
+    if (!group)
         return false;
-    }
     unsigned long long clock = 0;
     unsigned long long start = 0, end = 0;
     bool stop = false;
-    if (group->getDSPClock(nullptr, &clock) != FMOD_OK) {
+    if (group->getDSPClock(nullptr, &clock) != FMOD_OK)
         return false;
-    }
-    if (group->getDelay(&start, &end, &stop) != FMOD_OK) {
+    if (group->getDelay(&start, &end, &stop) != FMOD_OK)
         return false;
-    }
     return end > clock;
 }
 
@@ -206,11 +193,9 @@ void Logic::reset_opening_music_hold() {
 }
 
 std::string Logic::render_file_stem() const {
-    if (!render_name.empty() && render_name != "output") {
+    if (!render_name.empty() && render_name != "output")
         return render_name;
-    }
-    if (!macro_name.empty()) {
+    if (!macro_name.empty())
         return macro_name;
-    }
     return "Replay";
 }
