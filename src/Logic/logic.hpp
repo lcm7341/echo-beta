@@ -346,7 +346,7 @@ struct Session {
 	int steps_left = 0;
 	bool skip_physics = false;
 	bool defer_player_art = false, player_art_deferred = false;
-	uint32_t tick_steps = 0;
+	uint32_t steps_this_tick = 0;
 	int frame_steps = 0;
 	int respawn_frames = 0, ignore_record_frames = 0;
 	bool restoring_holds = false;

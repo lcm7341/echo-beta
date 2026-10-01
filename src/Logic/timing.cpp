@@ -1,7 +1,7 @@
 // decides how many physics steps each drawn frame runs, then runs them
 //
 // steps owed = frame time / step length. the leftover is carried to the next frame (logic.carry) so no time is lost
-// the count reaches gd thru tick_steps, which the step patch makes update() read instead of doing its own math
+// the count reaches gd thru steps_this_tick, which the step patch makes update() read instead of doing its own math
 // frame advance: exactly 1 step per press. speedhack & frame time dont matter
 // pause before kill / trajectory autoclicker: 1 step at a time, so there is a chance to stop BEFORE the death
 // real time: a frame may run up to a seconds worth of steps so game time stays right when physics cant keep up
@@ -288,7 +288,7 @@ void Logic::run_frame(GJBaseGameLayer* play, float dt, std::function<void(float)
     if (auto* live = Logic::as_play(play); live && live->m_playerDied) {
         logic.carry = 0.f;
         logic.steps_left = 0;
-        logic.tick_steps = 0;
+        logic.steps_this_tick = 0;
         if (Logic::get().advance_paused(play)) {
             logic.advance_queued = false;
             Trajectory::get().refresh(PlayLayer::get());
@@ -410,7 +410,7 @@ void Logic::run_frame(GJBaseGameLayer* play, float dt, std::function<void(float)
             float left = static_cast<float>(steps - batch) * logic.physics_step();
             float step_dt = logic.physics_step();
             logic.steps_left = batch;
-            logic.tick_steps = static_cast<uint32_t>(batch);
+            logic.steps_this_tick = static_cast<uint32_t>(batch);
             logic.frame_steps += batch;
             logic.defer_player_art = batch > 1 && phys::fast_prediction_pos();
             time_update([&] {
@@ -432,7 +432,7 @@ void Logic::run_frame(GJBaseGameLayer* play, float dt, std::function<void(float)
         settle_cost();
         logic.frame_steps = 0;
         logic.steps_left = 0;
-        logic.tick_steps = 0;
+        logic.steps_this_tick = 0;
         logic.present = true;
         Trajectory::get().refresh(PlayLayer::get());
         return;
@@ -470,7 +470,7 @@ void Logic::run_frame(GJBaseGameLayer* play, float dt, std::function<void(float)
                 }
                 float step_dt = logic.physics_step();
                 logic.steps_left = 1;
-                logic.tick_steps = 1;
+                logic.steps_this_tick = 1;
                 ++logic.frame_steps;
                 time_update([&] {
                     play->update(step_dt);
@@ -510,7 +510,7 @@ void Logic::run_frame(GJBaseGameLayer* play, float dt, std::function<void(float)
         settle_cost();
         logic.frame_steps = 0;
         logic.steps_left = 0;
-        logic.tick_steps = 0;
+        logic.steps_this_tick = 0;
         logic.present = true;
         Trajectory::get().refresh(PlayLayer::get());
         return;
@@ -537,10 +537,10 @@ void Logic::run_frame(GJBaseGameLayer* play, float dt, std::function<void(float)
         if (!std::isfinite(tick_dt) || !(tick_dt > 0.f) || tick_dt > 1.f)
             break;
         logic.steps_left = 1;
-        logic.tick_steps = 1;
+        logic.steps_this_tick = 1;
         tick(tick_dt);
         logic.steps_left = 0;
-        logic.tick_steps = 0;
+        logic.steps_this_tick = 0;
     }
     if (logic.backstep_target >= 0) {
         Logic::get().click_best_frame(Logic::as_play(play));

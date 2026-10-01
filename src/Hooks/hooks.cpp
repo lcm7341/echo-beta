@@ -779,7 +779,7 @@ class $modify(EchoGameLayer, GJBaseGameLayer) {
             return;
         // death HAS to reach the original or auto retry freezes
         if (auto* play = Logic::as_play(this); play && play->m_playerDied) {
-            logic.tick_steps = static_cast<uint32_t>(vanilla_physics_steps(dt, m_gameState.m_timeWarp));
+            logic.steps_this_tick = static_cast<uint32_t>(vanilla_physics_steps(dt, m_gameState.m_timeWarp));
             GJBaseGameLayer::update(dt);
             return;
         }
@@ -790,22 +790,22 @@ class $modify(EchoGameLayer, GJBaseGameLayer) {
             layer = editor;
         bool locked = Logic::get().lock_delta_active();
         if (logic.refresh_only || !layer || Logic::get().defer_physics()) {
-            logic.tick_steps = static_cast<uint32_t>(vanilla_physics_steps(dt, m_gameState.m_timeWarp));
+            logic.steps_this_tick = static_cast<uint32_t>(vanilla_physics_steps(dt, m_gameState.m_timeWarp));
             GJBaseGameLayer::update(dt);
             return;
         }
         if (logic.disable_shakes || logic.layout_mode)
             m_skipCameraShake = true;
         if (!locked && logic.steps_left == 0) {
-            logic.tick_steps = static_cast<uint32_t>(std::max(Logic::get().count_unlocked_steps(layer, dt), 0));
-            if (logic.tick_steps == 0)
+            logic.steps_this_tick = static_cast<uint32_t>(std::max(Logic::get().count_unlocked_steps(layer, dt), 0));
+            if (logic.steps_this_tick == 0)
                 return;
         }
         else if (!locked) {
-            logic.tick_steps = static_cast<uint32_t>(std::max(logic.steps_left, 0));
+            logic.steps_this_tick = static_cast<uint32_t>(std::max(logic.steps_left, 0));
         }
         else {
-            logic.tick_steps = 1;
+            logic.steps_this_tick = 1;
         }
         GJBaseGameLayer::update(dt);
     }
@@ -828,7 +828,7 @@ class $modify(EchoGameLayer, GJBaseGameLayer) {
         float step = logic.physics_step();
         if (!std::isfinite(warp) || warp < 0.f || !std::isfinite(step) || !(step > 0.f))
             return 0.0;
-        return static_cast<double>(step) * static_cast<double>(warp) * static_cast<double>(logic.tick_steps);
+        return static_cast<double>(step) * static_cast<double>(warp) * static_cast<double>(logic.steps_this_tick);
     }
 
     // advanced follow can throw stuff to like 1e12 xd
@@ -1982,7 +1982,7 @@ void install_physics_step_patch() {
         0x45, 0x8B, 0x1B,            // mov r11d, [r11]
         0xE9, 0x31, 0x00, 0x00, 0x00 // jmp over the old math
     };
-    auto* amt = &Logic::get().tick_steps;
+    auto* amt = &Logic::get().steps_this_tick;
     std::memcpy(bytes.data() + 2, &amt, sizeof(amt));
     auto address = reinterpret_cast<void*>(geode::base::get() + 0x237A5B); // in GJBaseGameLayer::update
     if (auto res = geode::Mod::get()->patch(address, bytes); res)
