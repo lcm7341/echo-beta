@@ -168,7 +168,7 @@ public:
     void uncap_pace();
     void restore_pace();
 
-    static constexpr int RING = 4;
+    static constexpr int RING = 6;
     static constexpr size_t QUEUE = 12;
 
     bool active = false;
