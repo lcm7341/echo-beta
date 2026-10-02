@@ -295,6 +295,9 @@ void Logic::pull_settings() {
                 logic.max_cps = static_cast<float>(number.unwrap());
             if (auto number = json["hitbox_thickness"].asDouble())
                 logic.hitbox_thickness = static_cast<float>(number.unwrap());
+            // default should be 0.3 now
+            if (!json.contains("hitbox_thickness_thin") && logic.hitbox_thickness == 1.f)
+                logic.hitbox_thickness = 0.3f;
             if (auto number = json["trail_length"].asInt())
                 logic.trail_length = std::max(0, static_cast<int>(number.unwrap()));
             if (auto flag = json["sort_automatically"].asBool())
