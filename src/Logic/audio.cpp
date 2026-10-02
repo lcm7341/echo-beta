@@ -1,5 +1,6 @@
 // keeps the music in step w/ the level, not only for renders
 // w/ sync audio on the song follows the levels position. when the level runs slower than real time,
+//   each frame plays exactly the slice of song the level moved thru
 #include <chrono>
 #include "Logic/logic.hpp"
 #include <Geode/binding/FMODAudioEngine.hpp>
@@ -184,7 +185,170 @@ namespace {
 }
 
 void Logic::sync_audio_clock() {
-    // later
+    auto& logic = Logic::get();
+    auto* engine = FMODAudioEngine::sharedEngine();
+    if (!engine || !engine->m_system)
+        return;
+    // song at 1x & the level at another speed cant be lined up
+    bool apart = !logic.audio_speedhack && std::fabs(logic.speedhack - 1.f) > 0.001f;
+    if (!logic.sync_audio || logic.render_active() || apart) {
+        release_song(engine);
+        return;
+    }
+    int threshold = std::clamp(logic.sync_audio_threshold, 20, 2000);
+
+    GJBaseGameLayer* layer = nullptr;
+    bool paused = false;
+    bool started = false;
+    bool dead = false;
+    if (auto* play = PlayLayer::get()) {
+        layer = play;
+        paused = play->m_isPaused;
+        started = play->m_started;
+        dead = play->m_playerDied;
+    }
+    else if (logic.editor_testing) {
+        if (auto* editor = LevelEditorLayer::get()) {
+            layer = editor;
+            paused = logic.editor_paused;
+            started = true;
+        }
+    }
+    if (!layer) {
+        release_song(engine);
+        return;
+    }
+
+    static bool anchored = false;
+    static double anchor_lvl = 0.0;
+    static unsigned anchor_music = 0;
+    static double last_lvl = 0.0;
+    static bool frame_held = false;
+    static std::unordered_map<FMOD::Channel*, SfxMark> marks;
+
+    auto groups = [&](auto&& use) {
+        use(engine->m_backgroundMusicChannel);
+        use(engine->m_globalChannel);
+        use(engine->m_reverbChannel);
+    };
+    if (!logic.frame_advance) {
+        if (frame_held) {
+            groups([](FMOD::ChannelGroup* group) {
+                release_group(group);
+            });
+            frame_held = false;
+        }
+    }
+
+    double level = layer->m_gameState.m_levelTime;
+    if (logic.frame_advance && started && !paused && !dead) {
+        release_song(engine);
+        frame_held = true;
+        double stepped = level - last_lvl;
+        if (stepped <= 0.0005) {
+            if (!slice_still_running(engine->m_backgroundMusicChannel))
+                groups([](FMOD::ChannelGroup* group) {
+                    pause_group(group);
+                });
+            return;
+        }
+        last_lvl = level;
+        if (!anchored) {
+            anchored = true;
+            anchor_lvl = level - stepped;
+            anchor_music = engine->getMusicTimeMS(0);
+        }
+        double start_d = (double)(anchor_music) + (level - stepped - anchor_lvl) * 1000.0;
+        if (start_d < 0.0)
+            start_d = 0.0;
+        engine->setMusicTimeMS(static_cast<unsigned>(std::llround(start_d)), false, 0);
+        int rate = 44100;
+        engine->m_system->getSoftwareFormat(&rate, nullptr, nullptr);
+        unsigned long long samples = std::max(1ull, static_cast<unsigned long long>(std::llround(stepped * (double)(std::max(rate, 1)))));
+        groups([&](FMOD::ChannelGroup* group) {
+            play_group_slice(group, samples);
+        });
+        return;
+    }
+
+    if (!started || paused || dead || level + 0.0005 < last_lvl) {
+        if (!started || dead || level + 0.0005 < last_lvl) {
+            anchored = false;
+            marks.clear();
+        }
+        if (!started || paused || dead) {
+            if (g_songSliced) {
+                g_songSliced = false;
+                if (engine->m_backgroundMusicChannel)
+                    engine->m_backgroundMusicChannel->setDelay(0, 0, false);
+            }
+            return;
+        }
+    }
+
+    using Clock = chrono::steady_clock;
+    static Clock::time_point last_wall;
+    static double rate = 1.0;
+    auto now = Clock::now();
+    if (!anchored) {
+        anchored = true;
+        anchor_lvl = level;
+        anchor_music = engine->getMusicTimeMS(0);
+        last_lvl = level;
+        last_wall = now;
+        rate = std::max((double)(logic.speedhack), 0.01);
+        return;
+    }
+    double wall = chrono::duration<double>(now - last_wall).count();
+    last_wall = now;
+    double stepped = std::max(level - last_lvl, 0.0);
+    if (wall > 0.0005 && wall < 1.0)
+        rate += (stepped / wall - rate) * std::min(wall * 4.0, 1.0);
+    last_lvl = level;
+
+    double expected_d = (double)(anchor_music) + (level - anchor_lvl) * 1000.0;
+    if (expected_d < 0.0)
+        expected_d = 0.0;
+    float base = std::max(logic.speedhack, 0.01f);
+    auto* music = engine->m_backgroundMusicChannel;
+    if (rate < base * 0.9 && music) {
+        double start_d = std::max(expected_d - stepped * 1000.0, 0.0);
+        unsigned actual = engine->getMusicTimeMS(0);
+        if (std::abs((double)(actual) - start_d) >= (double)(threshold))
+            engine->setMusicTimeMS(static_cast<unsigned>(std::llround(start_d)), false, 0);
+        music->setPitch(base);
+        static int slice_logs = 0;
+        if (!g_songSliced && slice_logs < 5) {
+            ++slice_logs;
+        }
+        g_songSliced = true;
+        if (stepped > 0.0) {
+            int output = 44100;
+            engine->m_system->getSoftwareFormat(&output, nullptr, nullptr);
+            auto samples = static_cast<unsigned long long>(std::llround(stepped / base * (double)(std::max(output, 1))));
+            play_group_slice(music, std::max(samples, 1ull));
+        }
+    }
+    else {
+        release_song(engine);
+        auto expected = static_cast<unsigned>(std::llround(expected_d));
+        unsigned actual = engine->getMusicTimeMS(0);
+        int drift = static_cast<int>(actual) - static_cast<int>(expected);
+        if (std::abs(drift) >= threshold) {
+            engine->setMusicTimeMS(expected, false, 0);
+            drift = 0;
+        }
+        double correction = std::clamp(-(double)(drift) / 1000.0 * 0.5, -0.01, 0.01);
+        if (music)
+            music->setPitch(static_cast<float>(base * (1.0 + correction)));
+    }
+
+    std::unordered_set<FMOD::Channel*> seen;
+    sync_effect_group(engine->m_globalChannel, level, marks, seen);
+    sync_effect_group(engine->m_reverbChannel, level, marks, seen);
+    std::erase_if(marks, [&](auto const& item) {
+        return !seen.contains(item.first);
+    });
 }
 
 void Logic::reset_opening_music_hold() {
