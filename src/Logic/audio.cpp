@@ -83,7 +83,48 @@ bool Logic::pause_menu_open() {
 }
 
 void Logic::sync_music_pitch() {
-    // TODO
+    auto* engine = FMODAudioEngine::sharedEngine();
+    if (!engine)
+        return;
+    auto* play = PlayLayer::get();
+    bool rendering = Logic::get().render_active();
+    float pitch = 1.f;
+    if (play)
+        pitch = rendering || !Logic::get().audio_speedhack ? 1.f : std::max(Logic::get().speedhack, 0.01f);
+
+    // freeze music til it actually starts
+    if (play && !play->m_started) {
+        if (!g_liveOpeningHeld) {
+            g_liveOpeningHeld = true;
+            g_liveOpeningSec = (double)(engine->getMusicTimeMS(0)) / 1000.0;
+        }
+        unsigned ms = static_cast<unsigned>(std::llround(std::max(g_liveOpeningSec, 0.0) * 1000.0));
+        unsigned now = engine->getMusicTimeMS(0);
+        if ((now > ms ? now - ms : ms - now) > 2)
+            engine->setMusicTimeMS(ms, false, 0);
+        if (engine->m_backgroundMusicChannel) {
+            engine->m_backgroundMusicChannel->setPitch(pitch);
+            engine->m_backgroundMusicChannel->setPaused(true);
+        }
+        if (engine->m_globalChannel)
+            engine->m_globalChannel->setPitch(pitch);
+        return;
+    }
+    if (g_liveOpeningHeld) {
+        g_liveOpeningHeld = false;
+        unsigned ms = static_cast<unsigned>(std::llround(std::max(g_liveOpeningSec, 0.0) * 1000.0));
+        engine->setMusicTimeMS(ms, false, 0);
+        if (engine->m_backgroundMusicChannel && play && !play->m_isPaused) {
+            engine->m_backgroundMusicChannel->setPaused(false);
+        }
+        g_liveOpeningSec = 0.0;
+    }
+
+    if (engine->m_backgroundMusicChannel)
+        engine->m_backgroundMusicChannel->setPitch(pitch);
+    if (engine->m_globalChannel)
+        engine->m_globalChannel->setPitch(pitch);
+    Logic::get().sync_audio_clock();
 }
 
 struct SfxMark {
