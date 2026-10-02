@@ -133,16 +133,13 @@ bool LevelLayout::hide_as_trigger(GameObject* object) {
 }
 
 bool LevelLayout::hide_as_decoration(GameObject* object) {
-    if (!object) {
+    if (!object)
         return false;
-    }
-    if (object->m_objectType == GameObjectType::Decoration || object->m_isNoTouch) {
+    if (object->m_objectType == GameObjectType::Decoration || object->m_isNoTouch)
         return true;
-    }
     int id = object->m_objectID;
-    if (id >= 506 && id <= 640) {
+    if (id >= 506 && id <= 640)
         return true;
-    }
     return LevelLayout::get().deco_hide_ids().contains(id);
 }
 
@@ -158,9 +155,8 @@ void LevelLayout::hide_object(GameObject* object) {
 }
 
 bool replaced_by_default_art(GameObject* object) {
-    if (!object || !Logic::get().layout_default_art) {
+    if (!object || !Logic::get().layout_default_art)
         return false;
-    }
     switch (object->m_objectType) {
     case GameObjectType::Solid:
     case GameObjectType::Slope:
@@ -191,9 +187,8 @@ std::vector<float>& lvl_opacity() {
 
 bool lvl_invisible(GameObject* object) {
     auto it = lvl_channels().find(object);
-    if (it == lvl_channels().end()) {
+    if (it == lvl_channels().end())
         return false;
-    }
     auto const& opacity = lvl_opacity();
     auto clear = [&](int channel) {
         return channel > 0 && static_cast<std::size_t>(channel) < opacity.size() && opacity[static_cast<std::size_t>(channel)] <= 0.001f;
@@ -215,9 +210,8 @@ void Logic::clear_layout_hidden() {
 }
 
 void LevelLayout::style_solid_object(GameObject* object) {
-    if (object->m_isHide && !art_hidden().contains(object)) {
+    if (object->m_isHide && !art_hidden().contains(object))
         lvl_hidden().insert(object);
-    }
     if (!lvl_channels().contains(object)) {
         auto channel_of = [](GJSpriteColor* sprite) {
             return sprite ? (sprite->m_colorID ? sprite->m_colorID : sprite->m_defaultColorID) : 0;
@@ -238,11 +232,11 @@ void LevelLayout::style_solid_object(GameObject* object) {
     object->m_detailUsesHSV = false;
     object->m_isDontFade = true;
     object->m_isDontEnter = true;
+    // fix colors
     bool hazard = object->m_objectType == GameObjectType::Hazard || object->m_objectType == GameObjectType::AnimatedHazard;
     for (auto* sprite : { object->m_baseColor, object->m_detailColor }) {
-        if (!sprite) {
+        if (!sprite)
             continue;
-        }
         int channel = sprite->m_colorID ? sprite->m_colorID : sprite->m_defaultColorID;
         if (hazard)
             sprite->m_colorID = 1010;
@@ -286,9 +280,8 @@ void Logic::paint_layout_colors(PlayLayer* play) {
 
     for (int id : ids) {
         auto* action = effects->getColorAction(id);
-        if (!action) {
+        if (!action)
             continue;
-        }
         if (id == 1000)
             action->m_color = LevelLayout::get().rgb(logic.backgroundColor);
         else if (id == 1001 || id == 1009)
@@ -309,15 +302,13 @@ void Logic::paint_layout_channels(GJEffectManager* effects) {
     if (opacity.empty()) {
         opacity.assign(sprites.size(), 1.f);
         for (std::size_t id = 1; id < sprites.size(); ++id)
-            if (sprites[id]) {
+            if (sprites[id])
                 opacity[id] = sprites[id]->m_opacity;
-            }
     }
     for (std::size_t id = 1; id < sprites.size(); ++id) {
         auto* sprite = sprites[id];
-        if (!sprite) {
+        if (!sprite)
             continue;
-        }
         switch (id) {
         case 1000:
             sprite->m_color = background;
@@ -347,6 +338,7 @@ void Logic::style_layout_object(GameObject* object) {
         LevelLayout::get().hide_object(object);
         return;
     }
+    // coins keep their own color (user coins went blue)
     if (object->m_objectType == GameObjectType::UserCoin || object->m_objectType == GameObjectType::SecretCoin)
         return;
     LevelLayout::get().style_solid_object(object);
@@ -363,7 +355,6 @@ void Logic::style_layout_glow(GameObject* object) {
 }
 
 void Logic::apply_layout(PlayLayer* play) {
-    log::debug("apply layout");
     auto& logic = Logic::get();
     if (!play)
         return;
@@ -371,9 +362,8 @@ void Logic::apply_layout(PlayLayer* play) {
         if (!logic.layout_styled)
             return;
         for (auto* obj : logic.hidden_decorations) {
-            if (!obj) {
+            if (!obj)
                 continue;
-            }
             obj->m_isHide = false;
         }
         logic.hidden_decorations.clear();
@@ -467,12 +457,10 @@ void Logic::draw_layout_art(PlayLayer* play) {
     bool on = play && Logic::get().layout_active() && Logic::get().layout_default_art && Logic::get().layout_styled && play->m_objectLayer;
     if (layer.play != play || !on) {
         for (auto* node : layer.nodes) {
-            if (node && layer.play == play && node->getParent()) {
+            if (node && layer.play == play && node->getParent())
                 node->removeFromParent();
-            }
-            if (node) {
+            if (node)
                 node->release();
-            }
         }
         layer = ArtLayer{};
         if (!on)
@@ -512,24 +500,24 @@ void Logic::draw_layout_art(PlayLayer* play) {
         }
         else {
             out = CCSprite::createWithSpriteFrame(frame);
-            if (!out) {
+            if (!out)
                 return nullptr;
-            }
             layer.nodes[which]->addChild(out);
             pool.push_back(out);
         }
         ++used;
-        if (!out->isFrameDisplayed(frame)) {
+        if (!out->isFrameDisplayed(frame))
             out->setDisplayFrame(frame);
-        }
         out->setVisible(true);
         return out;
     };
     auto place = [&](GameObject* object) {
         if (!object || !replaced_by_default_art(object) || object->m_isDisabled || object->m_isGroupDisabled)
             return;
+        // anticheat spike
         if (object == play->m_anticheatSpike || object == play->m_player1CollisionBlock || object == play->m_player2CollisionBlock)
             return;
+        // invisible blocks
         if (object->m_objectType == GameObjectType::Solid && (object->m_isNoTouch || object->m_isPassable || lvl_hidden().contains(object) || lvl_invisible(object))) {
             object->setOpacity(0);
             return;
@@ -548,9 +536,8 @@ void Logic::draw_layout_art(PlayLayer* play) {
         if (slope) {
             float w = object->m_width * scaleX, h = object->m_height * scaleY;
             float turns = object->getRotation() / 90.f;
-            if (std::abs(turns - std::round(turns)) < 0.001f && static_cast<long>(std::round(turns)) % 2 != 0) {
+            if (std::abs(turns - std::round(turns)) < 0.001f && static_cast<long>(std::round(turns)) % 2 != 0)
                 std::swap(w, h);
-            }
             bool wide = w > h * 1.5f;
             piece = wide ? &art.wide_slope : &art.slope;
             sx = w / piece->width;
@@ -578,12 +565,10 @@ void Logic::draw_layout_art(PlayLayer* play) {
         }
         else if (hazard) {
             piece = &art.spike;
-            if (object->m_width > 0.f) {
+            if (object->m_width > 0.f)
                 sx = object->m_width * scaleX / piece->width;
-            }
-            if (object->m_height > 0.f) {
+            if (object->m_height > 0.f)
                 sy = object->m_height * scaleY / piece->height;
-            }
         }
         else {
             piece = &art.block;
@@ -594,17 +579,16 @@ void Logic::draw_layout_art(PlayLayer* play) {
             }
             block_box = box;
         }
+        // opacity 0 AFTER gd sets it or it dont work
         object->setOpacity(0);
-        if (object->m_colorSprite) {
+        if (object->m_colorSprite)
             object->m_colorSprite->setVisible(false);
-        }
-        if (object->m_glowSprite) {
+        if (object->m_glowSprite)
             object->m_glowSprite->setVisible(false);
-        }
         auto color = ccColor3B{ 255, 255, 255 };
-        if (piece == &art.saw) {
+        // saws r white!
+        if (piece == &art.saw)
             color = { 0, 0, 0 };
-        }
         (void)hazard;
         (void)block_color;
         float rotationX = object->getRotationX(), rotationY = object->getRotationY();
@@ -625,9 +609,8 @@ void Logic::draw_layout_art(PlayLayer* play) {
             float turns = rotationX / 90.f;
             float nearest = std::round(turns);
             if (std::abs(turns - nearest) < 0.001f) {
-                if (static_cast<long>(nearest) % 2 != 0) {
+                if (static_cast<long>(nearest) % 2 != 0)
                     std::swap(sx, sy);
-                }
                 rotationX = rotationY = 0.f;
                 flipX = flipY = false;
             }
@@ -650,9 +633,8 @@ void Logic::draw_layout_art(PlayLayer* play) {
             layer.pools[piece->layer][layer.used[piece->layer] - 1]->setColor({ 0, 0, 0 });
         }
         draw(piece->frame, 0.f);
-        if (piece->halves) {
+        if (piece->halves)
             draw(piece->frame, 180.f);
-        }
     };
     auto& grid = play->m_nonEffectObjects;
     auto& sizes = play->m_nonEffectObjectsSizes;
@@ -662,15 +644,13 @@ void Logic::draw_layout_art(PlayLayer* play) {
     for (int x = first_x; x <= last_x; ++x) {
         auto* column = grid[x];
         auto* counts = sizes[x];
-        if (!column || !counts) {
+        if (!column || !counts)
             continue;
-        }
         int rows = (int)(std::min(column->size(), counts->size()));
         for (int y = 0; y < rows; ++y) {
             auto* bucket = (*column)[y];
-            if (!bucket) {
+            if (!bucket)
                 continue;
-            }
             int amt = std::min<int>((*counts)[y], (int)(bucket->size()));
             for (int i = 0; i < amt; ++i)
                 place((*bucket)[i]);
