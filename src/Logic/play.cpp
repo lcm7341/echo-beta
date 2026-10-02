@@ -499,7 +499,60 @@ void Logic::apply_maintain_gravity(GJBaseGameLayer* play) {
 }
 
 void Logic::sync_same_gravity(GJBaseGameLayer* play) {
-    // port this
+    if (!play || !same_gravity || !maintain_gravity || applying_playback || restoring_holds)
+        return;
+    bool two = play->m_levelSettings && play->m_levelSettings->m_twoPlayerMode;
+    bool dual = play->m_gameState.m_isDualMode && two;
+    if (!dual || !play->m_player1 || !play->m_player2)
+        return;
+    auto* first = play->m_player1;
+    auto* second = play->m_player2;
+    bool now1 = first->m_isUpsideDown, now2 = second->m_isUpsideDown;
+    // playback plays what it has. DONT force it
+    if (!records_player(false) && !records_player(true)) {
+        same_gravity_was_p1 = now1;
+        same_gravity_was_p2 = now2;
+        same_gravity_seen = true;
+        return;
+    }
+    bool target = now1;
+    if (same_gravity_seen && now2 != same_gravity_was_p2 && now1 == same_gravity_was_p1)
+        target = now2;
+    int jump = static_cast<int>(PlayerButton::Jump);
+    auto match = [&](PlayerObject* body, bool icon2) {
+        if (!body || !records_player(icon2) || body->m_controlsDisabled || body->m_isUpsideDown == target)
+            return;
+        // ball spider & swing flip with a click so do a REAL click & record it
+        // (flipGravity is not an input so the macro never had it)
+        bool clicks = body->m_isSwing || ((body->m_isBall || body->m_isSpider) && body->m_isOnGround);
+        if (body->m_isBall || body->m_isSpider || body->m_isSwing) {
+            if (!clicks)
+                return; // in the air, wait for the ground
+            auto put = [&](bool push) {
+                Frame input;
+                input.number = step_frame + 1;
+                input.holding = push;
+                input.player2 = icon2;
+                input.button = static_cast<uint8_t>(jump);
+                Logic::get().add_input(*this, input);
+                body->m_isLocked = false;
+                Logic::get().play_input(play, icon2, push, jump);
+            };
+            maintaining_gravity = true;
+            if (Logic::button_held(body, jump))
+                put(false);
+            put(true);
+            put(false);
+            maintaining_gravity = false;
+            return;
+        }
+        body->flipGravity(target, true);
+    };
+    match(first, false);
+    match(second, true);
+    same_gravity_was_p1 = first->m_isUpsideDown;
+    same_gravity_was_p2 = second->m_isUpsideDown;
+    same_gravity_seen = true;
 }
 
 void Logic::toggle_frame_advance() {
