@@ -19,18 +19,15 @@ using namespace geode::prelude;
 
 bool Orbs::click_orb_assist(bool player2) {
     auto& logic = Logic::get();
-    if (!logic.click_dash_orbs && !logic.click_black_orbs) {
+    if (!logic.click_dash_orbs && !logic.click_black_orbs)
         return false;
-    }
-    if (logic.plays_player(player2)) {
+    // playback uses the saved clicks only
+    if (logic.plays_player(player2))
         return false;
-    }
-    if (logic.is_playing() && !logic.is_recording()) {
+    if (logic.is_playing() && !logic.is_recording())
         return false;
-    }
-    if (logic.is_recording()) {
+    if (logic.is_recording())
         return logic.records_player(player2);
-    }
     return true;
 }
 
@@ -324,15 +321,12 @@ namespace {
 }
 
 std::vector<Orbs::Pose> Orbs::capture(GJBaseGameLayer* play, PlayerObject* player) {
-    log::debug("capture");
     std::vector<Pose> poses;
-    if (!play || !player) {
+    if (!play || !player)
         return poses;
-    }
     auto& logic = Logic::get();
-    if (!logic.click_dash_orbs && !logic.click_black_orbs && !logic.pad_blue_orb && !logic.pad_black_orb) {
+    if (!logic.click_dash_orbs && !logic.click_black_orbs && !logic.pad_blue_orb && !logic.pad_black_orb)
         return poses;
-    }
     each_near(play, player->getPosition(), travel_span(play, player), [&](GameObject* object) {
         bool listed = classify(object) != Kind::None || blue_orb(object) || black_orb(object);
         if (!listed)
@@ -348,9 +342,8 @@ std::vector<Orbs::Pose> Orbs::capture(GJBaseGameLayer* play, PlayerObject* playe
 
 void Orbs::restore(std::vector<Pose> const& poses) {
     for (auto const& pose : poses) {
-        if (!pose.object) {
+        if (!pose.object)
             continue;
-        }
         bool changed = false;
         if (pose.object->getPosition() != pose.pos) {
             pose.object->setPosition(pose.pos);
@@ -368,9 +361,8 @@ void Orbs::restore(std::vector<Pose> const& poses) {
             pose.object->setRotationY(pose.rotationY);
             changed = true;
         }
-        if (changed || pose.object->m_isOrientedBoxDirty) {
+        if (changed || pose.object->m_isOrientedBoxDirty)
             pose.object->updateOrientedBox();
-        }
     }
 }
 
@@ -425,9 +417,8 @@ void Orbs::click_pads(PlayLayer* play, PlayerObject* player, int objectType, Gam
     bool player2 = player == play->m_player2;
     if (logic.plays_player(player2))
         return;
-    if (pad && !jump_or_gravity_pad(static_cast<int>(pad->m_objectType))) {
+    if (pad && !jump_or_gravity_pad(static_cast<int>(pad->m_objectType)))
         pad = nullptr;
-    }
     auto& step = player2 ? pad_p2 : pad_p1;
     auto& spent_pads = player2 ? spent_pad_p2 : spent_pad_p1;
     step.pending = true;
@@ -438,9 +429,8 @@ void Orbs::click_pads(PlayLayer* play, PlayerObject* player, int objectType, Gam
     }
     if (spent_pads.contains(pad->m_uniqueID))
         return;
-    if (std::ranges::find(step.pads, pad->m_uniqueID) == step.pads.end()) {
+    if (std::ranges::find(step.pads, pad->m_uniqueID) == step.pads.end())
         step.pads.push_back(pad->m_uniqueID);
-    }
 }
 
 bool Orbs::has_pending_pads() {
@@ -461,18 +451,16 @@ void Orbs::flush_pads(PlayLayer* play) {
             return;
         auto& spent_pads = player2 ? spent_pad_p2 : spent_pad_p1;
         auto& spent_blue = player2 ? spent_blue_p2 : spent_blue_p1;
-        if (step.black > 0) {
+        if (step.black > 0)
             queue_pad_swift(play, player2, step.black, step.live_black);
-        }
         if (step.blue.empty() || (step.pads.empty() && !step.anon))
             return;
         bool already_flipped = std::ranges::any_of(step.blue, [&](GameObject* orb) {
             return orb_triggered(orb, player2);
         });
         if (already_flipped) {
-            if (!step.pads.empty()) {
+            if (!step.pads.empty())
                 spent_pads.insert(step.pads.front());
-            }
             return;
         }
         auto waiting = std::ranges::find_if(step.blue, [&](GameObject* orb) {
@@ -482,19 +470,16 @@ void Orbs::flush_pads(PlayLayer* play) {
             return;
         arm_blue(player, *waiting);
         spent_blue.insert((*waiting)->m_uniqueID);
-        if (!step.pads.empty()) {
+        if (!step.pads.empty())
             spent_pads.insert(step.pads.front());
-        }
-        if (holding_jump(player)) {
+        if (holding_jump(player))
             queue_jump(play, player2, false);
-        }
         queue_jump(play, player2, true);
         queue_jump(play, player2, false);
     };
     flush(play->m_player1, false, saved1);
-    if (play->m_gameState.m_isDualMode) {
+    if (play->m_gameState.m_isDualMode)
         flush(play->m_player2, true, saved2);
-    }
 }
 
 namespace {
@@ -530,7 +515,6 @@ void Orbs::arm_tool(bool on) {
 }
 
 void Orbs::begin_step() {
-    log::debug("begin step");
     used_p1.clear();
     used_p2.clear();
     jump_press_p1 = false;
@@ -545,34 +529,27 @@ void Orbs::begin_step() {
 }
 
 void Orbs::commit_tool_hits() {
-    if (pending_hit_p1) {
+    if (pending_hit_p1)
         tool_hit_p1 = true;
-    }
-    if (pending_hit_p2) {
+    if (pending_hit_p2)
         tool_hit_p2 = true;
-    }
     pending_hit_p1 = false;
     pending_hit_p2 = false;
 }
 
 bool Orbs::blockHoldRing(PlayerObject* player, GameObject* object) {
-    if (!player || !object) {
+    if (!player || !object)
         return false;
-    }
     bool player2 = icon2_of(player);
-    if (!Orbs::click_orb_assist(player2)) {
+    if (!Orbs::click_orb_assist(player2))
         return false;
-    }
     Kind kind = classify(object);
-    if (kind == Kind::None || !fits_mode(player, kind)) {
+    if (kind == Kind::None || !fits_mode(player, kind))
         return false;
-    }
-    if (tool_armed) {
+    if (tool_armed)
         return false;
-    }
-    if (player2 ? swift_p2 : swift_p1) {
+    if (player2 ? swift_p2 : swift_p1)
         return true;
-    }
     bool fresh = pushing && !(player2 ? held_before_p2 : held_before_p1);
     return !fresh;
 }
@@ -589,9 +566,8 @@ void Orbs::end_push(PlayerObject* player) {
     if (!player)
         return;
     bool player2 = icon2_of(player);
-    if (!(player2 ? held_before_p2 : held_before_p1)) {
+    if (!(player2 ? held_before_p2 : held_before_p1))
         (player2 ? swift_p2 : swift_p1) = true;
-    }
     pushing = false;
 }
 
@@ -605,12 +581,10 @@ void Orbs::note_jump_presses(PlayLayer* play) {
     int jump = static_cast<int>(PlayerButton::Jump);
     for (auto const& cmd : play->m_queuedButtons) {
         int button = static_cast<int>(cmd.m_button);
-        if (button != 0 && button != jump) {
+        if (button != 0 && button != jump)
             continue;
-        }
-        if (cmd.m_isPush) {
+        if (cmd.m_isPush)
             (cmd.m_isPlayer2 ? jump_press_p2 : jump_press_p1) = true;
-        }
         (cmd.m_isPlayer2 ? hold_after_p2 : hold_after_p1) = cmd.m_isPush;
     }
 }
@@ -633,9 +607,8 @@ int Orbs::claim_click(GJBaseGameLayer* layer, PlayerObject* player, bool player2
 
     auto stack = orb_stack(layer, player, player2, used, orb);
     for (auto* obj : stack) {
-        if (obj && !player->m_touchingRings->containsObject(obj)) {
+        if (obj && !player->m_touchingRings->containsObject(obj))
             player->m_touchingRings->addObject(obj);
-        }
     }
 
     player->m_stateRingJump2 = true;
@@ -699,16 +672,14 @@ void Orbs::click_fake(GJBaseGameLayer* play, PlayerObject* player, bool player2,
         return;
     auto& logic = Logic::get();
     if (!Orbs::click_orb_assist(player2)) {
-        if (!fresh_click && !holding_jump(player)) {
+        if (!fresh_click && !holding_jump(player))
             used.clear();
-        }
         return;
     }
     bool held = holding_jump(player);
     if (!fresh_click) {
-        if (!held) {
+        if (!held)
             used.clear();
-        }
         return;
     }
     auto key = PlayerButton::Jump;
@@ -718,18 +689,15 @@ void Orbs::click_fake(GJBaseGameLayer* play, PlayerObject* player, bool player2,
     auto stack = orb_stack(play, player, player2, used, orb);
     if (auto* rings = player->m_touchingRings) {
         for (auto* obj : stack) {
-            if (obj && !rings->containsObject(obj)) {
+            if (obj && !rings->containsObject(obj))
                 rings->addObject(obj);
-            }
         }
     }
-    if (classify(orb) == Kind::Black) {
+    if (classify(orb) == Kind::Black)
         (player2 ? pred_pad2 : pred_pad1).live_black = true;
-    }
     int swifts = std::max(1, static_cast<int>(stack.size()));
-    if (held) {
+    if (held)
         player->releaseButton(key);
-    }
     for (int i = 0; i < swifts; ++i) {
         player->m_stateRingJump2 = true;
         player->m_stateJumpBuffered = 1;
@@ -747,8 +715,7 @@ void Orbs::click_fake(GJBaseGameLayer* play, PlayerObject* player, bool player2,
         player->m_stateJumpBuffered = 1;
     }
     for (auto* obj : stack) {
-        if (obj) {
+        if (obj)
             used.insert(obj->m_uniqueID);
-        }
     }
 }
