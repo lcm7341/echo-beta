@@ -394,6 +394,10 @@ namespace echo::rotation {
     void restore(PlayerObject* player, float gameplay_angle, float visual_angle) {
         if (!player)
             return;
+        // DONT put the dead attempts angle back
+        tilt_held().erase(player);
+        tilt_fix().erase(player);
+        tilt_left().erase(player);
         player->setRotation(gameplay_angle);
         if (tilt_applies(player)) {
             tilt_fix()[player] = visual_angle;
