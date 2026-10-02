@@ -1097,7 +1097,54 @@ void GUI::draw_editor() {
 }
 
 void GUI::draw_sequence() {
-    // TODO
+    auto& value = Logic::get();
+    static int selected = -1;
+    static int amount = 1;
+
+    GUI::get().section_label("Queue");
+    if (GUI::get().checkbox_setting("Enable Sequence", value.sequence_enabled)) value.replay_index = 0;
+    ImGui::SameLine();
+    if (GUI::get().checkbox_setting("Random", value.sequence_random)) {
+        value.replay_index = 0;
+        value.sequence_order.clear();
+    }
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Plays the queue in a random order");
+    if (ImGui::Button("Remove All")) {
+        value.sequence.clear();
+        value.sequence_order.clear();
+        value.replay_index = 0;
+        selected = -1;
+        value.message = "Sequence cleared";
+    }
+
+    ImGui::BeginChild("##seq_replay_list", ImVec2(GUI::get().px(260.f), GUI::get().px(150.f)), ImGuiChildFlags_Borders);
+    for (unsigned i = 0; i < value.sequence.size(); ++i) {
+        ImGui::PushID(static_cast<int>(i));
+        bool chosen = selected == static_cast<int>(i);
+        if (ImGui::Selectable("##replay", chosen, ImGuiSelectableFlags_AllowDoubleClick)) selected = static_cast<int>(i);
+        ImGui::SameLine();
+        ImGui::TextUnformatted(value.sequence[i].name.c_str());
+        ImGui::PopID();
+    }
+    ImGui::EndChild();
+
+    GUI::get().section_label("Selected");
+    if (selected >= 0 && selected < static_cast<int>(value.sequence.size())) {
+        auto& clip = value.sequence[static_cast<size_t>(selected)];
+        ImGui::Text("Name: %s", clip.name.c_str());
+        ImGui::SameLine();
+        if (ImGui::Button("Remove")) {
+            value.sequence.erase(value.sequence.begin() + selected);
+            selected = -1;
+        }
+    }
+
+    GUI::get().section_label("Add");
+    ImGui::SetNextItemWidth(GUI::get().px(120.f));
+    ImGui::InputInt("Amount###macros", &amount);
+    if (amount < 1) amount = 1;
+    ImGui::SameLine();
+    if (ImGui::Button("Add")) GUI::get().open_macro_picker(true, amount);
 }
 
 void GUI::draw_click_times(bool& softs, float& soft_ms, bool& hards, float& hard_seconds, bool& micros, int& micro_ms, char const* suffix) {
