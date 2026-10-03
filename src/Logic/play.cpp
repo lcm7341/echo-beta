@@ -432,7 +432,8 @@ void Logic::apply_maintain_gravity(GJBaseGameLayer* play) {
     };
     auto correct = [&](PlayerObject* body, bool icon2) {
         maintaining_gravity = true;
-        int limit = 8;
+        // 1 is enough. a loop of clicks just toggles gravity forever
+        int limit = same_gravity ? 1 : 8;
         for (int step = 0; step < limit; ++step) {
             bool push = false;
             if (!mismatch(body, icon2, push))
