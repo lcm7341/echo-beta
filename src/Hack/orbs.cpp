@@ -656,15 +656,93 @@ namespace {
 }
 
 void Orbs::reset_prediction_pads() {
-    // todo
+    pred_pad1 = {};
+    pred_pad2 = {};
+    pred_spent_pad1.clear();
+    pred_spent_pad2.clear();
+    pred_spent_blue1.clear();
+    pred_spent_blue2.clear();
+    pred_spent_black1.clear();
+    pred_spent_black2.clear();
 }
 
 void Orbs::notePredictionPad(GJBaseGameLayer* play, PlayerObject* player, GameObject* pad) {
-    // todo
+    if (!Logic::get().predicting || !play || !player)
+        return;
+    auto& logic = Logic::get();
+    if (!logic.pad_black_orb && !logic.pad_blue_orb)
+        return;
+    bool player2 = icon2_of(player);
+    if (logic.plays_player(player2))
+        return;
+    if (pad && !jump_or_gravity_pad(static_cast<int>(pad->m_objectType)))
+        return;
+    auto& step = player2 ? pred_pad2 : pred_pad1;
+    auto& spent_pads = player2 ? pred_spent_pad2 : pred_spent_pad1;
+    if (pad && spent_pads.contains(pad->m_uniqueID))
+        return;
+    step.pending = true;
+    if (!pad)
+        step.anon = true;
+    else if (std::ranges::find(step.pads, pad->m_uniqueID) == step.pads.end())
+        step.pads.push_back(pad->m_uniqueID);
+    gather_prediction_orbs(play, player, player2, step);
 }
 
 void Orbs::apply_prediction_pads(GJBaseGameLayer* play, PlayerObject* player, bool player2) {
-    // todo
+    if (!Logic::get().predicting || !play || !player)
+        return;
+    auto& step = player2 ? pred_pad2 : pred_pad1;
+    if (!step.pending)
+        return;
+    PredictionPad saved = step;
+    step = {};
+    auto& spent_pads = player2 ? pred_spent_pad2 : pred_spent_pad1;
+    auto& spent_blue = player2 ? pred_spent_blue2 : pred_spent_blue1;
+    auto& spent_black = player2 ? pred_spent_black2 : pred_spent_black1;
+    if (!saved.black.empty() && !saved.live_black) {
+        if (auto* rings = player->m_touchingRings) {
+            for (auto* obj : saved.black) {
+                if (obj && !rings->containsObject(obj))
+                    rings->addObject(obj);
+            }
+        }
+        for (auto* obj : saved.black) {
+            if (!obj || player->m_ringRelatedSet.count(obj->m_uniqueID))
+                continue;
+            player->m_stateRingJump2 = true;
+            player->m_stateJumpBuffered = 1;
+            swift_hold(player, false);
+            spent_black.insert(obj->m_uniqueID);
+        }
+    }
+    else if (saved.live_black) {
+        player->releaseButton(PlayerButton::Jump);
+    }
+    if (saved.blue.empty() || (saved.pads.empty() && !saved.anon))
+        return;
+    bool already = std::ranges::any_of(saved.blue, [&](GameObject* orb) {
+        return orb && (orb_triggered(orb, player2) || spent_blue.contains(orb->m_uniqueID) || player->m_ringRelatedSet.count(orb->m_uniqueID));
+    });
+    if (already) {
+        if (!saved.pads.empty())
+            spent_pads.insert(saved.pads.front());
+        return;
+    }
+    auto waiting = std::ranges::find_if(saved.blue, [&](GameObject* orb) {
+        return orb && !orb_triggered(orb, player2) && !spent_blue.contains(orb->m_uniqueID) && !player->m_ringRelatedSet.count(orb->m_uniqueID);
+    });
+    if (waiting == saved.blue.end())
+        return;
+    arm_blue(player, *waiting);
+    spent_blue.insert((*waiting)->m_uniqueID);
+    if (!saved.pads.empty())
+        spent_pads.insert(saved.pads.front());
+    player->m_stateRingJump2 = true;
+    player->m_stateJumpBuffered = 1;
+    if (holding_jump(player))
+        player->releaseButton(PlayerButton::Jump);
+    swift_hold(player, false);
 }
 
 void Orbs::click_fake(GJBaseGameLayer* play, PlayerObject* player, bool player2, std::unordered_set<int>& used, bool fresh_click) {
