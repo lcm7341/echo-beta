@@ -871,7 +871,7 @@ bool Logic::traj_player_hidden(bool player2) const {
     return player2 ? hide_traj_p2 : hide_traj_p1;
 }
 
-void Logic::hide_icon(PlayerObject* player, bool hide) {
+void Logic::conceal_player(PlayerObject* player, bool hide) {
     if (!player)
         return;
     auto& held = held_look(player);
@@ -917,8 +917,8 @@ void Logic::after_frame(PlayLayer* play, float dt) {
     if (!play || logic.resetting)
         return;
     Logic::get().flush_click_hitboxes(play);
-    Logic::get().hide_icon(play->m_player1, logic.hide_p1);
-    Logic::get().hide_icon(play->m_player2, logic.hide_p2);
+    Logic::get().conceal_player(play->m_player1, logic.hide_p1);
+    Logic::get().conceal_player(play->m_player2, logic.hide_p2);
     if ((logic).is_recording())
         logic.recording_seconds += static_cast<double>(dt);
     if (play->m_hasCompletedLevel && (logic).is_recording()) {

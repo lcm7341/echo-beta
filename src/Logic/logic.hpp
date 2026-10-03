@@ -742,7 +742,7 @@ public:
 	bool player_hidden(PlayerObject* player) const;
 	bool hitbox_player_hidden(bool player2) const;
 	bool traj_player_hidden(bool player2) const;
-	void hide_icon(PlayerObject* player, bool hide);
+	void conceal_player(PlayerObject* player, bool hide);
 	void play_macro(GJBaseGameLayer* play, GJBaseGameLayer* layer, float dt, bool clearInputQueue);
 	void prepare_buttons(GJBaseGameLayer* play);
 	bool cbf_enabled() const;
