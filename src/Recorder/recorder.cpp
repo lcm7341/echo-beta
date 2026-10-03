@@ -518,6 +518,8 @@ void AudioTap::sample_streams(FMODAudioEngine* engine) {
         void* data = nullptr;
         channel->getUserData(&data);
         next->setUserData(data);
+        // if i dont clear ts gd thinks the new one ended xd
+        channel->setCallback(nullptr);
         channel->stop();
         for (auto& [id, held] : engine->m_channelIDToChannel) {
             if (held == channel)
