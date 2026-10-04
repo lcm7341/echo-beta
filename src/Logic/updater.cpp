@@ -198,7 +198,7 @@ int Logic::max_steps_for_frame() const {
     if (!std::isfinite(interval) || interval <= 0.0)
         interval = 1.0 / 60.0;
     if (real_time_mode) {
-        constexpr double REAL_TIME_FRAME = 0.25;
+        constexpr double REAL_TIME_FRAME = 0.1;
         double fixed = cost.per_update + cost.other_work;
         double room = std::max({ REAL_TIME_FRAME - fixed, REAL_TIME_FRAME * 0.5, std::min(fixed, 1.0) });
         double steps = std::floor(room / cost.per_step);
