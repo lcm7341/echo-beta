@@ -325,6 +325,8 @@ namespace {
             std::memcpy(instance.outline, mvp.mat, sizeof(instance.outline));
             instance.root_color = state.root_color;
             instance.outline_color = state.outline_color;
+            // DONT simplify ts the rounding changes
+            r.instances.insert(r.instances.end(), static_cast<std::size_t>(effect.count), instance);
         }
         if (r.instances.empty())
             return;
