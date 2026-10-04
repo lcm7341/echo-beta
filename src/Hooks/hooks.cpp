@@ -18,6 +18,8 @@
 #include "Physics/gravity.hpp"
 #include "Physics/player.hpp"
 #include "Physics/prediction_art.hpp"
+#include "Rendering/dash_end.hpp"
+#include "Rendering/dash_bursts.hpp"
 #include <unordered_set>
 #include <Geode/binding/PauseLayer.hpp>
 #include <Geode/modify/PauseLayer.hpp>
@@ -1598,6 +1600,40 @@ class $modify(EchoPlayerObject, PlayerObject) {
         }
         CCNode* object_layer = nullptr;
         unsigned before = object_layer && object_layer->getChildren() ? object_layer->getChildren()->count() : 0;
+        PlayerObject::startDashing(ring);
+        if (object_layer && ring)
+            echo::bursts::note_start(object_layer, before, ring->m_objectID);
+    }
+
+    void stopDashing() {
+        if (Trajectory::get().isFake(this)) {
+            phys::stopDashing(this);
+            return;
+        }
+        bool was_dashing = m_isDashing;
+        auto* node = m_fields->tick_spin.data();
+        bool use_tick = dash_spin_enabled() && was_dashing && m_iconSprite && node && dash_spin_manager()->numberOfRunningActionsInTarget(node) > 0;
+        if (use_tick)
+            m_iconSprite->setRotation(node->getRotation());
+        stop_tick_spin();
+        using echo::dash::EndEffect;
+        auto mode = EndEffect::Native;
+        if (was_dashing && echo::dash::end_effect_skippable(this)) {
+            auto& logic = Logic::get();
+            double tps = logic.sample_rate();
+            bool gpu = echo::dash::prefer_gpu();
+            bool merge = tps > VANILLA_TPS && gpu && !echo_dash_compare && echo::dash::merge_ready();
+            if (merge)
+                echo::dash::set_merge(true);
+            if (echo_dash_compare && echo::dash::gpu_effects_ready())
+                mode = EndEffect::Record;
+            else if (gpu)
+                mode = EndEffect::RecordOnly;
+        }
+        echo::dash::set_end_effect(mode);
+        PlayerObject::stopDashing();
+        echo::dash::set_end_effect(EndEffect::Native);
+        echo::dash::set_merge(false);
     }
 
     void incrementJumps() {

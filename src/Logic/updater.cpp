@@ -10,6 +10,8 @@
 #include "Hooks/step.hpp"
 #include "Hack/trajectory.hpp"
 #include "Physics/prediction_art.hpp"
+#include "Rendering/dash_end.hpp"
+#include "Rendering/dash_bursts.hpp"
 #include <Geode/binding/PlayLayer.hpp>
 #include <Geode/binding/LevelEditorLayer.hpp>
 #include <algorithm>
@@ -269,6 +271,8 @@ void Logic::run_frame(GJBaseGameLayer* play, float dt, std::function<void(float)
         tick(dt);
         return;
     }
+    echo::dash::prepare();
+    echo::bursts::prepare();
     logic.frame_steps = 0;
     bool paused = Logic::get().editor_paused;
     if (auto* live = Logic::as_play(play))
