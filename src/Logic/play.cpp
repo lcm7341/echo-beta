@@ -2039,6 +2039,8 @@ void Logic::play_macro(GJBaseGameLayer* play, GJBaseGameLayer* layer, float dt, 
     run_queue(0, user_count, false);
     if (logic.is_recording() && logic.maintain_gravity && !logic.restoring_holds)
         Logic::get().apply_maintain_gravity(play);
+    // maintain gravity used to delete the swifts :/
+    run_orb_clicks(play, layer, dt);
     bool one_dual = play->m_gameState.m_isDualMode && !(play->m_levelSettings && play->m_levelSettings->m_twoPlayerMode);
     logic.applying_playback = true;
     for (int i = user_count; i < static_cast<int>(queued.size()); ++i) {
