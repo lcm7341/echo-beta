@@ -1321,6 +1321,10 @@ void Logic::onReset(PlayLayer* play) {
             play->m_isPaused = false;
         Logic::get().clear_stuck_death(play);
         Logic::get().sync_time_scale();
+        // respawn is NOT a gravity flip
+        logic.same_gravity_was_p1 = play->m_player1 && play->m_player1->m_isUpsideDown;
+        logic.same_gravity_was_p2 = play->m_player2 && play->m_player2->m_isUpsideDown;
+        logic.same_gravity_seen = true;
     }
     else {
         Logic::get().resume_attempt(play);
