@@ -271,7 +271,216 @@ void GUI::paint_editor(float* dest, ImVec4 color) {
 }
 
 void GUI::randomize_theme() {
-    // TODO
+    std::mt19937 rng{std::random_device{}()};
+    std::uniform_real_distribution<float> unit(0.f, 1.f);
+    std::uniform_int_distribution<int> schemePick(0, 6);
+    std::uniform_int_distribution<int> moodPick(0, 3);
+
+    auto wrap = [](float h) {
+        h = std::fmod(h, 1.f);
+        return h < 0.f ? h + 1.f : h;
+    };
+    auto hsv = [](float h, float s, float v, float a = 1.f) {
+        float red = 0.f;
+        float green = 0.f;
+        float blue = 0.f;
+        ImGui::ColorConvertHSVtoRGB(h, std::clamp(s, 0.f, 1.f), std::clamp(v, 0.f, 1.f), red, green, blue);
+        return ImVec4(red, green, blue, a);
+    };
+    auto mix = [](ImVec4 a, ImVec4 b, float t) {
+        return ImVec4(
+            a.x + (b.x - a.x) * t,
+            a.y + (b.y - a.y) * t,
+            a.z + (b.z - a.z) * t,
+            a.w + (b.w - a.w) * t
+        );
+    };
+
+    float hue = unit(rng);
+    enum class Scheme { Complement, Split, Triad, Tetrad, Analogous, Mono, Compound };
+    auto scheme = static_cast<Scheme>(schemePick(rng));
+    float second = hue;
+    float third = hue;
+    float fourth = hue;
+    switch (scheme) {
+        case Scheme::Complement:
+            second = wrap(hue + 0.5f);
+            third = wrap(hue + 0.5f);
+            fourth = hue;
+            break;
+        case Scheme::Split:
+            second = wrap(hue + 0.42f);
+            third = wrap(hue + 0.58f);
+            fourth = wrap(hue + 0.5f);
+            break;
+        case Scheme::Triad:
+            second = wrap(hue + 1.f / 3.f);
+            third = wrap(hue + 2.f / 3.f);
+            fourth = second;
+            break;
+        case Scheme::Tetrad:
+            second = wrap(hue + 0.25f);
+            third = wrap(hue + 0.5f);
+            fourth = wrap(hue + 0.75f);
+            break;
+        case Scheme::Analogous:
+            second = wrap(hue + 0.08f);
+            third = wrap(hue - 0.08f);
+            fourth = wrap(hue + 0.16f);
+            break;
+        case Scheme::Mono:
+            second = hue;
+            third = hue;
+            fourth = hue;
+            break;
+        case Scheme::Compound:
+            second = wrap(hue + 0.17f);
+            third = wrap(hue + 0.5f);
+            fourth = wrap(hue + 0.67f);
+            break;
+    }
+
+    enum class Mood { Dark, Light, Muted, Neon };
+    auto mood = static_cast<Mood>(moodPick(rng));
+    float baseS = 0.28f;
+    float baseV = 0.11f;
+    float panelV = 0.16f;
+    float raisedV = 0.23f;
+    float textV = 0.96f;
+    float mutedV = 0.62f;
+    float accentS = 0.62f;
+    float accentV = 0.78f;
+    switch (mood) {
+        case Mood::Dark:
+            baseS = 0.22f + unit(rng) * 0.20f;
+            baseV = 0.07f + unit(rng) * 0.08f;
+            panelV = baseV + 0.05f;
+            raisedV = baseV + 0.12f;
+            textV = 0.94f + unit(rng) * 0.05f;
+            mutedV = 0.55f + unit(rng) * 0.12f;
+            accentS = 0.55f + unit(rng) * 0.30f;
+            accentV = 0.70f + unit(rng) * 0.22f;
+            break;
+        case Mood::Light:
+            baseS = 0.08f + unit(rng) * 0.18f;
+            baseV = 0.90f + unit(rng) * 0.08f;
+            panelV = baseV - 0.04f;
+            raisedV = baseV - 0.10f;
+            textV = 0.12f + unit(rng) * 0.10f;
+            mutedV = 0.40f + unit(rng) * 0.12f;
+            accentS = 0.50f + unit(rng) * 0.35f;
+            accentV = 0.55f + unit(rng) * 0.25f;
+            break;
+        case Mood::Muted:
+            baseS = 0.10f + unit(rng) * 0.14f;
+            baseV = 0.14f + unit(rng) * 0.14f;
+            panelV = baseV + 0.06f;
+            raisedV = baseV + 0.12f;
+            textV = 0.88f + unit(rng) * 0.08f;
+            mutedV = 0.58f + unit(rng) * 0.12f;
+            accentS = 0.28f + unit(rng) * 0.22f;
+            accentV = 0.62f + unit(rng) * 0.20f;
+            break;
+        case Mood::Neon:
+            baseS = 0.35f + unit(rng) * 0.25f;
+            baseV = 0.05f + unit(rng) * 0.08f;
+            panelV = baseV + 0.06f;
+            raisedV = baseV + 0.14f;
+            textV = 0.96f;
+            mutedV = 0.60f;
+            accentS = 0.78f + unit(rng) * 0.20f;
+            accentV = 0.88f + unit(rng) * 0.10f;
+            break;
+    }
+
+    if (scheme == Scheme::Mono) {
+        second = hue;
+        third = hue;
+        fourth = hue;
+        accentS = std::min(1.f, accentS + 0.08f);
+    }
+
+    auto& style = ImGui::GetStyle();
+    auto set = [&](ImGuiCol slot, ImVec4 color) { style.Colors[slot] = color; };
+
+    ImVec4 background = hsv(hue, baseS, baseV, 0.97f);
+    ImVec4 panel = hsv(hue, baseS * 0.85f, panelV, 0.98f);
+    ImVec4 raised = hsv(hue, baseS * 0.75f, raisedV, 1.f);
+    ImVec4 text = hsv(hue, mood == Mood::Light ? 0.12f : 0.04f, textV, 1.f);
+    ImVec4 muted = hsv(hue, mood == Mood::Light ? 0.10f : 0.08f, mutedV, 1.f);
+    ImVec4 line = hsv(second, baseS * 0.6f, mood == Mood::Light ? raisedV - 0.12f : raisedV + 0.10f, 0.75f);
+    ImVec4 accent = hsv(second, accentS, accentV, 1.f);
+    ImVec4 accentHot = hsv(second, std::min(1.f, accentS * 0.85f), std::min(1.f, accentV + 0.16f), 1.f);
+    ImVec4 accentDeep = hsv(second, accentS * 0.9f, accentV * 0.55f, 1.f);
+    ImVec4 support = hsv(third, accentS * 0.85f, accentV * 0.90f, 1.f);
+    ImVec4 highlight = hsv(fourth, accentS * 0.75f, std::min(1.f, accentV + 0.08f), 1.f);
+
+    if (mood == Mood::Light) {
+        accentDeep = hsv(second, accentS * 0.75f, accentV * 0.75f, 1.f);
+        line = hsv(hue, baseS * 0.5f, raisedV - 0.18f, 0.65f);
+    }
+
+    set(ImGuiCol_Text, text);
+    set(ImGuiCol_TextDisabled, muted);
+    set(ImGuiCol_WindowBg, background);
+    set(ImGuiCol_ChildBg, ImVec4(panel.x, panel.y, panel.z, 0.55f));
+    set(ImGuiCol_PopupBg, panel);
+    set(ImGuiCol_Border, line);
+    set(ImGuiCol_BorderShadow, ImVec4(0.f, 0.f, 0.f, 0.f));
+    set(ImGuiCol_FrameBg, raised);
+    set(ImGuiCol_FrameBgHovered, mix(raised, accent, 0.35f));
+    set(ImGuiCol_FrameBgActive, mix(raised, accent, 0.55f));
+    set(ImGuiCol_TitleBg, hsv(hue, baseS, std::max(0.f, baseV - 0.03f), 1.f));
+    set(ImGuiCol_TitleBgActive, mix(panel, accent, 0.45f));
+    set(ImGuiCol_TitleBgCollapsed, background);
+    set(ImGuiCol_MenuBarBg, panel);
+    set(ImGuiCol_ScrollbarBg, background);
+    set(ImGuiCol_ScrollbarGrab, accentDeep);
+    set(ImGuiCol_ScrollbarGrabHovered, accent);
+    set(ImGuiCol_ScrollbarGrabActive, accentHot);
+    set(ImGuiCol_CheckMark, accentHot);
+    set(ImGuiCol_SliderGrab, accent);
+    set(ImGuiCol_SliderGrabActive, accentHot);
+    set(ImGuiCol_Button, accentDeep);
+    set(ImGuiCol_ButtonHovered, accent);
+    set(ImGuiCol_ButtonActive, support);
+    set(ImGuiCol_Header, mix(raised, accent, 0.55f));
+    set(ImGuiCol_HeaderHovered, mix(raised, accent, 0.75f));
+    set(ImGuiCol_HeaderActive, accent);
+    set(ImGuiCol_Separator, line);
+    set(ImGuiCol_SeparatorHovered, accent);
+    set(ImGuiCol_SeparatorActive, accentHot);
+    set(ImGuiCol_ResizeGrip, accentDeep);
+    set(ImGuiCol_ResizeGripHovered, accent);
+    set(ImGuiCol_ResizeGripActive, accentHot);
+    set(ImGuiCol_Tab, hsv(hue, baseS * 0.9f, panelV, 1.f));
+    set(ImGuiCol_TabHovered, accent);
+    set(ImGuiCol_TabActive, mix(panel, accent, 0.55f));
+    set(ImGuiCol_TabUnfocused, hsv(hue, baseS * 0.7f, baseV, 1.f));
+    set(ImGuiCol_TabUnfocusedActive, mix(panel, accent, 0.35f));
+    set(ImGuiCol_PlotLines, support);
+    set(ImGuiCol_PlotLinesHovered, accentHot);
+    set(ImGuiCol_PlotHistogram, accent);
+    set(ImGuiCol_PlotHistogramHovered, accentHot);
+    set(ImGuiCol_TableHeaderBg, mix(panel, accent, 0.25f));
+    set(ImGuiCol_TableBorderStrong, line);
+    set(ImGuiCol_TableBorderLight, ImVec4(line.x, line.y, line.z, 0.45f));
+    set(ImGuiCol_TableRowBg, ImVec4(0.f, 0.f, 0.f, 0.f));
+    set(ImGuiCol_TableRowBgAlt, ImVec4(raised.x, raised.y, raised.z, 0.35f));
+    set(ImGuiCol_TextSelectedBg, ImVec4(accent.x, accent.y, accent.z, 0.45f));
+    set(ImGuiCol_DragDropTarget, accentHot);
+    set(ImGuiCol_NavHighlight, accent);
+    set(ImGuiCol_NavWindowingHighlight, ImVec4(1.f, 1.f, 1.f, 0.7f));
+    set(ImGuiCol_NavWindowingDimBg, ImVec4(0.2f, 0.2f, 0.2f, 0.2f));
+    set(ImGuiCol_ModalWindowDimBg, ImVec4(0.f, 0.f, 0.f, 0.45f));
+
+    auto& value = Logic::get();
+    GUI::get().paint_editor(value.editor_p1, hsv(hue, accentS * 0.9f, accentV, 1.f));
+    GUI::get().paint_editor(value.editor_p2, hsv(second, accentS, std::min(1.f, accentV + 0.05f), 1.f));
+    GUI::get().paint_editor(value.editor_sel_p1, hsv(third, accentS * 0.7f, std::min(1.f, accentV + 0.15f), 1.f));
+    GUI::get().paint_editor(value.editor_sel_p2, highlight);
+    GUI::get().write_theme(GUI::get().theme_path("current"));
+    Logic::get().save_settings_file();
 }
 
 void GUI::color_row(char const* label, float* color, int id) {
@@ -300,7 +509,141 @@ void GUI::apply_theme_json(matjson::Value const& json) {
 }
 
 void GUI::draw_theme() {
-    // TODO
+    auto& value = Logic::get();
+    auto& style = ImGui::GetStyle();
+    GUI::get().section_label("Theme");
+    ImGui::SetNextItemWidth(ImGui::GetFontSize() * 10.f);
+    ImGui::InputText("Name", &value.theme_name);
+    if (ImGui::IsItemDeactivatedAfterEdit()) Logic::get().save_settings_file();
+    float themeW = GUI::get().shared_button_width({"Save", "Load", "Randomize"});
+    if (ImGui::Button("Save", ImVec2(themeW, 0.f))) {
+        GUI::get().write_theme(GUI::get().theme_path(value.theme_name));
+        GUI::get().write_theme(GUI::get().theme_path("current"));
+        Logic::get().save_settings_file();
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Load", ImVec2(themeW, 0.f))) GUI::get().open_theme_picker();
+    ImGui::SameLine();
+    if (ImGui::Button("Randomize", ImVec2(themeW, 0.f))) GUI::get().randomize_theme();
+    if (ImGui::Checkbox("Docked Menu", &value.docked_menu)) Logic::get().save_settings_file();
+    ImGui::SameLine();
+    bool sharp = style.CircleTessellationMaxError >= 2.5f;
+    if (ImGui::Checkbox("Sharp Edges", &sharp)) {
+        style.CircleTessellationMaxError = sharp ? 5.f : 0.1f;
+        GUI::get().write_theme(GUI::get().theme_path("current"));
+    }
+    ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5.f);
+    float scale_cap = GUI::get().scale_cap;
+    float dragMax = GUI::get().scale_dragging ? 3.f : scale_cap;
+    if (ImGui::DragFloat("Global Scale", &value.menu_scale, 0.01f, 0.35f, dragMax, "%.1f")) {
+        value.menu_scale = std::clamp(value.menu_scale, 0.35f, 3.f);
+    } ImGui::SameLine();
+    if (ImGui::IsItemActivated()) GUI::get().scale_dragging = true;
+    if (ImGui::IsItemDeactivated()) {
+        GUI::get().scale_dragging = false;
+        value.menu_scale = std::clamp(value.menu_scale, 0.35f, GUI::get().scale_cap);
+    }
+    if (ImGui::IsItemDeactivatedAfterEdit()) {
+        Logic::get().save_settings_file();
+        GUI::get().write_theme(GUI::get().theme_path("current"));
+    }
+    ImGui::SetNextItemWidth(ImGui::GetFontSize() * 6.f);
+    if (ImGui::DragFloat("Animation Speed", &value.menu_anim_speed, 0.01f, 0.25f, 4.f, "%.2f")) {
+        value.menu_anim_speed = std::clamp(value.menu_anim_speed, 0.25f, 4.f);
+    }
+    if (ImGui::IsItemDeactivatedAfterEdit()) Logic::get().save_settings_file();
+    ImGui::Separator();
+
+    style.AntiAliasedLines = true;
+    style.AntiAliasedLinesUseTex = true;
+    style.AntiAliasedFill = true;
+
+    float themeChildH = ImGui::GetFontSize() * 18.f;
+    float filterOffset = ImGui::GetFrameHeight() + ImGui::GetStyle().ItemSpacing.y;
+    float sizesChildH = themeChildH + filterOffset;
+    float themeChildW = ImGui::GetFontSize() * 26.f;
+    float themeItemW = ImGui::GetFontSize() * 14.f;
+
+    if (ImGui::BeginTabBar("##echo-theme")) {
+        if (ImGui::BeginTabItem("Sizes")) {
+            ImGui::BeginChild("##echo-sizes", ImVec2(themeChildW, sizesChildH), ImGuiChildFlags_Borders);
+            ImGui::PushItemWidth(themeItemW);
+            ImGui::TextUnformatted("Main");
+            edit_style_vec("WindowPadding", style.WindowPadding, 0.f, 20.f);
+            edit_style_vec("FramePadding", style.FramePadding, 0.f, 20.f);
+            edit_style_vec("CellPadding", style.CellPadding, 0.f, 20.f);
+            edit_style_vec("ItemSpacing", style.ItemSpacing, 0.f, 20.f);
+            edit_style_vec("ItemInnerSpacing", style.ItemInnerSpacing, 0.f, 20.f);
+            edit_style_vec("TouchExtraPadding", style.TouchExtraPadding, 0.f, 10.f);
+            edit_style_float("IndentSpacing", style.IndentSpacing, 0.f, 30.f);
+            edit_style_float("ScrollbarSize", style.ScrollbarSize, 1.f, 20.f);
+            edit_style_float("GrabMinSize", style.GrabMinSize, 1.f, 20.f);
+            ImGui::TextUnformatted("Borders");
+            edit_style_float("WindowBorderSize", style.WindowBorderSize, 0.f, 1.f);
+            edit_style_float("ChildBorderSize", style.ChildBorderSize, 0.f, 1.f);
+            edit_style_float("PopupBorderSize", style.PopupBorderSize, 0.f, 1.f);
+            edit_style_float("FrameBorderSize", style.FrameBorderSize, 0.f, 1.f);
+            edit_style_float("TabBorderSize", style.TabBorderSize, 0.f, 1.f);
+            ImGui::TextUnformatted("Rounding");
+            edit_style_float("WindowRounding", style.WindowRounding, 0.f, 12.f);
+            edit_style_float("ChildRounding", style.ChildRounding, 0.f, 12.f);
+            edit_style_float("FrameRounding", style.FrameRounding, 0.f, 12.f);
+            edit_style_float("PopupRounding", style.PopupRounding, 0.f, 12.f);
+            edit_style_float("ScrollbarRounding", style.ScrollbarRounding, 0.f, 12.f);
+            edit_style_float("GrabRounding", style.GrabRounding, 0.f, 12.f);
+            edit_style_float("TabRounding", style.TabRounding, 0.f, 12.f);
+            ImGui::TextUnformatted("Alignment");
+            ImGui::DragFloat2("WindowTitleAlign", &style.WindowTitleAlign.x, 0.01f, 0.f, 1.f, "%.2f");
+            GUI::get().note_style_edit();
+            int buttonSide = static_cast<int>(style.WindowMenuButtonPosition) + 1;
+            if (ImGui::Combo("WindowBtnPos", &buttonSide, "None\0Left\0Right\0")) {
+                style.WindowMenuButtonPosition = static_cast<ImGuiDir>(buttonSide - 1);
+                GUI::get().write_theme(GUI::get().theme_path("current"));
+            }
+            int colorSide = static_cast<int>(style.ColorButtonPosition);
+            if (ImGui::Combo("ColorButtonPosition", &colorSide, "Left\0Right\0")) {
+                style.ColorButtonPosition = static_cast<ImGuiDir>(colorSide);
+                GUI::get().write_theme(GUI::get().theme_path("current"));
+            }
+            ImGui::DragFloat2("ButtonTextAlign", &style.ButtonTextAlign.x, 0.01f, 0.f, 1.f, "%.2f");
+            ImGui::SameLine();
+            GUI::get().help_marker("Alignment applies when a button is larger than its text.");
+            GUI::get().note_style_edit();
+            ImGui::DragFloat2("SelectableTextAlign", &style.SelectableTextAlign.x, 0.01f, 0.f, 1.f, "%.2f");
+            GUI::get().note_style_edit();
+            ImGui::TextUnformatted("Safe Area Padding");
+            ImGui::SameLine();
+            GUI::get().help_marker("Adjust if the window edges sit off the screen.");
+            ImGui::SliderFloat2("SafePadding", &style.DisplaySafeAreaPadding.x, 0.f, 30.f, "%.0f");
+            GUI::get().note_style_edit();
+            ImGui::PopItemWidth();
+            ImGui::EndChild();
+            ImGui::EndTabItem();
+        }
+        if (ImGui::BeginTabItem("Colors")) {
+            static ImGuiTextFilter filter;
+            filter.Draw("Filter colors", GUI::get().px(220.f));
+            ImGui::BeginChild("##echo-colors", ImVec2(themeChildW, themeChildH), ImGuiChildFlags_Borders);
+            if (filter.PassFilter("Player 1 In Editor")) GUI::get().color_row("Player 1 In Editor", value.editor_p1, 998);
+            if (filter.PassFilter("Player 2 In Editor")) GUI::get().color_row("Player 2 In Editor", value.editor_p2, 999);
+            if (filter.PassFilter("Player 1 In Editor (Selected)")) GUI::get().color_row("Player 1 In Editor (Selected)", value.editor_sel_p1, 997);
+            if (filter.PassFilter("Player 2 In Editor (Selected)")) GUI::get().color_row("Player 2 In Editor (Selected)", value.editor_sel_p2, 996);
+            for (int i = 0; i < ImGuiCol_COUNT; ++i) {
+                char const* name = ImGui::GetStyleColorName(i);
+                if (!filter.PassFilter(name)) continue;
+                ImGui::PushID(i);
+                if (ImGui::ColorEdit4("##style-color", &style.Colors[i].x, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaBar)) {
+                    GUI::get().write_theme(GUI::get().theme_path("current"));
+                }
+                ImGui::SameLine();
+                ImGui::TextUnformatted(name);
+                ImGui::PopID();
+            }
+            ImGui::EndChild();
+            ImGui::EndTabItem();
+        }
+        ImGui::EndTabBar();
+    }
 }
 
 BindAction const kListed[] = {
