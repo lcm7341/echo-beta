@@ -258,6 +258,9 @@ namespace echo::waves {
                 continue;
             if (wave->getParent() != parent || wave->m_delegate != delegate || !wave->m_target)
                 continue;
+            // m_position NOT node pos
+            if (!point_same(wave->m_position, position))
+                continue;
             if (!point_same(wave->m_target->getPosition(), position))
                 continue;
             if (wave->m_color.r != color.r || wave->m_color.g != color.g || wave->m_color.b != color.b)
