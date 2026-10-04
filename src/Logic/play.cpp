@@ -697,6 +697,46 @@ void Logic::on_keybind(std::string_view key, bool down) {
     Logic::get().dispatch_setting_key(key, true);
 }
 
+void Logic::sync_time_scale() {
+    auto* scheduler = CCDirector::sharedDirector()->getScheduler();
+    if (!scheduler)
+        return;
+    auto const& logic = Logic::get();
+    float speed = std::max(logic.speedhack, 0.01f);
+    if (!std::isfinite(speed) || speed < 0.01f)
+        speed = 1.f;
+    if (Logic::get().render_active()) {
+        scheduler->setTimeScale(1.f);
+        return;
+    }
+    if (auto* play = PlayLayer::get(); play && play->m_playerDied) {
+        scheduler->setTimeScale(speed);
+        return;
+    }
+    if (PlayLayer::get() || logic.editor_testing)
+        scheduler->setTimeScale(1.f);
+    else
+        scheduler->setTimeScale(speed);
+}
+
+void Logic::sync_playback_fps() {
+    auto& logic = Logic::get();
+    auto* director = CCDirector::sharedDirector();
+    if (!director || Logic::get().render_active())
+        return;
+    if (logic.playback_fps >= 1.f) {
+        if (!logic.playback_fps_held)
+            logic.held_interval = director->getAnimationInterval();
+        logic.playback_fps_held = true;
+        director->setAnimationInterval(1.f / (logic.playback_fps * logic.speedhack));
+        return;
+    }
+    if (!logic.playback_fps_held)
+        return;
+    logic.playback_fps_held = false;
+    director->setAnimationInterval(logic.held_interval > 0.f ? logic.held_interval : 1.f / 60.f);
+}
+
 void Logic::resume_attempt(PlayLayer* play) {
     if (!play)
         return;
