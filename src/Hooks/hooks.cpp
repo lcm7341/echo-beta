@@ -168,6 +168,13 @@ namespace {
         g_halfPasses = 0;
     }
 
+    // msvc delete crashes on ts when leaving a lvl
+    struct SectionVec {
+        uintptr_t* begin;
+        uintptr_t* end;
+        uintptr_t* cap;
+    };
+
     bool can_touch(void const* pointer, size_t bytes, bool write) {
         if (!pointer || bytes == 0)
             return false;
