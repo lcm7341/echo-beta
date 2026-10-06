@@ -5,7 +5,7 @@
 	},
 	"id": "decks.echo",
 	"name": "Echo",
-	"version": "v1.0.0",
+	"version": "v2.0.0",
 	"developer": "decks",
 	"description": "Echo is a replay tool with many features, all for free :)",
 	"links": {
