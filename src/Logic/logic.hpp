@@ -843,7 +843,7 @@ public:
 	void draw_hitboxes(GJBaseGameLayer* play);
 	void seat_overlay(CCNode* node, GJBaseGameLayer* play);
 	void sync_overlay_seats(GJBaseGameLayer* play);
-	void add_trail_point(GJBaseGameLayer* play);
+	void sample_hitbox_trail(GJBaseGameLayer* play);
 	void note_click_hitbox(GJBaseGameLayer* play, bool player1, bool down);
 	void capture_pending_click(PlayerObject* player);
 	void flush_click_hitboxes(GJBaseGameLayer* play);

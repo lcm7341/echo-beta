@@ -753,7 +753,7 @@ namespace echo::step {
             }
             Logic::get().apply_rate(logic.step_frame);
             if (!logic.hitbox_trail_visual)
-                Logic::get().add_trail_point(layer);
+                Logic::get().sample_hitbox_trail(layer);
         }
         if (play)
             trace(self);
@@ -1920,7 +1920,7 @@ class $modify(EchoScheduler, CCScheduler) {
             if (!paused) {
                 if (logic.hitbox_trail_visual && !dead && logic.step_frame != frames_before) {
                     ++logic.visual_frame;
-                    Logic::get().add_trail_point(layer);
+                    Logic::get().sample_hitbox_trail(layer);
                 }
             }
             Logic::get().draw_hitboxes(layer);

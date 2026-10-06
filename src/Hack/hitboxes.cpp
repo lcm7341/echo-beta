@@ -833,7 +833,7 @@ void Hitboxes::trim_trail(std::deque<HitboxTrailPoint>& trail, GJBaseGameLayer* 
         trail.pop_front();
 }
 
-void Logic::add_trail_point(GJBaseGameLayer* play) {
+void Logic::sample_hitbox_trail(GJBaseGameLayer* play) {
     auto& logic = Logic::get();
     if (!play || !logic.show_hitboxes || !logic.hitbox_trail)
         return;
