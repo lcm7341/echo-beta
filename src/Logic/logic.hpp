@@ -739,6 +739,13 @@ public:
 	void on_keybind(std::string_view key, bool down);
 	void tick_autoclicker(PlayLayer* play);
 	void after_frame(PlayLayer* play, float dt);
+	std::vector<std::string_view> active_cheats() const;
+	std::vector<std::string_view> const& attempt_cheats() const;
+	bool attempt_cheated() const;
+	void update_safe_mode(PlayLayer* play);
+	void hold_safe_mode_test_mode(PlayLayer* play);
+	void end_safe_mode_attempt(PlayLayer* play);
+	void reset_safe_mode();
 	bool player_hidden(PlayerObject* player) const;
 	bool hitbox_player_hidden(bool player2) const;
 	bool traj_player_hidden(bool player2) const;

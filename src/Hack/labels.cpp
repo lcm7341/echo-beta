@@ -338,6 +338,17 @@ void Logic::draw_overlay(PlayLayer* play) {
     }
     Labels::get().sync_label(play, UTILITY_TAG, !utilities.empty(), logic.utility_label, utilities, { 255, 200, 80 });
     std::string blocked;
+    if (show_labels && logic.show_safe_mode && logic.safeMode) {
+        auto names = Logic::get().attempt_cheats();
+        for (auto name : Logic::get().active_cheats()) {
+            if (std::ranges::find(names, name) == names.end())
+                names.push_back(name);
+        }
+        for (auto name : names) {
+            blocked += blocked.empty() ? "Cheats: " : ", ";
+            blocked += name;
+        }
+    }
     Labels::get().sync_label(play, SAFE_MODE_TAG, !blocked.empty(), logic.safe_mode_label, blocked, { 255, 60, 60 });
     for (int tag = 0xEC10; tag <= 0xEC1F; ++tag) {
         if (auto* leftover = play->getChildByTag(tag))

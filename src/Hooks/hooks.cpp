@@ -430,6 +430,7 @@ class $modify(EchoPlayLayer, PlayLayer) {
         clear_tilt();
         if (Trajectory::get().attached())
             Trajectory::get().detach();
+        Logic::get().reset_safe_mode();
         Logic::get().clear_layout_hidden();
         if (!PlayLayer::init(level, useReplay, dontCreateObjects))
             return false;
@@ -445,6 +446,7 @@ class $modify(EchoPlayLayer, PlayLayer) {
     void postUpdate(float dt) {
         PlayLayer::postUpdate(dt);
         Logic::get().after_frame(this, dt);
+        Logic::get().update_safe_mode(this);
     }
 
     // updateCamera calls ts every frame & it rebuilds the whole label :/
@@ -502,10 +504,12 @@ class $modify(EchoPlayLayer, PlayLayer) {
         bool roll_seed = !Logic::get().keep_lvl_seed && !logic.seed_override && !logic.is_playing();
         if (!roll_seed)
             Logic::get().plant_lvl_seed(this);
+        Logic::get().end_safe_mode_attempt(this);
         g_nativeReset = true;
         g_seedApplied = false;
         PlayLayer::resetLevel();
         g_nativeReset = false;
+        Logic::get().update_safe_mode(this);
         if (Logic::get().keep_lvl_seed)
             Logic::get().restore_checkpoint_random(this);
         else if (!roll_seed)
@@ -605,6 +609,8 @@ class $modify(EchoPlayLayer, PlayLayer) {
     void levelComplete() {
         if (Logic::get().predicting)
             return;
+        Logic::get().update_safe_mode(this);
+        Logic::get().hold_safe_mode_test_mode(this);
         Logic::get().on_complete(this);
         PlayLayer::levelComplete();
     }
