@@ -728,7 +728,8 @@ void Logic::sync_playback_fps() {
         if (!logic.playback_fps_held)
             logic.held_interval = director->getAnimationInterval();
         logic.playback_fps_held = true;
-        director->setAnimationInterval(1.f / (logic.playback_fps * logic.speedhack));
+        // speedhack does NOT scale the fps anymore, 240 stays 240 at 0.5x
+        director->setAnimationInterval(1.f / logic.playback_fps);
         return;
     }
     if (!logic.playback_fps_held)
