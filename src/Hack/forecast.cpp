@@ -422,6 +422,10 @@ namespace {
     std::unordered_map<int, std::uint32_t> forecast_fired;
 
     void refresh_objects(Forecast& f, PlayLayer* play) {
+        // hopefully fixes crash
+        if (f.play == play && f.array == play->m_objects && f.epoch == echo::movement::group_epoch &&
+            play->m_objects && f.array_count == play->m_objects->count())
+            return;
         f.play = play;
         f.array = play->m_objects;
         f.array_count = play->m_objects ? play->m_objects->count() : 0;
