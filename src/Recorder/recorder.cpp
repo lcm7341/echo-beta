@@ -2288,6 +2288,11 @@ void Logic::start_render() {
                 }
                 return;
             }
+            if (!PlayLayer::get()) {
+                Logic::get().stop_render();
+                Logic::get().notify("The level closed before the render started", false);
+                return;
+            }
             film.go_live();
         });
     }).detach();

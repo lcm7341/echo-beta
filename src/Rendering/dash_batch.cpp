@@ -269,6 +269,63 @@ class $modify(EchoDashLayerVisit, CCNode) {
             hook.unwrap()->setAutoEnable(echo_dash_batching_enabled);
     }
 
+    void visit() {
+        auto& r = renderer;
+        if (!r.active && !echo_dash_batching_enabled) {
+            CCNode::visit();
+            return;
+        }
+        auto* play = r.active ? nullptr : PlayLayer::get();
+        if (!r.active && play && static_cast<CCNode*>(this) == static_cast<CCNode*>(play->m_objectLayer) && !m_pCamera && !m_pGrid && initialize()) {
+            r.layer = this;
+            r.active = true;
+            r.enabled = echo_dash_batching_enabled;
+            r.native_program = CCShaderCache::sharedShaderCache()->programForKey(kCCShader_PositionTextureColor);
+            ++r.serial;
+            r.frame_sprites = 0;
+            r.frame_draws = 0;
+            sortAllChildren();
+            auto* children = getChildren();
+            if (children)
+                for (unsigned i = 0; i < children->count(); ++i) {
+                    auto* node = static_cast<CCSprite*>(children->objectAtIndex(i));
+                    auto it = effects.find(node);
+                    if (it != effects.end() && valid(node, it->second)) {
+                        it->second.serial = r.serial;
+                        it->second.index = i;
+                    }
+                }
+            CCNode::visit();
+            flush();
+            echo_dash_rendered_sprites = r.frame_sprites;
+            echo_dash_draw_calls = r.frame_draws;
+            r.active = false;
+            r.layer = nullptr;
+            return;
+        }
+        auto it = effects.find(reinterpret_cast<CCSprite*>(this));
+        bool effect = r.active && it != effects.end() && it->second.serial == r.serial;
+        if (r.active && !effect && owners.find(reinterpret_cast<CCSprite*>(this)) == owners.end())
+            flush();
+        CCNode::visit();
+        if (effect) {
+            it = effects.find(reinterpret_cast<CCSprite*>(this));
+            if (it == effects.end() || it->second.serial != r.serial) {
+                flush();
+                return;
+            }
+            auto* children = r.layer->getChildren();
+            auto idx = it->second.index;
+            if (!children || idx >= children->count() || children->objectAtIndex(idx) != this || idx + 1 >= children->count()) {
+                flush();
+                return;
+            }
+            auto next = effects.find(static_cast<CCSprite*>(children->objectAtIndex(idx + 1)));
+            if (next == effects.end() || next->second.serial != r.serial ||
+                (getZOrder() < 0 && static_cast<CCNode*>(children->objectAtIndex(idx + 1))->getZOrder() >= 0))
+                flush();
+        }
+    }
 };
 
 class $modify(EchoDashSpriteDraw, CCSprite) {

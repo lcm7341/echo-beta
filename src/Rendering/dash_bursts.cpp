@@ -346,6 +346,37 @@ namespace {
 // spamming an orb built it again just for the merge to delete it, most of the cost of a spammed press
 // so ask me first & a duplicate jumps past the block
 extern "C" bool echo_burst_duplicate(PlayerObject* player, GameObject* orb, float rotation) noexcept {
+    try {
+        if (!player || !orb || fresh.empty() || !stack_program)
+            return false;
+        auto* play = PlayLayer::get();
+        if (!play || !play->m_objectLayer)
+            return false;
+        CCPoint position = orb->getRealPosition();
+        float sprite_rotation = -rotation;
+        int type = orb->m_objectID;
+        auto key = burst_key(play->m_objectLayer, type, position, sprite_rotation, sprite_rotation);
+        auto indexed = fresh_index.find(key);
+        if (indexed == fresh_index.end())
+            return false;
+        auto matches = [&](Fresh const& item) {
+            auto* sprite = item.sprite;
+            return item.orb == type && sprite->getParent() == play->m_objectLayer &&
+                   same(sprite->getPositionX(), position.x) && same(sprite->getPositionY(), position.y) &&
+                   same(sprite->getRotationX(), sprite_rotation) && same(sprite->getRotationY(), sprite_rotation);
+        };
+        auto& candidate = fresh[indexed->second];
+        if (matches(candidate)) {
+            candidate.extra += 1.f;
+            return true;
+        }
+        for (auto it = fresh.rbegin(); it != fresh.rend(); ++it) {
+            if (!matches(*it))
+                continue;
+            it->extra += 1.f;
+            return true;
+        }
+    }
     catch (...) {
     }
     return false;

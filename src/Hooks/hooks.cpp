@@ -13,6 +13,7 @@
 #include "Hack/orbs.hpp"
 #include "GUI/gui.hpp"
 #include "Hack/trajectory.hpp"
+#include "Hack/forecast.hpp"
 #include "Physics/collisions.hpp"
 #include "Physics/gjbasegamelayer.hpp"
 #include "Physics/gravity.hpp"
@@ -505,6 +506,7 @@ class $modify(EchoPlayLayer, PlayLayer) {
         if (!roll_seed)
             Logic::get().plant_lvl_seed(this);
         Logic::get().end_safe_mode_attempt(this);
+        forecast::invalidate();
         g_nativeReset = true;
         g_seedApplied = false;
         PlayLayer::resetLevel();
@@ -741,6 +743,8 @@ namespace echo::step {
     void end(GJBaseGameLayer* self, GJBaseGameLayer* layer, bool isHalfTick) {
         auto& logic = Logic::get();
         auto* play = Logic::as_play(self);
+        if (play)
+            forecast::note_live_step();
 
         if (!layer) {
             dash_spin_post(isHalfTick);
@@ -1612,6 +1616,8 @@ class $modify(EchoPlayerObject, PlayerObject) {
             return;
         }
         CCNode* object_layer = nullptr;
+        if (auto* play = PlayLayer::get())
+            object_layer = play->m_objectLayer;
         unsigned before = object_layer && object_layer->getChildren() ? object_layer->getChildren()->count() : 0;
         PlayerObject::startDashing(ring);
         if (object_layer && ring)
@@ -1977,6 +1983,8 @@ class $modify(EchoGameObject, GameObject) {
 
 class $modify(EchoEffectObject, EffectGameObject) {
     void triggerObject(GJBaseGameLayer* layer, int uniqueID, gd::vector<int> const* remapKeys) {
+        if (Logic::get().predicting && !forecast::firing())
+            return;
         EffectGameObject::triggerObject(layer, uniqueID, remapKeys);
     }
 
@@ -1984,6 +1992,48 @@ class $modify(EchoEffectObject, EffectGameObject) {
         if (Logic::get().predicting)
             return;
         EffectGameObject::triggerActivated(xPosition);
+    }
+};
+
+class $modify(EchoRandTrigger, RandTriggerGameObject) {
+    struct Fields {
+        uint64_t state = std::numeric_limits<uint64_t>::max();
+    };
+
+    void customObjectSetup(gd::vector<gd::string>& values, gd::vector<void*>& exists) {
+        RandTriggerGameObject::customObjectSetup(values, exists);
+        Logic::get().note_rand_trigger(m_uniqueID, &m_fields->state);
+    }
+
+    void triggerObject(GJBaseGameLayer* layer, int uniqueID, gd::vector<int> const* remapKeys) {
+        // predicting must NOT roll the real random
+        if (Logic::get().predicting && !forecast::firing())
+            return;
+        if (m_objectID != 2068) {
+            RandTriggerGameObject::triggerObject(layer, uniqueID, remapKeys);
+            return;
+        }
+        if (m_fields->state == std::numeric_limits<uint64_t>::max()) {
+            m_fields->state = Logic::get().lvl_seed ^ (static_cast<uint64_t>(m_uniqueID) * 2137ull);
+        }
+        uint64_t roll = m_fields->state;
+        m_fields->state = 214013ull * roll + 2531011ull; // msvc rand()
+        int sum = 0;
+        for (auto const& chance : m_chanceObjects)
+            sum += chance.m_chance;
+        int threshold = static_cast<int>(std::round((static_cast<float>((roll >> 16) & 0x7FFF) / 32767.f) * static_cast<float>(sum)));
+        int running = 0;
+        int group = 0;
+        for (size_t i = 0; i < m_chanceObjects.size(); ++i) {
+            running += m_chanceObjects[i].m_chance;
+            group = m_chanceObjects[i].m_groupID;
+            if (running >= threshold)
+                break;
+        }
+        gd::vector<int> keys;
+        if (remapKeys)
+            keys = *remapKeys;
+        layer->spawnGroup(group, false, 0.0, keys, m_uniqueID, m_controlID);
     }
 };
 

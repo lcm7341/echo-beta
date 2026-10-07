@@ -9,6 +9,7 @@
 #include "Logic/logic.hpp"
 #include "Hooks/step.hpp"
 #include "Hack/trajectory.hpp"
+#include "Physics/moving_objects.hpp"
 #include "Physics/prediction_art.hpp"
 #include "Rendering/dash_end.hpp"
 #include "Rendering/dash_bursts.hpp"
@@ -271,6 +272,7 @@ void Logic::run_frame(GJBaseGameLayer* play, float dt, std::function<void(float)
         tick(dt);
         return;
     }
+    echo::movement::prepare();
     echo::dash::prepare();
     echo::bursts::prepare();
     logic.frame_steps = 0;

@@ -5,6 +5,7 @@
 // predicting must NEVER touch the real attempt: triggers dont fire for real, deaths stay on the fake, the random state is put back after
 // the same thing answers "does the next step kill me" (pause before kill, the autoclicker) & "how long do i live if i flip now" (find best frame)
 #include "Hack/trajectory.hpp"
+#include "Hack/forecast.hpp"
 #include "Hack/trajectory_path.hpp"
 #include "Hack/orbs.hpp"
 #include "Logic/logic.hpp"
@@ -608,6 +609,10 @@ void Trajectory::simulate(PlayLayer* play, bool player1, Click click, bool both,
     int steps = echo::trajectory::prediction_steps(logic.traj_seconds, logic.sample_rate(), warp);
     if (limit > 0)
         steps = std::min(steps, limit);
+    if (logic.traj_moving_objects)
+        forecast::prepare(play, steps, step_delta / 60.f);
+    else
+        forecast::invalidate();
     if (draw) {
         paths[fake == fake2].reserve(steps + 1);
         if (partner)
@@ -741,6 +746,8 @@ void Trajectory::simulate(PlayLayer* play, bool player1, Click click, bool both,
                 bottom = std::min(bottom, other.y);
                 top = std::max(top, other.y);
             }
+            if (logic.traj_moving_objects)
+                forecast::apply(play, i + 1, { left - REACH, bottom - REACH, right - left + 2.f * REACH, top - bottom + 2.f * REACH });
         }
         std::array<bool, 2> orb_press{};
         if (played || (pair && logic.is_playing())) {
@@ -957,6 +964,9 @@ void Trajectory::simulate(PlayLayer* play, bool player1, Click click, bool both,
         }
     }
 
+    if (note_path)
+        forecast::note_player_path(std::move(player_path), real->m_lastPosition);
+    forecast::rewind(play);
     pairing = false;
     joinable = false;
     join_real = nullptr;
