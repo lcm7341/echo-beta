@@ -69,6 +69,29 @@ std::string Logic::read_folder_setting(char const* key) {
     return value.string();
 }
 
+matjson::Value Logic::placement_json(LabelPlacement const& placement) {
+    matjson::Value json;
+    json["x"] = placement.x;
+    json["y"] = placement.y;
+    json["scale"] = placement.scale;
+    json["opacity"] = placement.opacity;
+    return json;
+}
+
+LabelPlacement Logic::read_placement(matjson::Value const& json, LabelPlacement fallback) {
+    if (!json.isObject())
+        return fallback;
+    if (auto number = json["x"].asDouble())
+        fallback.x = static_cast<float>(number.unwrap());
+    if (auto number = json["y"].asDouble())
+        fallback.y = static_cast<float>(number.unwrap());
+    if (auto number = json["scale"].asDouble())
+        fallback.scale = static_cast<float>(number.unwrap());
+    if (auto number = json["opacity"].asInt())
+        fallback.opacity = static_cast<int>(number.unwrap());
+    return fallback;
+}
+
 void Logic::boot() {
     auto root = Logic::get().save_root();
     std::error_code error;
