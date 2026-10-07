@@ -223,7 +223,8 @@ void refresh_object_hitbox(GameObject* object) {
     // objs with a box offset (teleport portals) keep the box gd already has, a redo moves it & that is NOT what the player hits
     if (object->m_customBoxOffset.x != 0.f || object->m_customBoxOffset.y != 0.f)
         return;
-    // TODO hitboxes lag behind move triggers
+    // move triggers leave the old box cached :/
+    object->m_isOrientedBoxDirty = true;
     object->m_isObjectRectDirty = true;
 }
 
