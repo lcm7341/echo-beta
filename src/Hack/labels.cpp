@@ -169,7 +169,7 @@ void Labels::layout(PlayLayer* play) {
     auto win = CCDirector::get()->getWinSize();
     bool right = logic.label_corner == 1 || logic.label_corner == 3, bottom = logic.label_corner >= 2;
     constexpr float MARGIN = 3.f;
-    constexpr float GAP = 1.f;
+    constexpr float GAP = 2.f;
     auto order = ordered_labels(logic);
     if (bottom)
         std::ranges::reverse(order);
