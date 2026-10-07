@@ -5,7 +5,7 @@
 // frame advance: exactly 1 step per press. speedhack & frame time dont matter
 // pause before kill / trajectory autoclicker: 1 step at a time, so there is a chance to stop BEFORE the death
 // real time: a frame may run up to a seconds worth of steps so game time stays right when physics cant keep up
-// max_steps_for_frame times real steps & the rest of the frame, then caps the frame to what fits. heavy levels slow down, they dont freeze
+// affordable_steps times real steps & the rest of the frame, then caps the frame to what fits. heavy levels slow down, they dont freeze
 #include "Logic/logic.hpp"
 #include "Hooks/step.hpp"
 #include "Hack/trajectory.hpp"
@@ -187,10 +187,10 @@ std::string echo::step::pace() {
     return fmt::format("tps={:.2f} fps={:.2f} interval_ms={:.3f} real_time={} lock_tps={} speed={:.3f} step_us={:.1f} update_us={:.1f} other_us={:.1f} afford={} cap={}",
         logic.sample_rate(), logic.playback_fps, director ? director->getAnimationInterval() * 1000.0 : 0.0,
         logic.real_time_mode, logic.lock_delta, logic.speedhack, cost.per_step * 1e6, cost.per_update * 1e6, cost.other_work * 1e6,
-        logic.max_steps_for_frame(), logic.unlocked_step_cap());
+        logic.affordable_steps(), logic.unlocked_step_cap());
 }
 
-int Logic::max_steps_for_frame() const {
+int Logic::affordable_steps() const {
     auto const& cost = step_cost();
     if (!(cost.per_step > 0.0))
         return std::numeric_limits<int>::max();
@@ -249,7 +249,7 @@ int Logic::count_unlocked_steps(GJBaseGameLayer* play, double dt) {
         steps = 0;
     bool capped = false;
     if (!Logic::get().render_capturing()) {
-        int affordable = Logic::get().max_steps_for_frame();
+        int affordable = Logic::get().affordable_steps();
         int cap = std::max(std::min(Logic::get().unlocked_step_cap(), affordable) - logic.frame_steps, 0);
         capped = steps > cap;
         steps = std::min(steps, cap);

@@ -608,7 +608,7 @@ void Logic::poll_advance_hold() {
     if (!std::isfinite(rate) || !(rate > 0.0))
         return;
     double elapsed = chrono::duration<double>(now - from).count();
-    int cap = std::min(logic.unlocked_step_cap(), logic.max_steps_for_frame());
+    int cap = std::min(logic.unlocked_step_cap(), logic.affordable_steps());
     double wanted = std::floor(elapsed * rate);
     if (wanted < 1.0)
         return;

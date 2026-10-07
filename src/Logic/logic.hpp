@@ -833,7 +833,7 @@ public:
 	void flush_clicks();
 	void note_step();
 	void release_replay_index();
-	int max_steps_for_frame() const;
+	int affordable_steps() const;
 	void note_frame_work(double seconds);
 	double frame_work = 0.0;
 	void draw_overlay(PlayLayer* play);
