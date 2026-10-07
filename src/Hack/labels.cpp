@@ -155,7 +155,36 @@ void Labels::sync_label(PlayLayer* play, int tag, bool visible, LabelPlacement c
 }
 
 void Labels::layout(PlayLayer* play) {
-    // later
+    auto const& logic = Logic::get();
+    if (!logic.labels_auto || !play)
+        return;
+    auto win = CCDirector::get()->getWinSize();
+    bool right = logic.label_corner == 1 || logic.label_corner == 3, bottom = logic.label_corner >= 2;
+    constexpr float MARGIN = 3.f;
+    constexpr float GAP = 1.f;
+    auto order = ordered_labels(logic);
+    if (bottom)
+        std::ranges::reverse(order);
+    float used = 0.f;
+    for (auto* info : order) {
+        auto* label = typeinfo_cast<CCLabelBMFont*>(play->getChildByTag(info->tag));
+        if (!label || !label->isVisible())
+            continue;
+        CCPoint anchor{ right ? 1.f : 0.f, bottom ? 0.f : 1.f };
+        if (label->getAnchorPoint() != anchor)
+            label->setAnchorPoint(anchor);
+        auto& alignment = alignments[info->tag];
+        auto wanted = right ? kCCTextAlignmentRight : kCCTextAlignmentLeft;
+        if (alignment != wanted) {
+            alignment = wanted;
+            label->setAlignment(wanted);
+        }
+        float height = label->getScaledContentSize().height;
+        CCPoint position{ right ? win.width - MARGIN : MARGIN, bottom ? MARGIN + used : win.height - MARGIN - used };
+        if (label->getPosition() != position)
+            label->setPosition(position);
+        used += height + GAP;
+    }
 }
 
 std::string Labels::format_clock(double seconds) {
