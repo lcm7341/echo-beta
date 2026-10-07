@@ -117,6 +117,77 @@ namespace echo::movement {
 #if defined(__SSE2__) || defined(_M_X64)
 #define ECHO_PARALLEL_MOVE 1
 
+	// threads for huge groups
+	// NEVER destroyed bc joining on unload deadlocks
+	class MovePool {
+	public:
+		static constexpr unsigned HELPER_COUNT = 5;
+
+		static MovePool& get() {
+			static MovePool* pool = new MovePool();
+			return *pool;
+		}
+
+		unsigned parts() const {
+			return HELPER_COUNT + 1;
+		}
+
+		template <class Job>
+		void run(Job& job) {
+			fn = [](void* context, unsigned part) {
+				(*static_cast<Job*>(context))(part);
+			};
+			context = &job;
+			csr = _mm_getcsr();
+			pending.store(HELPER_COUNT, std::memory_order_relaxed);
+			generation.fetch_add(1, std::memory_order_seq_cst);
+			if (sleepers.load(std::memory_order_seq_cst) > 0)
+				generation.notify_all();
+			job(0u);
+			while (pending.load(std::memory_order_acquire) != 0)
+				_mm_pause();
+		}
+
+	private:
+		MovePool() {
+			for (unsigned i = 0; i < HELPER_COUNT; ++i)
+				std::thread([this, i] {
+					work(i + 1);
+				}).detach();
+		}
+
+		void work(unsigned part) {
+			uint32_t seen = 0;
+			for (;;) {
+				auto spin_start = chrono::steady_clock::now();
+				for (unsigned spins = 0; generation.load(std::memory_order_acquire) == seen; ++spins) {
+					_mm_pause();
+					if ((spins & 255) != 255)
+						continue;
+					if (chrono::steady_clock::now() - spin_start < chrono::milliseconds(2))
+						continue;
+					sleepers.fetch_add(1, std::memory_order_seq_cst);
+					if (generation.load(std::memory_order_seq_cst) == seen)
+						generation.wait(seen, std::memory_order_seq_cst);
+					sleepers.fetch_sub(1, std::memory_order_seq_cst);
+					spin_start = chrono::steady_clock::now();
+				}
+				seen = generation.load(std::memory_order_acquire);
+				if (_mm_getcsr() != csr)
+					_mm_setcsr(csr);
+				fn(context, part);
+				pending.fetch_sub(1, std::memory_order_release);
+			}
+		}
+
+		void (*fn)(void*, unsigned) = nullptr;
+		void* context = nullptr;
+		unsigned csr = 0;
+		std::atomic<uint32_t> generation{ 0 };
+		std::atomic<unsigned> pending{ 0 };
+		std::atomic<unsigned> sleepers{ 0 };
+	};
+
 	struct GroupCheck {
 		void* array;
 		std::uint64_t epoch;
