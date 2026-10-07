@@ -109,6 +109,13 @@
 			"default": "None",
 			"category": "gameplay"
 		},
+		"key-autoclick": {
+			"type": "keybind",
+			"platforms": ["win"],
+			"name": "Autoclicker",
+			"default": "None",
+			"category": "gameplay"
+		},
 		"key-no-overwrite": {
 			"type": "keybind",
 			"platforms": ["win"],

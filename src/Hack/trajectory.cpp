@@ -1286,7 +1286,55 @@ int Trajectory::flip_survival(PlayLayer* play, bool player1, int& full, std::vec
 }
 
 void Trajectory::autoclick(PlayLayer* play) {
-    // TODO
+    auto& logic = Logic::get();
+    if (!logic.traj_autoclicker || !play || play->m_isPaused || play->m_playerDied)
+        return;
+    if (logic.step_frame < clicked_frame)
+        clicked_frame = -1;
+    if (logic.step_frame == clicked_frame)
+        return;
+    lookahead(play);
+    bool twoPlayer = play->m_levelSettings && play->m_levelSettings->m_twoPlayerMode;
+    bool dual = play->m_gameState.m_isDualMode && play->m_player2;
+    bool flip1 = logic.death_next_p1 || (dual && !twoPlayer && logic.death_next_p2);
+    bool flip2 = dual && twoPlayer && logic.death_next_p2;
+    if (!flip1 && !flip2)
+        return;
+    int jump = static_cast<int>(PlayerButton::Jump);
+    bool linked = dual && !twoPlayer;
+    // would ts click kill me on the next step
+    auto dies = [&](bool player1, Click click) {
+        logic.death_next_p1 = logic.death_next_p2 = false;
+        predicting(play, [&] {
+            simulate(play, player1, click, player1 && linked, false, 1, 1); // 1 = MEASURE_LIVE
+        });
+        cached = false;
+        return player1 ? logic.death_next_p1 || (linked && logic.death_next_p2) : logic.death_next_p2;
+    };
+    auto flip = [&](bool player1) {
+        bool held = next_click(play, player1) == Click::Hold;
+        auto* body = player1 ? play->m_player1 : play->m_player2;
+        // maintain gravity decides the button from what im "holding" so flip that instead
+        if (logic.maintain_gravity && body && body->m_isDart && logic.records_player(!player1)) {
+            (player1 ? logic.traj_flip_p1 : logic.traj_flip_p2) ^= true;
+            return;
+        }
+        // flipping dies too? try a swift (tap & let go on the same frame) if the swift line is on
+        if (logic.traj_swift && dies(player1, held ? Click::Release : Click::Hold) && !dies(player1, Click::Swift)) {
+            if (held)
+                play->queueButton(jump, false, !player1, Logic::get().click_stamp());
+            play->queueButton(jump, true, !player1, Logic::get().click_stamp());
+            play->queueButton(jump, false, !player1, Logic::get().click_stamp());
+            return;
+        }
+        play->queueButton(jump, !held, !player1, Logic::get().click_stamp());
+    };
+    if (flip1)
+        flip(true);
+    if (flip2)
+        flip(false);
+    clicked_frame = logic.step_frame;
+    lookahead(play);
 }
 
 void Trajectory::lookahead(PlayLayer* play) {
