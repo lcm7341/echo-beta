@@ -103,13 +103,21 @@ std::vector<std::string> const& label_font_names() {
 }
 
 std::string label_font_file(int index) {
-    // TODO
-    return {};
+    if (index <= 0)
+        return "bigFont.fnt";
+    if (index == 1)
+        return "goldFont.fnt";
+    if (index == 2)
+        return "chatFont.fnt";
+    return fmt::format("gjFont{:02}.fnt", std::clamp(index - 2, 1, 59));
 }
 
 int label_font_index(std::string const& file) {
-    // later
-    return {};
+    for (int i = 0; i < (int)(label_font_names().size()); ++i) {
+        if (label_font_file(i) == file)
+            return i;
+    }
+    return 0;
 }
 
 void Labels::sync_label(PlayLayer* play, int tag, bool visible, LabelPlacement const& place, std::string const& text, ccColor3B color) {
