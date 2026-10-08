@@ -706,5 +706,10 @@ void Logic::poll_back_hold() {
 static_assert(offsetof(PlayLayer, m_checkpointArray) == 0x3888);
 
 class $modify(BackstepPlayLayer, PlayLayer) {
-    // TODO stepping back counts as an attempt
+    // stepping back is NOT a new attempt
+    void updateAttempts() {
+        if (Logic::get().backstepping)
+            return;
+        PlayLayer::updateAttempts();
+    }
 };
