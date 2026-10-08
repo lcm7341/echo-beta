@@ -5,7 +5,7 @@
 // predicting must NEVER touch the real attempt: triggers dont fire for real, deaths stay on the fake, the random state is put back after
 // the same thing answers "does the next step kill me" (pause before kill, the autoclicker) & "how long do i live if i flip now" (find best frame)
 #include "Hack/trajectory.hpp"
-#include "Hack/forecast.hpp"
+#include "Hack/level_forecast.hpp"
 #include "Hack/trajectory_path.hpp"
 #include "Hack/orbs.hpp"
 #include "Logic/game_state_copy.hpp"

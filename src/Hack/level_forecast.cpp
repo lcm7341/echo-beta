@@ -5,7 +5,7 @@
 // a prediction step puts the nearby objects where they will be, runs, then puts them back
 // nothing real is toggled or spawned while forecasting
 // the forecast is built a bit per frame (BUILD_PER_FRAME) so it doesnt hitch
-#include "Hack/forecast.hpp"
+#include "Hack/level_forecast.hpp"
 #include "Logic/game_state_copy.hpp"
 #include "Logic/logic.hpp"
 #include "Physics/moving_objects.hpp"

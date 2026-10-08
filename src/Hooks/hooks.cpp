@@ -14,7 +14,7 @@
 #include "Hack/orbs.hpp"
 #include "GUI/gui.hpp"
 #include "Hack/trajectory.hpp"
-#include "Hack/forecast.hpp"
+#include "Hack/level_forecast.hpp"
 #include "Physics/collisions.hpp"
 #include "Physics/gjbasegamelayer.hpp"
 #include "Physics/gravity.hpp"
