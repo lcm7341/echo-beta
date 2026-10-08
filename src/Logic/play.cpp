@@ -2666,5 +2666,27 @@ void Logic::rewind_follow(GJBaseGameLayer* play) {
 }
 
 void Logic::run_follow(GJBaseGameLayer* play) {
-    // TODO
+    if (!follow_active(play) || predicting)
+        return;
+    bool follower2 = follow_mode == 1;
+    int frame = step_frame + 1;
+    double time = play->m_gameState.m_levelTime;
+    bool replaying = backstep_target >= 0;
+    std::vector<std::pair<bool, int>> presses;
+    for (auto& press : follow_log) {
+        if (press.sent)
+            continue;
+        if (!follow_due(press, frame, time))
+            break;
+        press.sent = true;
+        if (!replaying)
+            presses.push_back({ press.down, press.button });
+    }
+    for (auto [down, button] : presses) {
+        follow_injecting = true;
+        routing_input = true;
+        play->handleButton(down, button == 0 ? static_cast<int>(PlayerButton::Jump) : button, !follower2);
+        routing_input = false;
+        follow_injecting = false;
+    }
 }
