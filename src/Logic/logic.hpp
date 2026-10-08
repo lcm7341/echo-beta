@@ -284,7 +284,7 @@ struct HitboxTrailPoint {
 	int frame = 0;
 };
 
-struct BackstepInfo;
+struct BackstepExtra;
 
 struct Session {
 	RunState state = RunState::Idle;
@@ -306,7 +306,7 @@ struct Session {
 	struct BackstepSave {
 		CheckpointObject* object = nullptr;
 		Checkpoint echo;
-		std::shared_ptr<BackstepInfo> extra;
+		std::shared_ptr<BackstepExtra> extra;
 		std::vector<std::uint8_t> object_undo;
 		bool broken = false; // failed the check
 	};

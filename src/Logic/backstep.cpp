@@ -1,7 +1,7 @@
 // stepping backwards while recording
 //
 // every few steps the whole level is saved w/ gds own checkpoint (every step at 240 tps, less often above that, a save can cost 1ms)
-// gds checkpoint misses things: held buttons, the jump buffer, orb state, per player clocks, the camera. those ride along in BackstepInfo
+// gds checkpoint misses things: held buttons, the jump buffer, orb state, per player clocks, the camera. those ride along in BackstepExtra
 // stepping back = load the newest save at or before the target frame, then replay the recorded inputs forward to the exact frame
 // only backstep_percent of a seconds worth of saves is kept, the oldest are dropped
 // a save is checked before it is loaded (state_check). a broken one is leaked on purpose bc gds destructor would crash on it
@@ -88,7 +88,7 @@ std::vector<UsedMark> used_marks(PlayLayer* play) {
 }
 
 namespace {
-    struct CamState {
+    struct CameraState {
         struct Range {
             std::size_t begin, end;
         };
@@ -116,8 +116,8 @@ namespace {
         float layer_scale_x = 1.f, layer_scale_y = 1.f, layer_rotation = 0.f;
         bool present = false;
 
-        static CamState of(PlayLayer* play) {
-            CamState out;
+        static CameraState of(PlayLayer* play) {
+            CameraState out;
             auto const* base = reinterpret_cast<std::byte const*>(&play->m_gameState);
             std::size_t at = 0;
             for (auto const& range : RANGES) {
@@ -158,14 +158,14 @@ namespace {
         }
     };
 
-    std::optional<CamState>& pinned_camera() {
-        static std::optional<CamState> pin;
+    std::optional<CameraState>& pinned_camera() {
+        static std::optional<CameraState> pin;
         return pin;
     }
 
     bool pinned_this_frame = false;
 
-    void show_camera(PlayLayer* play, CamState const& state) {
+    void show_camera(PlayLayer* play, CameraState const& state) {
         state.apply(play);
         play->updateCamera(0.f);
         state.apply(play);
@@ -178,7 +178,7 @@ namespace {
     }
 
     void pin_camera(PlayLayer* play) {
-        pinned_camera() = CamState::of(play);
+        pinned_camera() = CameraState::of(play);
         pinned_this_frame = true;
     }
 }
@@ -201,14 +201,14 @@ void Logic::note_shown_camera(PlayLayer* play, bool stepped) {
     }
 }
 
-struct BackstepInfo {
+struct BackstepExtra {
     std::vector<UsedMark> used;
     SavedPlayerCheckpoint player1, player2;
     bool has_player2 = false;
     gd::unordered_map<int, int> persistent_items;
     gd::vector<GameObject*> calc_non_effect;
     int calc_non_effect_size = 0;
-    CamState camera;
+    CameraState camera;
 };
 
 namespace {
@@ -436,7 +436,7 @@ void Logic::save_backstep(PlayLayer* play) {
     if (!obj)
         return;
     obj->retain();
-    auto extra = std::make_shared<BackstepInfo>();
+    auto extra = std::make_shared<BackstepExtra>();
     if (play->m_player1) {
         extra->player1 = SavedPlayerCheckpoint::create(play->m_player1);
     }
@@ -450,7 +450,7 @@ void Logic::save_backstep(PlayLayer* play) {
     extra->calc_non_effect = play->m_calcNonEffectObjects;
     extra->calc_non_effect_size = play->m_calcNonEffectObjectsSize;
     extra->used = used_marks(play);
-    extra->camera = CamState::of(play);
+    extra->camera = CameraState::of(play);
     logic.backsteps.push_back({ obj, Logic::get().capture_checkpoint(play, obj, frame), std::move(extra), {} });
     Logic::get().note_backstep_objects(play);
     double rate = logic.sample_rate();
