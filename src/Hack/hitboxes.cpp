@@ -473,7 +473,7 @@ namespace {
             if (shape.fill.a > 0.f)
                 node->drawPolygon(shape.points.data(), static_cast<unsigned>(shape.points.size()), shape.fill, 0.f, { 0.f, 0.f, 0.f, 0.f });
         }
-        constexpr float CELL = 90.f;
+        constexpr float CELL = 60.f;
         std::unordered_map<std::uint64_t, std::vector<std::uint32_t>> cells;
         auto cell_key = [](int x, int y) {
             return (static_cast<std::uint64_t>(static_cast<std::uint32_t>(x)) << 32) | static_cast<std::uint32_t>(y);
