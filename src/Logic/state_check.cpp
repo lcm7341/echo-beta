@@ -1,4 +1,8 @@
 // is a GJGameState safe to copy?
+// a backstep save once had a broken map inside & gd crashed copying it
+// broken() walks the containers in the state (vectors, the effect lists, object pointers) & checks each 1 looks sane:
+//   sizes that make sense, pointers that land on a real object w/ a vtable inside the exe
+// it returns what was wrong as text, empty = fine
 #include "Logic/state_check.hpp"
 #include <Geode/Geode.hpp>
 #include <Geode/binding/EnterEffectInstance.hpp>
@@ -121,6 +125,30 @@ namespace {
 }
 
 std::string echo::state_check::broken(GJGameState const& s) {
-    // TODO
+    failure.clear();
+#define ECHO_CHECK(test, member) \
+    if (!test(s.member))         \
+        return #member + failure;
+    ECHO_CHECK(list, m_spawnChannelRelated0)
+    ECHO_CHECK(list, m_spawnChannelRelated1)
+    ECHO_CHECK(list, m_tweenActions)
+    ECHO_CHECK(list, m_gameObjectPhysics)
+    ECHO_CHECK(tree, m_activatedObjectIDs)
+    ECHO_CHECK(list, m_stateObjects)
+    ECHO_CHECK(tree, m_unkMapPairGJGameEventIntVectorEventTriggerInstance)
+    ECHO_CHECK(tree, m_unkMapPairGJGameEventIntInt)
+    ECHO_CHECK(effect_lists, m_enterEffectInstanceVectors)
+    ECHO_CHECK(effect_lists, m_exitEffectInstanceVectors)
+    ECHO_CHECK(effects, m_moveEffectInstances)
+    ECHO_CHECK(effects, m_rotateEffectInstances)
+    ECHO_CHECK(effects, m_scaleEffectInstances)
+    ECHO_CHECK(effects, m_fadeEffectInstances)
+    ECHO_CHECK(effects, m_tintEffectInstances)
+    ECHO_CHECK(list, m_unsortedAreaEffects)
+    ECHO_CHECK(list, m_unkUMap8)
+    ECHO_CHECK(tree, m_proximityVolumeRelated)
+    ECHO_CHECK(list, m_songChannelStates)
+    ECHO_CHECK(list, m_songTriggerStateVectors)
+#undef ECHO_CHECK
     return {};
 }

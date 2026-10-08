@@ -1,4 +1,8 @@
 // where moving objects were, for backstep saves & respawns. gd restores neither properly
+//
+// a full copy per save was 31mb on big levels, so there is 1 full copy (the base) & each save stores only what differs from it
+// only objects that belong to a group are tracked, nothing else can move
+// every 32nd save compares EVERYTHING against the base in case a change slipped past
 #include "Logic/logic.hpp"
 #include <Geode/binding/GameObject.hpp>
 #include <Geode/binding/PlayLayer.hpp>
@@ -317,15 +321,164 @@ void Logic::step_object_states(PlayLayer* play) {
 }
 
 void Logic::note_backstep_objects(PlayLayer* play) {
-    // TODO
+    log::debug("note backstep objects");
+    auto& logic = Logic::get();
+    auto& line = timeline();
+    if (line.play != play || line.array != play->m_objects) {
+        line.play = play;
+        line.array = play->m_objects;
+        line.objects = grouped_objects(play);
+        line.baseline.resize(line.objects.size() * STRIDE);
+        for (std::size_t i = 0; i < line.objects.size(); ++i)
+            gather(line.objects[i], line.baseline.data() + i * STRIDE);
+        int max_uid = 0;
+        for (auto* obj : line.objects)
+            max_uid = std::max(max_uid, obj->m_uniqueID);
+        line.by_uid.assign(static_cast<std::size_t>(std::max(max_uid, 0)) + 1, 0);
+        for (std::size_t i = 0; i < line.objects.size(); ++i) {
+            auto uid = line.objects[i]->m_uniqueID;
+            if (uid >= 0) {
+                line.by_uid[static_cast<std::size_t>(uid)] = static_cast<std::uint32_t>(i + 1);
+            }
+        }
+        line.touched_stamp.assign(line.objects.size(), 0);
+        line.touched.clear();
+        ++line.epoch;
+        line.always_full = lvl_has_untracked_movers(play);
+        line.full = line.always_full || untracked_motion(play);
+        line.saves = 0;
+        while (logic.backsteps.size() > 1) {
+            release_backstep(logic.backsteps.front(), "new timeline");
+            logic.backsteps.pop_front();
+        }
+        return;
+    }
+    if (logic.backsteps.size() < 2)
+        return;
+    auto& undo = logic.backsteps[logic.backsteps.size() - 2].object_undo;
+    undo.clear();
+    line.scratch.resize(STRIDE);
+    bool verify = false;
+    bool everything = line.full || line.always_full || verify;
+    int missed = 0;
+    std::string missed_sample;
+    auto visit = [&](std::size_t i) {
+        auto* slot = line.baseline.data() + i * STRIDE;
+        gather(line.objects[i], line.scratch.data());
+        if (std::memcmp(slot, line.scratch.data(), STRIDE) == 0)
+            return;
+        std::uint32_t idx = static_cast<std::uint32_t>(i);
+        std::size_t at = undo.size();
+        undo.resize(at + sizeof(idx) + 1);
+        std::memcpy(undo.data() + at, &idx, sizeof(idx));
+        std::uint8_t mask = 0;
+        std::size_t offset = 0;
+        for (std::size_t s = 0; s < SPANS.size(); ++s) {
+            auto size = SPANS[s].size;
+            if (std::memcmp(slot + offset, line.scratch.data() + offset, size) != 0) {
+                mask |= static_cast<std::uint8_t>(1u << s);
+                undo.insert(undo.end(), slot + offset, slot + offset + size);
+            }
+            offset += size;
+        }
+        undo[at + sizeof(idx)] = mask;
+        std::memcpy(slot, line.scratch.data(), STRIDE);
+        if (verify && (mask & 0x1f) && line.touched_stamp[i] != line.epoch) {
+            if (missed++ < 4) {
+                missed_sample += fmt::format(" id {} uid {} spans {:#x}", line.objects[i]->m_objectID, line.objects[i]->m_uniqueID, mask);
+            }
+        }
+    };
+    if (everything) {
+        for (std::size_t i = 0; i < line.objects.size(); ++i)
+            visit(i);
+    }
+    else {
+        for (auto i : line.touched)
+            visit(i);
+    }
+    if (missed) {
+        line.always_full = true;
+    }
+    line.touched.clear();
+    ++line.epoch;
+    line.full = line.always_full || untracked_motion(play);
+    undo.shrink_to_fit();
 }
 
 void Logic::pop_backstep() {
-    // TODO
+    auto& logic = Logic::get();
+    if (logic.backsteps.empty())
+        return;
+    release_backstep(logic.backsteps.back(), "pop");
+    logic.backsteps.pop_back();
+    if (logic.backsteps.empty()) {
+        clear_backstep_objects();
+        return;
+    }
+    auto& line = timeline();
+    line.full = true;
+    auto& undo = logic.backsteps.back().object_undo;
+    if (!line.baseline.empty()) {
+        rewind(line, undo);
+    }
+    undo.clear();
+    undo.shrink_to_fit();
 }
 
 void Logic::drop_backstep(std::size_t index) {
-    // TODO
+    auto& logic = Logic::get();
+    if (index == 0 || index + 1 >= logic.backsteps.size())
+        return;
+    auto& older = logic.backsteps[index - 1].object_undo;
+    auto const& newer = logic.backsteps[index].object_undo;
+    if (!newer.empty()) {
+        std::vector<std::uint8_t> masks;
+        auto const* in = older.data();
+        auto const* end = in + older.size();
+        std::vector<std::pair<std::uint32_t, std::uint8_t>> have;
+        while (in < end) {
+            std::uint32_t obj = 0;
+            std::memcpy(&obj, in, sizeof(obj));
+            in += sizeof(obj);
+            std::uint8_t mask = *in++;
+            have.emplace_back(obj, mask);
+            for (std::size_t s = 0; s < SPANS.size(); ++s)
+                if (mask & (1u << s)) {
+                    in += SPANS[s].size;
+                }
+        }
+        std::ranges::sort(have);
+        in = newer.data();
+        end = in + newer.size();
+        while (in < end) {
+            std::uint32_t obj = 0;
+            std::memcpy(&obj, in, sizeof(obj));
+            in += sizeof(obj);
+            std::uint8_t mask = *in++;
+            auto it = std::ranges::lower_bound(have, std::pair{ obj, std::uint8_t{ 0 } });
+            std::uint8_t taken = it != have.end() && it->first == obj ? it->second : 0;
+            std::uint8_t add = mask & static_cast<std::uint8_t>(~taken);
+            if (add) {
+                std::size_t at = older.size();
+                older.resize(at + sizeof(obj) + 1);
+                std::memcpy(older.data() + at, &obj, sizeof(obj));
+                older[at + sizeof(obj)] = add;
+            }
+            for (std::size_t s = 0; s < SPANS.size(); ++s) {
+                if (!(mask & (1u << s))) {
+                    continue;
+                }
+                if (add & (1u << s)) {
+                    older.insert(older.end(), in, in + SPANS[s].size);
+                }
+                in += SPANS[s].size;
+            }
+        }
+        older.shrink_to_fit();
+    }
+    release_backstep(logic.backsteps[index], "thin");
+    logic.backsteps.erase(logic.backsteps.begin() + static_cast<std::ptrdiff_t>(index));
 }
 
 void Logic::clear_backstep_objects() {
@@ -334,5 +487,38 @@ void Logic::clear_backstep_objects() {
 }
 
 void Logic::load_backstep_objects(int frame) {
-    // TODO
+    log::debug("load backstep objects");
+    auto& line = timeline();
+    if (!line.baseline.empty()) {
+        line.pending_frame = frame;
+    }
+    line.full = true;
 }
+
+class $modify(BackstepTouched, GJBaseGameLayer) {
+    static void touch_all(CCArray* objects) {
+        if (!objects || timeline().by_uid.empty() || Logic::get().predicting)
+            return;
+        for (unsigned n = 0; n < objects->count(); ++n) {
+            auto* obj = static_cast<GameObject*>(objects->objectAtIndex(n));
+            if (!obj)
+                break; // rob stops at the first null
+            touch_object(obj);
+        }
+    }
+
+    void moveObjects(CCArray* objects, double dx, double dy, bool lockPlayerY) {
+        touch_all(objects);
+        GJBaseGameLayer::moveObjects(objects, dx, dy, lockPlayerY);
+    }
+
+    void rotateObjects(CCArray* objects, float rotation, CCPoint position, CCPoint offset, bool finished, bool unused) {
+        touch_all(objects);
+        GJBaseGameLayer::rotateObjects(objects, rotation, position, offset, finished, unused);
+    }
+
+    void updateObjectSection(GameObject* object) {
+        touch_object(object);
+        GJBaseGameLayer::updateObjectSection(object);
+    }
+};
