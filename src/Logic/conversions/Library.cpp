@@ -59,17 +59,43 @@ bool ReplayIO::save_as(fs::path const& path, bool (*write)(fs::path const&)) {
 }
 
 bool ReplayIO::is_autosave(fs::path const& path) {
-    // later
-    return {};
+    auto lower = path.filename().string();
+    std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char c) {
+        return static_cast<char>(std::tolower(c));
+    });
+    return lower.ends_with(std::string(AUTOSAVE_SUFFIX) + ".echo");
 }
 
 bool Logic::autosave_replay() {
-    // TODO
-    return {};
+    auto& logic = Logic::get();
+    if (logic.inputs.empty())
+        return false;
+    logic.format = logic.save_debug ? ReplayFormat::MetaDebug : ReplayFormat::Meta;
+    auto path = replays_dir() / (ReplayIO::sanitize(logic.macro_name) + AUTOSAVE_SUFFIX + ".echo");
+    if (logic.autosaved_path != path)
+        remove_autosave();
+    bool ok = ReplayIO::save_as(path, ReplayIO::write_packed_echo);
+    if (ok)
+        logic.autosaved_path = path;
+    return ok;
 }
 
 void Logic::poll_autosave() {
-    // TODO
+    auto& logic = Logic::get();
+    if (!logic.is_recording() || logic.inputs.empty())
+        return;
+    static auto last = chrono::steady_clock::now();
+    static size_t saved_count = 0;
+    static uint64_t saved_revision = 0;
+    auto now = chrono::steady_clock::now();
+    if (now - last < chrono::seconds(30))
+        return;
+    last = now;
+    if (logic.inputs.size() == saved_count && logic.inputs_revision == saved_revision)
+        return;
+    saved_count = logic.inputs.size();
+    saved_revision = logic.inputs_revision;
+    Logic::get().autosave_replay();
 }
 
 bool Logic::write_file() {
