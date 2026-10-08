@@ -64,8 +64,14 @@ float Logic::scroll_speed_factor() {
 }
 
 float Logic::render_speed() {
-    // todo
-    return {};
+    if (Logic::get().render_speed_locked > 0.f)
+        return Logic::get().render_speed_locked;
+    if (!Logic::get().render_speedhack)
+        return 1.f;
+    float speed = Logic::get().speedhack;
+    if (!std::isfinite(speed) || speed < 0.01f)
+        return 1.f;
+    return speed;
 }
 
 float Logic::render_game_step() {
