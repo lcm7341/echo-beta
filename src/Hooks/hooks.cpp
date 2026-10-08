@@ -837,7 +837,8 @@ class $modify(EchoGameLayer, GJBaseGameLayer) {
             logic.steps_this_tick = static_cast<uint32_t>(std::max(logic.steps_left, 0));
         }
         else {
-            logic.steps_this_tick = 1;
+            // was 1 no matter the batch, so lock tps ran 1 step where it owed 4+ (the insanely slow lock tps)
+            logic.steps_this_tick = static_cast<uint32_t>(std::max(logic.steps_left, 0));
         }
         GJBaseGameLayer::update(dt);
     }
