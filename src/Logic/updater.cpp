@@ -531,6 +531,9 @@ void Logic::run_frame(GJBaseGameLayer* play, float dt, std::function<void(float)
     for (int taken = 0; taken < limit; ++taken) {
         if (died())
             break;
+        // autoclicker must NOT add to a backstep replay
+        if (logic.backstep_target < 0)
+            autoclick();
         if (pause_kill && logic.holding_advance && logic.backstep_target < 0) {
             if (!traj_click)
                 Trajectory::get().lookahead(PlayLayer::get());
