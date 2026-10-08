@@ -507,6 +507,10 @@ bool Logic::step_to(PlayLayer* play, int target, int keep_up_to) {
         logic.message = "Nothing saved to step back to";
         return false;
     }
+    while (!logic.backsteps.empty() && (logic.backsteps.back().broken || !echo::state_check::broken(logic.backsteps.back().object->m_gameState).empty())) {
+        logic.backsteps.back().broken = true;
+        Logic::get().pop_backstep();
+    }
     if (logic.backsteps.empty()) {
         logic.message = "Nothing saved to step back to";
         return false;
