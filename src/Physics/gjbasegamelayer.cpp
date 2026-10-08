@@ -85,7 +85,7 @@ void teleportPlayer(GJBaseGameLayer* pl, TeleportPortalObject* object,
                 if (groupLength == 1) {
                     someFloat = 0.0;
                 } else {
-                    auto& roll = Logic::get().tp_state;
+                    auto& roll = Logic::get().teleport_random;
                     roll = static_cast<uint64_t>(static_cast<int>((214013ull * roll + 2531011ull) >> 16) & 0x7FFF);
                     someFloat = static_cast<float>(roll) / 32767.f;
                     if (someFloat == 1.f) someFloat = 0.f;

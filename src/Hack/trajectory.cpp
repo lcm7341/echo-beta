@@ -471,8 +471,8 @@ void Trajectory::simulate(PlayLayer* play, bool player1, Click click, bool both,
     if (!fake || !real)
         return;
     auto random_state = GameToolbox::getfast_srand();
-    auto teleport_roll = logic.tp_state;
-    auto shake_roll = logic.shake_state;
+    auto teleport_roll = logic.teleport_random;
+    auto shake_roll = logic.shake_random;
     bool pair = both && play->m_gameState.m_isDualMode && partner && partner_real;
     auto* manager = GameManager::get();
     bool performance = manager && manager->m_performanceMode;
@@ -988,8 +988,8 @@ void Trajectory::simulate(PlayLayer* play, bool player1, Click click, bool both,
     saved_state.restore(play->m_gameState);
     restore_players();
     GameToolbox::fast_srand(random_state);
-    logic.tp_state = teleport_roll;
-    logic.shake_state = shake_roll;
+    logic.teleport_random = teleport_roll;
+    logic.shake_random = shake_roll;
 }
 
 void Trajectory::refresh(PlayLayer* play) {

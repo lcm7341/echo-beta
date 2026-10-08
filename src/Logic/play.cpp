@@ -1127,8 +1127,8 @@ void Logic::roll_live_seed(PlayLayer* play) {
     play->m_replayRandSeed = rolled;
     play->m_unk32e0 = rolled;
     Logic::get().set_game_random_state(rolled);
-    logic.shake_state = rolled & 0x7FFF;
-    logic.tp_state = rolled & 0x7FFF;
+    logic.shake_random = rolled & 0x7FFF;
+    logic.teleport_random = rolled & 0x7FFF;
     fill_variance(play, rolled);
     Logic::get().reseed_rand_triggers(rolled);
 }
@@ -1166,8 +1166,8 @@ void Logic::plant_lvl_seed(PlayLayer* play) {
     play->m_replayRandSeed = logic.lvl_seed;
     play->m_unk32e0 = logic.lvl_seed;
     Logic::get().set_game_random_state(logic.lvl_seed);
-    logic.shake_state = logic.lvl_seed & 0x7FFF;
-    logic.tp_state = logic.lvl_seed & 0x7FFF;
+    logic.shake_random = logic.lvl_seed & 0x7FFF;
+    logic.teleport_random = logic.lvl_seed & 0x7FFF;
     Logic::get().apply_attempt_variance(play, logic.lvl_seed);
     Logic::get().reseed_rand_triggers(logic.lvl_seed);
 }
@@ -1179,8 +1179,8 @@ void Logic::restore_checkpoint_random(PlayLayer* play) {
         return;
     auto const& checkpoint = *saved;
     Logic::get().set_game_random_state(checkpoint.random_state);
-    logic.shake_state = checkpoint.shake_state;
-    logic.tp_state = checkpoint.tp_state;
+    logic.shake_random = checkpoint.shake_random;
+    logic.teleport_random = checkpoint.teleport_random;
     if (checkpoint.variance.size() == play->m_varianceValues.size()) {
         std::copy(checkpoint.variance.begin(), checkpoint.variance.end(), play->m_varianceValues.begin());
         auto& lock = variance_lock();
@@ -1637,8 +1637,8 @@ Checkpoint Logic::capture_checkpoint(PlayLayer* play, CheckpointObject* object, 
     checkpoint.held_right_p1 = Logic::get().held_at(logic, false, checkpoint.frame, right);
     checkpoint.held_right_p2 = Logic::get().held_at(logic, true, checkpoint.frame, right);
     checkpoint.random_state = Logic::get().game_random_state();
-    checkpoint.shake_state = logic.shake_state;
-    checkpoint.tp_state = logic.tp_state;
+    checkpoint.shake_random = logic.shake_random;
+    checkpoint.teleport_random = logic.teleport_random;
     checkpoint.variance.assign(play->m_varianceValues.begin(), play->m_varianceValues.end());
     for (auto const& trigger : live_rand()) {
         if (trigger.state)

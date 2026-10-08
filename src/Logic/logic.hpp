@@ -258,7 +258,7 @@ struct Checkpoint {
 	bool held_right_p2 = false;
 	PlayerSnapshot player1, player2;
 	LayerSnapshot layer;
-	uint64_t random_state = 0, shake_state = 0, tp_state = 0;
+	uint64_t random_state = 0, shake_random = 0, teleport_random = 0;
 	std::vector<float> variance;
 	std::vector<std::pair<int, uint64_t>> rand_states;
 	std::shared_ptr<ObjectStates> objects;
@@ -548,7 +548,7 @@ struct Session {
 
 	bool lvl_seed_from_file = false, keep_lvl_seed = false, seed_override = false;
 	uint64_t seed_override_value = 0;
-	uint64_t shake_state = 0, tp_state = 0;
+	uint64_t shake_random = 0, teleport_random = 0;
 	float end_x = 0.f;
 	bool display_fps_locked = false;
 	float backgroundColor[3] = { 0.28235295f, 0.49019608f, 1.f };

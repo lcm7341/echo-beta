@@ -2157,8 +2157,8 @@ void apply_lvl_seed() {
     }
     if (logic.lvl_seed_known) {
         Logic::get().set_game_random_state(logic.lvl_seed);
-        logic.shake_state = logic.lvl_seed & 0x7FFF;
-        logic.tp_state = logic.lvl_seed & 0x7FFF;
+        logic.shake_random = logic.lvl_seed & 0x7FFF;
+        logic.teleport_random = logic.lvl_seed & 0x7FFF;
         Logic::get().apply_attempt_variance(play, logic.lvl_seed);
         Logic::get().reseed_rand_triggers(logic.lvl_seed);
         return;
@@ -2166,8 +2166,8 @@ void apply_lvl_seed() {
     uint64_t state = Logic::get().game_random_state();
     logic.lvl_seed = state;
     logic.lvl_seed_known = true;
-    logic.shake_state = state & 0x7FFF;
-    logic.tp_state = state & 0x7FFF;
+    logic.shake_random = state & 0x7FFF;
+    logic.teleport_random = state & 0x7FFF;
     Logic::get().reseed_rand_triggers(state);
 }
 
@@ -2196,13 +2196,13 @@ void echo_raw_hooks(bool on) {
 
     // shake & teleport rolls use my own seeded lcg NOT gds rand, so nothing else rolling changes them
     auto shake_step = [](safetyhook::Context& ctx) {
-        auto& state = Logic::get().shake_state;
+        auto& state = Logic::get().shake_random;
         state = static_cast<uint64_t>(static_cast<int>((214013ull * state + 2531011ull) >> 16) & 0x7FFF);
         ctx.rax = static_cast<uintptr_t>(state);
         ctx.rip += 6;
     };
     auto teleport_step = [](safetyhook::Context& ctx) {
-        auto& state = Logic::get().tp_state;
+        auto& state = Logic::get().teleport_random;
         state = static_cast<uint64_t>(static_cast<int>((214013ull * state + 2531011ull) >> 16) & 0x7FFF);
         ctx.rax = static_cast<uintptr_t>(state);
     };
