@@ -24,7 +24,8 @@
 	"resources": {
 		"files": [
 			"resources/*.ttf",
-			"resources/logos/*.png"
+			"resources/logos/*.png",
+			"logo.png"
 		]
 	},
 	"settings": {
