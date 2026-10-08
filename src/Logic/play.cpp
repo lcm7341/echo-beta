@@ -739,6 +739,37 @@ void Logic::sync_playback_fps() {
     director->setAnimationInterval(logic.held_interval > 0.f ? logic.held_interval : 1.f / 60.f);
 }
 
+void Logic::begin_editor_playtest() {
+    auto& logic = Logic::get();
+    logic.editor_testing = true;
+    logic.editor_paused = false;
+    logic.trail_p1.clear();
+    logic.trail_p2.clear();
+    logic.step_frame = 0;
+    logic.progress_base_set = false;
+    logic.carry = 0.f;
+    logic.respawn_frames = 0;
+    logic.follow_log.clear();
+    logic.buttons_prepared = false;
+    logic.replay_clicks_left = 0;
+    Logic::get().clear_click_hitbox();
+    if (logic.is_recording() && !logic.is_playing())
+        Logic::get().trim_fresh_attempt(nullptr, logic);
+    if (logic.is_playing())
+        Logic::get().set_replay_pos(nullptr);
+    Logic::get().sync_time_scale();
+}
+
+void Logic::end_editor_playtest(GJBaseGameLayer* editor) {
+    (void)editor;
+    auto& logic = Logic::get();
+    logic.editor_testing = false;
+    logic.editor_paused = false;
+    logic.carry = 0.f;
+    logic.steps_left = 0;
+    Logic::get().sync_time_scale();
+}
+
 void Logic::resume_attempt(PlayLayer* play) {
     if (!play)
         return;
