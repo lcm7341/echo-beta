@@ -10,6 +10,7 @@
 #include "Hooks/step.hpp"
 #include "Hack/trajectory.hpp"
 #include "Physics/moving_objects.hpp"
+#include "Physics/collision_bounds.hpp"
 #include "Physics/prediction_art.hpp"
 #include "Rendering/dash_end.hpp"
 #include "Rendering/dash_bursts.hpp"
@@ -275,6 +276,7 @@ void Logic::run_frame(GJBaseGameLayer* play, float dt, std::function<void(float)
     echo::movement::prepare();
     echo::dash::prepare();
     echo::bursts::prepare();
+    echo::collision_bounds::prepare();
     logic.frame_steps = 0;
     bool paused = Logic::get().editor_paused;
     if (auto* live = Logic::as_play(play))
