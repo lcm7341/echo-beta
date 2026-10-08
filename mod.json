@@ -67,6 +67,13 @@
 			"default": "C",
 			"category": "gameplay"
 		},
+		"step-back": {
+			"type": "keybind",
+			"platforms": ["win"],
+			"name": "Step back one frame",
+			"default": "None",
+			"category": "gameplay"
+		},
 		"key-click-both": {
 			"type": "keybind",
 			"platforms": ["win"],

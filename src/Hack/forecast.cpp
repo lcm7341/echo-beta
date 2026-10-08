@@ -6,6 +6,7 @@
 // nothing real is toggled or spawned while forecasting
 // the forecast is built a bit per frame (BUILD_PER_FRAME) so it doesnt hitch
 #include "Hack/forecast.hpp"
+#include "Logic/game_state_copy.hpp"
 #include "Logic/logic.hpp"
 #include "Physics/moving_objects.hpp"
 #include <Geode/Geode.hpp>
@@ -619,6 +620,7 @@ namespace {
     void extend(Forecast& f, PlayLayer* play, int count) {
         auto& logic = Logic::get();
         auto* live = play->m_effectManager;
+        echo::SavedGameState saved_state(play->m_gameState);
         auto random_state = GameToolbox::getfast_srand();
         bool predicting = logic.predicting;
         logic.predicting = true;
@@ -705,6 +707,7 @@ namespace {
         for (auto i : f.touched)
             put_base(f, i, true);
         f.sections.end();
+        saved_state.restore(play->m_gameState);
         GameToolbox::fast_srand(random_state);
         logic.predicting = predicting;
         f.horizon = static_cast<int>(f.frames.size());

@@ -3,6 +3,7 @@
 //   each frame plays exactly the slice of song the level moved thru
 #include <chrono>
 #include "Logic/logic.hpp"
+#include "Logic/child_type_cache.hpp"
 #include <Geode/binding/FMODAudioEngine.hpp>
 #include <Geode/binding/GJBaseGameLayer.hpp>
 #include <Geode/binding/LevelEditorLayer.hpp>
@@ -78,8 +79,24 @@ float Logic::render_game_step() {
 }
 
 bool Logic::pause_menu_open() {
-    // TODO
-    return {};
+    auto* director = CCDirector::sharedDirector();
+    auto* scene = director ? director->getRunningScene() : nullptr;
+    static thread_local replay::ChildTypeCache<CCObject> scene_types, play_types;
+    auto contains_pause = [](CCNode* node, auto& cache) {
+        auto* children = node ? node->getChildren() : nullptr;
+        std::span<CCObject*> objects;
+        if (children && children->data)
+            objects = { children->data->arr, children->data->num };
+        return cache.contains(objects, [](CCObject* object) {
+            return object->m_uID;
+        },
+            [](CCObject* object) {
+                return typeinfo_cast<PauseLayer*>(object) != nullptr;
+            });
+    };
+    if (contains_pause(scene, scene_types))
+        return true;
+    return contains_pause(PlayLayer::get(), play_types);
 }
 
 void Logic::sync_music_pitch() {

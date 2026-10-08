@@ -684,6 +684,7 @@ void Logic::on_keybind(std::string_view key, bool down) {
         Logic::get().holding_back = true;
         Logic::get().back_hold_start = now;
         Logic::get().last_back_step = now;
+        Logic::get().step_back(PlayLayer::get(), 1);
         return;
     }
     if (key == "step-frame") {
@@ -1683,7 +1684,9 @@ void Logic::on_complete(PlayLayer* play) {
 
 void Logic::onQuit(PlayLayer*) {
     auto& logic = Logic::get();
+    Logic::get().finish_backstep(nullptr);
     Logic::get().stop_best_frame();
+    Logic::get().clear_backsteps();
     logic.holding_back = false;
     logic.frame_advance = false;
     logic.advance_queued = false;

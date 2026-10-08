@@ -320,8 +320,10 @@ void GUI::draw_tools() {
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("Percent of your TPS, scaled with speedhack. 100%% at 1x will advance you in real time.");
         if (ImGui::IsItemDeactivatedAfterEdit()) Logic::get().save_settings_file();
         ImGui::Separator();
+        if (GUI::get().checkbox_setting("Backstep", value.backstep) && !value.backstep) Logic::get().clear_backsteps();
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("While recording, keeps saved states to step backwards to. Saves every step at 240 TPS; at higher TPS it saves less often and replays your inputs from the last save.");
         ImGui::SameLine();
+        if (ImGui::Button("Back")) Logic::get().step_back(PlayLayer::get(), 1);
         GUI::get().offer_rebind("step-back");
         ImGui::SetNextItemWidth(GUI::get().px(90.f));
         if (ImGui::DragInt("Saved States", &value.backstep_percent, 1.f, 1, 10000, "%d%%")) value.backstep_percent = std::clamp(value.backstep_percent, 1, 10000);

@@ -432,6 +432,7 @@ class $modify(EchoPlayLayer, PlayLayer) {
         if (Trajectory::get().attached())
             Trajectory::get().detach();
         Logic::get().reset_safe_mode();
+        Logic::get().clear_backsteps();
         Logic::get().clear_layout_hidden();
         if (!PlayLayer::init(level, useReplay, dontCreateObjects))
             return false;
@@ -493,6 +494,7 @@ class $modify(EchoPlayLayer, PlayLayer) {
         clear_tilt();
         auto& logic = Logic::get();
         if (!logic.backstepping) {
+            Logic::get().finish_backstep(this);
             Logic::get().stop_best_frame();
         }
         logic.carry = 0.f;
@@ -520,6 +522,8 @@ class $modify(EchoPlayLayer, PlayLayer) {
         logic.resetting = false;
         logic.present = true;
         Logic::get().onReset(this);
+        if (!logic.backstepping)
+            Logic::get().trim_backsteps(this);
         dash_spin_reset();
         Logic::get().cancel_steps();
         if (!logic.in_scheduler && !logic.backstepping)
@@ -734,6 +738,8 @@ namespace echo::step {
         if (self->m_resumeTimer > 0 && self->m_resumeTimer <= 8)
             self->m_resumeTimer = 0;
         if (play && !self->m_playerDied && self->m_resumeTimer <= 0) {
+            Logic::get().step_object_states(play);
+            Logic::get().save_backstep(play);
         }
         if (layer && !self->m_playerDied && self->m_resumeTimer <= 0)
             Logic::get().run_follow(layer);
@@ -1903,6 +1909,7 @@ class $modify(EchoScheduler, CCScheduler) {
             logic.advance_queued = false;
         }
         Logic::get().poll_advance_hold();
+        Logic::get().poll_back_hold();
         Logic::get().poll_hold_block();
         Logic::get().poll_autosave();
         Logic::get().sync_time_scale();
@@ -1935,6 +1942,8 @@ class $modify(EchoScheduler, CCScheduler) {
                     Logic::get().sample_hitbox_trail(layer);
                 }
             }
+            if (auto* live = Logic::as_play(layer); live && !paused && !dead)
+                Logic::get().note_shown_camera(live, logic.step_frame > frames_before);
             Logic::get().draw_hitboxes(layer);
         }
         else if (auto* editor = LevelEditorLayer::get(); editor && logic.show_hitboxes) {

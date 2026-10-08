@@ -549,6 +549,7 @@ void Logic::run_frame(GJBaseGameLayer* play, float dt, std::function<void(float)
         logic.steps_this_tick = 0;
     }
     if (logic.backstep_target >= 0) {
+        Logic::get().finish_backstep(Logic::as_play(play));
         Logic::get().click_best_frame(Logic::as_play(play));
     }
     logic.present = true;

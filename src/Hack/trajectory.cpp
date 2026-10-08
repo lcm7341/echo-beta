@@ -8,6 +8,7 @@
 #include "Hack/forecast.hpp"
 #include "Hack/trajectory_path.hpp"
 #include "Hack/orbs.hpp"
+#include "Logic/game_state_copy.hpp"
 #include "Logic/logic.hpp"
 #include "Physics/checkpoint.hpp"
 #include "Physics/collisions.hpp"
@@ -537,6 +538,7 @@ void Trajectory::simulate(PlayLayer* play, bool player1, Click click, bool both,
         }
     };
 
+    echo::SavedGameState saved_state(play->m_gameState);
     Orbs::reset_prediction_pads();
     seed(fake, real);
     if (pair)
@@ -983,6 +985,7 @@ void Trajectory::simulate(PlayLayer* play, bool player1, Click click, bool both,
         park(partner);
     used_p1.clear();
     used_p2.clear();
+    saved_state.restore(play->m_gameState);
     restore_players();
     GameToolbox::fast_srand(random_state);
     logic.tp_state = teleport_roll;
