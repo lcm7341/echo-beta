@@ -285,7 +285,7 @@ namespace {
     };
 
     constexpr double TOLERANCE = 0.5;
-    constexpr int BUILD_PER_FRAME = 30;
+    constexpr int BUILD_PER_FRAME = 60;
 
     struct Forecast {
         PlayLayer* play = nullptr;
