@@ -535,6 +535,8 @@ struct Session {
 		return is_playing() || is_recording() ? macro_unrounded : velocity_unrounding;
 	}
 
+	void sync_unrounding();
+
 	bool shown_unrounded() const {
 		return is_playing() || is_recording() || !inputs.empty() ? macro_unrounded : velocity_unrounding;
 	}

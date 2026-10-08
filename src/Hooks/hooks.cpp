@@ -7,6 +7,7 @@
 // visual tilt: ship / ufo / wave / swing turn too little per step at high tps to look right, so a separate visual angle is kept & drawn.
 //   physics & hitboxes still use the real one
 // the step count patches & silicates reset patches are at the bottom
+#include "Physics/object_counters.hpp"
 #include "Logic/logic.hpp"
 #include "Hooks/rotation.hpp"
 #include "Hooks/step.hpp"
@@ -433,6 +434,7 @@ class $modify(EchoPlayLayer, PlayLayer) {
             Trajectory::get().detach();
         Logic::get().reset_safe_mode();
         Logic::get().clear_backsteps();
+        echo::objects::reseed_variance();
         Logic::get().clear_layout_hidden();
         if (!PlayLayer::init(level, useReplay, dontCreateObjects))
             return false;
@@ -509,6 +511,7 @@ class $modify(EchoPlayLayer, PlayLayer) {
             Logic::get().plant_lvl_seed(this);
         Logic::get().end_safe_mode_attempt(this);
         forecast::invalidate();
+        echo::objects::reseed_variance();
         g_nativeReset = true;
         g_seedApplied = false;
         PlayLayer::resetLevel();
@@ -1912,6 +1915,7 @@ class $modify(EchoScheduler, CCScheduler) {
         Logic::get().poll_back_hold();
         Logic::get().poll_hold_block();
         Logic::get().poll_autosave();
+        Logic::get().sync_unrounding();
         Logic::get().sync_time_scale();
         Logic::get().sync_playback_fps();
         Logic::get().sync_music_pitch();
