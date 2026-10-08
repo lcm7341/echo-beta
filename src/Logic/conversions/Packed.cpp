@@ -733,7 +733,8 @@ bool read_varint(std::istream& file, uint64_t& value) {
     return false;
 }
 
-constexpr uint8_t FLAG_SAMPLES = 1, FLAG_WHOLE_FPS = 2, FLAG_SEED = 4;
+constexpr uint8_t FLAG_SAMPLES = 1, FLAG_WHOLE_FPS = 2, FLAG_SEED = 4, FLAG_UNROUNDED = 8;
+constexpr uint8_t FLAG_SILICATE_VARIANCE = 16;
 
 struct PackedBody {
     float fps = 240.f;
@@ -742,6 +743,8 @@ struct PackedBody {
     uint64_t attempts = 0;
     uint64_t seed = 0;
     bool has_seed = false;
+    bool unrounded = false;
+    bool silicate_variance = false;
     std::vector<Frame> inputs;
     std::vector<FramePose> poses;
     std::vector<RateChange> rates;
@@ -909,6 +912,8 @@ void store_packed(PackedBody& body) {
     logic.lvl_seed = body.seed;
     logic.lvl_seed_known = body.has_seed;
     logic.lvl_seed_from_file = body.has_seed;
+    logic.macro_unrounded = body.unrounded;
+    logic.macro_silicate_variance = body.silicate_variance;
     logic.format = ReplayFormat::Meta;
 }
 
@@ -949,6 +954,10 @@ bool ReplayIO::write_packed_echo(fs::path const& path) {
     uint8_t flags = samples ? FLAG_SAMPLES : 0;
     if (logic.lvl_seed_known)
         flags = static_cast<uint8_t>(flags | FLAG_SEED);
+    if (logic.macro_unrounded)
+        flags = static_cast<uint8_t>(flags | FLAG_UNROUNDED);
+    if (logic.macro_silicate_variance)
+        flags = static_cast<uint8_t>(flags | FLAG_SILICATE_VARIANCE);
     ReplayIO::write_pod(file, version);
     ReplayIO::write_pod(file, flags);
     if (!body.bytes.empty())
@@ -971,6 +980,8 @@ bool ReplayIO::read_packed_echo(fs::path const& path) {
 
     PackedBody body;
     bool loaded = false;
+    body.unrounded = (flags & FLAG_UNROUNDED) != 0;
+    body.silicate_variance = (flags & FLAG_SILICATE_VARIANCE) != 0;
     if (version == 1)
         loaded = load_version1(file, flags, body);
     else if (version == 2)
