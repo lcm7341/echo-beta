@@ -23,7 +23,8 @@
 	],
 	"resources": {
 		"files": [
-			"resources/*.ttf"
+			"resources/*.ttf",
+			"resources/logos/*.png"
 		]
 	},
 	"settings": {
