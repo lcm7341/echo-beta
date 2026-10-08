@@ -358,7 +358,7 @@ void Logic::note_backstep_objects(PlayLayer* play) {
     auto& undo = logic.backsteps[logic.backsteps.size() - 2].object_undo;
     undo.clear();
     line.scratch.resize(STRIDE);
-    bool verify = false;
+    bool verify = !line.full && !line.always_full && (++line.saves % 32) == 0;
     bool everything = line.full || line.always_full || verify;
     int missed = 0;
     std::string missed_sample;
