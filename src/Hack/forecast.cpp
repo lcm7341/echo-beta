@@ -284,7 +284,7 @@ namespace {
         }
     };
 
-    constexpr double TOLERANCE = 0.5;
+    constexpr double TOLERANCE = 0.3;
     constexpr int BUILD_PER_FRAME = 60;
 
     struct Forecast {
