@@ -280,7 +280,40 @@ namespace {
 }
 
 void Logic::step_object_states(PlayLayer* play) {
-    // TODO
+    auto& logic = Logic::get();
+    if (!play || logic.predicting || logic.backstepping)
+        return;
+    int frame = logic.step_frame;
+    auto& line = timeline();
+    if (!line.by_uid.empty() && !line.full && untracked_motion(play)) {
+        line.full = true;
+    }
+    if (line.pending_frame >= 0) {
+        int saved = std::exchange(line.pending_frame, -1);
+        if (saved == frame && line.play == play && line.array == play->m_objects) {
+            for (std::size_t i = 0; i < line.objects.size(); ++i)
+                put(play, line.objects[i], line.baseline.data() + i * STRIDE);
+        }
+    }
+    if (auto* obj = std::exchange(logic.object_restore, nullptr)) {
+        logic.object_capture = nullptr;
+        auto it = std::ranges::find(logic.checkpoints, obj, &Checkpoint::object);
+        if (it == logic.checkpoints.end() || !it->objects)
+            return;
+        if (it->objects->frame != frame) {
+            return;
+        }
+        restore(play, *it->objects);
+        return;
+    }
+    if (auto* obj = std::exchange(logic.object_capture, nullptr)) {
+        auto it = std::ranges::find(logic.checkpoints, obj, &Checkpoint::object);
+        if (it == logic.checkpoints.end())
+            return;
+        if (it->frame != frame)
+            return;
+        it->objects = capture(play, frame);
+    }
 }
 
 void Logic::note_backstep_objects(PlayLayer* play) {
