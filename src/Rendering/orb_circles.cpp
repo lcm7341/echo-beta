@@ -143,6 +143,8 @@ $execute {
         return;
     }
 #ifdef GEODE_IS_WINDOWS
+    // use gds sin/cos NOT mine
+    native_cosine = *reinterpret_cast<echo::circles::Trig*>(module + 0xe4ac8); // cosf
     native_sine = *reinterpret_cast<echo::circles::Trig*>(module + 0xe4ad0);   // sinf
 #elif defined(GEODE_IS_MACOS)
     native_cosine = &paired_cosine;
