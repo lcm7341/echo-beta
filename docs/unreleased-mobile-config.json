@@ -1,0 +1,17 @@
+{
+  "gd": {
+    "android": "2.2081",
+    "ios": "2.2081"
+  },
+  "dependencies": {
+    "eclipse.ffmpeg-api": {
+      "version": ">=v2.0.0",
+      "required": false,
+      "platforms": [
+        "win",
+        "android",
+        "mac"
+      ]
+    }
+  }
+}

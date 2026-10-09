@@ -1,0 +1,213 @@
+{
+	"geode": "5.8.2",
+	"gd": {
+		"win": "2.2081",
+		"mac": "2.2081"
+	},
+	"id": "decks.echo",
+	"name": "Echo",
+	"version": "v2.1.0",
+	"developer": "decks",
+	"description": "Echo is a replay tool with many features, all for free :)",
+	"links": {
+		"source": "https://github.com/lcm7341/Echo/"
+	},
+	"issues": {
+		"info": "Echo for 2.2 is not open sourced yet but you can still report issues",
+		"url": "https://github.com/lcm7341/Echo/issues"
+	},
+	"tags": [
+		"gameplay",
+		"utility",
+		"cheat",
+		"offline"
+	],
+	"dependencies": {
+		"kxtbit.high_precision_editor": ">=v0.1.31"
+	},
+	"resources": {
+		"files": [
+			"resources/*.ttf",
+			"logo.png"
+		]
+	},
+	"settings": {
+		"open-menu": {
+			"type": "keybind",
+			"name": "Open menu",
+			"description": "Show or hide the Echo menu.",
+			"default": "Alt+LeftMenu",
+			"category": "universal",
+			"allow-in-text-inputs": true
+		},
+		"toggle-record": {
+			"type": "keybind",
+			"name": "Toggle recording",
+			"default": "F4",
+			"category": "gameplay"
+		},
+		"toggle-play": {
+			"type": "keybind",
+			"name": "Toggle playback",
+			"default": "F5",
+			"category": "gameplay"
+		},
+		"toggle-advance": {
+			"type": "keybind",
+			"name": "Toggle frame advance",
+			"default": "V",
+			"category": "gameplay"
+		},
+		"step-frame": {
+			"type": "keybind",
+			"name": "Step one frame",
+			"default": "C",
+			"category": "gameplay"
+		},
+		"step-back": {
+			"type": "keybind",
+			"name": "Step back one frame",
+			"default": "None",
+			"category": "gameplay"
+		},
+		"key-click-both": {
+			"type": "keybind",
+			"name": "Click both players",
+			"default": "None",
+			"category": "gameplay"
+		},
+		"key-swap": {
+			"type": "keybind",
+			"name": "Swap player input",
+			"default": "None",
+			"category": "gameplay"
+		},
+		"key-shakes": {
+			"type": "keybind",
+			"name": "Disable shake",
+			"default": "None",
+			"category": "gameplay"
+		},
+		"key-layout": {
+			"type": "keybind",
+			"name": "Layout mode",
+			"default": "None",
+			"category": "gameplay"
+		},
+		"key-hitboxes": {
+			"type": "keybind",
+			"name": "Show hitboxes",
+			"default": "None",
+			"category": "gameplay"
+		},
+		"key-trajectory": {
+			"type": "keybind",
+			"name": "Show trajectory",
+			"default": "None",
+			"category": "gameplay"
+		},
+		"key-autoclick": {
+			"type": "keybind",
+			"name": "Autoclicker",
+			"default": "None",
+			"category": "gameplay"
+		},
+		"key-no-overwrite": {
+			"type": "keybind",
+			"name": "No overwrite",
+			"default": "None",
+			"category": "gameplay"
+		},
+		"key-ignore": {
+			"type": "keybind",
+			"name": "Ignore actions",
+			"default": "None",
+			"category": "gameplay"
+		},
+		"key-show-recording": {
+			"type": "keybind",
+			"name": "Show recording label",
+			"default": "None",
+			"category": "gameplay"
+		},
+		"key-show-cps": {
+			"type": "keybind",
+			"name": "Show CPS",
+			"default": "None",
+			"category": "gameplay"
+		},
+		"key-show-frame": {
+			"type": "keybind",
+			"name": "Show frame",
+			"default": "None",
+			"category": "gameplay"
+		},
+		"key-show-time": {
+			"type": "keybind",
+			"name": "Show time",
+			"default": "None",
+			"category": "gameplay"
+		},
+		"key-show-percent": {
+			"type": "keybind",
+			"name": "Show percent",
+			"default": "None",
+			"category": "gameplay"
+		},
+		"key-save": {
+			"type": "keybind",
+			"name": "Save replay",
+			"default": "None",
+			"category": "gameplay"
+		},
+		"key-load": {
+			"type": "keybind",
+			"name": "Load replay",
+			"default": "None",
+			"category": "gameplay"
+		},
+		"key-reset": {
+			"type": "keybind",
+			"name": "Reset level",
+			"default": "None",
+			"category": "gameplay"
+		},
+		"key-speedhack": {
+			"type": "keybind",
+			"name": "Speedhack",
+			"description": "Switch between 1x and the speed set on the slider.",
+			"default": "None",
+			"category": "gameplay"
+		},
+		"key-click-dash-orbs": {
+			"type": "keybind",
+			"name": "Click dash orbs",
+			"default": "None",
+			"category": "gameplay"
+		},
+		"key-click-black-orbs": {
+			"type": "keybind",
+			"name": "Click black orbs",
+			"default": "None",
+			"category": "gameplay"
+		},
+		"key-pad-black-orb": {
+			"type": "keybind",
+			"name": "Auto black orb on pad",
+			"default": "None",
+			"category": "gameplay"
+		},
+		"key-pad-blue-orb": {
+			"type": "keybind",
+			"name": "Auto blue orb on pad",
+			"default": "None",
+			"category": "gameplay"
+		},
+		"key-pause-before-kill": {
+			"type": "keybind",
+			"name": "Pause before kill",
+			"default": "None",
+			"category": "gameplay"
+		}
+	}
+}

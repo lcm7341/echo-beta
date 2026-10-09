@@ -1,0 +1,55 @@
+#pragma once
+#include <array>
+#include <cstdint>
+#include <cstddef>
+
+namespace echo::patches {
+// GD 2.2081, verified against the installed Windows game and phone's ARM64 library.
+inline constexpr uintptr_t pointAddress = 0xace648;
+inline constexpr std::array<uint32_t, 11> pointOriginal = {
+    0xa9be7bfd, 0x910003fd, 0xbd400020, 0xf9000bf3, 0xbd400421,
+    0xaa0003f3, 0x97fffff7, 0xaa1303e0, 0xf9400bf3, 0xa8c27bfd, 0xd65f03c0
+};
+// Load both components before storing, including when source and destination alias.
+inline constexpr std::array<uint32_t, 5> pointReplacement = {
+    0xbd400020, 0xbd400421, 0xbd000000, 0xbd000401, 0xd65f03c0
+};
+inline constexpr uintptr_t ringsAddress = 0x623e2c;
+inline constexpr std::array<uint32_t, 13> ringsOriginal = {
+    0xf9451680, 0xb40000a0, 0xf9400013, 0x941aa02e, 0xaa1303e0,
+    0xb5ffffb3, 0xf94006a2, 0x52800001, 0xf9450e80, 0xd37df042,
+    0x97fad3df, 0xf9000ebf, 0xf9000abf
+};
+// Empty unordered_set buckets are already zero. Nonempty clears still run memset.
+inline constexpr std::array<uint32_t, 1> ringsReplacement = {0xb4000140};
+inline constexpr uintptr_t queueAddress = 0x231daa;
+inline constexpr std::array<uint8_t, 16> queueOriginal = {
+    0xe8, 0x87, 0xfa, 0x29, 0x00, 0x48, 0x83, 0x83,
+    0x08, 0x33, 0x00, 0x00, 0xe8, 0x48, 0x8b, 0xc6
+};
+inline constexpr std::array<uint8_t, 5> queueReplacement = {0xe8, 0x44, 0, 0, 0};
+inline constexpr uintptr_t queueCaveAddress = 0x231df3;
+inline constexpr std::array<uint8_t, 13> queueCaveOriginal = {
+    0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc
+};
+// Skip a zero-byte move; otherwise tail-call the original memmove thunk.
+inline constexpr std::array<uint8_t, 11> queueCaveReplacement = {
+    0x4d, 0x85, 0xc0, 0x74, 0x05, 0xe9, 0x39, 0xfa, 0x29, 0x00, 0xc3
+};
+
+// Reuse the first event-state map lookup. No call/mutation occurs between
+// its returned value and the redundant lookup; insertion and dispatch remain native.
+inline constexpr uintptr_t eventLookupSignatureAddress = 0x232025;
+inline constexpr std::array<uint8_t, 58> eventLookupOriginal = {
+    0x48, 0x8d, 0x50, 0x08, 0x48, 0x81, 0xc1, 0x98, 0x05, 0x00, 0x00, 0xe8,
+    0xcb, 0xe7, 0xf9, 0xff, 0x8b, 0x96, 0xe0, 0x03, 0x00, 0x00, 0x39, 0x10,
+    0x0f, 0x84, 0x94, 0x00, 0x00, 0x00, 0x48, 0x8d, 0x94, 0x24, 0x80, 0x00,
+    0x00, 0x00, 0x48, 0x8d, 0x8e, 0x98, 0x05, 0x00, 0x00, 0xe8, 0xa9, 0xe7,
+    0xf9, 0xff, 0x8b, 0x8e, 0xe0, 0x03, 0x00, 0x00, 0x89, 0x08,
+};
+inline constexpr uintptr_t eventLookupAddress = 0x232043;
+inline constexpr std::array<uint8_t, 2> eventLookupReplacement = {0xeb, 0x12};
+inline constexpr uintptr_t eventMapAddress = 0x1d0800;
+inline constexpr size_t eventMapSize = 0x101;
+inline constexpr uint64_t eventMapHash = 0xc75bfd8bb81b108d;
+}

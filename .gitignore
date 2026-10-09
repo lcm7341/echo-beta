@@ -1,68 +1,27 @@
-# Prerequisites
-*.d
+# Build
+build/
+build-*/
+cmake-build-*/
+out/
+.cache/
+compile_commands.json
+CMakeUserPresets.json
 
-# Compiled Object files
-*.slo
-*.lo
-*.o
-*.obj
+# IDE
+.vs/
+.vscode/
+.idea/
 
-# Precompiled Headers
-*.gch
-*.pch
-
-# Linker files
-*.ilk
-
-# Debugger Files
-*.pdb
-
-# Compiled Dynamic libraries
+# Packages
+*.geode
+*.dll
 *.so
 *.dylib
-*.dll
-*.so.*
+*.pdb
 
-# Fortran module files
-*.mod
-*.smod
-
-# Compiled Static libraries
-*.lai
-*.la
-*.a
-*.lib
-
-# Executables
-*.exe
-*.out
-*.app
-
-# Build directories
-build/
-Build/
-build-*/
-
-# CMake generated files
-CMakeFiles/
-CMakeCache.txt
-cmake_install.cmake
-Makefile
-install_manifest.txt
-compile_commands.json
-
-# Temporary files
-*.tmp
-*.log
-*.bak
-*.swp
-
-# vcpkg
-vcpkg_installed/
-
-# debug information files
-*.dwo
-
-# test output & cache
-Testing/
-.cache/
+# Local tooling and output
+.cursor/
+.backup/
+dist/
+*.zip
+__pycache__/
