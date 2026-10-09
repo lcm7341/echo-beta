@@ -8,9 +8,12 @@
 //    ./build/_deps/bindings-src/bindings/2.2081/GeometryDash.bro
 //
 //    win: exe in steamapps
+//    mac: Geometry Dash.app/Contents/MacOS/Geometry Dash. arm & intel are in 1 file so lipo -thin arm64 / x86_64 first
 //    android64: adb pull libcocos2dcpp.so
 //
 // !! disassemble ONLY the function. llvm-objdump -d --start-address=STARTADDR --stop-address=ENDADDR 
+//    apple: otool -tv
+//    apple offsets = address - 0x100000000
 //
 // !! find the instructions to change in there
 //    offset = address of the first one
@@ -18,10 +21,12 @@
 //    it's good practice.
 //
 //    other platforms: same function in the .bro, same math
+//    arm step count: fcvt / fdiv / fmul / frinta
 //
 //    hashes: fnv-1a over { where, size } of ORIGINAL bytes (echo::circles::fingerprint)
 //    clean binary only, NOT from memory w/ mods loaded
 //
+//    inlined (mac processCommands, getModifiedDelta): no call, look at the calls around it
 
 namespace echo::patches {
 	inline constexpr uintptr_t point_address = 0xace648;

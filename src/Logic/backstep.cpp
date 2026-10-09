@@ -101,8 +101,10 @@ namespace {
             Range{ offsetof(GJGameState, m_unkUint13), offsetof(GJGameState, m_stateObjects) },
             Range{ offsetof(GJGameState, m_dynamicRotateActions) + sizeof(GJGameState::m_dynamicRotateActions), offsetof(GJGameState, m_unkUMap8) },
         };
+#ifdef GEODE_IS_WINDOWS
         static_assert(offsetof(GJGameState, m_cameraPosition) == 0x268 && offsetof(GJGameState, m_cameraStepDiff) == 0x334 &&
                       offsetof(GJGameState, m_unkUint13) == 0x358 && offsetof(GJGameState, m_unkUint17) == 0x5bc);
+#endif
         static constexpr std::size_t TOTAL_SIZE = [] {
             std::size_t total = 0;
             for (auto const& range : RANGES)
@@ -703,7 +705,9 @@ void Logic::poll_back_hold() {
     }
 }
 
+#ifdef GEODE_IS_WINDOWS
 static_assert(offsetof(PlayLayer, m_checkpointArray) == 0x3888);
+#endif
 
 class $modify(BackstepPlayLayer, PlayLayer) {
     // stepping back is NOT a new attempt

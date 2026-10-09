@@ -24,6 +24,7 @@ namespace {
 
 $execute {
     using namespace echo::patches;
+#ifdef GEODE_IS_WINDOWS
     // check the lookup too, if someone hooked it then once isnt the same as twice
     if (matches(event_lookup_signature_address, event_lookup_original) &&
         echo::circles::fingerprint(reinterpret_cast<uint8_t const*>(geode::base::get() + event_map_address),
@@ -38,4 +39,5 @@ $execute {
             (void)cave.unwrap()->disable();
         }
     }
+#endif
 }

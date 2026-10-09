@@ -14,6 +14,7 @@ namespace {
 
 namespace echo::movement {
     void prepare() {
+#ifdef GEODE_IS_WINDOWS
         static bool const supported = [] {
             auto base = geode::base::get();
             // gd code hash
@@ -34,6 +35,7 @@ namespace echo::movement {
                 }
             }
         }
+#endif
     }
 }
 
@@ -51,6 +53,7 @@ class $modify(EchoMovingObjects, GJBaseGameLayer) {
     }
 
     void moveObjects(CCArray* objects, double dx, double dy, bool lockPlayerY) {
+#ifdef GEODE_IS_WINDOWS
         if (ready && objects && Logic::as_play(this) && !Logic::get().predicting) {
             echo::movement::move(this, objects, dx, dy, [](void* p) {
                 return static_cast<CCArray*>(p)->count();
@@ -67,6 +70,7 @@ class $modify(EchoMovingObjects, GJBaseGameLayer) {
                 });
             return;
         }
+#endif
         GJBaseGameLayer::moveObjects(objects, dx, dy, lockPlayerY);
     }
 };

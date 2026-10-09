@@ -1,4 +1,5 @@
 #include <Geode/Geode.hpp>
+#ifdef GEODE_IS_WINDOWS
 #include "Rendering/circle_signatures.hpp"
 #include <cstdint>
 #include <cstring>
@@ -152,3 +153,4 @@ $execute {
     if (candidates)
         (void)redirect(third, 7, cave + 0x100);
 }
+#endif

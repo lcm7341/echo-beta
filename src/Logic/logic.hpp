@@ -33,7 +33,11 @@ class GJBaseGameLayer;
 class LevelEditorLayer;
 class TeleportPortalObject;
 
+#ifdef GEODE_IS_WINDOWS
 inline constexpr bool step_patched = true;
+#else
+inline bool step_patched = false;
+#endif
 inline constexpr float VANILLA_TPS = 240.f;
 
 enum class RunState {

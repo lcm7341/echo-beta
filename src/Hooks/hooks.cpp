@@ -55,8 +55,10 @@
 #include <Geode/modify/RingObject.hpp>
 #include <Geode/Geode.hpp>
 #include <Geode/binding/GJBaseGameLayer.hpp>
+#ifdef GEODE_IS_WINDOWS
 #include <safetyhook.hpp>
 #include <windows.h>
+#endif
 #include "Logic/input.hpp"
 #include <Geode/modify/ShaderLayer.hpp>
 #include <Geode/modify/GJEffectManager.hpp>
@@ -170,6 +172,7 @@ namespace {
         g_halfPasses = 0;
     }
 
+#ifdef GEODE_IS_WINDOWS
     // msvc delete crashes on ts when leaving a lvl
     struct SectionVec {
         uintptr_t* begin;
@@ -283,6 +286,7 @@ namespace {
         drop_grid(reinterpret_cast<SectionVec*>(base + 0x35b0));
         drop_grid(reinterpret_cast<SectionVec*>(base + 0x35c8));
     }
+#endif
 }
 
 static bool menu_holds_mouse() {
@@ -293,6 +297,7 @@ static bool menu_holds_mouse() {
 }
 
 static void keep_menu_cursor() {
+#ifdef GEODE_IS_WINDOWS
     if (!menu_holds_mouse())
         return;
     auto* view = CCEGLView::get();
@@ -317,6 +322,7 @@ static void keep_menu_cursor() {
     }
     view->m_fMouseX = x;
     view->m_fMouseY = y;
+#endif
 }
 
 // visual tilt for ship ufo wave swing
@@ -417,12 +423,16 @@ namespace echo::rotation {
     }
 }
 
+#ifdef GEODE_IS_WINDOWS
 void check_physics_step_patch();
 void echo_guard_step_site();
+#endif
 
 class $modify(EchoPlayLayer, PlayLayer) {
     bool init(GJGameLevel* level, bool useReplay, bool dontCreateObjects) {
+#ifdef GEODE_IS_WINDOWS
         check_physics_step_patch();
+#endif
         // the macro says if ldm was on. has to be set BEFORE the level builds its objects
         if (auto& macro = Logic::get(); level && macro.macro_ldm_known && !macro.inputs.empty() && level->m_lowDetailModeToggled != macro.macro_ldm) {
             level->m_lowDetailModeToggled = macro.macro_ldm;
@@ -521,6 +531,13 @@ class $modify(EchoPlayLayer, PlayLayer) {
             Logic::get().restore_checkpoint_random(this);
         else if (!roll_seed)
             Logic::get().plant_lvl_seed(this);
+#if defined(GEODE_IS_MACOS)
+        else if (!g_seedApplied)
+            Logic::get().roll_live_seed(this);
+#elif !defined(GEODE_IS_WINDOWS)
+        else
+            Logic::get().roll_live_seed(this);
+#endif
         Logic::get().keep_lvl_seed = false;
         logic.resetting = false;
         logic.present = true;
@@ -720,6 +737,30 @@ class $modify(EchoPauseLayer, PauseLayer) {
 
 int vanilla_physics_steps(float dt, float timeWarp);
 
+#ifndef GEODE_IS_WINDOWS
+bool plausible_object(GameObject const* object) {
+    auto bits = reinterpret_cast<uintptr_t>(object) & 0x00ffffffffffffffull;
+    return bits >= 0x10000 && bits < 0x0000800000000000ull && (bits & 7) == 0; // looks like a real pointer
+}
+
+bool section_holds(GJBaseGameLayer* layer, GameObject* object) {
+    auto in_range = [](auto const& list, int index) {
+        return index >= 0 && static_cast<size_t>(index) < list.size();
+    };
+    int x = object->m_outerSectionIndex, y = object->m_middleSectionIndex;
+    int slot = object->m_someOtherIndex;
+    if (!in_range(layer->m_sections, x) || !in_range(layer->m_sectionSizes, x))
+        return false;
+    auto* column = layer->m_sections[x];
+    auto* sizes = layer->m_sectionSizes[x];
+    if (!column || !sizes || !in_range(*column, y) || !in_range(*sizes, y) || !(*column)[y])
+        return false;
+    auto const& bucket = *(*column)[y];
+    int amt = (*sizes)[y];
+    return amt > 0 && static_cast<size_t>(amt) <= bucket.size() && slot >= 0 && slot < amt && bucket[slot] == object && plausible_object(bucket[amt - 1]);
+}
+#endif
+
 namespace echo::step {
     GJBaseGameLayer* begin(GJBaseGameLayer* self) {
         auto& logic = Logic::get();
@@ -800,10 +841,12 @@ class $modify(EchoGameLayer, GJBaseGameLayer) {
         (void)self.setHookPriorityAfter("GJBaseGameLayer::GJBaseGameLayer", "smjs.object-collab");
     }
 
+#ifdef GEODE_IS_WINDOWS
     void destructor() {
         drop_broken_sections(this);
         reinterpret_cast<void (*)(GJBaseGameLayer*)>(geode::base::get() + 0x2057a0)(this); // the real ~GJBaseGameLayer
     }
+#endif
 
     void update(float dt) {
         auto& logic = Logic::get();
@@ -893,6 +936,7 @@ class $modify(EchoGameLayer, GJBaseGameLayer) {
         GJBaseGameLayer::updateObjectSection(object);
     }
 
+#ifdef GEODE_IS_WINDOWS
     // checkpoint restore moves an object without fixing its section
     // then gd removes it from slot -1 & crashes
     void removeObjectFromSection(GameObject* object) {
@@ -1105,6 +1149,20 @@ class $modify(EchoGameLayer, GJBaseGameLayer) {
             *objectType = saved_type;
         }
     }
+
+#else
+    void removeObjectFromSection(GameObject* object) {
+        if (!object)
+            return;
+        if (section_holds(this, object)) {
+            GJBaseGameLayer::removeObjectFromSection(object);
+            return;
+        }
+        object->m_someOtherIndex = -1;
+        object->m_outerSectionIndex = -1;
+        object->m_middleSectionIndex = -1;
+    }
+#endif
 
     void processCommands(float dt, bool isHalfTick, bool isLastTick) {
         auto& logic = Logic::get();
@@ -1427,6 +1485,14 @@ class $modify(EchoGameLayer, GJBaseGameLayer) {
 };
 
 class $modify(EchoUILayer, UILayer) {
+#ifdef GEODE_IS_MACOS
+    void resetAllButtons() {
+        auto const& logic = Logic::get();
+        if (logic.resetting || logic.is_playing() || logic.is_recording())
+            return;
+        UILayer::resetAllButtons();
+    }
+#endif
 
     bool ccTouchBegan(CCTouch* touch, CCEvent* event) {
         if (Logic::get().pause_menu_open())
@@ -1625,6 +1691,7 @@ class $modify(EchoPlayerObject, PlayerObject) {
             phys::startDashing(this, ring);
             return;
         }
+#ifdef GEODE_IS_WINDOWS
         CCNode* object_layer = nullptr;
         if (auto* play = PlayLayer::get())
             object_layer = play->m_objectLayer;
@@ -1632,6 +1699,9 @@ class $modify(EchoPlayerObject, PlayerObject) {
         PlayerObject::startDashing(ring);
         if (object_layer && ring)
             echo::bursts::note_start(object_layer, before, ring->m_objectID);
+#else
+        PlayerObject::startDashing(ring);
+#endif
     }
 
     void stopDashing() {
@@ -1645,6 +1715,7 @@ class $modify(EchoPlayerObject, PlayerObject) {
         if (use_tick)
             m_iconSprite->setRotation(node->getRotation());
         stop_tick_spin();
+#ifdef GEODE_IS_WINDOWS
         using echo::dash::EndEffect;
         auto mode = EndEffect::Native;
         if (was_dashing && echo::dash::end_effect_skippable(this)) {
@@ -1663,6 +1734,9 @@ class $modify(EchoPlayerObject, PlayerObject) {
         PlayerObject::stopDashing();
         echo::dash::set_end_effect(EndEffect::Native);
         echo::dash::set_merge(false);
+#else
+        PlayerObject::stopDashing();
+#endif
     }
 
     void incrementJumps() {
@@ -1759,6 +1833,10 @@ class $modify(EchoPlayerObject, PlayerObject) {
         auto* layer = GJBaseGameLayer::get();
         auto* play = Logic::as_play(layer);
         auto& logic = Logic::get();
+#ifdef GEODE_IS_MACOS
+        if (logic.resetting && play)
+            return;
+#endif
         if (logic.resetting || logic.suppress_auto_hold || !play) {
             PlayerObject::releaseAllButtons();
             return;
@@ -2084,6 +2162,7 @@ class $modify(EchoRingObject, RingObject) {
     }
 };
 
+#ifdef GEODE_IS_WINDOWS
 // skidded from silicate (GPL-3.0, gd 2.2081)
 // swaps gds step count math in GJBaseGameLayer::update for a load of my count
 // HAS to be a raw patch, a midhook saves every register & that changes the ship delta
@@ -2130,6 +2209,7 @@ void check_physics_step_patch() {
         (void)g_step_patch->enable();
     }
 }
+#endif
 
 int vanilla_physics_steps(float dt, float timeWarp) {
     float warp = std::min(timeWarp, 1.f);
@@ -2172,12 +2252,45 @@ void apply_lvl_seed() {
     Logic::get().reseed_rand_triggers(state);
 }
 
+#ifdef GEODE_IS_WINDOWS
 safetyhook::MidHook g_levelSeed;
 
 void on_lvl_seed(safetyhook::Context&) {
     apply_lvl_seed();
 }
+#endif
 
+#ifdef GEODE_IS_MACOS
+class $modify(EchoSeedToolbox, GameToolbox) {
+    static void fast_srand(uint64_t seed) {
+        GameToolbox::fast_srand(seed);
+        if (!g_nativeReset || g_seedApplied)
+            return;
+        g_seedApplied = true;
+        apply_lvl_seed();
+    }
+};
+#endif
+
+#if defined(GEODE_IS_MACOS)
+class $modify(EchoPortalTarget, GJBaseGameLayer) {
+    TeleportPortalObject* getPortalTarget(TeleportPortalObject* portal) {
+        auto* picked = GJBaseGameLayer::getPortalTarget(portal);
+        if (!portal || portal->m_orangePortal || portal->m_targetGroupID <= 0)
+            return picked;
+        auto* group = getGroup(portal->m_targetGroupID);
+        int amt = group ? static_cast<int>(group->count()) : 0;
+        if (amt <= 1)
+            return picked;
+        auto& roll = Logic::get().teleport_random;
+        roll = static_cast<uint64_t>(static_cast<int>((214013ull * roll + 2531011ull) >> 16) & 0x7FFF);
+        float at = static_cast<float>(roll) / 32767.f;
+        return static_cast<TeleportPortalObject*>(group->objectAtIndex(static_cast<int>(at * amt)));
+    }
+};
+#endif
+
+#ifdef GEODE_IS_WINDOWS
 // the mid hooks are NOT geode patches so disable bot has to take them out itself
 void echo_raw_hooks(bool on) {
     static safetyhook::MidHook shake_a, shake_b, shake_c, shake_d;
@@ -2223,8 +2336,10 @@ void echo_guard_step_site() {
     (void)g_step_patch->enable();
     (void)g_step_patch->disable();
 }
+#endif
 
 $execute {
+#if defined(GEODE_IS_WINDOWS)
     install_physics_step_patch();
     echo_raw_hooks(true);
 
@@ -2236,6 +2351,7 @@ $execute {
     patch(0x4CD95C, std::vector<uint8_t>(19, 0x90), "UILayer::handleKeypress");
     patch(0x3B994C, { 0xEB, 0x5E }, "PlayLayer::resetLevel");
     patch(0x3BA508, std::vector<uint8_t>(5, 0x90), "PlayLayer::resumeAndRestart");
+#endif
 }
 
 class $modify(EchoShaderLayer, ShaderLayer) {
@@ -2322,6 +2438,7 @@ class $modify(EchoDirector, CCDirector) {
     }
 };
 
+#ifdef GEODE_IS_WINDOWS
 class $modify(EchoEGLView, CCEGLView) {
     void setFrameSize(float width, float height) {
         if (Logic::get().render_holds_view())
@@ -2347,6 +2464,7 @@ class $modify(EchoEGLView, CCEGLView) {
         CCEGLView::toggleLockCursor(locked);
     }
 };
+#endif
 
 class $modify(EchoAudioEngine, FMODAudioEngine) {
     void update(float dt) {

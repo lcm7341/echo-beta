@@ -1,7 +1,8 @@
 {
 	"geode": "5.8.2",
 	"gd": {
-		"win": "2.2081"
+		"win": "2.2081",
+		"mac": "2.2081"
 	},
 	"id": "decks.echo",
 	"name": "Echo",
@@ -31,7 +32,7 @@
 	"settings": {
 		"open-menu": {
 			"type": "keybind",
-			"platforms": ["win"],
+			"platforms": ["win", "mac"],
 			"name": "Open menu",
 			"description": "Show or hide the Echo menu.",
 			"default": "Alt+LeftMenu",
@@ -40,161 +41,161 @@
 		},
 		"toggle-record": {
 			"type": "keybind",
-			"platforms": ["win"],
+			"platforms": ["win", "mac"],
 			"name": "Toggle recording",
 			"default": "F4",
 			"category": "gameplay"
 		},
 		"toggle-play": {
 			"type": "keybind",
-			"platforms": ["win"],
+			"platforms": ["win", "mac"],
 			"name": "Toggle playback",
 			"default": "F5",
 			"category": "gameplay"
 		},
 		"toggle-advance": {
 			"type": "keybind",
-			"platforms": ["win"],
+			"platforms": ["win", "mac"],
 			"name": "Toggle frame advance",
 			"default": "V",
 			"category": "gameplay"
 		},
 		"step-frame": {
 			"type": "keybind",
-			"platforms": ["win"],
+			"platforms": ["win", "mac"],
 			"name": "Step one frame",
 			"default": "C",
 			"category": "gameplay"
 		},
 		"step-back": {
 			"type": "keybind",
-			"platforms": ["win"],
+			"platforms": ["win", "mac"],
 			"name": "Step back one frame",
 			"default": "None",
 			"category": "gameplay"
 		},
 		"key-click-both": {
 			"type": "keybind",
-			"platforms": ["win"],
+			"platforms": ["win", "mac"],
 			"name": "Click both players",
 			"default": "None",
 			"category": "gameplay"
 		},
 		"key-swap": {
 			"type": "keybind",
-			"platforms": ["win"],
+			"platforms": ["win", "mac"],
 			"name": "Swap player input",
 			"default": "None",
 			"category": "gameplay"
 		},
 		"key-shakes": {
 			"type": "keybind",
-			"platforms": ["win"],
+			"platforms": ["win", "mac"],
 			"name": "Disable shake",
 			"default": "None",
 			"category": "gameplay"
 		},
 		"key-layout": {
 			"type": "keybind",
-			"platforms": ["win"],
+			"platforms": ["win", "mac"],
 			"name": "Layout mode",
 			"default": "None",
 			"category": "gameplay"
 		},
 		"key-hitboxes": {
 			"type": "keybind",
-			"platforms": ["win"],
+			"platforms": ["win", "mac"],
 			"name": "Show hitboxes",
 			"default": "None",
 			"category": "gameplay"
 		},
 		"key-trajectory": {
 			"type": "keybind",
-			"platforms": ["win"],
+			"platforms": ["win", "mac"],
 			"name": "Show trajectory",
 			"default": "None",
 			"category": "gameplay"
 		},
 		"key-autoclick": {
 			"type": "keybind",
-			"platforms": ["win"],
+			"platforms": ["win", "mac"],
 			"name": "Autoclicker",
 			"default": "None",
 			"category": "gameplay"
 		},
 		"key-no-overwrite": {
 			"type": "keybind",
-			"platforms": ["win"],
+			"platforms": ["win", "mac"],
 			"name": "No overwrite",
 			"default": "None",
 			"category": "gameplay"
 		},
 		"key-ignore": {
 			"type": "keybind",
-			"platforms": ["win"],
+			"platforms": ["win", "mac"],
 			"name": "Ignore actions",
 			"default": "None",
 			"category": "gameplay"
 		},
 		"key-show-recording": {
 			"type": "keybind",
-			"platforms": ["win"],
+			"platforms": ["win", "mac"],
 			"name": "Show recording label",
 			"default": "None",
 			"category": "gameplay"
 		},
 		"key-show-cps": {
 			"type": "keybind",
-			"platforms": ["win"],
+			"platforms": ["win", "mac"],
 			"name": "Show CPS",
 			"default": "None",
 			"category": "gameplay"
 		},
 		"key-show-frame": {
 			"type": "keybind",
-			"platforms": ["win"],
+			"platforms": ["win", "mac"],
 			"name": "Show frame",
 			"default": "None",
 			"category": "gameplay"
 		},
 		"key-show-time": {
 			"type": "keybind",
-			"platforms": ["win"],
+			"platforms": ["win", "mac"],
 			"name": "Show time",
 			"default": "None",
 			"category": "gameplay"
 		},
 		"key-show-percent": {
 			"type": "keybind",
-			"platforms": ["win"],
+			"platforms": ["win", "mac"],
 			"name": "Show percent",
 			"default": "None",
 			"category": "gameplay"
 		},
 		"key-save": {
 			"type": "keybind",
-			"platforms": ["win"],
+			"platforms": ["win", "mac"],
 			"name": "Save replay",
 			"default": "None",
 			"category": "gameplay"
 		},
 		"key-load": {
 			"type": "keybind",
-			"platforms": ["win"],
+			"platforms": ["win", "mac"],
 			"name": "Load replay",
 			"default": "None",
 			"category": "gameplay"
 		},
 		"key-reset": {
 			"type": "keybind",
-			"platforms": ["win"],
+			"platforms": ["win", "mac"],
 			"name": "Reset level",
 			"default": "None",
 			"category": "gameplay"
 		},
 		"key-speedhack": {
 			"type": "keybind",
-			"platforms": ["win"],
+			"platforms": ["win", "mac"],
 			"name": "Speedhack",
 			"description": "Switch between 1x and the speed set on the slider.",
 			"default": "None",
@@ -202,35 +203,35 @@
 		},
 		"key-click-dash-orbs": {
 			"type": "keybind",
-			"platforms": ["win"],
+			"platforms": ["win", "mac"],
 			"name": "Click dash orbs",
 			"default": "None",
 			"category": "gameplay"
 		},
 		"key-click-black-orbs": {
 			"type": "keybind",
-			"platforms": ["win"],
+			"platforms": ["win", "mac"],
 			"name": "Click black orbs",
 			"default": "None",
 			"category": "gameplay"
 		},
 		"key-pad-black-orb": {
 			"type": "keybind",
-			"platforms": ["win"],
+			"platforms": ["win", "mac"],
 			"name": "Auto black orb on pad",
 			"default": "None",
 			"category": "gameplay"
 		},
 		"key-pad-blue-orb": {
 			"type": "keybind",
-			"platforms": ["win"],
+			"platforms": ["win", "mac"],
 			"name": "Auto blue orb on pad",
 			"default": "None",
 			"category": "gameplay"
 		},
 		"key-pause-before-kill": {
 			"type": "keybind",
-			"platforms": ["win"],
+			"platforms": ["win", "mac"],
 			"name": "Prevent death",
 			"default": "None",
 			"category": "gameplay"

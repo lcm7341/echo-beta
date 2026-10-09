@@ -1,4 +1,5 @@
 #include <Geode/Geode.hpp>
+#ifdef GEODE_IS_WINDOWS
 #include <Geode/binding/GameManager.hpp>
 #include <Geode/modify/CCSprite.hpp>
 #include "dash_bursts.hpp"
@@ -439,3 +440,4 @@ $execute {
     }
     skip_patch = res.unwrap();
 }
+#endif

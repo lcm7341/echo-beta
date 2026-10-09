@@ -1,4 +1,5 @@
 #include <Geode/Geode.hpp>
+#ifdef GEODE_IS_WINDOWS
 #include <cstring>
 #include <vector>
 #include "obb_math.hpp"
@@ -64,3 +65,4 @@ $execute {
     }
     ready = true;
 }
+#endif

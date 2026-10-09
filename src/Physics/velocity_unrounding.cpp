@@ -11,6 +11,7 @@ using namespace geode::prelude;
 // gd rounds the players y velocity to 3 decimals after a jump, a collision, a boost & postCollision. ts takes those out
 // changes physics so the macro remembers if it was on (Session::macro_unrounded)
 namespace {
+#ifdef GEODE_IS_WINDOWS
     // each block rounds xmm to 1/1000. nop it & the register keeps the real value
     // bytes are hashed first
     struct Site {
@@ -33,6 +34,7 @@ namespace {
             hash = (hash ^ bytes[i]) * 1099511628211ull;
         return hash;
     }
+#endif
     std::vector<Patch*> patches;
     bool prepared = false;
     bool available = false;
@@ -46,6 +48,7 @@ namespace {
         if (Loader::get()->isModLoaded("chizz.velocity-unrounding")) {
             return;
         }
+#ifdef GEODE_IS_WINDOWS
         auto base = geode::base::get();
         for (auto const& site : SITES) {
             if (fingerprint(reinterpret_cast<std::uint8_t const*>(base + site.rva), site.size) != site.fingerprint) {
@@ -67,6 +70,7 @@ namespace {
             patches.push_back(patch);
         }
         available = true;
+#endif
     }
 }
 

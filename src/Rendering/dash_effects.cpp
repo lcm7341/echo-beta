@@ -4,6 +4,7 @@
 // effects that started on the same frame share a Cohort, so their state is only worked out once
 // the transform & color math is cocos's own (node_transform, sprite_color) w/ gds sinf / cosf, so the pixels match
 #include <Geode/Geode.hpp>
+#ifdef GEODE_IS_WINDOWS
 #include <Geode/binding/GameManager.hpp>
 #include <Geode/binding/PlayerObject.hpp>
 #include "circle_signatures.hpp"
@@ -693,3 +694,4 @@ namespace echo::dash {
         effect.native_outline = outline;
     }
 }
+#endif

@@ -780,8 +780,10 @@ void GUI::follow_selection() {
     auto& inputs = value.inputs;
     auto find = [&](uint64_t id, int fallback) {
         if (id != 0) {
+#ifdef GEODE_IS_WINDOWS
             if (fallback >= 0 && fallback < static_cast<int>(inputs.size()) &&
                 value.input_id(static_cast<size_t>(fallback)) == id) return fallback;
+#endif
             for (int i = 0; i < static_cast<int>(inputs.size()); ++i) {
                 if (value.input_id(static_cast<size_t>(i)) == id) return i;
             }
@@ -1234,10 +1236,12 @@ void GUI::draw_render() {
             ImGui::EndPopup();
         }
         ImGui::TextWrapped("%s", blocker.c_str());
+#ifdef GEODE_IS_WINDOWS
         if (ImGui::Button("Download FFmpeg")) {
             geode::utils::web::openLinkInBrowser("https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip");
         }
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("Place ffmpeg.exe next to Geometry Dash once downloaded!");
+#endif
         return;
     }
     value.ffmpeg_missing = false;

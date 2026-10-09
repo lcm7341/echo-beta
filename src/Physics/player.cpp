@@ -98,7 +98,14 @@ void startDashing(PlayerObject* player, DashRingObject* ring) {
         sidewaysAngle = 1.0;
     }
 
+#if defined(GEODE_IS_WINDOWS)
     cocos2d::CCPoint p = cocos2d::ccpForAngle(dashAngle * 0.01745329);
+#else
+    cocos2d::CCPoint p = CCPoint{
+        (float)std::cos(((float)dashAngle * 0.01745329)),
+        (float)std::sin(((float)dashAngle * 0.01745329)),
+    };
+#endif
     cocos2d::CCPoint mult = p * sidewaysAngle;
 
     float x = mult.x;
@@ -370,9 +377,13 @@ void ringJump(PlayerObject* player, RingObject* ring) {
         player->m_isBallRotating2 = false;
         player->m_isBallRotating = false;
         player->m_rotationSpeed = 0.0;
+#if defined(GEODE_IS_WINDOWS)
         player->runNormalRotation(0, 1.0);
+#endif
     } else {
+#if defined(GEODE_IS_WINDOWS)
         player->runBallRotation2();
+#endif
     }
 
     cocos2d::CCPoint playerPos = player->getPosition();

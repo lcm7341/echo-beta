@@ -8,8 +8,11 @@
 #include <Geode/binding/EnterEffectInstance.hpp>
 #include <Geode/binding/GJGameState.hpp>
 #include <Geode/binding/GameObject.hpp>
+#ifdef GEODE_IS_WINDOWS
 #include <windows.h>
+#endif
 
+#ifdef GEODE_IS_WINDOWS
 #include "Logic/state_check_walk.hpp"
 
 namespace {
@@ -152,3 +155,9 @@ std::string echo::state_check::broken(GJGameState const& s) {
 #undef ECHO_CHECK
     return {};
 }
+
+#else
+std::string echo::state_check::broken(GJGameState const&) {
+    return {};
+}
+#endif

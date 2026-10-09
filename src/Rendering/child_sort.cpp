@@ -6,6 +6,7 @@
 // removal: finished effects are collected & taken out in 1 pass, not 1 array shift each
 // only on if cocos's own code hashes right & no other mod hooked sortAllChildren
 #include <Geode/Geode.hpp>
+#ifdef GEODE_IS_WINDOWS
 #include <Geode/loader/Loader.hpp>
 #include <Geode/modify/CCNode.hpp>
 #include <Geode/modify/CCActionManager.hpp>
@@ -274,3 +275,4 @@ $execute {
     native_wave_removed = reinterpret_cast<WaveRemoved>(address);
     (void)Mod::get()->hook(reinterpret_cast<void*>(address), &wave_removed, "PlayLayer::circleWaveWillBeRemoved");
 }
+#endif

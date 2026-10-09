@@ -6,6 +6,7 @@
 //      of the original so they come out exactly like vanilla
 // only done if the bytes hash to what 2.2081's libcocos2d has
 #include <Geode/Geode.hpp>
+#ifdef GEODE_IS_WINDOWS
 #include "circle_signatures.hpp"
 #include "matrix_multiply.hpp"
 #include <array>
@@ -56,3 +57,4 @@ $execute {
     }
     // the fallback page is never freed, on purpose
 }
+#endif

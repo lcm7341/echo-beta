@@ -87,6 +87,7 @@ float Logic::render_game_step() {
 bool Logic::pause_menu_open() {
     auto* director = CCDirector::sharedDirector();
     auto* scene = director ? director->getRunningScene() : nullptr;
+#ifdef GEODE_IS_WINDOWS
     static thread_local replay::ChildTypeCache<CCObject> scene_types, play_types;
     auto contains_pause = [](CCNode* node, auto& cache) {
         auto* children = node ? node->getChildren() : nullptr;
@@ -103,6 +104,12 @@ bool Logic::pause_menu_open() {
     if (contains_pause(scene, scene_types))
         return true;
     return contains_pause(PlayLayer::get(), play_types);
+#else
+    if (scene && scene->getChildByType<PauseLayer>(0))
+        return true;
+    auto* play = PlayLayer::get();
+    return play && play->getChildByType<PauseLayer>(0);
+#endif
 }
 
 void Logic::sync_music_pitch() {

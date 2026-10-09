@@ -1,4 +1,5 @@
 #pragma once
+#ifdef GEODE_IS_WINDOWS
 namespace cocos2d {
 	class CCSprite;
 }
@@ -11,3 +12,4 @@ namespace echo::dash {
 	void track_draw(CCSprite* root, CCSprite* outline);
 	void untrack_draw(CCSprite* root);
 }
+#endif

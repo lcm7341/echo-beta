@@ -28,7 +28,9 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
+#ifdef GEODE_IS_WINDOWS
 #include <windows.h>
+#endif
 
 using namespace geode::prelude;
 

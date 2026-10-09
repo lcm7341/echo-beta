@@ -22,6 +22,9 @@
 #include <functional>
 #include <limits>
 #include <utility>
+#ifdef GEODE_IS_MACOS
+#include "Logic/mac_refresh_clock.hpp"
+#endif
 
 namespace chrono = std::chrono;
 
@@ -274,9 +277,11 @@ void Logic::run_frame(GJBaseGameLayer* play, float dt, std::function<void(float)
         return;
     }
     echo::movement::prepare();
+#ifdef GEODE_IS_WINDOWS
     echo::dash::prepare();
     echo::bursts::prepare();
     echo::collision_bounds::prepare();
+#endif
     logic.frame_steps = 0;
     bool paused = Logic::get().editor_paused;
     if (auto* live = Logic::as_play(play))
@@ -339,6 +344,11 @@ void Logic::run_frame(GJBaseGameLayer* play, float dt, std::function<void(float)
     if (!std::isfinite(frame_dt) || frame_dt < 0.f)
         frame_dt = 0.f;
     bool rendering = Logic::get().render_capturing();
+#ifdef GEODE_IS_MACOS
+    echo::mac::suggest_sdl_pacing();
+    if (!rendering)
+        frame_dt = static_cast<float>(echo::mac::refresh_frame_time(frame_dt));
+#endif
     if (!rendering && !logic.real_time_mode && frame_dt > 0.25f)
         frame_dt = 0.25f;
     frame_dt *= speed;

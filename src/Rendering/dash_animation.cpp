@@ -10,6 +10,7 @@
 #include <vector>
 
 using namespace geode::prelude;
+#ifdef GEODE_IS_WINDOWS
 namespace {
     using Removal = void (*)(CCSprite*);
     Removal native_removal = nullptr;
@@ -373,3 +374,4 @@ $execute {
     }
     effect_actions_patch = res.unwrap();
 }
+#endif

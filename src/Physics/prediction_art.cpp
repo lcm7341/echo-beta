@@ -16,6 +16,7 @@ namespace phys {
     }
 
     void prepare_prediction_art() {
+#ifdef GEODE_IS_WINDOWS
         static bool const supported = [] {
             auto* code = reinterpret_cast<uint8_t const*>(geode::base::get() + 0x39c660); // PlayerObject::setPosition
             uint64_t hash = 14695981039346656037ull;                                      // fnv-1a start value
@@ -41,5 +42,8 @@ namespace phys {
             }
         }
         reported = true;
+#else
+        fast_pos = false;
+#endif
     }
 }

@@ -1,6 +1,7 @@
 // CCString::createWithFormat allocates a 100kb buffer on every call & labels / frame names call it constantly. windows
 // ts formats into 1kb on the stack & only goes to the original when the text doesnt fit
 #include <Geode/Geode.hpp>
+#ifdef GEODE_IS_WINDOWS
 #include "circle_signatures.hpp"
 #include <cstdarg>
 #include <cstdio>
@@ -35,3 +36,4 @@ $execute {
     native_init = reinterpret_cast<Init>(cocos + 0x105e0);
     (void)Mod::get()->hook(reinterpret_cast<void*>(native_init), &init_formatted, "CCString::initWithFormatAndValist");
 }
+#endif

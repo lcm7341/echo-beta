@@ -4,6 +4,7 @@
 //   & flush() sends the whole buffer to the gpu w/ its own small shader
 // a sprite the batch cant copy exactly (valid() says no) is drawn the normal way
 #include <Geode/Geode.hpp>
+#ifdef GEODE_IS_WINDOWS
 #include <Geode/modify/CCNode.hpp>
 #include <Geode/modify/CCSprite.hpp>
 #include "dash_batch.hpp"
@@ -344,3 +345,4 @@ class $modify(EchoDashSpriteDraw, CCSprite) {
         CCSprite::draw();
     }
 };
+#endif

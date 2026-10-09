@@ -1,4 +1,5 @@
 #pragma once
+#ifdef GEODE_IS_WINDOWS
 #include <cstdint>
 using namespace cocos2d;
 
@@ -30,3 +31,4 @@ extern "C" void echo_record_dash_end(PlayerObject* player) noexcept;
 extern volatile bool echo_dash_compare;
 extern volatile bool echo_dash_show_gpu;
 extern volatile std::uint64_t echo_dash_compared, echoDashMismatches, echoDashLifeMismatches;
+#endif

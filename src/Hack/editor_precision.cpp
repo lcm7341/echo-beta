@@ -30,11 +30,23 @@ namespace {
     }
 
     std::optional<float> number(std::string_view text) {
+#if defined(GEODE_IS_MACOS)
+        // thank you john apple
+        if (text.empty() || text.find_first_not_of("+-.0123456789eE") != std::string_view::npos)
+            return std::nullopt;
+        std::string copy(text);
+        char* stop = nullptr;
+        float value = std::strtof(copy.c_str(), &stop);
+        if (stop != copy.c_str() + copy.size())
+            return std::nullopt;
+        return value;
+#else
         float value = 0.f;
         auto [end, error] = std::from_chars(text.data(), text.data() + text.size(), value);
         if (error != std::errc{} || end != text.data() + text.size())
             return std::nullopt;
         return value;
+#endif
     }
 }
 

@@ -13,6 +13,7 @@
 using namespace geode::prelude;
 
 namespace {
+#ifdef GEODE_IS_WINDOWS
     template <class T>
     T* resolve(std::uintptr_t site, std::size_t operand, std::size_t length, std::initializer_list<std::uint8_t> prefix, std::uintptr_t expected) {
         auto const* code = reinterpret_cast<std::uint8_t const*>(geode::base::get() + site);
@@ -28,19 +29,28 @@ namespace {
             return nullptr;
         return reinterpret_cast<T*>(target);
     }
+#endif
 
     constexpr std::uint64_t VARIANCE_SEED = 0;
 }
 
 namespace echo::objects {
     int* unique_id_counter() {
+#ifdef GEODE_IS_WINDOWS
         static int* const counter = resolve<int>(0x18de5b, 2, 6, { 0x8b, 0x05 }, 0x6ba158);
         return counter;
+#else
+        return nullptr;
+#endif
     }
 
     std::uint64_t* variance_generator() {
+#ifdef GEODE_IS_WINDOWS
         static std::uint64_t* const generator = resolve<std::uint64_t>(0x18ddec, 3, 11, { 0x48, 0x69, 0x05 }, 0x6c2ee0);
         return generator;
+#else
+        return nullptr;
+#endif
     }
 
     void reseed_variance() {

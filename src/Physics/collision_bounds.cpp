@@ -1,4 +1,5 @@
 #include "collision_bounds.hpp"
+#ifdef GEODE_IS_WINDOWS
 #include <Geode/Geode.hpp>
 #include "Rendering/circle_signatures.hpp"
 
@@ -58,3 +59,10 @@ $execute {
     }
     bounds_patch = res.unwrap();
 }
+
+#else
+namespace echo::collision_bounds {
+    void prepare() {
+    }
+}
+#endif

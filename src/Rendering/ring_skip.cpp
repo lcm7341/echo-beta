@@ -1,4 +1,5 @@
 #include <Geode/Geode.hpp>
+#ifdef GEODE_IS_WINDOWS
 #include <Geode/binding/GameManager.hpp>
 #include <Geode/binding/GameObject.hpp>
 #include <Geode/binding/PlayerObject.hpp>
@@ -135,3 +136,4 @@ $execute {
         return;
     }
 }
+#endif

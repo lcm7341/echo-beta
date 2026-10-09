@@ -28,9 +28,15 @@ namespace {
         return objects;
     }
 
+#if defined(GEODE_IS_WINDOWS)
 #define ECHO_NO_MIRROR_DRAW
     constexpr std::ptrdiff_t PLAIN_DRAW = 0x31f4;
     constexpr std::ptrdiff_t MIRROR_DIRECTION = 0x3204;
+#elif defined(GEODE_IS_MACOS)
+#define ECHO_NO_MIRROR_DRAW
+    constexpr std::ptrdiff_t PLAIN_DRAW = 0x305c;
+    constexpr std::ptrdiff_t MIRROR_DIRECTION = 0x306c;
+#endif
 
 #ifdef ECHO_NO_MIRROR_DRAW
     float& layer_float(GJBaseGameLayer* layer, std::ptrdiff_t offset) {
@@ -44,9 +50,13 @@ namespace {
     bool offsets_player(GJBaseGameLayer* layer, PlayerObject* body) {
         if (!body)
             return false;
+#ifdef GEODE_IS_WINDOWS
         if (reinterpret_cast<std::uint8_t*>(body)[0xa2a] != 0)
             return false;                                                                      // why
         return body == layer->m_player1 || reinterpret_cast<std::uint8_t*>(layer)[0x422] != 0; // tf
+#else
+        return body == layer->m_player1 || layer->m_gameState.m_isDualMode;
+#endif
     }
 #endif
 }

@@ -6,6 +6,9 @@
 #include <Geode/modify/CCCircleWave.hpp>
 #include "circle_signatures.hpp"
 #include "wave_timeline.hpp"
+#ifdef GEODE_IS_MACOS
+#include "mac_signatures.hpp"
+#endif
 #include "wave_merge.hpp"
 #include <algorithm>
 #include <bit>
@@ -15,6 +18,7 @@
 #include <vector>
 
 using namespace geode::prelude;
+#if defined(GEODE_IS_WINDOWS) || defined(GEODE_IS_MACOS)
 namespace {
     bool compact_animation = false;
 
@@ -33,7 +37,11 @@ namespace {
     }
 
     echo::waves::Power native_power = nullptr;
+#if defined(GEODE_IS_ARM_MAC)
+    constexpr bool fused_tween = true;
+#else
     constexpr bool fused_tween = false;
+#endif
 
     class WaveAnimation final : public CCActionInterval {
         echo::waves::Timeline timeline;
@@ -145,9 +153,11 @@ class $modify(EchoWaveAnimation, CCCircleWave) {
         m_blendAdditive = true;
         action->autorelease();
         CCDirector::sharedDirector()->getActionManager()->addAction(action, this, false);
+#ifdef GEODE_IS_WINDOWS
         params[this] = { from, to, duration, fadeIn, easeOut };
         retain();
         fresh.push_back(this);
+#endif
         return true;
     }
 };
@@ -296,8 +306,18 @@ $execute {
     constexpr Signature win_init{ 0x42940, 0x213, 0xf375e3ceb8ec56da };
     constexpr Signature win_tween{ 0x3d1a0, 0x79, 0xeed524abc5b5ff1f };
     constexpr Signature win_ease{ 0x2a4d0, 0x3d, 0xf3ef639193fee5fc };
+#ifdef GEODE_IS_WINDOWS
     auto cocos_module = geode::base::getCocos();
     constexpr auto init_signature = win_init, tween_signature = win_tween, ease_signature = win_ease;
+#elif defined(GEODE_IS_MACOS)
+    auto cocos_module = geode::base::get();
+    constexpr auto init_signature = echo::rendering::mac::wave_init;
+    constexpr auto tween_signature = echo::rendering::mac::tween;
+    constexpr auto ease_signature = echo::rendering::mac::ease;
+#else
+    auto cocos_module = geode::base::get();
+    constexpr auto init_signature = arm_init, tween_signature = arm_tween, ease_signature = arm_ease;
+#endif
     auto matches = [](uintptr_t module, echo::circles::Signature const& signature) {
         return echo::circles::fingerprint(reinterpret_cast<uint8_t const*>(module + signature.offset), signature.size) == signature.hash;
     };
@@ -305,6 +325,11 @@ $execute {
         !matches(cocos_module, ease_signature)) {
         return;
     }
+#ifdef GEODE_IS_WINDOWS
     native_power = *reinterpret_cast<echo::waves::Power*>(cocos_module + 0xe4b00); // powf
+#else
+    native_power = &::powf;
+#endif
     compact_animation = true;
 }
+#endif

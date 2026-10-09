@@ -1,4 +1,5 @@
 #pragma once
+#ifdef GEODE_IS_WINDOWS
 namespace cocos2d {
 	class CCNode;
 }
@@ -11,3 +12,4 @@ namespace echo::bursts {
 	void merge_fresh();
 	void note_removed(CCNode* child);
 }
+#endif

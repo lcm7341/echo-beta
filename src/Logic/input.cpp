@@ -3,7 +3,9 @@
 #include <algorithm>
 #include <array>
 
+#ifdef GEODE_IS_WINDOWS
 #include <windows.h>
+#endif
 
 using namespace cocos2d;
 
@@ -13,6 +15,7 @@ namespace {
     constexpr std::array LEFT_KEYS{ KEY_A, KEY_Left };
     constexpr std::array RIGHT_KEYS{ KEY_D, KEY_Right };
 
+#ifdef GEODE_IS_WINDOWS
     int virtual_key(enumKeyCodes key) {
         switch (key) {
         case KEY_Space:
@@ -34,6 +37,20 @@ namespace {
         });
     }
 
+#else
+    std::array<bool, 0x400>& held_keys() {
+        static std::array<bool, 0x400> held{};
+        return held;
+    }
+
+    bool any_down(auto const& keys) {
+        auto const& held = held_keys();
+        return std::ranges::any_of(keys, [&](enumKeyCodes key) {
+            auto idx = static_cast<size_t>(key);
+            return idx < held.size() && held[idx];
+        });
+    }
+#endif
 }
 
 namespace Input {
@@ -50,14 +67,27 @@ namespace Input {
     }
 
     bool mouseDown() {
+#ifdef GEODE_IS_WINDOWS
         return (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
+#else
+        return false;
+#endif
     }
 
     void note_key(enumKeyCodes key, bool down) {
+#ifndef GEODE_IS_WINDOWS
+        auto idx = static_cast<size_t>(key);
+        if (idx < held_keys().size())
+            held_keys()[idx] = down;
+#else
         (void)key;
         (void)down;
+#endif
     }
 
     void clear_keys() {
+#ifndef GEODE_IS_WINDOWS
+        held_keys().fill(false);
+#endif
     }
 }

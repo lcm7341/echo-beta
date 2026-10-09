@@ -8,6 +8,9 @@
 // practice checkpoints, maintain / same gravity, follow player & the seed handling are in here too
 #include "Logic/logic.hpp"
 #include "Hooks/step.hpp"
+#ifdef GEODE_IS_MACOS
+#include "Logic/mac_refresh_clock.hpp"
+#endif
 #include "GUI/gui.hpp"
 #include "Hack/trajectory.hpp"
 #include "Hack/orbs.hpp"
@@ -1381,8 +1384,10 @@ void Logic::restore_holds(PlayLayer* play) {
             p1 = ui->m_p1Jumping || ui->m_p1TouchId != -1;
             p2 = ui->m_p2Jumping || ui->m_p2TouchId != -1;
         }
+#ifdef GEODE_IS_WINDOWS
         if (!Input::jump_key_down() && !Input::mouseDown())
             p1 = p2 = false;
+#endif
         play->m_queuedButtons.clear();
         if (play->m_player1)
             play->m_player1->releaseAllButtons();
@@ -2035,6 +2040,7 @@ void Logic::play_macro(GJBaseGameLayer* play, GJBaseGameLayer* layer, float dt, 
         logic.buttons_prepared = false;
         return;
     }
+#ifdef GEODE_IS_WINDOWS
     bool correct_gravity = logic.is_recording() && logic.maintain_gravity && !logic.restoring_holds;
     bool single_dual = play->m_gameState.m_isDualMode && !(play->m_levelSettings && play->m_levelSettings->m_twoPlayerMode);
     if (clearInputQueue && play->m_queuedButtons.size() == 1 && (replay == 0 || replay == 1) &&
@@ -2057,6 +2063,7 @@ void Logic::play_macro(GJBaseGameLayer* play, GJBaseGameLayer* layer, float dt, 
         logic.buttons_prepared = false;
         return;
     }
+#endif
     replay::SmallSnapshot<PlayerButtonCommand, 8> queued(play->m_queuedButtons);
     if (logic.is_recording() && logic.maintain_gravity && !logic.restoring_holds) {
         int jump = static_cast<int>(PlayerButton::Jump);
