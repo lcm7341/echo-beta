@@ -2173,13 +2173,21 @@ void Recorder::finish_video() {
 }
 
 bool Recorder::api_available() {
-    // todo
-    return {};
+#if   defined(ECHO_FFMPEG_API)
+    return Loader::get()->isModLoaded("eclipse.ffmpeg-api") && ffmpeg::events::impl::getVTable().createRecorder;
+#else
+    return false;
+#endif
 }
 
 bool Recorder::prefer_api() {
-    // port this
-    return {};
+#ifndef ECHO_FFMPEG_API
+    return false;
+#elif defined(GEODE_IS_WINDOWS)
+    return !fs::exists(Recorder::get().game_directory() / "ffmpeg.exe") && Recorder::api_available();
+#else
+    return true;
+#endif
 }
 
 bool Recorder::idle() const {
@@ -2246,7 +2254,76 @@ void Recorder::go_live() {
 
 #ifdef ECHO_FFMPEG_API
 std::string Recorder::open_api(int fps) {
-    // port this
+#ifdef GEODE_IS_ANDROID
+    install_encoder_options();
+#endif
+    auto const& logic = Logic::get();
+    if (!Recorder::api_available())
+        return "FFmpeg API is not installed";
+    auto encoder = std::make_unique<ffmpeg::events::Recorder>();
+    if (!encoder->isValid())
+        return "FFmpeg API did not respond";
+    auto codecs = ffmpeg::events::Recorder::getAvailableCodecs();
+    auto offered = [&](std::string const& name) {
+        return codecs.empty() || std::ranges::find(codecs, name) != codecs.end();
+    };
+    std::vector<std::string> wanted;
+#ifdef GEODE_IS_ANDROID
+    if (logic.render_codec.empty() || logic.render_codec == "libx264")
+        wanted.push_back("h264_mediacodec");
+#endif
+    std::vector<std::string> fallbacks{ logic.render_codec, "libx264", "h264_videotoolbox", "h264_mediacodec", "libopenh264", "mpeg4" };
+    wanted.insert(wanted.end(), fallbacks.begin(), fallbacks.end());
+    std::vector<std::string> picks;
+    std::ranges::copy_if(wanted, std::back_inserter(picks), [&](std::string const& name) {
+        return !name.empty() && offered(name) && std::ranges::find(picks, name) == picks.end();
+    });
+    auto color_modes = logic.render_color_fix ? std::vector<bool>{ true, false } : std::vector<bool>{ false };
+    std::vector<std::pair<std::string, bool>> attempts;
+    std::ranges::for_each(picks, [&](std::string const& codec) {
+        std::ranges::transform(color_modes, std::back_inserter(attempts), [&](bool color_fix) {
+            return std::pair{ codec, color_fix };
+        });
+    });
+    int64_t pixels = static_cast<int64_t>(width) * static_cast<int64_t>(height);
+    int64_t bitrate = logic.render_bitrate > 0 ? logic.render_bitrate : std::max<int64_t>(pixels * fps / 4, 8'000'000);
+    std::string error = "No usable video codec";
+    auto opened = std::ranges::find_if(attempts, [&](auto const& attempt) {
+        auto const& [codec, color_fix] = attempt;
+        ffmpeg::RenderSettings settings;
+#ifdef GEODE_IS_WINDOWS
+        settings.m_pixelFormat = ffmpeg::PixelFormat::BGRA;
+#else
+        settings.m_pixelFormat = ffmpeg::PixelFormat::RGBA;
+#endif
+        settings.m_codec = codec;
+        settings.m_bitrate = bitrate;
+        settings.m_width = static_cast<uint32_t>(width);
+        settings.m_height = static_cast<uint32_t>(height);
+        settings.m_fps = static_cast<uint16_t>(std::clamp(fps, 1, 65535));
+        settings.m_outputFile = output;
+        settings.m_doVerticalFlip = true;
+        settings.m_colorspaceFilters = color_fix ? "all=bt709:iall=bt470bg:fast=1" : "";
+#ifdef GEODE_IS_ANDROID
+        s_echoPreset = codec == "libx264" ? logic.render_preset.c_str() : nullptr;
+        struct PresetScope {
+            ~PresetScope() {
+                s_echoPreset = nullptr;
+            }
+        } reset_preset;
+#endif
+        encoder = std::make_unique<ffmpeg::events::Recorder>();
+        auto res = encoder->init(settings);
+        if (res.isErr())
+            error = res.unwrapErr();
+        return res.isOk();
+    });
+    if (opened == attempts.end()) {
+        std::error_code ignored;
+        fs::remove(output, ignored);
+        return error.empty() ? std::string("FFmpeg API could not open the encoder") : error;
+    }
+    api = std::move(encoder);
     return {};
 }
 #endif
@@ -2300,7 +2377,110 @@ namespace {
 }
 
 void Recorder::save_api_render() {
-    // todo
+#ifdef ECHO_FFMPEG_API
+    auto& tap = AudioTap::get();
+    std::error_code error;
+    bool has_audio = !audio.empty() && frames > 0 && tap.written > 0 && tap.rate > 0 && tap.channels > 0 && fs::exists(output, error);
+    auto finish = [](fs::path const& video, std::string const& failed) {
+        Recorder::get().saving = false;
+        auto& logic = Logic::get();
+        if (failed.empty()) {
+            logic.message = "Render stopped";
+            logic.notify(fmt::format("Saved {}", video.filename().string()), true);
+        }
+        else {
+            logic.message = "Video saved, audio mux failed: " + failed;
+            logic.notify(logic.message, false);
+        }
+    };
+    if (!has_audio) {
+        if (!audio.empty())
+            fs::remove(audio, error);
+        if (frames > 0 && fs::exists(output, error))
+            finish(output, {});
+        else
+            Logic::get().message = "Render stopped";
+        return;
+    }
+    saving = true;
+    int kept_rate = static_cast<int>(std::max(1ll, std::llround((double)(tap.rate) * std::max(audio_speed, 0.01f))));
+    std::thread([finish, video = output, raw = audio, rate = kept_rate, channels = tap.channels] {
+        auto folder = video.parent_path();
+        auto wav = folder / (video.stem().string() + ".audio.wav");
+        auto temp = folder / (video.stem().string() + ".part" + video.extension().string());
+        std::string failed;
+        std::error_code error;
+        std::vector<float> stereo;
+        try {
+            stereo = echo::audio::read_stereo(raw, channels);
+        }
+        catch (std::exception const& error) {
+            failed = error.what();
+        }
+#ifdef ECHO_FFMPEG_API
+        if (failed.empty()) {
+#ifdef GEODE_IS_ANDROID
+            s_echoGlobalHeader = true;
+            struct HeaderScope {
+                ~HeaderScope() {
+                    s_echoGlobalHeader = false;
+                }
+            } reset_header;
+#endif
+            try {
+                // mixVideoRaw takes the samples as 44100 no matter what (phones are 48000, & render speed moves it too)
+                // so anything else goes in as a wav, the api reads the real rate off that & converts it
+                if (rate == 44100) {
+                    if (auto mixed = ffmpeg::events::AudioMixer::mixVideoRaw(video, stereo, temp); mixed.isErr())
+                        failed = mixed.unwrapErr();
+                }
+                else if (!write_wav(raw, wav, rate, channels))
+                    failed = "could not write the audio";
+                else {
+                    if (auto mixed = ffmpeg::events::AudioMixer::mixVideoAudio(video, wav, temp); mixed.isErr())
+                        failed = mixed.unwrapErr();
+                    else
+                        fs::remove(wav, error);
+                }
+            }
+            catch (std::exception const& error) {
+                failed = error.what();
+            }
+        }
+#endif
+        if (failed.empty() && !fs::exists(temp, error))
+            failed = "FFmpeg API did not write the video";
+        if (failed.empty()) {
+            auto backup = folder / (video.filename().string() + ".unmuxed");
+            fs::rename(video, backup, error);
+            if (!error) {
+                fs::rename(temp, video, error);
+                if (error) {
+                    std::error_code restore_error;
+                    fs::rename(backup, video, restore_error);
+                }
+                else
+                    fs::remove(backup, error);
+            }
+            if (error)
+                failed = "could not replace the video";
+        }
+        if (failed.empty())
+            fs::remove(raw, error);
+        else {
+            fs::remove(temp, error);
+            if (write_wav(raw, wav, rate, channels)) {
+                fs::remove(raw, error);
+                failed += "; audio kept in " + wav.filename().string();
+            }
+            else
+                failed += "; raw audio kept in " + raw.filename().string();
+        }
+        Loader::get()->queueInMainThread([finish, video, failed] {
+            finish(video, failed);
+        });
+    }).detach();
+#endif
 }
 
 #ifdef GEODE_IS_WINDOWS
