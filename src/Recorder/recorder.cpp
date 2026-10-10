@@ -56,6 +56,9 @@ using namespace geode::prelude;
 #ifdef GEODE_IS_WINDOWS
 #include <windows.h>
 #endif
+#ifdef GEODE_IS_ANDROID
+#include <dlfcn.h>
+#endif
 #ifdef GEODE_IS_MACOS
 #include <OpenGL/OpenGL.h>
 #include <cerrno>
@@ -66,6 +69,54 @@ using namespace geode::prelude;
 #include <sys/wait.h>
 #include <unistd.h>
 extern char** environ;
+#endif
+
+#if defined(GEODE_IS_ANDROID) && defined(ECHO_FFMPEG_API)
+namespace {
+    struct AVCodecContext;
+    struct AVCodec;
+    struct AVDictionary;
+    using OpenCodec = int (*)(AVCodecContext*, AVCodec const*, AVDictionary**);
+    using SetDictionary = int (*)(AVDictionary**, char const*, char const*, int);
+    using FreeDictionary = void (*)(AVDictionary**);
+    OpenCodec s_openCodec = nullptr;
+    SetDictionary s_setDictionary = nullptr;
+    FreeDictionary s_freeDictionary = nullptr;
+    thread_local char const* s_echoPreset = nullptr;
+
+    int echo_open_codec(AVCodecContext* context, AVCodec const* codec, AVDictionary** options) {
+        AVDictionary* local = nullptr;
+        AVDictionary** chosen = options ? options : &local;
+        if (s_echoPreset)
+            s_setDictionary(chosen, "preset", s_echoPreset, 0);
+        if (s_echoGlobalHeader)
+            s_setDictionary(chosen, "flags", "+global_header", 0);
+        int res = s_openCodec(context, codec, chosen);
+        if (local)
+            s_freeDictionary(&local);
+        return res;
+    }
+
+    void install_encoder_options() {
+        static bool installed = false;
+        if (installed)
+            return;
+        auto* dependency = Loader::get()->getLoadedMod("eclipse.ffmpeg-api");
+        if (!dependency)
+            return;
+        void* binary = dlopen(dependency->getBinaryPath().c_str(), RTLD_NOW | RTLD_NOLOAD);
+        if (!binary)
+            return;
+        s_openCodec = reinterpret_cast<OpenCodec>(dlsym(binary, "avcodec_open2"));
+        s_setDictionary = reinterpret_cast<SetDictionary>(dlsym(binary, "av_dict_set"));
+        s_freeDictionary = reinterpret_cast<FreeDictionary>(dlsym(binary, "av_dict_free"));
+        if (s_openCodec && s_setDictionary && s_freeDictionary) {
+            auto hook = Mod::get()->hook(reinterpret_cast<void*>(s_openCodec), &echo_open_codec, "Echo encoder preset");
+            installed = hook.isOk();
+        }
+        dlclose(binary);
+    }
+}
 #endif
 
 namespace {
@@ -1415,7 +1466,7 @@ void Recorder::hold_view() {
     if (!holding) {
         saved_win_width = CCDirector::sharedDirector()->getWinSize().width;
         saved_frame = CCEGLView::sharedOpenGLView()->getFrameSize();
-#if defined(GEODE_IS_WINDOWS)
+#if defined(GEODE_IS_WINDOWS) || defined(GEODE_IS_MOBILE)
         saved_pixels = window_pixels().value_or(saved_frame);
 #else
         GLint viewport[4] = {};
@@ -1894,6 +1945,11 @@ void Recorder::drawFrame() {
 void Recorder::show_overlay() {
     if (!active)
         return;
+#ifdef GEODE_IS_MOBILE
+    // touches use the real screen size NOT the video size
+    if (holding)
+        silent_change_size(saved_frame);
+#endif
     auto pixels = window_pixels().value_or(saved_pixels);
     if (pixels.width < 1.f || pixels.height < 1.f)
         pixels = CCSize(1.f, 1.f);
@@ -2431,7 +2487,9 @@ void Logic::sync_render_pause_button() {
     auto* play = PlayLayer::get();
     CCNode* button = play && play->m_uiLayer ? play->m_uiLayer->m_pauseBtn : nullptr;
     bool hide = button && render_hide_pause && Recorder::get().active;
+#ifndef GEODE_IS_MOBILE
     hide = false;
+#endif
     if (hidden && hidden != button)
         hidden = nullptr;
     if (hide && !hidden && button->isVisible()) {
@@ -2445,7 +2503,11 @@ void Logic::sync_render_pause_button() {
 }
 
 bool Logic::render_uses_screen_shape() {
+#if   defined(GEODE_IS_MOBILE)
+    return render_screen_shape;
+#else
     return false;
+#endif
 }
 
 int Logic::render_width_for(int width, int height) {

@@ -172,7 +172,7 @@ void teleportPlayer(GJBaseGameLayer* pl, TeleportPortalObject* object,
                 }
             } else {
                 float forceMod = forceRelated * 0.01745329;
-#if defined(GEODE_IS_WINDOWS)
+#if defined(GEODE_IS_WINDOWS) || defined(GEODE_IS_ANDROID)
                 cocos2d::CCPoint p = cocos2d::ccpForAngle(forceMod);
 #else
                 cocos2d::CCPoint p = CCPoint{

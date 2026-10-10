@@ -14,7 +14,7 @@
 #endif
 
 using namespace geode::prelude;
-#if defined(GEODE_IS_WINDOWS) || defined(GEODE_IS_MACOS)
+#if defined(GEODE_IS_WINDOWS) || defined(GEODE_IS_ANDROID64) || defined(GEODE_IS_MACOS)
 namespace {
     thread_local unsigned drawing_wave = 0;
     thread_local float wave_count = 1.f;
@@ -26,7 +26,7 @@ namespace {
     GLint* color_uniform = nullptr;
     float* draw_color = nullptr;
     echo::circles::Trig native_cosine = nullptr, native_sine = nullptr;
-#if defined(GEODE_IS_ARM_MAC)
+#if defined(GEODE_IS_ANDROID64) || defined(GEODE_IS_ARM_MAC)
     constexpr bool fused = true;
 #else
     constexpr bool fused = false;

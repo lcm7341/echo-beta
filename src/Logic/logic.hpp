@@ -436,7 +436,7 @@ struct Session {
 	std::vector<TilePlace> tile_places;
 	int ui_style = 0;
 	float floating_x = -1.f, floating_y = -1.f;
-	float frame_bar_x = -1.f, frame_bar_y = -1.f;
+	float frame_bar_x = -1.f, frame_bar_y = -1.f; // where the mobile frame advance bar sits, -1 = top middle
 	bool floating_hide_in_lvl = true;
 	float floating_size = 38.f;
 	float menu_scale = 1.f, menu_scale_undocked = 1.f, menu_anim_speed = 1.f;

@@ -1,3 +1,4 @@
+// small speedups patched into gd on windows & android. the bytes, offsets & how to find them again are in game_patches.hpp
 #include <Geode/Geode.hpp>
 #include "game_patches.hpp"
 #include "Rendering/circle_signatures.hpp"
@@ -24,6 +25,16 @@ namespace {
 
 $execute {
     using namespace echo::patches;
+#ifdef GEODE_IS_ANDROID64
+    // fuck it we ball
+    if (matches(point_address, point_original)) {
+        (void)install(point_address, point_replacement);
+    }
+    if (matches(rings_address, rings_original)) {
+        // +4 because only the cbz changes
+        (void)install(rings_address + 4, rings_replacement);
+    }
+#endif
 #ifdef GEODE_IS_WINDOWS
     // check the lookup too, if someone hooked it then once isnt the same as twice
     if (matches(event_lookup_signature_address, event_lookup_original) &&

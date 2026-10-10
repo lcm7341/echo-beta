@@ -18,7 +18,7 @@
 #include <vector>
 
 using namespace geode::prelude;
-#if defined(GEODE_IS_WINDOWS) || defined(GEODE_IS_MACOS)
+#if defined(GEODE_IS_WINDOWS) || defined(GEODE_IS_ANDROID64) || defined(GEODE_IS_MACOS)
 namespace {
     bool compact_animation = false;
 
@@ -37,7 +37,7 @@ namespace {
     }
 
     echo::waves::Power native_power = nullptr;
-#if defined(GEODE_IS_ARM_MAC)
+#if defined(GEODE_IS_ANDROID64) || defined(GEODE_IS_ARM_MAC)
     constexpr bool fused_tween = true;
 #else
     constexpr bool fused_tween = false;

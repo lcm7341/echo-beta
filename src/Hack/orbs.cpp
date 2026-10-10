@@ -43,7 +43,7 @@ namespace {
     bool held_before_p1 = false, held_before_p2 = false, swift_p1 = false, swift_p2 = false;
 
     bool live(void const* pointer) {
-        auto bits = reinterpret_cast<uintptr_t>(pointer) & 0x00ffffffffffffffull;
+        auto bits = reinterpret_cast<uintptr_t>(pointer) & 0x00ffffffffffffffull; // drop the tag android puts in the top byte
         return bits >= 0x10000u && bits < 0x0000800000000000ull;                  // probably data
     }
 

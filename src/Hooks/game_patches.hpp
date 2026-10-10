@@ -29,6 +29,8 @@
 //    inlined (mac processCommands, getModifiedDelta): no call, look at the calls around it
 
 namespace echo::patches {
+	// 2.2081 ONLY. checked on the windows exe & the arm64 lib off my phone
+	// android: rob calls a whole other function just to copy a CCPoint
 	inline constexpr uintptr_t point_address = 0xace648;
 	inline constexpr std::array<uint32_t, 11> point_original = {
 		0xa9be7bfd, 0x910003fd, 0xbd400020, 0xf9000bf3, 0xbd400421,
@@ -38,6 +40,7 @@ namespace echo::patches {
 	inline constexpr std::array<uint32_t, 5> point_replacement = {
 		0xbd400020, 0xbd400421, 0xbd000000, 0xbd000401, 0xd65f03c0
 	};
+	// android: the set clear that runs even when the set is empty
 	inline constexpr uintptr_t rings_address = 0x623e2c;
 	inline constexpr std::array<uint32_t, 13> rings_original = {
 		0xf9451680, 0xb40000a0, 0xf9400013, 0x941aa02e, 0xaa1303e0,

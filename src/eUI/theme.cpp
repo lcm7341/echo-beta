@@ -971,6 +971,13 @@ bool Logic::dispatch_setting_key(std::string_view key, bool down) {
 }
 
 void GUI::offer_rebind(char const* setting_id, char const* tip) {
+#ifdef GEODE_IS_MOBILE
+    (void)setting_id;
+    if (tip && ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("%s", tip);
+    }
+    return;
+#endif
     if (ImGui::IsItemHovered()) {
         auto cur = GUI::get().stored_bind(setting_id);
         if (tip)
@@ -1240,8 +1247,10 @@ void GUI::open_merge_picker() {
 
 namespace {
     void focus_search_on_open() {
+#ifndef GEODE_IS_MOBILE
         if (ImGui::IsWindowAppearing())
             ImGui::SetKeyboardFocusHere();
+#endif
     }
 }
 

@@ -1514,6 +1514,9 @@ void Logic::restore_holds(PlayLayer* play) {
         auto live_side = [&](bool icon2, bool sticky, bool& key, bool& physical, bool down) {
             if (logic.suppress_auto_hold)
                 return false;
+#ifdef GEODE_IS_MOBILE
+            down = down || physical;
+#endif
             if (!down) {
                 key = false;
                 physical = false;

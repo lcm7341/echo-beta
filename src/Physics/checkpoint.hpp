@@ -8,6 +8,11 @@
 #include <vector>
 
 struct SavedPlayerCheckpoint {
+#ifdef GEODE_IS_ANDROID
+    SavedPlayerCheckpoint() = default;
+    SavedPlayerCheckpoint(SavedPlayerCheckpoint const&) = default;
+    SavedPlayerCheckpoint& operator=(SavedPlayerCheckpoint const&) = default;
+#endif
     void apply(PlayerObject* p);
     static SavedPlayerCheckpoint create(PlayerObject* p);
 

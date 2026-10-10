@@ -355,6 +355,14 @@ namespace {
             shown = preset.name;
             mine = i;
         }
+#ifdef GEODE_IS_MOBILE
+        bool forced = false;
+        ImGui::BeginDisabled(forced);
+        if (toggle("Match Screen Shape", logic.render_screen_shape))
+            save();
+        ImGui::EndDisabled();
+        tip(forced ? "iOS always renders at the screen's shape: the game cannot draw at another." : "On: the video is as wide as your screen's shape at the chosen height (1080 high on a phone comes out wider than 1920).\nOff: the size as chosen.");
+#endif
         bool shaped = logic.render_uses_screen_shape();
         auto sized = [&](std::string const& name, int width, int height) {
             if (!shaped)

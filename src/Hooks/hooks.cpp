@@ -739,7 +739,7 @@ int vanilla_physics_steps(float dt, float timeWarp);
 
 #ifndef GEODE_IS_WINDOWS
 bool plausible_object(GameObject const* object) {
-    auto bits = reinterpret_cast<uintptr_t>(object) & 0x00ffffffffffffffull;
+    auto bits = reinterpret_cast<uintptr_t>(object) & 0x00ffffffffffffffull;   // drop the tag android puts in the top byte
     return bits >= 0x10000 && bits < 0x0000800000000000ull && (bits & 7) == 0; // looks like a real pointer
 }
 
@@ -1360,6 +1360,11 @@ class $modify(EchoGameLayer, GJBaseGameLayer) {
             Logic::get().play_input(this, icon2, down, button);
         }
         else {
+#ifdef GEODE_IS_ANDROID64
+            // android has the same list, in isButtonAllowed (0x88370c in the arm64 lib off my phone)
+            if (value.applying_playback || orb_swift)
+                reinterpret_cast<gd::unordered_set<int>*>(reinterpret_cast<std::uint8_t*>(this) + 0x970)->clear(); // gd:: bc the game is NOT built w/ my stl
+#endif
             auto* manager = GameManager::get();
             if (flips && manager)
                 manager->setGameVariable("0010", false);
@@ -2221,6 +2226,60 @@ int vanilla_physics_steps(float dt, float timeWarp) {
     return std::max(steps, 1);
 }
 
+#ifdef GEODE_IS_ANDROID64
+// android version of the step patch, checked on the arm64 lib off my phone
+// only the count math changes, timewarp stays in s1 & the 3 delta divisions at 0x89da30 still run
+void install_android_physics_step_patch() {
+    constexpr std::array<uint32_t, 10> original = {
+        0x1e62100a, 0x1e6a096a, 0x1e624140, 0x1e264009, 0x1e2e1000,
+        0x1e202130, 0x5400758d, 0x1e380120, 0x1e620000, 0xb900e3a0
+    };
+    auto* address = reinterpret_cast<void*>(geode::base::get() + 0x89d9f8); // in GJBaseGameLayer::update
+    if (std::memcmp(address, original.data(), sizeof(original)) != 0) {
+        return;
+    }
+    // ldr x0, <ptr>; ldr w0, [x0]; cmp w0, #1; csinc w0, w0, wzr, ge; scvtf d0, w0; str w0, [x29, #0xe0]; b 0x89da20; nop; <ptr>
+    std::array<uint32_t, 10> words = {
+        0x58000100, 0xb9400000, 0x7100041f, 0x1a9fa400,
+        0x1e620000, 0xb900e3a0, 0x14000004, 0xd503201f, 0, 0
+    };
+    auto* amt = &Logic::get().steps_this_tick;
+    static_assert(sizeof(amt) == 8);
+    std::memcpy(words.data() + 8, &amt, sizeof(amt));
+    std::vector<uint8_t> bytes(sizeof(words));
+    std::memcpy(bytes.data(), words.data(), sizeof(words));
+    if (!Mod::get()->patch(address, bytes)) {
+        return;
+    }
+    step_patched = true;
+}
+
+// silicate's windows patches (GPL-3.0, bottom of this file) found again in the arm64 android lib
+// each checks the original instructions first & skips w/ a warning if they dont match
+void install_android_silicate_patches() {
+    constexpr uint32_t nop = 0xd503201f; // arm64 nop
+    auto patch = [](uintptr_t offset, std::initializer_list<uint32_t> original, std::initializer_list<uint32_t> replacement, char const* name) {
+        auto* address = reinterpret_cast<void*>(geode::base::get() + offset);
+        if (std::memcmp(address, original.begin(), original.size() * 4) != 0) {
+            return;
+        }
+        std::vector<uint8_t> bytes(replacement.size() * 4);
+        std::memcpy(bytes.data(), replacement.begin(), bytes.size());
+        (void)Mod::get()->patch(address, bytes);
+    };
+    // resetLevelVariables keeps both players held buttons (no releaseAllButtons on either)
+    patch(0x88abe0, { 0x97f6c0d7 }, { nop }, "GJBaseGameLayer::resetLevelVariables P1");
+    patch(0x88abe8, { 0x97f6c0d5 }, { nop }, "GJBaseGameLayer::resetLevelVariables P2");
+    // the restart key leaves the ui's touches and button state alone
+    patch(0x5c6f5c, { 0xb9024a61, 0xb9024e61, 0x97fffefa }, { nop, nop, nop }, "UILayer::handleKeypress");
+    // resetLevel skips the GameManager check, removeReleasedButtons & the held check. always queues the jump
+    // fmov d0, xzr (d0 is queueButton's timestamp); b 0x5e571c
+    patch(0x5e56e4, { 0x94002767, 0x394ccc00 }, { 0x9e6703e0, 0x1400000d }, "PlayLayer::resetLevel");
+    // resumeAndRestart keeps p1's held buttons
+    patch(0x5d27e0, { 0x9401a1d7 }, { nop }, "PlayLayer::resumeAndRestart");
+}
+#endif
+
 void apply_lvl_seed() {
     auto* play = PlayLayer::get();
     if (!play)
@@ -2272,7 +2331,7 @@ class $modify(EchoSeedToolbox, GameToolbox) {
 };
 #endif
 
-#if defined(GEODE_IS_MACOS)
+#if defined(GEODE_IS_ANDROID) || defined(GEODE_IS_MACOS)
 class $modify(EchoPortalTarget, GJBaseGameLayer) {
     TeleportPortalObject* getPortalTarget(TeleportPortalObject* portal) {
         auto* picked = GJBaseGameLayer::getPortalTarget(portal);
@@ -2339,11 +2398,16 @@ void echo_guard_step_site() {
 #endif
 
 $execute {
+#ifdef GEODE_IS_ANDROID64
+    install_android_physics_step_patch();
+    install_android_silicate_patches();
+#endif
 #if defined(GEODE_IS_WINDOWS)
     install_physics_step_patch();
     echo_raw_hooks(true);
 
     // skidded straight from silicate (GPL-3.0), these offsets + bytes are their findings for 2.2081
+    // same 4 as the android ones above
     auto patch = [](uintptr_t offset, std::vector<uint8_t> bytes, char const* name) {
         (void)Mod::get()->patch(reinterpret_cast<void*>(geode::base::get() + offset), bytes);
     };

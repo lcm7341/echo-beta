@@ -2,7 +2,8 @@
 	"geode": "5.8.2",
 	"gd": {
 		"win": "2.2081",
-		"mac": "2.2081"
+		"mac": "2.2081",
+		"android": "2.2081"
 	},
 	"id": "decks.echo",
 	"name": "Echo",
@@ -22,6 +23,13 @@
 		"cheat",
 		"offline"
 	],
+	"dependencies": {
+		"eclipse.ffmpeg-api": {
+			"version": ">=v2.0.0",
+			"required": false,
+			"platforms": ["android"]
+		}
+	},
 	"resources": {
 		"files": [
 			"resources/*.ttf",

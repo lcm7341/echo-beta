@@ -121,6 +121,7 @@ void Logic::boot() {
             fs::create_directories(packs / folder, error);
         }
     }
+#ifndef GEODE_IS_MOBILE
     auto migrate_key = [](char const* id, enumKeyCodes from, KeyboardModifier from_mods, enumKeyCodes to, KeyboardModifier to_mods) {
         auto cur = Mod::get()->getSettingValue<std::vector<Keybind>>(id);
         if (cur.size() != 1 || cur[0].key != from || cur[0].modifiers != from_mods)
@@ -132,6 +133,7 @@ void Logic::boot() {
     migrate_key("open-menu", KEY_LeftMenu, KeyboardModifier::None, KEY_LeftMenu, left_alt);
     migrate_key("toggle-advance", KEY_F6, KeyboardModifier::None, KEY_V, KeyboardModifier::None);
     migrate_key("step-frame", KEY_F7, KeyboardModifier::None, KEY_C, KeyboardModifier::None);
+#endif
     if (std::fabs(Logic::read_float("macro-fps", 240.f) - 60.f) < 0.01f)
         Logic::write_float("macro-fps", 240.f);
     Logic::get().pull_settings();
@@ -459,8 +461,10 @@ void Logic::pull_settings() {
                 logic.traj_width = static_cast<float>(number.unwrap());
             if (!had_seconds && logic.traj_width >= 1.4f)
                 logic.traj_width = 0.5f;
+#ifndef GEODE_IS_MOBILE
             if (auto flag = json["docked_menu"].asBool())
                 logic.docked_menu = flag.unwrap();
+#endif
             if (auto number = json["floating_x"].asDouble())
                 logic.floating_x = static_cast<float>(number.unwrap());
             if (auto number = json["floating_y"].asDouble())
