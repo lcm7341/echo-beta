@@ -2344,6 +2344,8 @@ class $modify(EchoPortalTarget, GJBaseGameLayer) {
         auto& roll = Logic::get().teleport_random;
         roll = static_cast<uint64_t>(static_cast<int>((214013ull * roll + 2531011ull) >> 16) & 0x7FFF);
         float at = static_cast<float>(roll) / 32767.f;
+        if (at == 1.f)
+            at = 0.f; // why
         return static_cast<TeleportPortalObject*>(group->objectAtIndex(static_cast<int>(at * amt)));
     }
 };
