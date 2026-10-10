@@ -522,3 +522,459 @@ matjson::Value GUI::convert_old_theme(matjson::Value const& old, std::string con
     }
     return json;
 }
+
+void GUI::import_theme(fs::path const& path) {
+    std::ifstream file(path);
+    auto parsed = matjson::Value::parse(file);
+    if (!parsed)
+        return;
+    auto json = parsed.unwrap();
+    if (!json["colors"].isArray() && json.contains("FramePaddingX")) {
+        json = GUI::get().convert_old_theme(json, geode::utils::string::pathToString(path.stem()));
+    }
+    GUI::get().apply_theme_json(json);
+}
+
+void GUI::apply_theme_json(matjson::Value const& json) {
+    GUI::get().apply_style_json(json);
+    GUI::get().export_theme(GUI::get().theme_path("current"));
+    Logic::get().save_settings_file();
+}
+
+void GUI::ui_editor() {
+    log::debug("ui editor");
+    auto& logic = Logic::get();
+    auto& style = ImGui::GetStyle();
+    auto& sizes = GUI::get().base_style;
+    float theme_child_h = ImGui::GetFontSize() * 18.f;
+    float filter_offset = ImGui::GetFrameHeight() + ImGui::GetStyle().ItemSpacing.y;
+    float sizes_child_h = theme_child_h + filter_offset, theme_child_w = ImGui::GetFontSize() * 26.f;
+    float theme_item_w = ImGui::GetFontSize() * 14.f;
+
+    if (ImGui::BeginTabBar("##echo-theme")) {
+        if (ImGui::BeginTabItem("Sizes")) {
+            ImGui::BeginChild("##echo-sizes", ImVec2(theme_child_w, sizes_child_h), ImGuiChildFlags_Borders);
+            ImGui::PushItemWidth(theme_item_w);
+            ImGui::TextUnformatted("Main");
+            edit_style_vec("WindowPadding", sizes.WindowPadding, 0.f, 20.f);
+            edit_style_vec("FramePadding", sizes.FramePadding, 0.f, 20.f);
+            edit_style_vec("CellPadding", sizes.CellPadding, 0.f, 20.f);
+            edit_style_vec("ItemSpacing", sizes.ItemSpacing, 0.f, 20.f);
+            edit_style_vec("ItemInnerSpacing", sizes.ItemInnerSpacing, 0.f, 20.f);
+            edit_style_vec("TouchExtraPadding", sizes.TouchExtraPadding, 0.f, 10.f);
+            edit_style_float("IndentSpacing", sizes.IndentSpacing, 0.f, 30.f);
+            edit_style_float("ScrollbarSize", sizes.ScrollbarSize, 1.f, 20.f);
+            edit_style_float("GrabMinSize", sizes.GrabMinSize, 1.f, 20.f);
+            ImGui::TextUnformatted("Borders");
+            edit_style_float("WindowBorderSize", sizes.WindowBorderSize, 0.f, 1.f);
+            edit_style_float("ChildBorderSize", sizes.ChildBorderSize, 0.f, 1.f);
+            edit_style_float("PopupBorderSize", sizes.PopupBorderSize, 0.f, 1.f);
+            edit_style_float("FrameBorderSize", sizes.FrameBorderSize, 0.f, 1.f);
+            edit_style_float("TabBorderSize", sizes.TabBorderSize, 0.f, 1.f);
+            ImGui::TextUnformatted("Rounding");
+            edit_style_float("WindowRounding", sizes.WindowRounding, 0.f, 12.f);
+            edit_style_float("ChildRounding", sizes.ChildRounding, 0.f, 12.f);
+            edit_style_float("FrameRounding", sizes.FrameRounding, 0.f, 12.f);
+            edit_style_float("PopupRounding", sizes.PopupRounding, 0.f, 12.f);
+            edit_style_float("ScrollbarRounding", sizes.ScrollbarRounding, 0.f, 12.f);
+            edit_style_float("GrabRounding", sizes.GrabRounding, 0.f, 12.f);
+            edit_style_float("TabRounding", sizes.TabRounding, 0.f, 12.f);
+            ImGui::TextUnformatted("Alignment");
+            eui::DragFloat2("WindowTitleAlign", &sizes.WindowTitleAlign.x, 0.01f, 0.f, 1.f, "%.2f");
+            GUI::get().note_style_edit();
+            int button_side = static_cast<int>(sizes.WindowMenuButtonPosition) + 1;
+            if (eui::Combo("WindowBtnPos", &button_side, "None\0Left\0Right\0")) {
+                sizes.WindowMenuButtonPosition = static_cast<ImGuiDir>(button_side - 1);
+                GUI::get().export_theme(GUI::get().theme_path("current"));
+            }
+            int color_side = static_cast<int>(sizes.ColorButtonPosition);
+            if (eui::Combo("ColorButtonPosition", &color_side, "Left\0Right\0")) {
+                sizes.ColorButtonPosition = static_cast<ImGuiDir>(color_side);
+                GUI::get().export_theme(GUI::get().theme_path("current"));
+            }
+            eui::DragFloat2("ButtonTextAlign", &sizes.ButtonTextAlign.x, 0.01f, 0.f, 1.f, "%.2f");
+            ImGui::SameLine();
+            GUI::get().help_marker("Alignment applies when a button is larger than its text.");
+            GUI::get().note_style_edit();
+            eui::DragFloat2("SelectableTextAlign", &sizes.SelectableTextAlign.x, 0.01f, 0.f, 1.f, "%.2f");
+            GUI::get().note_style_edit();
+            ImGui::TextUnformatted("Safe Area Padding");
+            ImGui::SameLine();
+            GUI::get().help_marker("Adjust if the window edges sit off the screen.");
+            eui::SliderFloat2("SafePadding", &sizes.DisplaySafeAreaPadding.x, 0.f, 30.f, "%.0f");
+            GUI::get().note_style_edit();
+            ImGui::PopItemWidth();
+            ImGui::EndChild();
+            ImGui::EndTabItem();
+        }
+        if (ImGui::BeginTabItem("Colors")) {
+            static ImGuiTextFilter filter;
+            filter.Draw("Filter colors", GUI::get().px(220.f));
+            ImGui::BeginChild("##echo-colors", ImVec2(theme_child_w, theme_child_h), ImGuiChildFlags_Borders);
+            if (filter.PassFilter("Player 1 In Editor")) {
+                GUI::get().color_row("Player 1 In Editor", logic.editor_p1, 998);
+            }
+            if (filter.PassFilter("Player 2 In Editor")) {
+                GUI::get().color_row("Player 2 In Editor", logic.editor_p2, 999);
+            }
+            if (filter.PassFilter("Player 1 In Editor (Selected)")) {
+                GUI::get().color_row("Player 1 In Editor (Selected)", logic.editor_sel_p1, 997);
+            }
+            if (filter.PassFilter("Player 2 In Editor (Selected)")) {
+                GUI::get().color_row("Player 2 In Editor (Selected)", logic.editor_sel_p2, 996);
+            }
+            for (int i = 0; i < ImGuiCol_COUNT; ++i) {
+                char const* name = ImGui::GetStyleColorName(i);
+                if (!filter.PassFilter(name)) {
+                    continue;
+                }
+                ImGui::PushID(i);
+                if (ImGui::ColorEdit4("##style-color", &style.Colors[i].x, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaBar)) {
+                    GUI::get().export_theme(GUI::get().theme_path("current"));
+                }
+                ImGui::SameLine();
+                ImGui::TextUnformatted(name);
+                ImGui::PopID();
+            }
+            ImGui::EndChild();
+            ImGui::EndTabItem();
+        }
+        ImGui::EndTabBar();
+    }
+}
+
+BindAction const LISTED[] = {
+    { "open-menu", "Open menu" },
+    { "toggle-record", "Toggle recording" },
+    { "toggle-play", "Toggle playback" },
+    { "toggle-advance", "Toggle frame advance" },
+    { "step-frame", "Step one frame" },
+    { "step-back", "Step back one frame" },
+    { "find-best-frame", "Find best frame" },
+    { "key-click-both", "Click both players" },
+    { "key-swap", "Swap player input" },
+    { "key-shakes", "Disable shake" },
+    { "key-layout", "Layout mode" },
+    { "key-hitboxes", "Show hitboxes" },
+    { "key-trajectory", "Show trajectory" },
+    { "key-autoclick", "Autoclicker" },
+    { "key-no-overwrite", "No overwrite" },
+    { "key-ignore", "Ignore actions" },
+    { "key-show-recording", "Show recording label" },
+    { "key-show-cps", "Show CPS" },
+    { "key-show-frame", "Show frame" },
+    { "key-show-time", "Show time" },
+    { "key-show-percent", "Show percent" },
+    { "key-save", "Save replay" },
+    { "key-load", "Load replay" },
+    { "key-reset", "Reset level" },
+    { "key-speedhack", "Speedhack" },
+    { "key-click-dash-orbs", "Click dash orbs" },
+    { "key-click-black-orbs", "Click black orbs" },
+    { "key-pad-black-orb", "Auto black orb on pad" },
+    { "key-pad-blue-orb", "Auto blue orb on pad" },
+    { "key-pause-before-kill", "Prevent death" },
+};
+
+std::span<BindAction const> GUI::bind_actions() {
+    return LISTED;
+}
+
+std::optional<enumKeyCodes> GUI::cocos_key(ImGuiKey key) {
+    using Code = enumKeyCodes;
+    if (key >= ImGuiKey_A && key <= ImGuiKey_Z) {
+        return static_cast<Code>(KEY_A + (key - ImGuiKey_A));
+    }
+    if (key >= ImGuiKey_0 && key <= ImGuiKey_9) {
+        return static_cast<Code>(KEY_Zero + (key - ImGuiKey_0));
+    }
+    if (key >= ImGuiKey_F1 && key <= ImGuiKey_F24) {
+        return static_cast<Code>(KEY_F1 + (key - ImGuiKey_F1));
+    }
+    if (key >= ImGuiKey_Keypad0 && key <= ImGuiKey_Keypad9) {
+        return static_cast<Code>(KEY_NumPad0 + (key - ImGuiKey_Keypad0));
+    }
+    switch (key) {
+    case ImGuiKey_Tab:
+        return KEY_Tab;
+    case ImGuiKey_LeftArrow:
+        return KEY_Left;
+    case ImGuiKey_RightArrow:
+        return KEY_Right;
+    case ImGuiKey_UpArrow:
+        return KEY_Up;
+    case ImGuiKey_DownArrow:
+        return KEY_Down;
+    case ImGuiKey_PageUp:
+        return KEY_PageUp;
+    case ImGuiKey_PageDown:
+        return KEY_PageDown;
+    case ImGuiKey_Home:
+        return KEY_Home;
+    case ImGuiKey_End:
+        return KEY_End;
+    case ImGuiKey_Insert:
+        return KEY_Insert;
+    case ImGuiKey_Delete:
+        return KEY_Delete;
+    case ImGuiKey_Backspace:
+        return KEY_Backspace;
+    case ImGuiKey_Space:
+        return KEY_Space;
+    case ImGuiKey_Enter:
+        return KEY_Enter;
+    case ImGuiKey_Escape:
+        return KEY_Escape;
+    case ImGuiKey_Apostrophe:
+        return KEY_OEM7;
+    case ImGuiKey_Comma:
+        return KEY_OEMComma;
+    case ImGuiKey_Minus:
+        return KEY_OEMMinus;
+    case ImGuiKey_Period:
+        return KEY_OEMPeriod;
+    case ImGuiKey_Slash:
+        return KEY_OEM2;
+    case ImGuiKey_Semicolon:
+        return KEY_OEM1;
+    case ImGuiKey_Equal:
+        return KEY_OEMPlus;
+    case ImGuiKey_LeftBracket:
+        return KEY_OEM4;
+    case ImGuiKey_Backslash:
+        return KEY_OEM5;
+    case ImGuiKey_RightBracket:
+        return KEY_OEM6;
+    case ImGuiKey_GraveAccent:
+        return KEY_OEM3;
+    case ImGuiKey_CapsLock:
+        return KEY_CapsLock;
+    case ImGuiKey_LeftCtrl:
+        return KEY_LeftControl;
+    case ImGuiKey_RightCtrl:
+        return KEY_RightControl;
+    case ImGuiKey_LeftShift:
+        return KEY_LeftShift;
+    case ImGuiKey_RightShift:
+        return KEY_RightShift;
+    case ImGuiKey_LeftAlt:
+        return KEY_LeftMenu;
+    case ImGuiKey_RightAlt:
+        return KEY_RightMenu;
+    case ImGuiKey_LeftSuper:
+        return KEY_LeftWindowsKey;
+    case ImGuiKey_RightSuper:
+        return KEY_RightWindowsKey;
+    case ImGuiKey_Menu:
+        return KEY_ApplicationsKey;
+    case ImGuiKey_ScrollLock:
+        return KEY_ScrollLock;
+    case ImGuiKey_NumLock:
+        return KEY_Numlock;
+    case ImGuiKey_PrintScreen:
+        return KEY_PrintScreen;
+    case ImGuiKey_Pause:
+        return KEY_Pause;
+    case ImGuiKey_KeypadDecimal:
+        return KEY_Decimal;
+    case ImGuiKey_KeypadDivide:
+        return KEY_Divide;
+    case ImGuiKey_KeypadMultiply:
+        return KEY_Multiply;
+    case ImGuiKey_KeypadSubtract:
+        return KEY_Subtract;
+    case ImGuiKey_KeypadAdd:
+        return KEY_Add;
+    case ImGuiKey_KeypadEnter:
+        return KEY_Enter;
+    default:
+        return std::nullopt;
+    }
+}
+
+bool GUI::is_modifier(ImGuiKey key) {
+    switch (key) {
+    case ImGuiKey_LeftCtrl:
+    case ImGuiKey_RightCtrl:
+    case ImGuiKey_LeftShift:
+    case ImGuiKey_RightShift:
+    case ImGuiKey_LeftAlt:
+    case ImGuiKey_RightAlt:
+    case ImGuiKey_LeftSuper:
+    case ImGuiKey_RightSuper:
+    case ImGuiKey_ReservedForModCtrl:
+    case ImGuiKey_ReservedForModShift:
+    case ImGuiKey_ReservedForModAlt:
+    case ImGuiKey_ReservedForModSuper:
+        return true;
+    default:
+        return false;
+    }
+}
+
+std::string GUI::key_name(enumKeyCodes key) {
+    // todo
+    return {};
+}
+
+KeyboardModifier GUI::modifier_for_key(enumKeyCodes key) {
+    // TODO
+    return {};
+}
+
+std::string GUI::stored_bind(char const* setting) {
+    // port this
+    return {};
+}
+
+void GUI::store_bind(char const* setting, enumKeyCodes key, bool ctrl, bool shift, bool alt) {
+    // port this
+}
+
+void GUI::flip_setting(bool& field, char const* setting) {
+    field = !field;
+    Logic::write_bool(setting, field);
+    Logic::get().save_settings_file();
+}
+
+static void flip_utility(bool& field) {
+    field = !field;
+    Logic::get().reset_traj();
+    Logic::get().save_settings_file();
+}
+
+bool Logic::dispatch_setting_key(std::string_view key, bool down) {
+    // TODO
+    return {};
+}
+
+void GUI::offer_rebind(char const* setting_id, char const* tip) {
+    // TODO
+}
+
+char const* const GUI::BIND_POPUP = "Confirm Keybind###Confirm Keybind";
+
+void GUI::show_keybind_prompt(bool nested) {
+    // todo
+}
+
+#ifdef GEODE_IS_MACOS
+#endif
+
+$execute {
+    static ListenerHandle menu_drag = MouseMoveEvent().listen([](int32_t, int32_t) {
+        auto& imgui = ImGuiCocos::get();
+        if (!imgui.isInitialized() || !imgui.isVisible())
+            return false;
+        return ImGui::GetIO().WantCaptureMouse || ImGui::IsAnyItemActive();
+    });
+#ifdef GEODE_IS_MACOS
+    static ListenerHandle wheel = ScrollWheelEvent().listen([](double x, double y) {
+        auto& imgui = ImGuiCocos::get();
+        if (!imgui.isInitialized() || !imgui.isVisible())
+            return false;
+        auto& io = ImGui::GetIO();
+        if (!io.WantCaptureMouse)
+            return false;
+        double scale = echo_scroll_is_precise() ? .1 : 1.;
+        io.AddMouseSourceEvent(ImGuiMouseSource_Mouse);
+        io.AddMouseWheelEvent((float)(x * scale), (float)(y * scale));
+        return true;
+    });
+#endif
+    static ListenerHandle right_click = MouseInputEvent().listen([](MouseInputData& data) {
+        if (data.button != MouseInputData::Button::Right)
+            return false;
+        auto& imgui = ImGuiCocos::get();
+        if (!imgui.isInitialized() || !imgui.isVisible())
+            return false;
+        ImGui::GetIO().AddMouseButtonEvent(1, data.action == MouseInputData::Action::Press);
+        return ImGui::GetIO().WantCaptureMouse;
+    });
+}
+
+PickerState& GUI::picker() {
+    return GUI::get().replay_picker;
+}
+
+std::string GUI::lower_copy(std::string text) {
+    // todo
+    return {};
+}
+
+ShownReplay GUI::shown_replay(fs::path const& path) {
+    // TODO
+    return {};
+}
+
+void GUI::refresh_files() {
+    // todo
+}
+
+void GUI::open_macro_picker(bool sequence, int amount) {
+    // TODO
+}
+
+void GUI::open_merge_picker() {
+    GUI::get().open_macro_picker(false, 1);
+    GUI::get().picker().merge = true;
+}
+
+namespace {
+    void focus_search_on_open() {
+        if (ImGui::IsWindowAppearing())
+            ImGui::SetKeyboardFocusHere();
+    }
+}
+
+void GUI::draw_macro_picker() {
+    // port this
+}
+
+ThemePicker& GUI::themes() {
+    return GUI::get().theme_picker;
+}
+
+void GUI::refresh_themes() {
+    // later
+}
+
+void GUI::open_theme_picker() {
+    // later
+}
+
+void GUI::draw_theme_picker() {
+    // todo
+}
+
+ClickpackPicker& GUI::clickpacks() {
+    return GUI::get().clickpack_picker;
+}
+
+void GUI::refresh_clickpacks() {
+    // TODO
+}
+
+void GUI::open_clickpack_picker() {
+    // TODO
+}
+
+void GUI::draw_clickpack_picker() {
+    // TODO
+}
+
+RenderPicker& GUI::renders() {
+    return GUI::get().render_picker;
+}
+
+void GUI::refresh_renders() {
+    // todo
+}
+
+void GUI::open_render_picker() {
+    // TODO
+}
+
+void GUI::draw_render_picker() {
+    // todo
+}
