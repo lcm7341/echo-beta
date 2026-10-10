@@ -83,6 +83,8 @@ namespace {
     SetDictionary s_setDictionary = nullptr;
     FreeDictionary s_freeDictionary = nullptr;
     thread_local char const* s_echoPreset = nullptr;
+    // api forgets a flag mp4 needs :/
+    thread_local bool s_echoGlobalHeader = false;
 
     int echo_open_codec(AVCodecContext* context, AVCodec const* codec, AVDictionary** options) {
         AVDictionary* local = nullptr;
