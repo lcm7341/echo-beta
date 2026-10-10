@@ -251,6 +251,9 @@ namespace {
             for (auto const& [button, held] : body->m_holdingButtons)
                 if (button >= 0 && button < 4)
                     out.holding[static_cast<std::size_t>(button)] = held ? 1 : 0;
+            // 1 by 1 bc android sets dont do assign :/
+            for (int ring : body->m_touchedRings)
+                out.touched_rings.push_back(ring);
             for (int ring : body->m_ringRelatedSet)
                 out.ring_related.push_back(ring);
             return out;
