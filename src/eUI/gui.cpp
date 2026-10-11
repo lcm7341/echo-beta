@@ -590,3 +590,157 @@ void GUI::draw_window() {
     GUI::get().draw_render_picker();
     ImGui::End();
 }
+
+$on_mod(Loaded) {
+    ImGuiCocos::get().setup([] {
+                         GUI::get().load_menu_font();
+                         eui::apply_echo_theme();
+                         GUI::get().apply_saved_theme();
+                         ImGuiCocos::get().setVisible(false);
+                     })
+        .draw([] {
+            GUI::get().touch_scroll();
+            GUI::get().draw_window();
+            eui::WindowRims(GUI::get().bar_only ? 1.f : GUI::get().smoothstep01(GUI::get().motion.open));
+        });
+}
+
+void GUI::draw_status(bool rule) {
+    auto& logic = Logic::get();
+    ImVec4 tint = ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled);
+    if (logic.is_recording())
+        tint = ImVec4(1.f, .36f, .44f, 1.f);
+    else if (logic.is_playing())
+        tint = ImGui::GetStyleColorVec4(ImGuiCol_CheckMark);
+    if (rule)
+        eui::Separator();
+    else
+        ImGui::AlignTextToFramePadding();
+    eui::StatusDot(tint);
+    ImGui::SameLine(0.f, ImGui::GetStyle().ItemInnerSpacing.x);
+    ImGui::TextUnformatted(logic.state_name(logic.state));
+    auto note = [](std::string const& text) {
+        ImGui::SameLine(0.f, ImGui::GetFontSize() * .9f);
+        ImGui::TextDisabled("%s", text.c_str());
+    };
+    if (auto* play = PlayLayer::get()) {
+        note(fmt::format("Frame {}", logic.get_frame(play) + 1));
+    }
+    note(fmt::format("{} inputs", logic.inputs.size()));
+    note(fmt::format("{:g} TPS", logic.fps));
+    note(fmt::format("{:g}x speed", logic.speedhack));
+    if (logic.frame_advance) {
+        ImGui::SameLine(0.f, ImGui::GetFontSize() * .9f);
+        eui::StatusDot(ImGui::GetStyleColorVec4(ImGuiCol_CheckMark));
+        ImGui::SameLine(0.f, ImGui::GetStyle().ItemInnerSpacing.x);
+        ImGui::TextUnformatted("Frame Advance");
+    }
+}
+
+void GUI::sync_menu_scale() {
+    log::debug("sync menu scale");
+    auto& logic = Logic::get();
+    auto& gui = GUI::get();
+    gui.scale_cap = 3.f;
+    if (logic.docked_menu && gui.dock_unit.x > 1.f) {
+        ImVec2 display = ImGui::GetIO().DisplaySize;
+        float fits = display.x / gui.dock_unit.x;
+        if (gui.dock_least_tall > 1.f) {
+            fits = std::min(fits, display.y / gui.dock_least_tall);
+        }
+        if (std::isfinite(fits) && fits > 0.f) {
+            gui.scale_cap = std::clamp(fits, 0.35f, 3.f);
+        }
+    }
+#ifdef GEODE_IS_MOBILE
+    gui.scale_cap = std::min(gui.scale_cap, 1.f);
+#endif
+    float& saved = logic.docked_menu ? logic.menu_scale : logic.menu_scale_undocked;
+    float scale = saved;
+    if (Logic::get().render_active())
+        scale = std::clamp(scale, 0.35f, gui.scale_cap);
+    else
+        scale = saved = std::clamp(saved, 0.35f, gui.scale_cap);
+    gui.at_scale_cap = logic.docked_menu && gui.scale_cap < 3.f && scale >= gui.scale_cap - .004f;
+    if (!GUI::get().has_base) {
+        GUI::get().base_style = ImGui::GetStyle();
+        GUI::get().base_style._MainScale = 1.f;
+        GUI::get().has_base = true;
+    }
+    float total = scale * touch_scale();
+    ImGuiStyle scaled = GUI::get().base_style;
+    scaled.ScaleAllSizes(total);
+    ImGuiStyle& live = ImGui::GetStyle();
+    for (int i = 0; i < ImGuiCol_COUNT; ++i)
+        scaled.Colors[i] = live.Colors[i];
+    scaled.Alpha = live.Alpha;
+    live = scaled;
+    ImGui::GetIO().FontGlobalScale = total;
+    GUI::get().applied_scale = scale;
+    apply_touch_style();
+}
+
+float GUI::touch_scale() {
+    // todo
+    return {};
+}
+
+void GUI::apply_touch_style() {
+    // TODO
+}
+
+void GUI::touch_scroll() {
+    // TODO
+}
+
+void GUI::restore_base_sizes() {
+    if (!GUI::get().has_base)
+        return;
+    ImGuiStyle& live = ImGui::GetStyle();
+    ImGuiStyle plain = GUI::get().base_style;
+    for (int i = 0; i < ImGuiCol_COUNT; ++i)
+        plain.Colors[i] = live.Colors[i];
+    plain.Alpha = live.Alpha;
+    live = plain;
+}
+
+void GUI::on_style_replaced() {
+    GUI::get().base_style = ImGui::GetStyle();
+    GUI::get().base_style._MainScale = 1.f;
+    GUI::get().has_base = true;
+    GUI::get().applied_scale = 1.f;
+    GUI::get().sync_menu_scale();
+}
+
+void GUI::release_stuck_mouse() {
+    auto& io = ImGui::GetIO();
+    for (int button = 0; button < 5; ++button)
+        io.AddMouseButtonEvent(button, false);
+}
+
+void GUI::open_popup() {
+    auto& imgui = ImGuiCocos::get();
+    if (!imgui.isInitialized())
+        return;
+    if (!imgui.isVisible() || GUI::get().bar_only) {
+        GUI::get().bar_only = false;
+        GUI::get().closing = false;
+        imgui.setVisible(true);
+        return;
+    }
+    if (GUI::get().closing) {
+        GUI::get().closing = false;
+        return;
+    }
+    GUI::get().begin_close();
+}
+
+void GUI::reveal_menu() {
+    auto& imgui = ImGuiCocos::get();
+    if (!imgui.isInitialized())
+        return;
+    GUI::get().bar_only = false;
+    if (!imgui.isVisible()) {
+        imgui.setVisible(true);
+    }
+}
