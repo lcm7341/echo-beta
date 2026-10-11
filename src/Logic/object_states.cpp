@@ -289,9 +289,8 @@ void Logic::step_object_states(PlayLayer* play) {
         return;
     int frame = logic.step_frame;
     auto& line = timeline();
-    if (!line.by_uid.empty() && !line.full && untracked_motion(play)) {
+    if (!line.by_uid.empty() && !line.full && untracked_motion(play))
         line.full = true;
-    }
     if (line.pending_frame >= 0) {
         int saved = std::exchange(line.pending_frame, -1);
         if (saved == frame && line.play == play && line.array == play->m_objects) {
@@ -321,7 +320,6 @@ void Logic::step_object_states(PlayLayer* play) {
 }
 
 void Logic::note_backstep_objects(PlayLayer* play) {
-    log::debug("note backstep objects");
     auto& logic = Logic::get();
     auto& line = timeline();
     if (line.play != play || line.array != play->m_objects) {
@@ -337,9 +335,8 @@ void Logic::note_backstep_objects(PlayLayer* play) {
         line.by_uid.assign(static_cast<std::size_t>(std::max(max_uid, 0)) + 1, 0);
         for (std::size_t i = 0; i < line.objects.size(); ++i) {
             auto uid = line.objects[i]->m_uniqueID;
-            if (uid >= 0) {
+            if (uid >= 0)
                 line.by_uid[static_cast<std::size_t>(uid)] = static_cast<std::uint32_t>(i + 1);
-            }
         }
         line.touched_stamp.assign(line.objects.size(), 0);
         line.touched.clear();
@@ -358,6 +355,7 @@ void Logic::note_backstep_objects(PlayLayer* play) {
     auto& undo = logic.backsteps[logic.backsteps.size() - 2].object_undo;
     undo.clear();
     line.scratch.resize(STRIDE);
+    // every 32nd save checks EVERYTHING
     bool verify = !line.full && !line.always_full && (++line.saves % 32) == 0;
     bool everything = line.full || line.always_full || verify;
     int missed = 0;
@@ -384,9 +382,8 @@ void Logic::note_backstep_objects(PlayLayer* play) {
         undo[at + sizeof(idx)] = mask;
         std::memcpy(slot, line.scratch.data(), STRIDE);
         if (verify && (mask & 0x1f) && line.touched_stamp[i] != line.epoch) {
-            if (missed++ < 4) {
+            if (missed++ < 4)
                 missed_sample += fmt::format(" id {} uid {} spans {:#x}", line.objects[i]->m_objectID, line.objects[i]->m_uniqueID, mask);
-            }
         }
     };
     if (everything) {
@@ -419,9 +416,8 @@ void Logic::pop_backstep() {
     auto& line = timeline();
     line.full = true;
     auto& undo = logic.backsteps.back().object_undo;
-    if (!line.baseline.empty()) {
+    if (!line.baseline.empty())
         rewind(line, undo);
-    }
     undo.clear();
     undo.shrink_to_fit();
 }
@@ -444,9 +440,8 @@ void Logic::drop_backstep(std::size_t index) {
             std::uint8_t mask = *in++;
             have.emplace_back(obj, mask);
             for (std::size_t s = 0; s < SPANS.size(); ++s)
-                if (mask & (1u << s)) {
+                if (mask & (1u << s))
                     in += SPANS[s].size;
-                }
         }
         std::ranges::sort(have);
         in = newer.data();
@@ -466,12 +461,10 @@ void Logic::drop_backstep(std::size_t index) {
                 older[at + sizeof(obj)] = add;
             }
             for (std::size_t s = 0; s < SPANS.size(); ++s) {
-                if (!(mask & (1u << s))) {
+                if (!(mask & (1u << s)))
                     continue;
-                }
-                if (add & (1u << s)) {
+                if (add & (1u << s))
                     older.insert(older.end(), in, in + SPANS[s].size);
-                }
                 in += SPANS[s].size;
             }
         }
@@ -487,11 +480,9 @@ void Logic::clear_backstep_objects() {
 }
 
 void Logic::load_backstep_objects(int frame) {
-    log::debug("load backstep objects");
     auto& line = timeline();
-    if (!line.baseline.empty()) {
+    if (!line.baseline.empty())
         line.pending_frame = frame;
-    }
     line.full = true;
 }
 
