@@ -19,9 +19,8 @@ std::vector<std::string_view> Logic::active_cheats() const {
     auto const& value = *this;
     std::vector<std::string_view> out;
     auto add = [&](bool on, std::string_view name) {
-        if (on) {
+        if (on)
             out.push_back(name);
-        }
     };
     add(value.noclip_p1 || value.noclip_p2, "Noclip");
     add(value.speedhack != 1.f, "Speedhack");
@@ -69,9 +68,8 @@ void Logic::update_safe_mode(PlayLayer* play) {
         return;
     for (auto name : active_cheats()) {
         g_cheated = true;
-        if (std::ranges::find(g_used, name) == g_used.end()) {
+        if (std::ranges::find(g_used, name) == g_used.end())
             g_used.push_back(name);
-        }
     }
 }
 
@@ -84,12 +82,10 @@ void Logic::hold_safe_mode_test_mode(PlayLayer* play) {
 }
 
 void Logic::end_safe_mode_attempt(PlayLayer* play) {
-    log::debug("end safe mode attempt");
     g_cheated = false;
     g_used.clear();
-    if (g_applied && play) {
+    if (g_applied && play)
         play->m_isTestMode = g_savedTestMode;
-    }
     g_applied = false;
 }
 
