@@ -1088,3 +1088,405 @@ void GUI::draw_macro() {
     eui::EndCard();
     eui::EndCardRow();
 }
+
+void GUI::clickbot() {
+    auto& logic = Logic::get();
+    static int player = 0;
+    eui::BeginCardRow("clickbot-0");
+    if (eui::BeginCard("Clickbot", card_width())) {
+        toggle("Enabled", logic.clickbot);
+        char const* players[] = { "Player 1", "Player 2" };
+        eui::Row("Settings for");
+        eui::Combo("##clickbot-player", &player, players, 2);
+        auto& pack = player == 0 ? logic.clickpack : logic.clickpack_p2;
+        auto& volume = player == 0 ? logic.clickbot_volume : logic.clickbot_volume_p2;
+        eui::Row("Volume");
+        GUI::get().drag_float_setting(player == 0 ? "##clickbot-volume-p1" : "##clickbot-volume-p2", volume, 0.25f, 0.f, 10.f, "%.2fx");
+
+        auto folders_root = Logic::get().save_root() / "clickpacks";
+        std::vector<std::string> folders;
+        std::error_code folder_error;
+        for (auto const& entry : fs::directory_iterator(folders_root, folder_error)) {
+            if (!entry.is_directory(folder_error)) {
+                continue;
+            }
+            try {
+                folders.push_back(entry.path().filename().string());
+            }
+            catch (...) {
+            }
+        }
+        std::string cur;
+        try {
+            cur = fs::path(pack).filename().string();
+        }
+        catch (...) {
+        }
+        if (cur.empty()) {
+            cur = pack;
+        }
+        eui::RowWith("Click pack", 5.f);
+        if (eui::BeginCombo(player == 0 ? "##clickpack-p1" : "##clickpack-p2", cur.empty() ? "None" : cur.c_str())) {
+            for (auto const& folder : folders) {
+                if (eui::Selectable(folder.c_str(), folder == cur)) {
+                    pack = (folders_root / folder).string();
+                    GUI::get().persist();
+                }
+            }
+            ImGui::EndCombo();
+        }
+        float browse_w = eui::RowRight(5.f);
+        if (eui::Button("Browse", ImVec2(browse_w, 0.f))) {
+            GUI::get().clickpacks().player = player;
+            GUI::get().open_clickpack_picker();
+        }
+    }
+    eui::EndCard();
+    if (eui::BeginCard(player == 0 ? "Click Types (Player 1)###click-types" : "Click Types (Player 2)###click-types", card_width())) {
+        ImGui::PushID(player);
+        if (player == 0)
+            draw_click_types(logic.p1_softs, logic.p1_soft_ms, logic.p1_hards, logic.p1_hard_seconds, logic.p1_micros, logic.p1_micro_ms);
+        else
+            draw_click_types(logic.p2_softs, logic.p2_soft_ms, logic.p2_hards, logic.p2_hard_seconds, logic.p2_micros, logic.p2_micro_ms);
+        ImGui::PopID();
+    }
+    eui::EndCard();
+    eui::EndCardRow();
+}
+
+void GUI::renderer() {
+    auto& logic = Logic::get();
+    bool open_save_preset = false;
+    auto blocker = GUI::get().render_blocker();
+    logic.ffmpeg_missing = !blocker.empty();
+    if (!blocker.empty()) {
+        if (eui::BeginCard("Render", card_width() * 2.f)) {
+            ImGui::PushTextWrapPos(0.f);
+            ImGui::TextUnformatted(blocker.c_str());
+            ImGui::PopTextWrapPos();
+#ifdef GEODE_IS_WINDOWS
+            if (eui::Button("Download FFmpeg")) {
+                geode::utils::web::openLinkInBrowser("https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip");
+            }
+            tip("Place ffmpeg.exe next to Geometry Dash once downloaded!");
+#endif
+#ifdef GEODE_IS_MACOS
+            if (eui::Button("Copy Install Command")) {
+                geode::utils::clipboard::write("brew install ffmpeg");
+                Logic::get().notify("Copied: brew install ffmpeg", true);
+            }
+            tip("Paste this in Terminal. Requires Homebrew (brew.sh).");
+#endif
+        }
+        eui::EndCard();
+        return;
+    }
+
+    eui::BeginCardRow("render-0");
+    if (eui::BeginCard("Capture", card_width())) {
+        bool recording = Logic::get().render_active();
+        ImVec2 big(-FLT_MIN, eui::em(2.3f));
+        if (recording) {
+            if (eui::ActionButton("Stop Rendering", eui::Icon::Render, true, big, RECORD_RED)) {
+                Logic::get().stop_render();
+            }
+        }
+        else if (PlayLayer::get()) {
+            if (eui::ActionButton("Start Rendering Here", eui::Icon::Render, false, big)) {
+                Logic::get().start_render();
+            }
+            tip("Begins rendering from your current position.");
+        }
+        else if (logic.render_queued) {
+            if (eui::ActionButton("Cancel (waiting for a level)", eui::Icon::Render, true, big)) {
+                logic.render_queued = false;
+            }
+        }
+        else {
+            if (eui::ActionButton("Start Rendering", eui::Icon::Render, false, big)) {
+                Logic::get().start_render();
+            }
+            tip("Starts when you enter a level.");
+        }
+        if (Logic::get().render_capturing()) {
+            auto status = Logic::get().render_status();
+            eui::ProgressBar(status.known ? status.progress : -1.f, ImVec2(-FLT_MIN, 0.f), status.text.c_str());
+        }
+        eui::Row("Video name", "Leave empty to name the video after the macro");
+        eui::InputTextWithHint("##render-name", logic.macro_name.empty() ? "Replay" : logic.macro_name.c_str(), &logic.render_name);
+        float half = eui::RowButton(2);
+        ImGui::BeginDisabled(logic.merge_busy);
+        if (eui::Button("Join Two Videos", ImVec2(half, 0.f))) {
+            GUI::get().open_render_picker();
+        }
+        ImGui::EndDisabled();
+#ifdef GEODE_IS_MACOS
+        tip("Joins two videos back to back with a crossfade.");
+#else
+        tip("Joins two videos back to back with a crossfade. Needs ffprobe.exe next to ffmpeg.exe.");
+#endif
+        ImGui::SameLine();
+        if (eui::Button("Open Folder", ImVec2(half, 0.f))) {
+            auto folder = Logic::get().save_root() / "renders";
+            std::error_code ignored;
+            fs::create_directories(folder, ignored);
+            geode::utils::file::openFolder(folder);
+        }
+        tip("Opens the folder your videos are saved in.");
+        if (logic.merge_busy) {
+            float done = logic.merge_progress();
+            auto text = done < 0.f ? std::string("Joining...") : fmt::format("Joining {:.0f}%", done * 100.f);
+            eui::ProgressBar(done, ImVec2(-FLT_MIN, 0.f), text.c_str());
+            tip(logic.merge_label.c_str());
+        }
+    }
+    eui::EndCard();
+    if (eui::BeginCard("Behavior", card_width())) {
+        toggle("Use Speedhack", logic.render_speedhack);
+        tip("Renders at your speedhack value");
+        toggle("Exit level when finished", logic.render_auto_exit);
+        toggle("Record the Opening Pause", logic.render_record_pause);
+        toggle("Show Level While Rendering", logic.render_show_lvl);
+        tip("Shows the level while rendering instead of a black screen.");
+        toggle("Immediate Restart", logic.immediate_restart);
+        GUI::get().offer_rebind("key-reset", "Restarts the level once as soon as you enter it");
+    }
+    eui::EndCard();
+    eui::EndCardRow();
+    eui::BeginCardRow("render-1");
+    if (eui::BeginCard("Video", card_width())) {
+        draw_video_shape(open_save_preset);
+        eui::Separator();
+#ifdef GEODE_IS_ANDROID
+        eui::Row("Codec, extension");
+        float gap = ImGui::GetStyle().ItemSpacing.x;
+        float pair = ImGui::GetContentRegionAvail().x;
+        ImGui::SetNextItemWidth(std::max(eui::em(2.f), (pair - gap) * .62f));
+        eui::InputTextWithHint("##render-codec", "libx264", &logic.render_codec);
+        saved_on_release();
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(std::max(eui::em(2.f), ImGui::GetContentRegionAvail().x));
+        eui::InputTextWithHint("##render-extension", "mp4", &logic.render_extension);
+        saved_on_release();
+#else
+        eui::Row("File extension");
+        eui::InputText("##render-extension", &logic.render_extension);
+        saved_on_release();
+        eui::Row("Codec");
+        eui::InputText("##render-codec", &logic.render_codec);
+        saved_on_release();
+#endif
+        eui::Row("FFmpeg arguments", "Output options placed after the codec information. Leave blank if you don't know what this is");
+        eui::InputText("##render-args", &logic.render_args);
+        saved_on_release();
+        toggle("Color Fix", logic.render_color_fix);
+        tip("Fixes video colors to be more accurate to the game.");
+        eui::RowHalf();
+        toggle("Hide Labels", logic.render_hide_labels);
+        tip("Hides Echo's labels while rendering.");
+#ifdef GEODE_IS_ANDROID
+        toggle("Hide Pause Button", logic.render_hide_pause);
+        tip("Hides the pause button while rendering. Use the Echo icon to stop the render.");
+#endif
+    }
+    eui::EndCard();
+    if (eui::BeginCard("Audio", card_width())) {
+        eui::Row("Music volume");
+        GUI::get().drag_float_setting("##render-music", logic.render_music, 0.01f, 0.f, 1.f, "%.2f");
+        eui::Row("SFX volume");
+        GUI::get().drag_float_setting("##render-sfx", logic.render_sfx, 0.01f, 0.f, 1.f, "%.2f");
+        eui::Row("Fade in");
+        GUI::get().drag_float_setting("##render-fade-in", logic.render_fade_in, 0.01f, 0.f, 2.f, "%.2f s");
+        eui::Row("Fade out");
+        GUI::get().drag_float_setting("##render-fade-out", logic.render_fade_out, 0.01f, 0.f, 2.f, "%.2f s");
+        eui::Row("Keep going after end");
+        GUI::get().drag_float_setting("##render-after-end", logic.render_after_end, 0.05f, 0.f, 5.f, "%.2f s");
+        toggle("SSB Fix", logic.render_ssb_fix);
+        tip("Fixes audio sync because of the game's scroll speed bug when rendering.");
+    }
+    eui::EndCard();
+    eui::EndCardRow();
+    if (open_save_preset) {
+        ImGui::OpenPopup("Save Video Preset");
+    }
+    if (eui::BeginModal("Save Video Preset", 16.f)) {
+        static std::string name;
+        ImGui::TextDisabled("%i x %i   %i FPS", logic.render_width, logic.render_height, logic.render_fps);
+        eui::Row("Name");
+        eui::InputTextWithHint("##preset-name", "My preset", &name);
+        ImGui::BeginDisabled(name.empty());
+        if (eui::Button("Save", ImVec2(-FLT_MIN, 0.f))) {
+            std::erase_if(logic.render_presets, [&](RenderPreset const& preset) {
+                return preset.name == name;
+            });
+            logic.render_presets.push_back({ name, logic.render_width, logic.render_height, logic.render_fps, logic.render_bitrate });
+            save();
+            name.clear();
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndDisabled();
+        eui::EndModal();
+    }
+}
+
+CCTexture2D* GUI::theme_logo_texture() {
+    auto const& name = Logic::get().theme_name;
+    for (int i = 1; i < eui::preset_count(); ++i) {
+        if (name != eui::preset(i).name) {
+            continue;
+        }
+        auto const& preset = eui::preset(i);
+        auto sprite = fmt::format("{}/echo-logo-{}.png", Mod::get()->getID(), GUI::get().lower_copy(preset.name));
+        if (auto image = eui::logo_texture(sprite.c_str())) {
+            return image;
+        }
+    }
+    if (!GUI::get().has_palette || name == "Echo") {
+        return eui::logo_texture("logo.png"_spr);
+    }
+    auto const& palette = GUI::get().palette;
+    char const* base = nullptr;
+    if (palette.rainbow)
+        base = "rainbow";
+    else if (palette.scene != eui::Scene::None)
+        base = eui::scene_name(palette.scene);
+    else if (palette.light)
+        base = "white";
+    else if (palette.accent_saturation < .06f)
+        base = palette.depth < .8f ? "black" : "silver";
+    if (base) {
+        auto sprite = fmt::format("{}/echo-logo-{}.png", Mod::get()->getID(), base);
+        if (auto image = eui::logo_texture(sprite.c_str())) {
+            return image;
+        }
+    }
+    return eui::logo_tinted_texture(palette.accent_hue);
+}
+
+ImTextureID GUI::theme_logo() {
+    auto* texture = GUI::get().theme_logo_texture();
+    return texture ? static_cast<ImTextureID>(texture->getName()) : ImTextureID{};
+}
+
+void GUI::draw_theme() {
+    log::debug("draw theme");
+    auto& logic = Logic::get();
+    auto& gui = GUI::get();
+    auto& style = ImGui::GetStyle();
+    bool open_advanced = false;
+
+    eui::BeginCardRow("settings-0");
+    if (eui::BeginCard("Theme", card_width())) {
+        for (int i = 0; i < eui::preset_count(); ++i) {
+            auto const& preset = eui::preset(i);
+            if (i % 6 != 0) {
+                ImGui::SameLine(0.f, (eui::RowButton(6) - eui::em(2.5f)) + ImGui::GetStyle().ItemSpacing.x);
+            }
+            auto sprite = i == 0 ? std::string("logo.png"_spr) : fmt::format("{}/echo-logo-{}.png", Mod::get()->getID(), gui.lower_copy(preset.name));
+            if (eui::ThemeTile(preset.name, eui::logo_image(sprite.c_str()), logic.theme_name == preset.name)) {
+                gui.use_palette(preset.palette, preset.name);
+            }
+            tip(preset.name);
+        }
+        float half = eui::RowButton(2);
+        if (eui::Button("Randomize", ImVec2(half, 0.f))) {
+            gui.randomize_theme();
+        }
+        tip("Picks a random color for the menu and logo.");
+        ImGui::SameLine();
+        if (eui::Button("Reset", ImVec2(half, 0.f))) {
+            gui.restore_base_sizes();
+            eui::apply_metrics();
+            gui.on_style_replaced();
+            gui.use_palette(eui::Palette{}, "Echo");
+        }
+        tip("Resets to the default Echo theme.");
+        eui::Separator();
+        eui::Row("Save as", "Saves the current theme under a name.");
+        eui::InputText("##theme-name", &logic.theme_name);
+        saved_on_release();
+        if (eui::Button("Save", ImVec2(half, 0.f))) {
+            gui.export_theme(gui.theme_path(logic.theme_name));
+            gui.export_theme(gui.theme_path("current"));
+            save();
+        }
+        ImGui::SameLine();
+        if (eui::Button("Load", ImVec2(half, 0.f))) {
+            gui.open_theme_picker();
+        }
+    }
+    eui::EndCard();
+    eui::EndCard();
+    eui::EndCardRow();
+    eui::BeginCardRow("settings-1");
+    if (eui::BeginCard("Custom Color", card_width())) {
+        auto& palette = gui.palette;
+        bool live = false;
+        bool settled = false;
+        auto slider = [&](char const* label, char const* id, float* field, float min, float max, bool rainbow, char const* hint) {
+            eui::Row(label, hint);
+            if (eui::Slider(id, field, min, max, rainbow ? "" : "%.2f", rainbow)) {
+                live = true;
+            }
+            if (ImGui::IsItemDeactivatedAfterEdit()) {
+                settled = true;
+            }
+        };
+        slider("Body", "##palette-hue", &palette.hue, 0.f, 1.f, true, "The color the menu's dark body is tinted with.");
+        slider("Accent", "##palette-accent", &palette.accent_hue, 0.f, 1.f, true, "The bright color of the rim, toggles and markers. The logo takes it too.");
+        slider("Richness", "##palette-richness", &palette.richness, 0.f, 1.4f, false, "How strongly the body is tinted.");
+        slider("Brightness", "##palette-depth", &palette.depth, .5f, 1.5f, false, "How dark or light the body is.");
+        slider("Accent strength", "##palette-accent-saturation", &palette.accent_saturation, 0.f, .8f, false, "From a white accent to a vivid one.");
+        if (live) {
+            gui.has_palette = true;
+            logic.theme_name = "Custom";
+            eui::apply_palette(palette);
+            gui.paint_editor_from_theme();
+        }
+        if (settled) {
+            gui.use_palette(palette, "Custom");
+        }
+    }
+    eui::EndCard();
+#ifndef GEODE_IS_MOBILE
+    if (eui::BeginCard("Keybinds", card_width())) {
+        ImGui::TextDisabled("Click a key to change it.");
+        ImGui::BeginChild("##keybind-list", ImVec2(-FLT_MIN, eui::CardFill(8.f)), ImGuiChildFlags_Borders);
+        float key_w = eui::em(6.5f);
+        for (auto const& action : GUI::bind_actions()) {
+            ImGui::PushID(action.setting);
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextUnformatted(action.label);
+            ImGui::SameLine(ImGui::GetWindowWidth() - key_w - ImGui::GetStyle().WindowPadding.x - ImGui::GetStyle().ScrollbarSize);
+            auto bound = gui.stored_bind(action.setting);
+            bool none = bound == "None";
+            if (none) {
+                ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+            }
+            if (eui::Button((bound + "##bind").c_str(), ImVec2(key_w, 0.f))) {
+                gui.prompt = action.setting;
+                gui.prompt_nested = false;
+            }
+            if (none) {
+                ImGui::PopStyleColor();
+            }
+            ImGui::PopID();
+        }
+        ImGui::EndChild();
+    }
+    eui::EndCard();
+#endif
+    eui::EndCardRow();
+
+    style.AntiAliasedLines = true;
+    style.AntiAliasedLinesUseTex = true;
+    style.AntiAliasedFill = true;
+
+    if (open_advanced) {
+        ImGui::OpenPopup("Advanced Style");
+    }
+    if (eui::BeginModal("Advanced Style", 27.f)) {
+        gui.ui_editor();
+        eui::EndModal();
+    }
+}
