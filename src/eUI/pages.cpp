@@ -482,3 +482,69 @@ namespace {
         ImGui::TextDisabled("Hard  %.2f s and up", hard_seconds);
     }
 }
+
+void GUI::main() {
+    auto& logic = Logic::get();
+    bool busy = logic.is_recording() || logic.is_playing();
+    bool want_reset = false, open_overwrite = false, open_sync_audio = false;
+
+    eui::BeginCardRow("replay-0");
+    if (eui::BeginCard("Session", card_width())) {
+        float half = eui::RowButton(2);
+        ImVec2 big(half, eui::em(2.3f));
+        if (eui::ActionButton(logic.is_recording() ? "Stop Recording" : "Record", eui::Icon::Record, logic.is_recording(), big, RECORD_RED)) {
+            Logic::get().toggle_recording();
+        }
+        GUI::get().offer_rebind("toggle-record");
+        ImGui::SameLine();
+        if (eui::ActionButton(logic.is_playing() ? "Stop Playing" : "Play", eui::Icon::Play, logic.is_playing(), big)) {
+            Logic::get().toggle_playing();
+        }
+        GUI::get().offer_rebind("toggle-play");
+        ImGui::BeginDisabled(busy);
+        eui::Row("Record", "Which player's inputs are recorded.");
+        int record = GUI::get().pair_index(logic.record_p1, logic.record_p2);
+        if (eui::Combo("##record-players", &record, PLAYERS, 3)) {
+            GUI::get().apply_pair(record, logic.record_p1, logic.record_p2);
+            GUI::get().persist();
+        }
+        eui::Row("Play back", "Which player's inputs are played.");
+        int play = GUI::get().pair_index(logic.play_p1, logic.play_p2);
+        if (eui::Combo("##play-players", &play, PLAYERS, 3)) {
+            GUI::get().apply_pair(play, logic.play_p1, logic.play_p2);
+            GUI::get().persist();
+        }
+        ImGui::EndDisabled();
+        toggle("Ignore Inputs During Playback", logic.ignore_inputs);
+        GUI::get().offer_rebind("key-ignore");
+        if (eui::Button("Reset Level", ImVec2(half, 0.f))) {
+            if (auto* level = PlayLayer::get()) {
+                level->resetLevel();
+            }
+        }
+        GUI::get().offer_rebind("key-reset");
+        ImGui::SameLine();
+        if (eui::Button("Close Menu", ImVec2(half, 0.f))) {
+            GUI::get().begin_close();
+        }
+        GUI::get().offer_rebind("open-menu");
+    }
+    eui::EndCard();
+    if (eui::BeginCard("Speed and Timing", card_width())) {
+        eui::Row("Speed");
+        static float dragged = 1.f;
+        ImGuiID speed_id = ImGui::GetID("##speed");
+        bool typing = ImGui::TempInputIsActive(speed_id);
+        bool dragging = ImGui::GetActiveID() == speed_id && !typing;
+        if (!dragging) {
+            dragged = logic.speedhack;
+        }
+        float stepped = std::clamp(std::round(dragged / .05f) * .05f, .01f, 5.f);
+        auto shown = fmt::format("{:.2f}x", stepped);
+        if (eui::DragFloat("##speed", &dragged, 0.005f, 0.01f, 5.f, dragging ? shown.c_str() : "%.3fx", dragging ? ImGuiSliderFlags_NoRoundToFormat : ImGuiSliderFlags_None)) {
+            GUI::get().setSpeed(typing ? dragged : std::clamp(std::round(dragged / .05f) * .05f, .01f, 5.f), false);
+        }
+        GUI::get().offer_rebind("key-speedhack");
+        if (ImGui::IsItemDeactivatedAfterEdit()) {
+            GUI::get().setSpeed(logic.speedhack, true);
+        }
