@@ -75,6 +75,14 @@
 			"default": "C",
 			"category": "gameplay"
 		},
+		"find-best-frame": {
+			"type": "keybind",
+			"platforms": ["win", "mac"],
+			"name": "Find best frame",
+			"description": "Finds the frame where your next click is the safest, steps to it and clicks. Requires Backstep.",
+			"default": "None",
+			"category": "gameplay"
+		},
 		"step-back": {
 			"type": "keybind",
 			"platforms": ["win", "mac"],

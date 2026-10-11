@@ -6,6 +6,8 @@
 // pause before kill / trajectory autoclicker: 1 step at a time, so there is a chance to stop BEFORE the death
 // real time: a frame may run up to a seconds worth of steps so game time stays right when physics cant keep up
 // affordable_steps times real steps & the rest of the frame, then caps the frame to what fits. heavy levels slow down, they dont freeze
+// time warp below 1x makes each step SHORTER in level time, it does not add steps
+// find best frame is here too: step forward, ask the trajectory how long a flip would survive, stop on the best frame
 #include "Logic/logic.hpp"
 #include "Hooks/step.hpp"
 #include "Hack/trajectory.hpp"
@@ -573,19 +575,152 @@ void Logic::run_frame(GJBaseGameLayer* play, float dt, std::function<void(float)
 }
 
 void Logic::stop_best_frame(char const* why) {
-    // later
+    auto& logic = Logic::get();
+    bool was = logic.best_frame_running;
+    logic.best_frame_running = false;
+    logic.best_frame_step_first = false;
+    logic.find_best_queued = false;
+    logic.best_frame_click_at = -1;
+    if (was && why) {
+        logic.message = why;
+    }
 }
 
 void Logic::request_best_frame() {
-    // TODO
+    auto& logic = Logic::get();
+    if (logic.best_frame_running) {
+        Logic::get().stop_best_frame("Find Best Frame stopped");
+        return;
+    }
+    auto* play = PlayLayer::get();
+    if (!play || !play->m_started || play->m_playerDied || logic.backstep_target >= 0 || logic.render_capturing())
+        return;
+    if (!logic.backstep) {
+        logic.message = "Turn on Backstep first";
+        return;
+    }
+#ifdef GEODE_IS_MOBILE
+    logic.best_frame_click = false;
+    logic.best_frame_auto = false;
+#endif
+    logic.frame_advance = true;
+    logic.holding_advance = false;
+    logic.advance_queued = false;
+    logic.find_best_queued = true;
+    logic.best_frame_running = logic.best_frame_auto;
+    logic.best_frame_step_first = false;
 }
 
 void Logic::find_best_frame(PlayLayer* play, std::function<void(float)> const& tick) {
-    // port this
+    auto& logic = Logic::get();
+    auto& trajectory = Trajectory::get();
+    if (!play || play->m_playerDied || !trajectory.attached()) {
+        Logic::get().stop_best_frame();
+        return;
+    }
+    auto step = [&] {
+        Logic::get().apply_rate(logic.step_frame);
+        float tick_dt = logic.physics_step();
+        if (!std::isfinite(tick_dt) || !(tick_dt > 0.f) || tick_dt > 1.f)
+            return false;
+        logic.steps_left = 1;
+        logic.steps_this_tick = 1;
+        tick(tick_dt);
+        logic.steps_left = 0;
+        logic.steps_this_tick = 0;
+        return !play->m_playerDied && !play->m_hasCompletedLevel;
+    };
+    if (std::exchange(logic.best_frame_step_first, false) && !step()) {
+        logic.present = true;
+        Logic::get().stop_best_frame(play->m_hasCompletedLevel ? "Level complete" : "Find Best Frame stopped");
+        return;
+    }
+    bool player1 = !(logic.is_recording() && !logic.records_player(false) && logic.records_player(true));
+    if (logic.plays_player(!player1)) {
+        Logic::get().stop_best_frame();
+        logic.message = "The macro plays this player";
+        return;
+    }
+    bool twoPlayer = play->m_levelSettings && play->m_levelSettings->m_twoPlayerMode;
+    int keep = static_cast<int>(std::clamp(std::llround(logic.sample_rate() * logic.backstep_percent / 100.0), 1ll, 100000ll));
+    int range = std::clamp(logic.best_frame_range, 1, keep);
+    int start = logic.step_frame;
+
+    struct Window {
+        int from = -1, to = -1;
+        int score = -1;
+    };
+
+    Window best;
+    Window cur;
+    int full = 0;
+    for (int i = 0; i <= range; ++i) {
+        int len = 0;
+        int score = trajectory.flip_survival(play, player1, len);
+        if (len <= 0)
+            break;
+        full = std::max(full, len);
+        if (score == cur.score && cur.to == i - 1)
+            cur.to = i;
+        else
+            cur = { i, i, score };
+        if (cur.score > best.score || cur.from == best.from)
+            best = cur;
+        if (best.score >= full && cur.from != best.from)
+            break;
+        if (i == range)
+            break;
+        trajectory.lookahead(play);
+        bool dies = player1 ? logic.death_next_p1 || (!twoPlayer && logic.death_next_p2) : logic.death_next_p2;
+        if (dies || !step())
+            break;
+    }
+    logic.present = true;
+    if (best.score <= 0) {
+        Logic::get().stop_best_frame();
+        logic.message = "No frame found";
+        if (logic.step_frame != start)
+            Logic::get().step_back(play, logic.step_frame - start);
+        return;
+    }
+    int pick = start + best.from + (best.to - best.from) / 2;
+    bool running = logic.best_frame_running;
+    logic.best_frame_click_at = logic.best_frame_click || running ? pick : -1;
+    logic.best_frame_click_p1 = player1;
+    int back = logic.step_frame - pick;
+    if (back > 0 && !Logic::get().step_back(play, back)) {
+        Logic::get().stop_best_frame();
+        return;
+    }
+    logic.message = best.score >= full
+                        ? fmt::format("Best frame: +{} (window {} steps)", pick - start, best.to - best.from + 1)
+                        : fmt::format("Best frame: +{} (lives {}/{} steps)", pick - start, best.score, full);
+    if (running && best.score < full) {
+        logic.best_frame_running = false;
+        logic.message += ". Auto stopped: nothing survives the full trajectory";
+    }
+    if (logic.backstep_target < 0)
+        Logic::get().click_best_frame(play);
 }
 
 void Logic::click_best_frame(PlayLayer* play) {
-    // TODO
+    auto& logic = Logic::get();
+    int at = std::exchange(logic.best_frame_click_at, -1);
+    if (!play || at < 0 || logic.step_frame != at || play->m_playerDied) {
+        if (at >= 0)
+            Logic::get().stop_best_frame("Find Best Frame stopped");
+        return;
+    }
+    bool player1 = logic.best_frame_click_p1;
+    bool held = Trajectory::get().held_next(play, player1);
+    play->queueButton(static_cast<int>(PlayerButton::Jump), !held, !player1, Logic::get().click_stamp());
+    Logic::get().reset_traj();
+    if (logic.best_frame_running && !logic.best_frame_auto)
+        logic.best_frame_running = false;
+    if (logic.best_frame_running) {
+        logic.best_frame_step_first = true;
+        logic.find_best_queued = true;
+    }
 }
 
 void Logic::cancel_steps() {
