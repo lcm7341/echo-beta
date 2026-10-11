@@ -1,0 +1,456 @@
+// the menu window
+// docked = 1 window w/ a sidebar of pages. undocked = every section is its own tile that packs across the screen & can be pinned or hidden
+#include "GUI/gui.hpp"
+#include <imgui-cocos.hpp>
+#include <imgui.h>
+#include <imgui_internal.h>
+#include <misc/cpp/imgui_stdlib.h>
+#include <algorithm>
+#include <cmath>
+#include <filesystem>
+#include <random>
+#include <string>
+#include <unordered_map>
+#include <utility>
+#include <vector>
+#include <initializer_list>
+#include <sstream>
+#include <Geode/utils/web.hpp>
+#include <fstream>
+#include <Geode/cocos/robtop/keyboard_dispatcher/CCKeyboardDispatcher.h>
+#include <Geode/loader/Event.hpp>
+#include <optional>
+#include <Geode/binding/CCTextInputNode.hpp>
+#include <functional>
+
+namespace fs = std::filesystem;
+
+GUI& GUI::get() {
+    static GUI instance;
+    return instance;
+}
+
+using namespace geode::prelude;
+
+namespace {
+    char const* menu_title() {
+        static std::string const title = fmt::format("Echo {}###Echo", Mod::get()->getVersion().toVString());
+        return title.c_str();
+    }
+}
+
+bool GUI::typing() {
+    if (ImGui::GetCurrentContext() && ImGui::GetIO().WantTextInput) {
+        return true;
+    }
+    auto* director = CCDirector::sharedDirector();
+    auto* scene = director ? director->getRunningScene() : nullptr;
+    if (!scene) {
+        return false;
+    }
+    bool it = false;
+    std::function<void(CCNode*)> walk = [&](CCNode* node) {
+        if (!node || it)
+            return;
+        if (auto* input = typeinfo_cast<CCTextInputNode*>(node); input && input->m_selected) {
+            it = true;
+        }
+        auto* children = node->getChildren();
+        if (!children)
+            return;
+        for (auto* child : CCArrayExt<CCNode*>(children))
+            walk(child);
+    };
+    walk(scene);
+    return it;
+}
+
+void GUI::load_menu_font() {
+    auto& io = ImGui::GetIO();
+    auto const path = Mod::get()->getResourcesDir() / "Roboto-Medium.ttf";
+    ImFontConfig config;
+    config.OversampleH = 2;
+    config.OversampleV = 2;
+    ImFont* font = nullptr;
+    if (fs::exists(path)) {
+        font = io.Fonts->AddFontFromFileTTF(path.string().c_str(), 18.f, &config);
+    }
+    if (!font) {
+        io.Fonts->AddFontDefault();
+    }
+}
+
+TabPage const PAGES[] = {
+    { "Replay", [] {
+         GUI::get().main();
+     } },
+    { "Assists", [] {
+         GUI::get().tools();
+     } },
+    { "Visuals", [] {
+         GUI::get().draw_visuals();
+     } },
+    { "Editor", [] {
+         GUI::get().editor();
+     } },
+    { "Library", [] {
+         GUI::get().draw_macro();
+     } },
+    { "Clickbot", [] {
+         GUI::get().clickbot();
+     } },
+    { "Render", [] {
+         GUI::get().renderer();
+     } },
+    { "Settings", [] {
+         GUI::get().draw_theme();
+     } },
+};
+
+std::vector<TabPage> GUI::ordered_pages() {
+    return { std::begin(PAGES), std::end(PAGES) };
+}
+
+float GUI::smoothstep01(float t) {
+    t = std::clamp(t, 0.f, 1.f);
+    return t * t * (3.f - 2.f * t);
+}
+
+void GUI::ease_toward(float& current, float target, float dt) {
+    float step = 1.f - std::exp(-dt * 16.f);
+    if (std::abs(current - target) <= 0.35f)
+        current = target;
+    else
+        current += (target - current) * step;
+}
+
+void GUI::ease_toward(ImVec2& current, ImVec2 target, float dt) {
+    GUI::get().ease_toward(current.x, target.x, dt);
+    GUI::get().ease_toward(current.y, target.y, dt);
+}
+
+Slide GUI::roll_slide() {
+    static std::mt19937 rng{ std::random_device{}() };
+    std::uniform_int_distribution<int> dist(0, 3);
+    return static_cast<Slide>(dist(rng));
+}
+
+void GUI::roll_directions() {
+    for (auto const& page : PAGES)
+        GUI::get().slide[page.name] = GUI::get().roll_slide();
+    GUI::get().dock_slide = GUI::get().roll_slide();
+}
+
+ImVec2 GUI::offscreen(Slide dir, ImVec2 target, ImVec2 size, ImVec2 display) {
+    float pad = 28.f;
+    switch (dir) {
+    case Slide::Left:
+        return ImVec2(-size.x - pad, target.y);
+    case Slide::Right:
+        return ImVec2(display.x + pad, target.y);
+    case Slide::Down:
+        return ImVec2(target.x, display.y + pad);
+    case Slide::Up:
+        return ImVec2(target.x, -size.y - pad);
+    }
+    return ImVec2(target.x, -size.y - pad);
+}
+
+float GUI::anim_rate() {
+    return std::max(Logic::get().menu_anim_speed, 0.05f);
+}
+
+void GUI::begin_close() {
+    if (!ImGuiCocos::get().isVisible() || GUI::get().bar_only)
+        return;
+    GUI::get().closing = true;
+}
+
+void GUI::tick_motion() {
+    // todo
+}
+
+void GUI::push_open_fade(StyleVarGuard& guard) {
+    float alpha = ImGui::GetStyle().Alpha * std::max(GUI::get().smoothstep01(GUI::get().motion.open), 0.04f);
+    ImGui::PushStyleVar(ImGuiStyleVar_Alpha, alpha);
+    guard.count += 1;
+}
+
+float GUI::shared_button_width(std::initializer_list<char const*> labels) {
+    int amt = std::max(static_cast<int>(labels.size()), 1);
+    float need = 0.f;
+    for (char const* label : labels)
+        need = std::max(need, GUI::get().labelWidth(label));
+    ImGuiWindow* window = ImGui::GetCurrentWindow();
+    bool stretches = (window->Flags & ImGuiWindowFlags_AlwaysAutoResize) != 0 || (window->ChildFlags & ImGuiChildFlags_AutoResizeX) != 0;
+    float along = window->DC.CursorPos.x - window->DC.CursorStartPos.x;
+    float inner = along + std::max(0.f, ImGui::GetContentRegionAvail().x);
+    float spacing = ImGui::GetStyle().ItemSpacing.x * (float)(std::max(amt - 1, 0));
+    float room = std::max(0.f, inner - spacing);
+    return std::max(need, room / (float)(amt));
+}
+
+template <typename A1>
+void GUI::fade_page(char const* name, A1&& draw) {
+    if (GUI::get().motion.tab != name) {
+        GUI::get().motion.tab = name;
+        GUI::get().motion.tab_blend = 0.f;
+    }
+    GUI::get().motion.tab_blend = std::min(1.f, GUI::get().motion.tab_blend + ImGui::GetIO().DeltaTime * 6.5f);
+    float alpha = ImGui::GetStyle().Alpha * (0.4f + 0.6f * GUI::get().smoothstep01(GUI::get().motion.tab_blend));
+    ImGui::PushStyleVar(ImGuiStyleVar_Alpha, alpha);
+    draw();
+    ImGui::PopStyleVar();
+}
+
+const TabPage* GUI::active_page(std::vector<TabPage> const& pages) {
+    log::debug("active page");
+    for (auto const& page : pages) {
+        if (GUI::get().page == page.name) {
+            return &page;
+        }
+    }
+    return pages.empty() ? nullptr : &pages.front();
+}
+
+ImGuiWindowFlags GUI::menu_flags() {
+    return ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
+}
+
+namespace {
+    eui::Icon icon_for(std::string_view page) {
+        if (page == "Replay")
+            return eui::Icon::Play;
+        if (page == "Assists")
+            return eui::Icon::Tools;
+        if (page == "Visuals")
+            return eui::Icon::Visuals;
+        if (page == "Editor")
+            return eui::Icon::Editor;
+        if (page == "Library")
+            return eui::Icon::Macro;
+        if (page == "Clickbot")
+            return eui::Icon::Clickbot;
+        if (page == "Render")
+            return eui::Icon::Render;
+        if (page == "Settings")
+            return eui::Icon::Gear;
+        return eui::Icon::None;
+    }
+}
+
+void GUI::draw_nav(std::vector<TabPage> const& pages, float height) {
+    ImGuiStyle const& style = ImGui::GetStyle();
+    ImGui::PushFont(nullptr, ImGui::GetFontSize() * 1.05f);
+    float width = 0.f;
+    for (auto const& page : pages)
+        width = std::max(width, GUI::get().labelWidth(page.name));
+    float amt = (float)(std::max<size_t>(pages.size(), 1));
+    float least = ImGui::GetFrameHeight() * 1.2f;
+    float gaps = style.ItemSpacing.y * (amt - 1.f) + style.WindowPadding.y * 2.f;
+    GUI::get().nav_needs = least * amt + gaps;
+    float tall = std::max(height, least * amt + gaps);
+    float row = std::clamp((tall - gaps) / amt, least, least * 2.6f);
+    ImGui::BeginChild("##echo-nav", ImVec2(0.f, tall), ImGuiChildFlags_Borders | ImGuiChildFlags_AutoResizeX);
+    ImVec2 mark_min{}, mark_max{};
+    bool marked = false;
+    for (auto const& page : pages) {
+        bool selected = GUI::get().page == page.name;
+        if (eui::NavItem(page.name, icon_for(page.name), selected, width, row)) {
+            GUI::get().page = page.name;
+        }
+        if (selected) {
+            mark_min = ImGui::GetItemRectMin();
+            mark_max = ImGui::GetItemRectMax();
+            marked = true;
+        }
+    }
+    if (marked) {
+        eui::NavMarker(mark_min, mark_max);
+    }
+    ImGui::EndChild();
+    ImGui::PopFont();
+}
+
+void GUI::draw_floating(std::vector<TabPage> const& pages) {
+    // TODO
+}
+
+void GUI::draw_frame_bar() {
+    // port this
+}
+
+void GUI::draw_window() {
+    if (GUI::get().bar_only) {
+        GUI::get().motion.open = 0.f;
+        GUI::get().closing = false;
+        GUI::get().sync_menu_scale();
+        GUI::get().draw_frame_bar();
+        return;
+    }
+    if (!ImGuiCocos::get().isVisible()) {
+        GUI::get().motion.open = 0.f;
+        GUI::get().closing = false;
+        return;
+    }
+    GUI::get().tick_motion();
+    if (!ImGuiCocos::get().isVisible())
+        return;
+    GUI::get().sync_menu_scale();
+    if (!ImGui::GetIO().WantTextInput && !ImGui::IsPopupOpen(GUI::BIND_POPUP) && ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+        ImGuiContext& context = *ImGui::GetCurrentContext();
+        if (context.OpenPopupStack.Size > 0) {
+            ImGui::ClosePopupToLevel(context.OpenPopupStack.Size - 1, true);
+        }
+    }
+#ifdef GEODE_IS_MOBILE
+    if (!GUI::get().closing && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !ImGui::IsAnyItemActive() &&
+        !ImGui::IsWindowHovered(ImGuiHoveredFlags_AnyWindow | ImGuiHoveredFlags_AllowWhenBlockedByPopup | ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) &&
+        !ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel)) {
+        GUI::get().begin_close();
+    }
+#endif
+    auto pages = GUI::get().ordered_pages();
+    if (!Logic::get().docked_menu) {
+        GUI::get().dock_return = true;
+        GUI::get().draw_floating(pages);
+        GUI::get().show_keybind_prompt();
+        GUI::get().draw_macro_picker();
+        GUI::get().draw_theme_picker();
+        GUI::get().draw_clickpack_picker();
+        GUI::get().draw_render_picker();
+        return;
+    }
+    StyleVarGuard fade;
+    GUI::get().push_open_fade(fade);
+    float eased = GUI::get().smoothstep01(GUI::get().motion.open);
+    bool settle = eased > 0.985f && !GUI::get().closing;
+    bool returning = GUI::get().dock_return;
+    GUI::get().dock_return = false;
+    static bool settled = false;
+    bool arriving = settle && !settled;
+    settled = settle;
+    bool centered = GUI::get().at_scale_cap;
+#ifdef GEODE_IS_MOBILE
+    centered = true;
+#endif
+    ImVec2 display = ImGui::GetIO().DisplaySize;
+    ImVec2 home = GUI::get().dock_home;
+    if (centered) {
+        home = ImVec2(std::max(0.f, (display.x - GUI::get().dock_size.x) * .5f), std::max(0.f, (display.y - GUI::get().dock_size.y) * .5f));
+    }
+    if (centered && settle) {
+        bool tall = GUI::get().dock_size.y > display.y;
+        ImGui::SetNextWindowPos(ImVec2(display.x * .5f, tall ? 0.f : display.y * .5f), ImGuiCond_Always, ImVec2(.5f, tall ? 0.f : .5f));
+    }
+    else if (returning || arriving) {
+        ImGui::SetNextWindowPos(home, ImGuiCond_Always);
+    }
+    else if (!settle) {
+        ImVec2 origin = GUI::get().offscreen(GUI::get().dock_slide, home, GUI::get().dock_size, display);
+        float along = GUI::get().closing ? eased : eui::glide_in(GUI::get().motion.open);
+        ImVec2 pos(std::lerp(origin.x, home.x, along), std::lerp(origin.y, home.y, along));
+        ImGui::SetNextWindowPos(pos, ImGuiCond_Always);
+    }
+    bool open = true;
+    if (!ImGui::Begin(menu_title(), &open, GUI::get().menu_flags() | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoTitleBar)) {
+        ImGui::End();
+        if (!open) {
+            GUI::get().begin_close();
+        }
+        return;
+    }
+    if (!open) {
+        GUI::get().begin_close();
+    }
+    if (settle && !returning && !arriving) {
+        if (!centered) {
+            GUI::get().dock_home = ImGui::GetWindowPos();
+        }
+        GUI::get().dock_size = ImGui::GetWindowSize();
+    }
+    {
+        float scale = std::max(GUI::get().applied_scale, .01f);
+        static float steady_scale = 0.f;
+        static int steady_frames = 0;
+        steady_frames = scale == steady_scale ? steady_frames + 1 : 0;
+        steady_scale = scale;
+        if (steady_frames >= 3) {
+            ImGuiWindow* window = ImGui::GetCurrentWindow();
+            ImVec2 pad = ImGui::GetStyle().WindowPadding;
+            ImVec2 needs(window->ContentSize.x + pad.x * 2.f, window->ContentSize.y + pad.y * 2.f);
+            GUI::get().dock_unit = ImVec2(std::max(GUI::get().dock_unit.x, needs.x / scale), std::max(GUI::get().dock_unit.y, needs.y / scale));
+        }
+    }
+    if (eui::Header("Echo", Mod::get()->getVersion().toVString().c_str(), GUI::get().theme_logo())) {
+        GUI::get().begin_close();
+    }
+    static float page_height = 0.f;
+    static float measured_at = 0.f;
+    static bool settings_measured = false;
+    if (measured_at != ImGui::GetFontSize()) {
+        measured_at = ImGui::GetFontSize();
+        page_height = 0.f;
+        settings_measured = false;
+    }
+    float nav_top = ImGui::GetCursorScreenPos().y - ImGui::GetWindowPos().y;
+    GUI::get().draw_nav(pages, page_height);
+    {
+        ImGuiStyle const& style = ImGui::GetStyle();
+        float least = nav_top + GUI::get().nav_needs + ImGui::GetFrameHeightWithSpacing() + style.ItemSpacing.y * 2.f + style.WindowPadding.y;
+        GUI::get().dock_least_tall = least / std::max(GUI::get().applied_scale, .01f);
+    }
+    ImGui::SameLine();
+    ImGui::BeginGroup();
+    eui::last_card_row() = 0;
+    bool measuring = false;
+#ifdef GEODE_IS_MOBILE
+    if (!settings_measured) {
+        settings_measured = true;
+        measuring = true;
+        ImVec2 start = ImGui::GetCursorPos();
+        std::vector<std::pair<ImGuiID, float>> rows;
+        ImGui::PushStyleVar(ImGuiStyleVar_Alpha, 0.f);
+        for (auto const& page : pages) {
+            ImGui::SetCursorPos(start);
+            ImGui::BeginGroup();
+            eui::last_card_row() = 0;
+            page.draw();
+            ImGui::EndGroup();
+            ImGuiID row = eui::single_column() ? 0 : eui::last_card_row();
+            float natural = ImGui::GetItemRectSize().y - (row ? eui::card_row_extra(row) : 0.f);
+            page_height = std::max(page_height, natural);
+            rows.emplace_back(row, natural);
+        }
+        ImGui::PopStyleVar();
+        for (auto const& [row, natural] : rows) {
+            if (!row) {
+                continue;
+            }
+            float spare = page_height - natural;
+            eui::card_row_extra(row) = spare > 1.f ? spare : 0.f;
+        }
+    }
+#endif
+    if (!measuring) {
+        if (auto* page = GUI::get().active_page(pages)) {
+            GUI::get().page = page->name;
+            GUI::get().fade_page(page->name, page->draw);
+        }
+    }
+    ImGui::EndGroup();
+    ImGuiID last_row = measuring || eui::single_column() ? 0 : eui::last_card_row();
+    float natural = measuring ? page_height : ImGui::GetItemRectSize().y - (last_row ? eui::card_row_extra(last_row) : 0.f);
+    page_height = std::max(page_height, natural);
+    if (last_row) {
+        float spare = page_height - natural;
+        eui::card_row_extra(last_row) = spare > 1.f ? spare : 0.f;
+    }
+    GUI::get().draw_status();
+    GUI::get().show_keybind_prompt();
+    GUI::get().draw_macro_picker();
+    GUI::get().draw_theme_picker();
+    GUI::get().draw_clickpack_picker();
+    GUI::get().draw_render_picker();
+    ImGui::End();
+}
