@@ -167,7 +167,21 @@ void GUI::begin_close() {
 }
 
 void GUI::tick_motion() {
-    // todo
+    float dt = ImGui::GetIO().DeltaTime;
+    float rate = GUI::get().anim_rate();
+    if (GUI::get().closing) {
+        GUI::get().motion.open = std::max(0.f, GUI::get().motion.open - dt * 2.6f * rate);
+        if (GUI::get().motion.open <= 0.f) {
+            GUI::get().closing = false;
+            GUI::get().motion.open = 0.f;
+            ImGuiCocos::get().setVisible(false);
+        }
+        return;
+    }
+    if (GUI::get().motion.open <= 0.f) {
+        GUI::get().roll_directions();
+    }
+    GUI::get().motion.open = std::min(1.f, GUI::get().motion.open + dt * 2.4f * rate);
 }
 
 void GUI::push_open_fade(StyleVarGuard& guard) {
