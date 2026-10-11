@@ -136,6 +136,7 @@ public:
 	void draw_visuals();
 	void sequential_replay();
 	void clickbot();
+	void editor();
 	void draw_theme();
 	void ui_editor();
 	ImTextureID theme_logo();
@@ -378,6 +379,7 @@ public:
 	void draw_loose(char const* id, char const* title, bool can_close, ImVec2 target, float shown, A1&& draw);
 	void draw_window();
 	ImGuiChildFlags fit_card();
+	float columnWidth(std::initializer_list<char const*> labels);
 	std::string ordinal(int number);
 	std::string format_plain(Session const& value);
 	void apply_plain(std::string const& text);
