@@ -273,7 +273,143 @@ void GUI::draw_nav(std::vector<TabPage> const& pages, float height) {
 }
 
 void GUI::draw_floating(std::vector<TabPage> const& pages) {
-    // TODO
+    log::debug("draw floating");
+    auto& logic = Logic::get();
+    StyleVarGuard fade;
+    GUI::get().push_open_fade(fade);
+    auto is_open = [&](char const* name) {
+        return std::find(logic.open_pages.begin(), logic.open_pages.end(), name) != logic.open_pages.end();
+    };
+    static bool loaded = false;
+    if (!loaded) {
+        loaded = true;
+        for (auto const& place : logic.tile_places) {
+            auto& state = eui::tile_states()[place.key];
+            state.pinned = place.pinned;
+            state.hidden = place.hidden;
+            state.x = place.x;
+            state.y = place.y;
+        }
+    }
+    auto set_open = [&](char const* name, bool on) {
+        auto at = std::find(logic.open_pages.begin(), logic.open_pages.end(), name);
+        if (on && at == logic.open_pages.end()) {
+            logic.open_pages.emplace_back(name);
+        }
+        if (!on && at != logic.open_pages.end()) {
+            logic.open_pages.erase(at);
+        }
+        if (on) {
+            auto prefix = std::string(name) + "/";
+            for (auto& [key, state] : eui::tile_states()) {
+                if (key.starts_with(prefix)) {
+                    state.hidden = false;
+                }
+            }
+            eui::tiles_changed() = true;
+        }
+        Logic::get().save_settings_file();
+    };
+    ImGuiStyle const& style = ImGui::GetStyle();
+    float font = ImGui::GetFontSize();
+    float margin = font * .8f;
+    ImVec2 display = ImGui::GetIO().DisplaySize;
+    ImGuiWindowFlags fixed = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings;
+
+    static float bar_tall = 0.f;
+    float opened = GUI::get().motion.open;
+    float drop = GUI::get().closing ? GUI::get().smoothstep01(opened) : eui::glide_in(opened);
+    ImGui::SetNextWindowPos(ImVec2(margin, margin - (1.f - drop) * (bar_tall + margin)), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(display.x - margin * 2.f, 0.f), ImGuiCond_Always);
+    float bar_bottom = margin;
+    if (ImGui::Begin("###echo-bar", nullptr, fixed)) {
+        int item = 0;
+        float items = (float)(pages.size() + 5);
+        auto enter = [&] {
+            eui::BeginEntrance((opened - .55f * (float)(item++) / items) / .45f);
+        };
+        float height = ImGui::GetFrameHeight();
+        if (ImTextureID logo = GUI::get().theme_logo()) {
+            enter();
+            ImGui::Image(ImTextureRef(logo), ImVec2(height, height));
+            eui::EndEntrance();
+            ImGui::SameLine();
+        }
+        ImGui::AlignTextToFramePadding();
+        enter();
+        ImGui::TextUnformatted("Echo");
+        eui::EndEntrance();
+        ImGui::SameLine();
+        enter();
+        ImGui::TextDisabled("%s", Mod::get()->getVersion().toVString().c_str());
+        eui::EndEntrance();
+        for (auto const& page : pages) {
+            ImGui::SameLine(0.f, style.ItemSpacing.x * .6f);
+            bool open = is_open(page.name);
+            enter();
+            bool pressed = eui::NavItem(page.name, icon_for(page.name), open, GUI::get().labelWidth(page.name));
+            eui::EndEntrance();
+            if (pressed) {
+                set_open(page.name, !open);
+            }
+        }
+        ImGui::SameLine(0.f, font);
+        enter();
+        GUI::get().draw_status(false);
+        eui::EndEntrance();
+        float close_w = GUI::get().labelWidth("Close"), reset_w = GUI::get().labelWidth("Reset Layout");
+        ImGui::SameLine(ImGui::GetWindowWidth() - style.WindowPadding.x - close_w - style.ItemSpacing.x - reset_w);
+        enter();
+        bool reset = eui::Button("Reset Layout", ImVec2(reset_w, 0.f));
+        eui::EndEntrance();
+        if (reset) {
+            for (auto& [key, state] : eui::tile_states()) {
+                state.pinned = false;
+                state.hidden = false;
+            }
+            eui::tiles_changed() = true;
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Unpins all tiles and shows the hidden ones.");
+        }
+        ImGui::SameLine();
+        enter();
+        bool close = eui::Button("Close", ImVec2(close_w, 0.f));
+        eui::EndEntrance();
+        if (close) {
+            GUI::get().begin_close();
+        }
+        GUI::get().offer_rebind("open-menu");
+        bar_tall = ImGui::GetWindowSize().y;
+        bar_bottom = margin + bar_tall;
+    }
+    ImGui::End();
+
+    eui::BeginTiles(margin, bar_bottom + font * .55f, display.x - margin, display.y - margin, 18.f, GUI::get().motion.open, GUI::get().anim_rate());
+    for (auto const& page : pages) {
+        if (!is_open(page.name)) {
+            continue;
+        }
+        eui::TileGroup(page.name);
+        auto host = fmt::format("###echo-host-{}", page.name);
+        ImGui::SetNextWindowPos(ImVec2(0.f, 0.f), ImGuiCond_Always);
+        ImGui::SetNextWindowSize(ImVec2(1.f, 1.f), ImGuiCond_Always);
+        if (ImGui::Begin(host.c_str(), nullptr, fixed | ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoFocusOnAppearing)) {
+            page.draw();
+        }
+        ImGui::End();
+    }
+    eui::EndTiles();
+    if (eui::tiles_changed()) {
+        eui::tiles_changed() = false;
+        logic.tile_places.clear();
+        for (auto const& [key, state] : eui::tile_states()) {
+            if (state.pinned || state.hidden) {
+                logic.tile_places.push_back({ key, state.pinned, state.hidden, state.x, state.y });
+            }
+        }
+        Logic::get().save_settings_file();
+    }
 }
 
 void GUI::draw_frame_bar() {
