@@ -1,3 +1,5 @@
+// themes: loading & saving (.ui.json), the style editor, the keybind prompt & the file pickers
+// import_theme also converts old echo .ui themes
 #include <imgui_internal.h>
 #include "GUI/gui.hpp"
 #include <imgui-cocos.hpp>
@@ -23,11 +25,14 @@
 #include <optional>
 #include <cctype>
 
+namespace fs = std::filesystem;
+
 using namespace geode::prelude;
 
 void GUI::help_marker(char const* text) {
-    ImGui::TextDisabled("(?)");
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", text);
+    eui::Help();
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("%s", text);
 }
 
 matjson::Value GUI::color_json(ImVec4 const& color) {
@@ -40,6 +45,7 @@ matjson::Value GUI::color_json(ImVec4 const& color) {
 }
 
 matjson::Value GUI::pair_json(ImVec2 const& value) {
+    log::debug("pair json");
     matjson::Value json = matjson::Value::array();
     json.push(value.x);
     json.push(value.y);
@@ -47,15 +53,23 @@ matjson::Value GUI::pair_json(ImVec2 const& value) {
 }
 
 void GUI::read_pair(matjson::Value const& json, char const* key, ImVec2& value) {
-    if (!json[key].isArray() || json[key].size() < 2) return;
-    if (auto x = json[key][0].asDouble()) value.x = static_cast<float>(x.unwrap());
-    if (auto y = json[key][1].asDouble()) value.y = static_cast<float>(y.unwrap());
+    if (!json[key].isArray() || json[key].size() < 2)
+        return;
+    if (auto x = json[key][0].asDouble()) {
+        value.x = (float)(x.unwrap());
+    }
+    if (auto y = json[key][1].asDouble()) {
+        value.y = (float)(y.unwrap());
+    }
 }
 
 void GUI::read_color(matjson::Value const& json, char const* key, float* color) {
-    if (!json[key].isArray() || json[key].size() < 4) return;
+    if (!json[key].isArray() || json[key].size() < 4)
+        return;
     for (int i = 0; i < 4; ++i) {
-        if (auto channel = json[key][i].asDouble()) color[i] = static_cast<float>(channel.unwrap());
+        if (auto channel = json[key][i].asDouble()) {
+            color[i] = (float)(channel.unwrap());
+        }
     }
 }
 
@@ -69,11 +83,30 @@ ImVec2 GUI::unscaled(ImVec2 value) {
 }
 
 matjson::Value GUI::style_json() {
-    auto& style = ImGui::GetStyle();
-    auto& value = Logic::get();
+    ImGuiStyle style = GUI::get().has_base ? GUI::get().base_style : ImGui::GetStyle();
+    for (int i = 0; i < ImGuiCol_COUNT; ++i)
+        style.Colors[i] = ImGui::GetStyle().Colors[i];
+    auto& logic = Logic::get();
     matjson::Value json;
-    json["name"] = value.theme_name;
-    json["scale"] = value.menu_scale;
+    json["name"] = logic.theme_name;
+    json["scale"] = logic.menu_scale;
+    json["rainbow_rim"] = eui::rainbow_rim();
+    json["button_effects"] = eui::button_effects();
+    json["scene"] = eui::scene_name(eui::scene());
+    if (GUI::get().has_palette) {
+        auto const& palette = GUI::get().palette;
+        matjson::Value saved;
+        saved["hue"] = palette.hue;
+        saved["accent_hue"] = palette.accent_hue;
+        saved["richness"] = palette.richness;
+        saved["depth"] = palette.depth;
+        saved["accent_saturation"] = palette.accent_saturation;
+        saved["accent_value"] = palette.accent_value;
+        saved["light"] = palette.light;
+        saved["rainbow"] = palette.rainbow;
+        saved["scene"] = eui::scene_name(palette.scene);
+        json["palette"] = saved;
+    }
     json["metrics_absolute"] = true;
     json["WindowPadding"] = GUI::get().pair_json(style.WindowPadding);
     json["FramePadding"] = GUI::get().pair_json(style.FramePadding);
@@ -107,25 +140,61 @@ matjson::Value GUI::style_json() {
     json["CircleTessellationMaxError"] = style.CircleTessellationMaxError;
     json["SharpEdges"] = style.CircleTessellationMaxError >= 2.5f;
     json["colors"] = matjson::Value::array();
-    for (int i = 0; i < ImGuiCol_COUNT; ++i) json["colors"].push(GUI::get().color_json(style.Colors[i]));
+    for (int i = 0; i < ImGuiCol_COUNT; ++i)
+        json["colors"].push(GUI::get().color_json(style.Colors[i]));
     json["editor_p1"] = matjson::Value::array();
     json["editor_p2"] = matjson::Value::array();
     json["editor_sel_p1"] = matjson::Value::array();
     json["editor_sel_p2"] = matjson::Value::array();
     for (int i = 0; i < 4; ++i) {
-        json["editor_p1"].push(value.editor_p1[i]);
-        json["editor_p2"].push(value.editor_p2[i]);
-        json["editor_sel_p1"].push(value.editor_sel_p1[i]);
-        json["editor_sel_p2"].push(value.editor_sel_p2[i]);
+        json["editor_p1"].push(logic.editor_p1[i]);
+        json["editor_p2"].push(logic.editor_p2[i]);
+        json["editor_sel_p1"].push(logic.editor_sel_p1[i]);
+        json["editor_sel_p2"].push(logic.editor_sel_p2[i]);
     }
     return json;
 }
 
 void GUI::apply_style_json(matjson::Value const& json) {
+    GUI::get().restore_base_sizes();
     auto& style = ImGui::GetStyle();
-    auto& value = Logic::get();
-    if (auto text = json["name"].asString()) value.theme_name = text.unwrap();
-    if (auto number = json["scale"].asDouble()) value.menu_scale = std::clamp(static_cast<float>(number.unwrap()), 0.35f, 3.f);
+    auto& logic = Logic::get();
+    if (auto text = json["name"].asString()) {
+        logic.theme_name = text.unwrap();
+    }
+    if (auto number = json["scale"].asDouble()) {
+        logic.menu_scale = std::clamp((float)(number.unwrap()), 0.35f, 3.f);
+    }
+    eui::rainbow_rim() = json["rainbow_rim"].asBool().unwrapOr(false);
+    if (json.contains("button_effects")) {
+        eui::button_effects() = json["button_effects"].asBool().unwrapOr(true);
+    }
+    auto scene_in = [](matjson::Value const& from) {
+        if (from["halloween"].asBool().unwrapOr(false)) {
+            return eui::Scene::Halloween;
+        }
+        return eui::scene_named(from["scene"].asString().unwrapOr(""));
+    };
+    eui::scene() = scene_in(json);
+    GUI::get().has_palette = json.contains("palette");
+    if (GUI::get().has_palette) {
+        auto const& saved = json["palette"];
+        auto number = [&](char const* key, float fallback) {
+            return (float)(saved[key].asDouble().unwrapOr(fallback));
+        };
+        eui::Palette palette;
+        palette.hue = number("hue", palette.hue);
+        palette.accent_hue = number("accent_hue", palette.accent_hue);
+        palette.richness = number("richness", palette.richness);
+        palette.depth = number("depth", palette.depth);
+        palette.accent_saturation = number("accent_saturation", palette.accent_saturation);
+        palette.accent_value = number("accent_value", palette.accent_value);
+        palette.light = saved["light"].asBool().unwrapOr(false);
+        palette.rainbow = saved["rainbow"].asBool().unwrapOr(false);
+        palette.scene = scene_in(saved);
+        GUI::get().palette = palette;
+        eui::sync_scene_turn(palette);
+    }
     GUI::get().read_pair(json, "WindowPadding", style.WindowPadding);
     GUI::get().read_pair(json, "FramePadding", style.FramePadding);
     GUI::get().read_pair(json, "CellPadding", style.CellPadding);
@@ -137,7 +206,9 @@ void GUI::apply_style_json(matjson::Value const& json) {
     GUI::get().read_pair(json, "SelectableTextAlign", style.SelectableTextAlign);
     GUI::get().read_pair(json, "DisplaySafeAreaPadding", style.DisplaySafeAreaPadding);
     auto number = [&](char const* key, float& field) {
-        if (auto parsed = json[key].asDouble()) field = static_cast<float>(parsed.unwrap());
+        if (auto parsed = json[key].asDouble()) {
+            field = (float)(parsed.unwrap());
+        }
     };
     number("IndentSpacing", style.IndentSpacing);
     number("ScrollbarSize", style.ScrollbarSize);
@@ -158,36 +229,55 @@ void GUI::apply_style_json(matjson::Value const& json) {
     number("CircleTessellationMaxError", style.CircleTessellationMaxError);
     if (auto flag = json["SharpEdges"].asBool()) {
         style.CircleTessellationMaxError = flag.unwrap() ? 5.f : 0.1f;
-    } else if (style.CircleTessellationMaxError >= 2.5f) {
+    }
+    else if (style.CircleTessellationMaxError >= 2.5f) {
         style.CircleTessellationMaxError = 5.f;
-    } else if (style.CircleTessellationMaxError > 0.f) {
+    }
+    else if (style.CircleTessellationMaxError > 0.f) {
         style.CircleTessellationMaxError = 0.1f;
     }
     style.AntiAliasedLines = true;
     style.AntiAliasedLinesUseTex = true;
     style.AntiAliasedFill = true;
     if (json["colors"].isArray()) {
-        int count = std::min(static_cast<int>(json["colors"].size()), static_cast<int>(ImGuiCol_COUNT));
-        for (int i = 0; i < count; ++i) {
-            if (!json["colors"][i].isArray() || json["colors"][i].size() < 4) continue;
+        int amt = std::min(static_cast<int>(json["colors"].size()), static_cast<int>(ImGuiCol_COUNT));
+        for (int i = 0; i < amt; ++i) {
+            if (!json["colors"][i].isArray() || json["colors"][i].size() < 4) {
+                continue;
+            }
             ImVec4 color = style.Colors[i];
-            if (auto channel = json["colors"][i][0].asDouble()) color.x = static_cast<float>(channel.unwrap());
-            if (auto channel = json["colors"][i][1].asDouble()) color.y = static_cast<float>(channel.unwrap());
-            if (auto channel = json["colors"][i][2].asDouble()) color.z = static_cast<float>(channel.unwrap());
-            if (auto channel = json["colors"][i][3].asDouble()) color.w = static_cast<float>(channel.unwrap());
+            if (auto channel = json["colors"][i][0].asDouble()) {
+                color.x = (float)(channel.unwrap());
+            }
+            if (auto channel = json["colors"][i][1].asDouble()) {
+                color.y = (float)(channel.unwrap());
+            }
+            if (auto channel = json["colors"][i][2].asDouble()) {
+                color.z = (float)(channel.unwrap());
+            }
+            if (auto channel = json["colors"][i][3].asDouble()) {
+                color.w = (float)(channel.unwrap());
+            }
             style.Colors[i] = color;
         }
     }
-    GUI::get().read_color(json, "editor_p1", value.editor_p1);
-    GUI::get().read_color(json, "editor_p2", value.editor_p2);
-    GUI::get().read_color(json, "editor_sel_p1", value.editor_sel_p1);
-    GUI::get().read_color(json, "editor_sel_p2", value.editor_sel_p2);
-    if (style.CurveTessellationTol < 0.10f) style.CurveTessellationTol = 0.10f;
+    GUI::get().read_color(json, "editor_p1", logic.editor_p1);
+    GUI::get().read_color(json, "editor_p2", logic.editor_p2);
+    GUI::get().read_color(json, "editor_sel_p1", logic.editor_sel_p1);
+    GUI::get().read_color(json, "editor_sel_p2", logic.editor_sel_p2);
+    if (style.CurveTessellationTol < 0.10f) {
+        style.CurveTessellationTol = 0.10f;
+    }
     bool absolute = false;
-    if (auto flag = json["metrics_absolute"].asBool()) absolute = flag.unwrap();
-    if (!absolute && value.menu_scale != 1.f) {
-        float bake = value.menu_scale;
-        auto grow = [&](ImVec2& pair) { pair.x *= bake; pair.y *= bake; };
+    if (auto flag = json["metrics_absolute"].asBool()) {
+        absolute = flag.unwrap();
+    }
+    if (!absolute && logic.menu_scale != 1.f) {
+        float bake = logic.menu_scale;
+        auto grow = [&](ImVec2& pair) {
+            pair.x *= bake;
+            pair.y *= bake;
+        };
         grow(style.WindowPadding);
         grow(style.FramePadding);
         grow(style.CellPadding);
@@ -209,24 +299,29 @@ void GUI::apply_style_json(matjson::Value const& json) {
     GUI::get().on_style_replaced();
 }
 
-std::filesystem::path GUI::theme_path(std::string const& name) {
+fs::path GUI::theme_path(std::string const& name) {
     auto safe = name.empty() ? std::string("Default") : name;
     for (char& glyph : safe) {
-        if (glyph == '/' || glyph == '\\' || glyph == ':') glyph = '_';
+        if (glyph == '/' || glyph == '\\' || glyph == ':') {
+            glyph = '_';
+        }
     }
     return Logic::get().save_root() / "themes" / (safe + ".ui.json");
 }
 
-void GUI::write_theme(std::filesystem::path const& path) {
+void GUI::export_theme(fs::path const& path) {
+    log::debug("export theme");
     std::error_code error;
-    std::filesystem::create_directories(path.parent_path(), error);
+    fs::create_directories(path.parent_path(), error);
     std::ofstream file(path);
-    if (!file) return;
+    if (!file)
+        return;
     file << GUI::get().style_json().dump(2);
 }
 
 void GUI::note_style_edit() {
-    if (ImGui::IsItemDeactivatedAfterEdit()) GUI::get().write_theme(GUI::get().theme_path("current"));
+    if (ImGui::IsItemDeactivatedAfterEdit())
+        GUI::get().export_theme(GUI::get().theme_path("current"));
 }
 
 bool edit_style_vec(char const* id, ImVec2& live, float min, float max) {
@@ -234,12 +329,19 @@ bool edit_style_vec(char const* id, ImVec2& live, float min, float max) {
         ImVec2 value;
         bool drag = false;
     };
+
     static std::unordered_map<std::string, Draft> drafts;
     auto& draft = drafts[id];
-    if (!draft.drag) draft.value = live;
-    ImGui::SliderFloat2(id, &draft.value.x, min, max, "%.0f");
-    if (ImGui::IsItemActivated()) draft.drag = true;
-    if (!ImGui::IsItemDeactivated()) return false;
+    if (!draft.drag) {
+        draft.value = live;
+    }
+    eui::SliderFloat2(id, &draft.value.x, min, max, "%.0f");
+    if (ImGui::IsItemActivated()) {
+        draft.drag = true;
+    }
+    if (!ImGui::IsItemDeactivated()) {
+        return false;
+    }
     draft.drag = false;
     live = draft.value;
     GUI::get().note_style_edit();
@@ -251,12 +353,19 @@ bool edit_style_float(char const* id, float& live, float min, float max) {
         float value = 0.f;
         bool drag = false;
     };
+
     static std::unordered_map<std::string, Draft> drafts;
     auto& draft = drafts[id];
-    if (!draft.drag) draft.value = live;
-    ImGui::SliderFloat(id, &draft.value, min, max, "%.0f");
-    if (ImGui::IsItemActivated()) draft.drag = true;
-    if (!ImGui::IsItemDeactivated()) return false;
+    if (!draft.drag) {
+        draft.value = live;
+    }
+    eui::SliderFloat(id, &draft.value, min, max, "%.0f");
+    if (ImGui::IsItemActivated()) {
+        draft.drag = true;
+    }
+    if (!ImGui::IsItemDeactivated()) {
+        return false;
+    }
     draft.drag = false;
     live = draft.value;
     GUI::get().note_style_edit();
@@ -270,224 +379,62 @@ void GUI::paint_editor(float* dest, ImVec4 color) {
     dest[3] = color.w;
 }
 
-void GUI::randomize_theme() {
-    std::mt19937 rng{std::random_device{}()};
-    std::uniform_real_distribution<float> unit(0.f, 1.f);
-    std::uniform_int_distribution<int> schemePick(0, 6);
-    std::uniform_int_distribution<int> moodPick(0, 3);
-
-    auto wrap = [](float h) {
-        h = std::fmod(h, 1.f);
-        return h < 0.f ? h + 1.f : h;
+// editor rows come from the themes own colors so they always sit right on it
+// p1 = the accent, p2 = the same accent turned a bit (NOT the opposite color, that clashed)
+void GUI::paint_editor_from_theme() {
+    auto& logic = Logic::get();
+    auto const& colors = ImGui::GetStyle().Colors;
+    ImVec4 base = colors[ImGuiCol_FrameBg], accent = colors[ImGuiCol_CheckMark];
+    base.w = accent.w = 1.f;
+    float h, sat, val;
+    ImGui::ColorConvertRGBtoHSV(accent.x, accent.y, accent.z, h, sat, val);
+    ImVec4 second = accent;
+    if (sat < .08f) {
+    }
+    else {
+        float turned = h + 50.f / 360.f;
+        turned -= std::floor(turned);
+        ImGui::ColorConvertHSVtoRGB(turned, sat, val, second.x, second.y, second.z);
+    }
+    auto blend = [&](ImVec4 const& tint, float amount) {
+        return ImVec4(base.x + (tint.x - base.x) * amount, base.y + (tint.y - base.y) * amount, base.z + (tint.z - base.z) * amount, 1.f);
     };
-    auto hsv = [](float h, float s, float v, float a = 1.f) {
-        float red = 0.f;
-        float green = 0.f;
-        float blue = 0.f;
-        ImGui::ColorConvertHSVtoRGB(h, std::clamp(s, 0.f, 1.f), std::clamp(v, 0.f, 1.f), red, green, blue);
-        return ImVec4(red, green, blue, a);
-    };
-    auto mix = [](ImVec4 a, ImVec4 b, float t) {
-        return ImVec4(
-            a.x + (b.x - a.x) * t,
-            a.y + (b.y - a.y) * t,
-            a.z + (b.z - a.z) * t,
-            a.w + (b.w - a.w) * t
-        );
-    };
+    GUI::get().paint_editor(logic.editor_p1, blend(accent, .32f));
+    GUI::get().paint_editor(logic.editor_p2, blend(second, .32f));
+    GUI::get().paint_editor(logic.editor_sel_p1, blend(accent, .62f));
+    GUI::get().paint_editor(logic.editor_sel_p2, blend(second, .62f));
+}
 
-    float hue = unit(rng);
-    enum class Scheme { Complement, Split, Triad, Tetrad, Analogous, Mono, Compound };
-    auto scheme = static_cast<Scheme>(schemePick(rng));
-    float second = hue;
-    float third = hue;
-    float fourth = hue;
-    switch (scheme) {
-        case Scheme::Complement:
-            second = wrap(hue + 0.5f);
-            third = wrap(hue + 0.5f);
-            fourth = hue;
-            break;
-        case Scheme::Split:
-            second = wrap(hue + 0.42f);
-            third = wrap(hue + 0.58f);
-            fourth = wrap(hue + 0.5f);
-            break;
-        case Scheme::Triad:
-            second = wrap(hue + 1.f / 3.f);
-            third = wrap(hue + 2.f / 3.f);
-            fourth = second;
-            break;
-        case Scheme::Tetrad:
-            second = wrap(hue + 0.25f);
-            third = wrap(hue + 0.5f);
-            fourth = wrap(hue + 0.75f);
-            break;
-        case Scheme::Analogous:
-            second = wrap(hue + 0.08f);
-            third = wrap(hue - 0.08f);
-            fourth = wrap(hue + 0.16f);
-            break;
-        case Scheme::Mono:
-            second = hue;
-            third = hue;
-            fourth = hue;
-            break;
-        case Scheme::Compound:
-            second = wrap(hue + 0.17f);
-            third = wrap(hue + 0.5f);
-            fourth = wrap(hue + 0.67f);
-            break;
-    }
-
-    enum class Mood { Dark, Light, Muted, Neon };
-    auto mood = static_cast<Mood>(moodPick(rng));
-    float baseS = 0.28f;
-    float baseV = 0.11f;
-    float panelV = 0.16f;
-    float raisedV = 0.23f;
-    float textV = 0.96f;
-    float mutedV = 0.62f;
-    float accentS = 0.62f;
-    float accentV = 0.78f;
-    switch (mood) {
-        case Mood::Dark:
-            baseS = 0.22f + unit(rng) * 0.20f;
-            baseV = 0.07f + unit(rng) * 0.08f;
-            panelV = baseV + 0.05f;
-            raisedV = baseV + 0.12f;
-            textV = 0.94f + unit(rng) * 0.05f;
-            mutedV = 0.55f + unit(rng) * 0.12f;
-            accentS = 0.55f + unit(rng) * 0.30f;
-            accentV = 0.70f + unit(rng) * 0.22f;
-            break;
-        case Mood::Light:
-            baseS = 0.08f + unit(rng) * 0.18f;
-            baseV = 0.90f + unit(rng) * 0.08f;
-            panelV = baseV - 0.04f;
-            raisedV = baseV - 0.10f;
-            textV = 0.12f + unit(rng) * 0.10f;
-            mutedV = 0.40f + unit(rng) * 0.12f;
-            accentS = 0.50f + unit(rng) * 0.35f;
-            accentV = 0.55f + unit(rng) * 0.25f;
-            break;
-        case Mood::Muted:
-            baseS = 0.10f + unit(rng) * 0.14f;
-            baseV = 0.14f + unit(rng) * 0.14f;
-            panelV = baseV + 0.06f;
-            raisedV = baseV + 0.12f;
-            textV = 0.88f + unit(rng) * 0.08f;
-            mutedV = 0.58f + unit(rng) * 0.12f;
-            accentS = 0.28f + unit(rng) * 0.22f;
-            accentV = 0.62f + unit(rng) * 0.20f;
-            break;
-        case Mood::Neon:
-            baseS = 0.35f + unit(rng) * 0.25f;
-            baseV = 0.05f + unit(rng) * 0.08f;
-            panelV = baseV + 0.06f;
-            raisedV = baseV + 0.14f;
-            textV = 0.96f;
-            mutedV = 0.60f;
-            accentS = 0.78f + unit(rng) * 0.20f;
-            accentV = 0.88f + unit(rng) * 0.10f;
-            break;
-    }
-
-    if (scheme == Scheme::Mono) {
-        second = hue;
-        third = hue;
-        fourth = hue;
-        accentS = std::min(1.f, accentS + 0.08f);
-    }
-
-    auto& style = ImGui::GetStyle();
-    auto set = [&](ImGuiCol slot, ImVec4 color) { style.Colors[slot] = color; };
-
-    ImVec4 background = hsv(hue, baseS, baseV, 0.97f);
-    ImVec4 panel = hsv(hue, baseS * 0.85f, panelV, 0.98f);
-    ImVec4 raised = hsv(hue, baseS * 0.75f, raisedV, 1.f);
-    ImVec4 text = hsv(hue, mood == Mood::Light ? 0.12f : 0.04f, textV, 1.f);
-    ImVec4 muted = hsv(hue, mood == Mood::Light ? 0.10f : 0.08f, mutedV, 1.f);
-    ImVec4 line = hsv(second, baseS * 0.6f, mood == Mood::Light ? raisedV - 0.12f : raisedV + 0.10f, 0.75f);
-    ImVec4 accent = hsv(second, accentS, accentV, 1.f);
-    ImVec4 accentHot = hsv(second, std::min(1.f, accentS * 0.85f), std::min(1.f, accentV + 0.16f), 1.f);
-    ImVec4 accentDeep = hsv(second, accentS * 0.9f, accentV * 0.55f, 1.f);
-    ImVec4 support = hsv(third, accentS * 0.85f, accentV * 0.90f, 1.f);
-    ImVec4 highlight = hsv(fourth, accentS * 0.75f, std::min(1.f, accentV + 0.08f), 1.f);
-
-    if (mood == Mood::Light) {
-        accentDeep = hsv(second, accentS * 0.75f, accentV * 0.75f, 1.f);
-        line = hsv(hue, baseS * 0.5f, raisedV - 0.18f, 0.65f);
-    }
-
-    set(ImGuiCol_Text, text);
-    set(ImGuiCol_TextDisabled, muted);
-    set(ImGuiCol_WindowBg, background);
-    set(ImGuiCol_ChildBg, ImVec4(panel.x, panel.y, panel.z, 0.55f));
-    set(ImGuiCol_PopupBg, panel);
-    set(ImGuiCol_Border, line);
-    set(ImGuiCol_BorderShadow, ImVec4(0.f, 0.f, 0.f, 0.f));
-    set(ImGuiCol_FrameBg, raised);
-    set(ImGuiCol_FrameBgHovered, mix(raised, accent, 0.35f));
-    set(ImGuiCol_FrameBgActive, mix(raised, accent, 0.55f));
-    set(ImGuiCol_TitleBg, hsv(hue, baseS, std::max(0.f, baseV - 0.03f), 1.f));
-    set(ImGuiCol_TitleBgActive, mix(panel, accent, 0.45f));
-    set(ImGuiCol_TitleBgCollapsed, background);
-    set(ImGuiCol_MenuBarBg, panel);
-    set(ImGuiCol_ScrollbarBg, background);
-    set(ImGuiCol_ScrollbarGrab, accentDeep);
-    set(ImGuiCol_ScrollbarGrabHovered, accent);
-    set(ImGuiCol_ScrollbarGrabActive, accentHot);
-    set(ImGuiCol_CheckMark, accentHot);
-    set(ImGuiCol_SliderGrab, accent);
-    set(ImGuiCol_SliderGrabActive, accentHot);
-    set(ImGuiCol_Button, accentDeep);
-    set(ImGuiCol_ButtonHovered, accent);
-    set(ImGuiCol_ButtonActive, support);
-    set(ImGuiCol_Header, mix(raised, accent, 0.55f));
-    set(ImGuiCol_HeaderHovered, mix(raised, accent, 0.75f));
-    set(ImGuiCol_HeaderActive, accent);
-    set(ImGuiCol_Separator, line);
-    set(ImGuiCol_SeparatorHovered, accent);
-    set(ImGuiCol_SeparatorActive, accentHot);
-    set(ImGuiCol_ResizeGrip, accentDeep);
-    set(ImGuiCol_ResizeGripHovered, accent);
-    set(ImGuiCol_ResizeGripActive, accentHot);
-    set(ImGuiCol_Tab, hsv(hue, baseS * 0.9f, panelV, 1.f));
-    set(ImGuiCol_TabHovered, accent);
-    set(ImGuiCol_TabActive, mix(panel, accent, 0.55f));
-    set(ImGuiCol_TabUnfocused, hsv(hue, baseS * 0.7f, baseV, 1.f));
-    set(ImGuiCol_TabUnfocusedActive, mix(panel, accent, 0.35f));
-    set(ImGuiCol_PlotLines, support);
-    set(ImGuiCol_PlotLinesHovered, accentHot);
-    set(ImGuiCol_PlotHistogram, accent);
-    set(ImGuiCol_PlotHistogramHovered, accentHot);
-    set(ImGuiCol_TableHeaderBg, mix(panel, accent, 0.25f));
-    set(ImGuiCol_TableBorderStrong, line);
-    set(ImGuiCol_TableBorderLight, ImVec4(line.x, line.y, line.z, 0.45f));
-    set(ImGuiCol_TableRowBg, ImVec4(0.f, 0.f, 0.f, 0.f));
-    set(ImGuiCol_TableRowBgAlt, ImVec4(raised.x, raised.y, raised.z, 0.35f));
-    set(ImGuiCol_TextSelectedBg, ImVec4(accent.x, accent.y, accent.z, 0.45f));
-    set(ImGuiCol_DragDropTarget, accentHot);
-    set(ImGuiCol_NavHighlight, accent);
-    set(ImGuiCol_NavWindowingHighlight, ImVec4(1.f, 1.f, 1.f, 0.7f));
-    set(ImGuiCol_NavWindowingDimBg, ImVec4(0.2f, 0.2f, 0.2f, 0.2f));
-    set(ImGuiCol_ModalWindowDimBg, ImVec4(0.f, 0.f, 0.f, 0.45f));
-
-    auto& value = Logic::get();
-    GUI::get().paint_editor(value.editor_p1, hsv(hue, accentS * 0.9f, accentV, 1.f));
-    GUI::get().paint_editor(value.editor_p2, hsv(second, accentS, std::min(1.f, accentV + 0.05f), 1.f));
-    GUI::get().paint_editor(value.editor_sel_p1, hsv(third, accentS * 0.7f, std::min(1.f, accentV + 0.15f), 1.f));
-    GUI::get().paint_editor(value.editor_sel_p2, highlight);
-    GUI::get().write_theme(GUI::get().theme_path("current"));
+void GUI::use_palette(eui::Palette const& palette, std::string const& name) {
+    eui::apply_palette(palette);
+    GUI::get().palette = palette;
+    GUI::get().has_palette = true;
+    auto& logic = Logic::get();
+    GUI::get().paint_editor_from_theme();
+    logic.theme_name = name;
+    GUI::get().export_theme(GUI::get().theme_path("current"));
     Logic::get().save_settings_file();
+}
+
+void GUI::randomize_theme() {
+    log::debug("randomize theme");
+    std::mt19937 rng{ std::random_device{}() };
+    std::uniform_real_distribution<float> unit(0.f, 1.f);
+    eui::Palette palette;
+    palette.hue = unit(rng);
+    float lean = unit(rng) < .35f ? 0.f : (unit(rng) - .5f) * (70.f / 360.f);
+    palette.accent_hue = palette.hue + lean;
+    palette.richness = .7f + unit(rng) * .5f;
+    palette.depth = .85f + unit(rng) * .35f;
+    palette.accent_saturation = .38f + unit(rng) * .34f;
+    GUI::get().use_palette(palette, "Random");
 }
 
 void GUI::color_row(char const* label, float* color, int id) {
     ImGui::PushID(id);
     if (ImGui::ColorEdit4("##editor-color", color, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaBar)) {
         Logic::get().save_settings_file();
-        GUI::get().write_theme(GUI::get().theme_path("current"));
+        GUI::get().export_theme(GUI::get().theme_path("current"));
     }
     ImGui::SameLine();
     ImGui::TextUnformatted(label);
@@ -496,125 +443,166 @@ void GUI::color_row(char const* label, float* color, int id) {
 
 void GUI::apply_saved_theme() {
     auto path = GUI::get().theme_path("current");
-    if (!std::filesystem::exists(path)) return;
+    constexpr int ECHO_STYLE = 2;
+    auto& logic = Logic::get();
+    if (logic.ui_style < ECHO_STYLE) {
+        std::error_code error;
+        auto kept = GUI::get().theme_path("Before Echo style");
+        if (fs::exists(path, error) && !fs::exists(kept, error)) {
+            fs::rename(path, kept, error);
+        }
+        logic.ui_style = ECHO_STYLE;
+        logic.theme_name = "Echo";
+        GUI::get().palette = eui::Palette{};
+        GUI::get().has_palette = true;
+        GUI::get().export_theme(path);
+        Logic::get().save_settings_file();
+        return;
+    }
+    if (!fs::exists(path))
+        return;
     std::ifstream file(path);
     auto parsed = matjson::Value::parse(file);
-    if (!parsed) return;
+    if (!parsed)
+        return;
     GUI::get().apply_style_json(parsed.unwrap());
 }
+
+// convert old
+matjson::Value GUI::convert_old_theme(matjson::Value const& old, std::string const& name) {
+    matjson::Value json;
+    json["name"] = name;
+    json["metrics_absolute"] = true;
+    if (auto scale = old["GlobalScale"].asDouble()) {
+        json["scale"] = scale.unwrap();
+    }
+    for (std::string key : { "WindowPadding", "FramePadding", "CellPadding", "ItemSpacing", "ItemInnerSpacing", "TouchExtraPadding",
+             "WindowTitleAlign", "ButtonTextAlign", "SelectableTextAlign", "DisplaySafeAreaPadding" }) {
+        auto x = old[key + "X"].asDouble();
+        auto y = old[key + "Y"].asDouble();
+        if (x) {
+            if (y) {
+                json[key] = GUI::get().pair_json(ImVec2((float)(x.unwrap()), (float)(y.unwrap())));
+            }
+        }
+    }
+    for (std::string key : { "IndentSpacing", "ScrollbarSize", "GrabMinSize", "WindowBorderSize", "ChildBorderSize", "PopupBorderSize",
+             "FrameBorderSize", "TabBorderSize", "WindowRounding", "ChildRounding", "FrameRounding", "PopupRounding", "ScrollbarRounding",
+             "GrabRounding", "TabRounding", "CurveTessellationTol", "CircleTessellationMaxError" }) {
+        if (old.contains(key)) {
+            json[key] = old[key];
+        }
+    }
+    auto& style = ImGui::GetStyle();
+    matjson::Value colors = matjson::Value::array();
+    for (int i = 0; i < ImGuiCol_COUNT; ++i) {
+        std::string key = ImGui::GetStyleColorName(i);
+        if (i == ImGuiCol_TabSelected) {
+            key = "TabActive";
+        }
+        if (i == ImGuiCol_TabDimmed) {
+            key = "TabUnfocused";
+        }
+        if (i == ImGuiCol_TabDimmedSelected) {
+            key = "TabUnfocusedActive";
+        }
+        if (i == ImGuiCol_NavCursor) {
+            key = "NavHighlight";
+        }
+        if (old[key].isArray() && old[key].size() >= 4)
+            colors.push(old[key]);
+        else
+            colors.push(GUI::get().color_json(style.Colors[i]));
+    }
+    json["colors"] = colors;
+    for (auto [from, to] : { std::pair{ "player_1_button_color", "editor_p1" }, std::pair{ "player_2_button_color", "editor_p2" },
+             std::pair{ "input_selected_color_p1", "editor_sel_p1" }, std::pair{ "input_selected_color_p2", "editor_sel_p2" } }) {
+        if (old.contains(from)) {
+            json[to] = old[from];
+        }
+    }
+    return json;
+}
+
+void GUI::import_theme(fs::path const& path) {
+    std::ifstream file(path);
+    auto parsed = matjson::Value::parse(file);
+    if (!parsed)
+        return;
+    auto json = parsed.unwrap();
+    if (!json["colors"].isArray() && json.contains("FramePaddingX")) {
+        json = GUI::get().convert_old_theme(json, geode::utils::string::pathToString(path.stem()));
+    }
+    GUI::get().apply_theme_json(json);
+}
+
 void GUI::apply_theme_json(matjson::Value const& json) {
     GUI::get().apply_style_json(json);
-    GUI::get().write_theme(GUI::get().theme_path("current"));
+    GUI::get().export_theme(GUI::get().theme_path("current"));
     Logic::get().save_settings_file();
 }
 
-void GUI::draw_theme() {
-    auto& value = Logic::get();
+void GUI::ui_editor() {
+    log::debug("ui editor");
+    auto& logic = Logic::get();
     auto& style = ImGui::GetStyle();
-    GUI::get().section_label("Theme");
-    ImGui::SetNextItemWidth(ImGui::GetFontSize() * 10.f);
-    ImGui::InputText("Name", &value.theme_name);
-    if (ImGui::IsItemDeactivatedAfterEdit()) Logic::get().save_settings_file();
-    float themeW = GUI::get().shared_button_width({"Save", "Load", "Randomize"});
-    if (ImGui::Button("Save", ImVec2(themeW, 0.f))) {
-        GUI::get().write_theme(GUI::get().theme_path(value.theme_name));
-        GUI::get().write_theme(GUI::get().theme_path("current"));
-        Logic::get().save_settings_file();
-    }
-    ImGui::SameLine();
-    if (ImGui::Button("Load", ImVec2(themeW, 0.f))) GUI::get().open_theme_picker();
-    ImGui::SameLine();
-    if (ImGui::Button("Randomize", ImVec2(themeW, 0.f))) GUI::get().randomize_theme();
-    if (ImGui::Checkbox("Docked Menu", &value.docked_menu)) Logic::get().save_settings_file();
-    ImGui::SameLine();
-    bool sharp = style.CircleTessellationMaxError >= 2.5f;
-    if (ImGui::Checkbox("Sharp Edges", &sharp)) {
-        style.CircleTessellationMaxError = sharp ? 5.f : 0.1f;
-        GUI::get().write_theme(GUI::get().theme_path("current"));
-    }
-    ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5.f);
-    float scale_cap = GUI::get().scale_cap;
-    float dragMax = GUI::get().scale_dragging ? 3.f : scale_cap;
-    if (ImGui::DragFloat("Global Scale", &value.menu_scale, 0.01f, 0.35f, dragMax, "%.1f")) {
-        value.menu_scale = std::clamp(value.menu_scale, 0.35f, 3.f);
-    } ImGui::SameLine();
-    if (ImGui::IsItemActivated()) GUI::get().scale_dragging = true;
-    if (ImGui::IsItemDeactivated()) {
-        GUI::get().scale_dragging = false;
-        value.menu_scale = std::clamp(value.menu_scale, 0.35f, GUI::get().scale_cap);
-    }
-    if (ImGui::IsItemDeactivatedAfterEdit()) {
-        Logic::get().save_settings_file();
-        GUI::get().write_theme(GUI::get().theme_path("current"));
-    }
-    ImGui::SetNextItemWidth(ImGui::GetFontSize() * 6.f);
-    if (ImGui::DragFloat("Animation Speed", &value.menu_anim_speed, 0.01f, 0.25f, 4.f, "%.2f")) {
-        value.menu_anim_speed = std::clamp(value.menu_anim_speed, 0.25f, 4.f);
-    }
-    if (ImGui::IsItemDeactivatedAfterEdit()) Logic::get().save_settings_file();
-    ImGui::Separator();
-
-    style.AntiAliasedLines = true;
-    style.AntiAliasedLinesUseTex = true;
-    style.AntiAliasedFill = true;
-
-    float themeChildH = ImGui::GetFontSize() * 18.f;
-    float filterOffset = ImGui::GetFrameHeight() + ImGui::GetStyle().ItemSpacing.y;
-    float sizesChildH = themeChildH + filterOffset;
-    float themeChildW = ImGui::GetFontSize() * 26.f;
-    float themeItemW = ImGui::GetFontSize() * 14.f;
+    auto& sizes = GUI::get().base_style;
+    float theme_child_h = ImGui::GetFontSize() * 18.f;
+    float filter_offset = ImGui::GetFrameHeight() + ImGui::GetStyle().ItemSpacing.y;
+    float sizes_child_h = theme_child_h + filter_offset, theme_child_w = ImGui::GetFontSize() * 26.f;
+    float theme_item_w = ImGui::GetFontSize() * 14.f;
 
     if (ImGui::BeginTabBar("##echo-theme")) {
         if (ImGui::BeginTabItem("Sizes")) {
-            ImGui::BeginChild("##echo-sizes", ImVec2(themeChildW, sizesChildH), ImGuiChildFlags_Borders);
-            ImGui::PushItemWidth(themeItemW);
+            ImGui::BeginChild("##echo-sizes", ImVec2(theme_child_w, sizes_child_h), ImGuiChildFlags_Borders);
+            ImGui::PushItemWidth(theme_item_w);
             ImGui::TextUnformatted("Main");
-            edit_style_vec("WindowPadding", style.WindowPadding, 0.f, 20.f);
-            edit_style_vec("FramePadding", style.FramePadding, 0.f, 20.f);
-            edit_style_vec("CellPadding", style.CellPadding, 0.f, 20.f);
-            edit_style_vec("ItemSpacing", style.ItemSpacing, 0.f, 20.f);
-            edit_style_vec("ItemInnerSpacing", style.ItemInnerSpacing, 0.f, 20.f);
-            edit_style_vec("TouchExtraPadding", style.TouchExtraPadding, 0.f, 10.f);
-            edit_style_float("IndentSpacing", style.IndentSpacing, 0.f, 30.f);
-            edit_style_float("ScrollbarSize", style.ScrollbarSize, 1.f, 20.f);
-            edit_style_float("GrabMinSize", style.GrabMinSize, 1.f, 20.f);
+            edit_style_vec("WindowPadding", sizes.WindowPadding, 0.f, 20.f);
+            edit_style_vec("FramePadding", sizes.FramePadding, 0.f, 20.f);
+            edit_style_vec("CellPadding", sizes.CellPadding, 0.f, 20.f);
+            edit_style_vec("ItemSpacing", sizes.ItemSpacing, 0.f, 20.f);
+            edit_style_vec("ItemInnerSpacing", sizes.ItemInnerSpacing, 0.f, 20.f);
+            edit_style_vec("TouchExtraPadding", sizes.TouchExtraPadding, 0.f, 10.f);
+            edit_style_float("IndentSpacing", sizes.IndentSpacing, 0.f, 30.f);
+            edit_style_float("ScrollbarSize", sizes.ScrollbarSize, 1.f, 20.f);
+            edit_style_float("GrabMinSize", sizes.GrabMinSize, 1.f, 20.f);
             ImGui::TextUnformatted("Borders");
-            edit_style_float("WindowBorderSize", style.WindowBorderSize, 0.f, 1.f);
-            edit_style_float("ChildBorderSize", style.ChildBorderSize, 0.f, 1.f);
-            edit_style_float("PopupBorderSize", style.PopupBorderSize, 0.f, 1.f);
-            edit_style_float("FrameBorderSize", style.FrameBorderSize, 0.f, 1.f);
-            edit_style_float("TabBorderSize", style.TabBorderSize, 0.f, 1.f);
+            edit_style_float("WindowBorderSize", sizes.WindowBorderSize, 0.f, 1.f);
+            edit_style_float("ChildBorderSize", sizes.ChildBorderSize, 0.f, 1.f);
+            edit_style_float("PopupBorderSize", sizes.PopupBorderSize, 0.f, 1.f);
+            edit_style_float("FrameBorderSize", sizes.FrameBorderSize, 0.f, 1.f);
+            edit_style_float("TabBorderSize", sizes.TabBorderSize, 0.f, 1.f);
             ImGui::TextUnformatted("Rounding");
-            edit_style_float("WindowRounding", style.WindowRounding, 0.f, 12.f);
-            edit_style_float("ChildRounding", style.ChildRounding, 0.f, 12.f);
-            edit_style_float("FrameRounding", style.FrameRounding, 0.f, 12.f);
-            edit_style_float("PopupRounding", style.PopupRounding, 0.f, 12.f);
-            edit_style_float("ScrollbarRounding", style.ScrollbarRounding, 0.f, 12.f);
-            edit_style_float("GrabRounding", style.GrabRounding, 0.f, 12.f);
-            edit_style_float("TabRounding", style.TabRounding, 0.f, 12.f);
+            edit_style_float("WindowRounding", sizes.WindowRounding, 0.f, 12.f);
+            edit_style_float("ChildRounding", sizes.ChildRounding, 0.f, 12.f);
+            edit_style_float("FrameRounding", sizes.FrameRounding, 0.f, 12.f);
+            edit_style_float("PopupRounding", sizes.PopupRounding, 0.f, 12.f);
+            edit_style_float("ScrollbarRounding", sizes.ScrollbarRounding, 0.f, 12.f);
+            edit_style_float("GrabRounding", sizes.GrabRounding, 0.f, 12.f);
+            edit_style_float("TabRounding", sizes.TabRounding, 0.f, 12.f);
             ImGui::TextUnformatted("Alignment");
-            ImGui::DragFloat2("WindowTitleAlign", &style.WindowTitleAlign.x, 0.01f, 0.f, 1.f, "%.2f");
+            eui::DragFloat2("WindowTitleAlign", &sizes.WindowTitleAlign.x, 0.01f, 0.f, 1.f, "%.2f");
             GUI::get().note_style_edit();
-            int buttonSide = static_cast<int>(style.WindowMenuButtonPosition) + 1;
-            if (ImGui::Combo("WindowBtnPos", &buttonSide, "None\0Left\0Right\0")) {
-                style.WindowMenuButtonPosition = static_cast<ImGuiDir>(buttonSide - 1);
-                GUI::get().write_theme(GUI::get().theme_path("current"));
+            int button_side = static_cast<int>(sizes.WindowMenuButtonPosition) + 1;
+            if (eui::Combo("WindowBtnPos", &button_side, "None\0Left\0Right\0")) {
+                sizes.WindowMenuButtonPosition = static_cast<ImGuiDir>(button_side - 1);
+                GUI::get().export_theme(GUI::get().theme_path("current"));
             }
-            int colorSide = static_cast<int>(style.ColorButtonPosition);
-            if (ImGui::Combo("ColorButtonPosition", &colorSide, "Left\0Right\0")) {
-                style.ColorButtonPosition = static_cast<ImGuiDir>(colorSide);
-                GUI::get().write_theme(GUI::get().theme_path("current"));
+            int color_side = static_cast<int>(sizes.ColorButtonPosition);
+            if (eui::Combo("ColorButtonPosition", &color_side, "Left\0Right\0")) {
+                sizes.ColorButtonPosition = static_cast<ImGuiDir>(color_side);
+                GUI::get().export_theme(GUI::get().theme_path("current"));
             }
-            ImGui::DragFloat2("ButtonTextAlign", &style.ButtonTextAlign.x, 0.01f, 0.f, 1.f, "%.2f");
+            eui::DragFloat2("ButtonTextAlign", &sizes.ButtonTextAlign.x, 0.01f, 0.f, 1.f, "%.2f");
             ImGui::SameLine();
             GUI::get().help_marker("Alignment applies when a button is larger than its text.");
             GUI::get().note_style_edit();
-            ImGui::DragFloat2("SelectableTextAlign", &style.SelectableTextAlign.x, 0.01f, 0.f, 1.f, "%.2f");
+            eui::DragFloat2("SelectableTextAlign", &sizes.SelectableTextAlign.x, 0.01f, 0.f, 1.f, "%.2f");
             GUI::get().note_style_edit();
             ImGui::TextUnformatted("Safe Area Padding");
             ImGui::SameLine();
             GUI::get().help_marker("Adjust if the window edges sit off the screen.");
-            ImGui::SliderFloat2("SafePadding", &style.DisplaySafeAreaPadding.x, 0.f, 30.f, "%.0f");
+            eui::SliderFloat2("SafePadding", &sizes.DisplaySafeAreaPadding.x, 0.f, 30.f, "%.0f");
             GUI::get().note_style_edit();
             ImGui::PopItemWidth();
             ImGui::EndChild();
@@ -623,17 +611,27 @@ void GUI::draw_theme() {
         if (ImGui::BeginTabItem("Colors")) {
             static ImGuiTextFilter filter;
             filter.Draw("Filter colors", GUI::get().px(220.f));
-            ImGui::BeginChild("##echo-colors", ImVec2(themeChildW, themeChildH), ImGuiChildFlags_Borders);
-            if (filter.PassFilter("Player 1 In Editor")) GUI::get().color_row("Player 1 In Editor", value.editor_p1, 998);
-            if (filter.PassFilter("Player 2 In Editor")) GUI::get().color_row("Player 2 In Editor", value.editor_p2, 999);
-            if (filter.PassFilter("Player 1 In Editor (Selected)")) GUI::get().color_row("Player 1 In Editor (Selected)", value.editor_sel_p1, 997);
-            if (filter.PassFilter("Player 2 In Editor (Selected)")) GUI::get().color_row("Player 2 In Editor (Selected)", value.editor_sel_p2, 996);
+            ImGui::BeginChild("##echo-colors", ImVec2(theme_child_w, theme_child_h), ImGuiChildFlags_Borders);
+            if (filter.PassFilter("Player 1 In Editor")) {
+                GUI::get().color_row("Player 1 In Editor", logic.editor_p1, 998);
+            }
+            if (filter.PassFilter("Player 2 In Editor")) {
+                GUI::get().color_row("Player 2 In Editor", logic.editor_p2, 999);
+            }
+            if (filter.PassFilter("Player 1 In Editor (Selected)")) {
+                GUI::get().color_row("Player 1 In Editor (Selected)", logic.editor_sel_p1, 997);
+            }
+            if (filter.PassFilter("Player 2 In Editor (Selected)")) {
+                GUI::get().color_row("Player 2 In Editor (Selected)", logic.editor_sel_p2, 996);
+            }
             for (int i = 0; i < ImGuiCol_COUNT; ++i) {
                 char const* name = ImGui::GetStyleColorName(i);
-                if (!filter.PassFilter(name)) continue;
+                if (!filter.PassFilter(name)) {
+                    continue;
+                }
                 ImGui::PushID(i);
                 if (ImGui::ColorEdit4("##style-color", &style.Colors[i].x, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaBar)) {
-                    GUI::get().write_theme(GUI::get().theme_path("current"));
+                    GUI::get().export_theme(GUI::get().theme_path("current"));
                 }
                 ImGui::SameLine();
                 ImGui::TextUnformatted(name);
@@ -646,155 +644,234 @@ void GUI::draw_theme() {
     }
 }
 
-BindAction const kListed[] = {
-    {"open-menu", "Open menu"},
-    {"toggle-record", "Toggle recording"},
-    {"toggle-play", "Toggle playback"},
-    {"toggle-advance", "Toggle frame advance"},
-    {"step-frame", "Step one frame"},
-    {"step-back", "Step back one frame"},
-    {"key-click-both", "Click both players"},
-    {"key-swap", "Swap player input"},
-    {"key-shakes", "Disable shake"},
-    {"key-layout", "Layout mode"},
-    {"key-hitboxes", "Show hitboxes"},
-    {"key-trajectory", "Show trajectory"},
-    {"key-autoclick", "Autoclicker"},
-    {"key-no-overwrite", "No overwrite"},
-    {"key-ignore", "Ignore actions"},
-    {"key-show-recording", "Show recording label"},
-    {"key-show-cps", "Show CPS"},
-    {"key-show-frame", "Show frame"},
-    {"key-show-time", "Show time"},
-    {"key-show-percent", "Show percent"},
-    {"key-save", "Save replay"},
-    {"key-load", "Load replay"},
-    {"key-reset", "Reset level"},
-    {"key-speedhack", "Speedhack"},
-    {"key-click-dash-orbs", "Click dash orbs"},
-    {"key-click-black-orbs", "Click black orbs"},
-    {"key-pad-black-orb", "Auto black orb on pad"},
-    {"key-pad-blue-orb", "Auto blue orb on pad"},
-    {"key-pause-before-kill", "Prevent death"},
+BindAction const LISTED[] = {
+    { "open-menu", "Open menu" },
+    { "toggle-record", "Toggle recording" },
+    { "toggle-play", "Toggle playback" },
+    { "toggle-advance", "Toggle frame advance" },
+    { "step-frame", "Step one frame" },
+    { "step-back", "Step back one frame" },
+    { "find-best-frame", "Find best frame" },
+    { "key-click-both", "Click both players" },
+    { "key-swap", "Swap player input" },
+    { "key-shakes", "Disable shake" },
+    { "key-layout", "Layout mode" },
+    { "key-hitboxes", "Show hitboxes" },
+    { "key-trajectory", "Show trajectory" },
+    { "key-autoclick", "Autoclicker" },
+    { "key-no-overwrite", "No overwrite" },
+    { "key-ignore", "Ignore actions" },
+    { "key-show-recording", "Show recording label" },
+    { "key-show-cps", "Show CPS" },
+    { "key-show-frame", "Show frame" },
+    { "key-show-time", "Show time" },
+    { "key-show-percent", "Show percent" },
+    { "key-save", "Save replay" },
+    { "key-load", "Load replay" },
+    { "key-reset", "Reset level" },
+    { "key-speedhack", "Speedhack" },
+    { "key-click-dash-orbs", "Click dash orbs" },
+    { "key-click-black-orbs", "Click black orbs" },
+    { "key-pad-black-orb", "Auto black orb on pad" },
+    { "key-pad-blue-orb", "Auto blue orb on pad" },
+    { "key-pause-before-kill", "Prevent death" },
 };
 
-std::optional<cocos2d::enumKeyCodes> GUI::cocos_key(ImGuiKey key) {
-    using Code = cocos2d::enumKeyCodes;
-    if (key >= ImGuiKey_A && key <= ImGuiKey_Z) return static_cast<Code>(cocos2d::KEY_A + (key - ImGuiKey_A));
-    if (key >= ImGuiKey_0 && key <= ImGuiKey_9) return static_cast<Code>(cocos2d::KEY_Zero + (key - ImGuiKey_0));
-    if (key >= ImGuiKey_F1 && key <= ImGuiKey_F24) return static_cast<Code>(cocos2d::KEY_F1 + (key - ImGuiKey_F1));
-    if (key >= ImGuiKey_Keypad0 && key <= ImGuiKey_Keypad9) return static_cast<Code>(cocos2d::KEY_NumPad0 + (key - ImGuiKey_Keypad0));
+std::span<BindAction const> GUI::bind_actions() {
+    return LISTED;
+}
+
+std::optional<enumKeyCodes> GUI::cocos_key(ImGuiKey key) {
+    using Code = enumKeyCodes;
+    if (key >= ImGuiKey_A && key <= ImGuiKey_Z) {
+        return static_cast<Code>(KEY_A + (key - ImGuiKey_A));
+    }
+    if (key >= ImGuiKey_0 && key <= ImGuiKey_9) {
+        return static_cast<Code>(KEY_Zero + (key - ImGuiKey_0));
+    }
+    if (key >= ImGuiKey_F1 && key <= ImGuiKey_F24) {
+        return static_cast<Code>(KEY_F1 + (key - ImGuiKey_F1));
+    }
+    if (key >= ImGuiKey_Keypad0 && key <= ImGuiKey_Keypad9) {
+        return static_cast<Code>(KEY_NumPad0 + (key - ImGuiKey_Keypad0));
+    }
     switch (key) {
-        case ImGuiKey_Tab: return cocos2d::KEY_Tab;
-        case ImGuiKey_LeftArrow: return cocos2d::KEY_Left;
-        case ImGuiKey_RightArrow: return cocos2d::KEY_Right;
-        case ImGuiKey_UpArrow: return cocos2d::KEY_Up;
-        case ImGuiKey_DownArrow: return cocos2d::KEY_Down;
-        case ImGuiKey_PageUp: return cocos2d::KEY_PageUp;
-        case ImGuiKey_PageDown: return cocos2d::KEY_PageDown;
-        case ImGuiKey_Home: return cocos2d::KEY_Home;
-        case ImGuiKey_End: return cocos2d::KEY_End;
-        case ImGuiKey_Insert: return cocos2d::KEY_Insert;
-        case ImGuiKey_Delete: return cocos2d::KEY_Delete;
-        case ImGuiKey_Backspace: return cocos2d::KEY_Backspace;
-        case ImGuiKey_Space: return cocos2d::KEY_Space;
-        case ImGuiKey_Enter: return cocos2d::KEY_Enter;
-        case ImGuiKey_Escape: return cocos2d::KEY_Escape;
-        case ImGuiKey_Apostrophe: return cocos2d::KEY_OEM7;
-        case ImGuiKey_Comma: return cocos2d::KEY_OEMComma;
-        case ImGuiKey_Minus: return cocos2d::KEY_OEMMinus;
-        case ImGuiKey_Period: return cocos2d::KEY_OEMPeriod;
-        case ImGuiKey_Slash: return cocos2d::KEY_OEM2;
-        case ImGuiKey_Semicolon: return cocos2d::KEY_OEM1;
-        case ImGuiKey_Equal: return cocos2d::KEY_OEMPlus;
-        case ImGuiKey_LeftBracket: return cocos2d::KEY_OEM4;
-        case ImGuiKey_Backslash: return cocos2d::KEY_OEM5;
-        case ImGuiKey_RightBracket: return cocos2d::KEY_OEM6;
-        case ImGuiKey_GraveAccent: return cocos2d::KEY_OEM3;
-        case ImGuiKey_CapsLock: return cocos2d::KEY_CapsLock;
-        case ImGuiKey_LeftCtrl: return cocos2d::KEY_LeftControl;
-        case ImGuiKey_RightCtrl: return cocos2d::KEY_RightControl;
-        case ImGuiKey_LeftShift: return cocos2d::KEY_LeftShift;
-        case ImGuiKey_RightShift: return cocos2d::KEY_RightShift;
-        case ImGuiKey_LeftAlt: return cocos2d::KEY_LeftMenu;
-        case ImGuiKey_RightAlt: return cocos2d::KEY_RightMenu;
-        case ImGuiKey_LeftSuper: return cocos2d::KEY_LeftWindowsKey;
-        case ImGuiKey_RightSuper: return cocos2d::KEY_RightWindowsKey;
-        case ImGuiKey_Menu: return cocos2d::KEY_ApplicationsKey;
-        case ImGuiKey_ScrollLock: return cocos2d::KEY_ScrollLock;
-        case ImGuiKey_NumLock: return cocos2d::KEY_Numlock;
-        case ImGuiKey_PrintScreen: return cocos2d::KEY_PrintScreen;
-        case ImGuiKey_Pause: return cocos2d::KEY_Pause;
-        case ImGuiKey_KeypadDecimal: return cocos2d::KEY_Decimal;
-        case ImGuiKey_KeypadDivide: return cocos2d::KEY_Divide;
-        case ImGuiKey_KeypadMultiply: return cocos2d::KEY_Multiply;
-        case ImGuiKey_KeypadSubtract: return cocos2d::KEY_Subtract;
-        case ImGuiKey_KeypadAdd: return cocos2d::KEY_Add;
-        case ImGuiKey_KeypadEnter: return cocos2d::KEY_Enter;
-        default: return std::nullopt;
+    case ImGuiKey_Tab:
+        return KEY_Tab;
+    case ImGuiKey_LeftArrow:
+        return KEY_Left;
+    case ImGuiKey_RightArrow:
+        return KEY_Right;
+    case ImGuiKey_UpArrow:
+        return KEY_Up;
+    case ImGuiKey_DownArrow:
+        return KEY_Down;
+    case ImGuiKey_PageUp:
+        return KEY_PageUp;
+    case ImGuiKey_PageDown:
+        return KEY_PageDown;
+    case ImGuiKey_Home:
+        return KEY_Home;
+    case ImGuiKey_End:
+        return KEY_End;
+    case ImGuiKey_Insert:
+        return KEY_Insert;
+    case ImGuiKey_Delete:
+        return KEY_Delete;
+    case ImGuiKey_Backspace:
+        return KEY_Backspace;
+    case ImGuiKey_Space:
+        return KEY_Space;
+    case ImGuiKey_Enter:
+        return KEY_Enter;
+    case ImGuiKey_Escape:
+        return KEY_Escape;
+    case ImGuiKey_Apostrophe:
+        return KEY_OEM7;
+    case ImGuiKey_Comma:
+        return KEY_OEMComma;
+    case ImGuiKey_Minus:
+        return KEY_OEMMinus;
+    case ImGuiKey_Period:
+        return KEY_OEMPeriod;
+    case ImGuiKey_Slash:
+        return KEY_OEM2;
+    case ImGuiKey_Semicolon:
+        return KEY_OEM1;
+    case ImGuiKey_Equal:
+        return KEY_OEMPlus;
+    case ImGuiKey_LeftBracket:
+        return KEY_OEM4;
+    case ImGuiKey_Backslash:
+        return KEY_OEM5;
+    case ImGuiKey_RightBracket:
+        return KEY_OEM6;
+    case ImGuiKey_GraveAccent:
+        return KEY_OEM3;
+    case ImGuiKey_CapsLock:
+        return KEY_CapsLock;
+    case ImGuiKey_LeftCtrl:
+        return KEY_LeftControl;
+    case ImGuiKey_RightCtrl:
+        return KEY_RightControl;
+    case ImGuiKey_LeftShift:
+        return KEY_LeftShift;
+    case ImGuiKey_RightShift:
+        return KEY_RightShift;
+    case ImGuiKey_LeftAlt:
+        return KEY_LeftMenu;
+    case ImGuiKey_RightAlt:
+        return KEY_RightMenu;
+    case ImGuiKey_LeftSuper:
+        return KEY_LeftWindowsKey;
+    case ImGuiKey_RightSuper:
+        return KEY_RightWindowsKey;
+    case ImGuiKey_Menu:
+        return KEY_ApplicationsKey;
+    case ImGuiKey_ScrollLock:
+        return KEY_ScrollLock;
+    case ImGuiKey_NumLock:
+        return KEY_Numlock;
+    case ImGuiKey_PrintScreen:
+        return KEY_PrintScreen;
+    case ImGuiKey_Pause:
+        return KEY_Pause;
+    case ImGuiKey_KeypadDecimal:
+        return KEY_Decimal;
+    case ImGuiKey_KeypadDivide:
+        return KEY_Divide;
+    case ImGuiKey_KeypadMultiply:
+        return KEY_Multiply;
+    case ImGuiKey_KeypadSubtract:
+        return KEY_Subtract;
+    case ImGuiKey_KeypadAdd:
+        return KEY_Add;
+    case ImGuiKey_KeypadEnter:
+        return KEY_Enter;
+    default:
+        return std::nullopt;
     }
 }
 
 bool GUI::is_modifier(ImGuiKey key) {
     switch (key) {
-        case ImGuiKey_LeftCtrl:
-        case ImGuiKey_RightCtrl:
-        case ImGuiKey_LeftShift:
-        case ImGuiKey_RightShift:
-        case ImGuiKey_LeftAlt:
-        case ImGuiKey_RightAlt:
-        case ImGuiKey_LeftSuper:
-        case ImGuiKey_RightSuper:
-        case ImGuiKey_ReservedForModCtrl:
-        case ImGuiKey_ReservedForModShift:
-        case ImGuiKey_ReservedForModAlt:
-        case ImGuiKey_ReservedForModSuper:
-            return true;
-        default: return false;
+    case ImGuiKey_LeftCtrl:
+    case ImGuiKey_RightCtrl:
+    case ImGuiKey_LeftShift:
+    case ImGuiKey_RightShift:
+    case ImGuiKey_LeftAlt:
+    case ImGuiKey_RightAlt:
+    case ImGuiKey_LeftSuper:
+    case ImGuiKey_RightSuper:
+    case ImGuiKey_ReservedForModCtrl:
+    case ImGuiKey_ReservedForModShift:
+    case ImGuiKey_ReservedForModAlt:
+    case ImGuiKey_ReservedForModSuper:
+        return true;
+    default:
+        return false;
     }
 }
 
-std::string GUI::key_name(cocos2d::enumKeyCodes key) {
-    if (key == cocos2d::KEY_None) return "None";
+std::string GUI::key_name(enumKeyCodes key) {
+    if (key == KEY_None) {
+        return "None";
+    }
     char const* name = CCKeyboardDispatcher::get()->keyToString(key);
-    if (!name || name[0] == '\0') return "Unknown";
+    if (!name || name[0] == '\0') {
+        return "Unknown";
+    }
     return name;
 }
 
-KeyboardModifier GUI::modifier_for_key(cocos2d::enumKeyCodes key) {
+KeyboardModifier GUI::modifier_for_key(enumKeyCodes key) {
+    log::debug("modifier for key");
     switch (key) {
-        case cocos2d::KEY_LeftControl:
-        case cocos2d::KEY_RightControl:
-        case cocos2d::KEY_Control:
-            return KeyboardModifier::Control;
-        case cocos2d::KEY_LeftShift:
-        case cocos2d::KEY_RightShift:
-        case cocos2d::KEY_Shift:
-            return KeyboardModifier::Shift;
-        case cocos2d::KEY_LeftMenu:
-        case cocos2d::KEY_RightMenu:
-        case cocos2d::KEY_Alt:
-            return KeyboardModifier::Alt;
-        case cocos2d::KEY_LeftWindowsKey:
-        case cocos2d::KEY_RightWindowsKey:
-            return KeyboardModifier::Super;
-        default:
-            return KeyboardModifier::None;
+    case KEY_LeftControl:
+    case KEY_RightControl:
+    case KEY_Control:
+        return KeyboardModifier::Control;
+    case KEY_LeftShift:
+    case KEY_RightShift:
+    case KEY_Shift:
+        return KeyboardModifier::Shift;
+    case KEY_LeftMenu:
+    case KEY_RightMenu:
+    case KEY_Alt:
+        return KeyboardModifier::Alt;
+    case KEY_LeftWindowsKey:
+    case KEY_RightWindowsKey:
+        return KeyboardModifier::Super;
+    default:
+        return KeyboardModifier::None;
     }
 }
 
 std::string GUI::stored_bind(char const* setting) {
     auto binds = Mod::get()->getSettingValue<std::vector<Keybind>>(setting);
-    if (binds.empty() || binds[0].key == cocos2d::KEY_None) return "None";
+    if (binds.empty() || binds[0].key == KEY_None) {
+        return "None";
+    }
     return binds[0].toString();
 }
 
-void GUI::store_bind(char const* setting, cocos2d::enumKeyCodes key, bool ctrl, bool shift, bool alt) {
+void GUI::store_bind(char const* setting, enumKeyCodes key, bool ctrl, bool shift, bool alt) {
     KeyboardModifier mods = GUI::get().modifier_for_key(key);
-    if (ctrl) mods |= KeyboardModifier::Control;
-    if (shift) mods |= KeyboardModifier::Shift;
-    if (alt) mods |= KeyboardModifier::Alt;
-    Mod::get()->setSettingValue<std::vector<Keybind>>(setting, {Keybind(key, mods)});
+    if (ctrl) {
+        mods |= KeyboardModifier::Control;
+    }
+    if (shift) {
+        mods |= KeyboardModifier::Shift;
+    }
+    if (alt) {
+        mods |= KeyboardModifier::Alt;
+    }
+#ifdef GEODE_IS_MACOS
+    if (key != KEY_None && GUI::get().bind_super) {
+        mods |= KeyboardModifier::Super;
+    }
+#endif
+    Mod::get()->setSettingValue<std::vector<Keybind>>(setting, { Keybind(key, mods) });
     Logic::get().save_settings_file();
 }
 
@@ -811,60 +888,102 @@ static void flip_utility(bool& field) {
 }
 
 bool Logic::dispatch_setting_key(std::string_view key, bool down) {
-    if (!down) return false;
-    auto& value = Logic::get();
-    if (key == "toggle-record") Logic::get().toggle_recording();
-    else if (key == "toggle-play") Logic::get().toggle_playing();
-    else if (key == "toggle-advance") Logic::get().toggle_frame_advance();
-    else if (key == "key-click-both") GUI::get().flip_setting(value.click_both, "click-both");
-    else if (key == "key-swap") GUI::get().flip_setting(value.swap_players, "swap-players");
-    else if (key == "key-shakes") GUI::get().flip_setting(value.disable_shakes, "disable-shakes");
-    else if (key == "key-layout") GUI::get().flip_setting(value.layout_mode, "layout-mode");
-    else if (key == "key-hitboxes") GUI::get().flip_setting(value.show_hitboxes, "show-hitboxes");
-    else if (key == "key-trajectory") GUI::get().flip_setting(value.show_traj, "show-trajectory");
-    else if (key == "key-autoclick") GUI::get().flip_setting(value.autoclicker, "autoclicker");
-    else if (key == "key-no-overwrite") GUI::get().flip_setting(value.no_overwrite, "no-overwrite");
-    else if (key == "key-ignore") GUI::get().flip_setting(value.ignore_inputs, "ignore-inputs");
-    else if (key == "key-show-recording") GUI::get().flip_setting(value.show_recording, "show-recording");
-    else if (key == "key-show-cps") GUI::get().flip_setting(value.show_cps, "show-cps");
-    else if (key == "key-show-frame") GUI::get().flip_setting(value.show_frame, "show-frame");
-    else if (key == "key-show-time") GUI::get().flip_setting(value.show_time, "show-time");
-    else if (key == "key-show-percent") GUI::get().flip_setting(value.show_percent, "show-percent");
-    else if (key == "key-click-dash-orbs") flip_utility(value.click_dash_orbs);
-    else if (key == "key-click-black-orbs") flip_utility(value.click_black_orbs);
-    else if (key == "key-pad-black-orb") flip_utility(value.pad_black_orb);
-    else if (key == "key-pad-blue-orb") flip_utility(value.pad_blue_orb);
-    else if (key == "key-pause-before-kill") flip_utility(value.pause_before_kill);
-    else if (key == "key-save") Logic::get().write_file();
-    else if (key == "key-load") Logic::get().pick_replay();
+    if (!down) {
+        return false;
+    }
+    auto& logic = Logic::get();
+    if (key == "toggle-record")
+        Logic::get().toggle_recording();
+    else if (key == "toggle-play")
+        Logic::get().toggle_playing();
+    else if (key == "toggle-advance")
+        Logic::get().toggle_frame_advance();
+    else if (key == "key-click-both")
+        GUI::get().flip_setting(logic.click_both, "click-both");
+    else if (key == "key-swap")
+        GUI::get().flip_setting(logic.swap_players, "swap-players");
+    else if (key == "key-shakes")
+        GUI::get().flip_setting(logic.disable_shakes, "disable-shakes");
+    else if (key == "key-layout")
+        GUI::get().flip_setting(logic.layout_mode, "layout-mode");
+    else if (key == "key-hitboxes")
+        GUI::get().flip_setting(logic.show_hitboxes, "show-hitboxes");
+    else if (key == "key-trajectory")
+        GUI::get().flip_setting(logic.show_traj, "show-trajectory");
+    else if (key == "key-autoclick")
+        GUI::get().flip_setting(logic.autoclicker, "autoclicker");
+    else if (key == "key-no-overwrite")
+        GUI::get().flip_setting(logic.no_overwrite, "no-overwrite");
+    else if (key == "key-ignore")
+        GUI::get().flip_setting(logic.ignore_inputs, "ignore-inputs");
+    else if (key == "key-show-recording")
+        GUI::get().flip_setting(logic.show_recording, "show-recording");
+    else if (key == "key-show-cps")
+        GUI::get().flip_setting(logic.show_cps, "show-cps");
+    else if (key == "key-show-frame")
+        GUI::get().flip_setting(logic.show_frame, "show-frame");
+    else if (key == "key-show-time")
+        GUI::get().flip_setting(logic.show_time, "show-time");
+    else if (key == "key-show-percent")
+        GUI::get().flip_setting(logic.show_percent, "show-percent");
+    else if (key == "key-click-dash-orbs")
+        flip_utility(logic.click_dash_orbs);
+    else if (key == "key-click-black-orbs")
+        flip_utility(logic.click_black_orbs);
+    else if (key == "key-pad-black-orb")
+        flip_utility(logic.pad_black_orb);
+    else if (key == "key-pad-blue-orb")
+        flip_utility(logic.pad_blue_orb);
+    else if (key == "key-pause-before-kill")
+        flip_utility(logic.pause_before_kill);
+    else if (key == "key-save")
+        Logic::get().write_file();
+    else if (key == "key-load")
+        Logic::get().pick_replay();
     else if (key == "open-menu") {
         GUI::get().open_popup();
     }
     else if (key == "key-reset") {
-        if (auto* play = PlayLayer::get()) play->resetLevel();
-    } else if (key == "key-speedhack") {
-        if (std::abs(value.speedhack - 1.f) > 0.05f) {
-            value.speedhack_memory = value.speedhack;
-            value.speedhack = 1.f;
-        } else {
-            float back = value.speedhack_memory;
-            if (!(back >= 0.01f) || std::abs(back - 1.f) <= 0.05f) return false;
-            value.speedhack = back;
+        if (auto* play = PlayLayer::get()) {
+            play->resetLevel();
+        }
+    }
+    else if (key == "key-speedhack") {
+        if (std::abs(logic.speedhack - 1.f) > 0.05f) {
+            logic.speedhack_memory = logic.speedhack;
+            logic.speedhack = 1.f;
+        }
+        else {
+            float back = logic.speedhack_memory;
+            if (!(back >= 0.01f) || std::abs(back - 1.f) <= 0.05f) {
+                return false;
+            }
+            logic.speedhack = back;
         }
         Logic::get().sync_time_scale();
         Logic::get().sync_playback_fps();
         Logic::get().save_settings_file();
-    } else {
+    }
+    else {
         return false;
     }
     return true;
 }
 
 void GUI::offer_rebind(char const* setting_id, char const* tip) {
+#ifdef GEODE_IS_MOBILE
+    (void)setting_id;
+    if (tip && ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("%s", tip);
+    }
+    return;
+#endif
     if (ImGui::IsItemHovered()) {
-        auto current = GUI::get().stored_bind(setting_id);
-        if (tip) ImGui::SetTooltip("%s\nRight-click to rebind (%s)", tip, current.c_str());
-        else ImGui::SetTooltip("Right-click to rebind (%s)", current.c_str());
+        auto cur = GUI::get().stored_bind(setting_id);
+        if (tip)
+            ImGui::SetTooltip("%s\nRight-click to rebind (%s)", tip, cur.c_str());
+        else
+            ImGui::SetTooltip("Right-click to rebind (%s)", cur.c_str());
     }
     if (ImGui::IsItemClicked(ImGuiMouseButton_Right)) {
         GUI::get().prompt = setting_id;
@@ -872,33 +991,56 @@ void GUI::offer_rebind(char const* setting_id, char const* tip) {
     }
 }
 
-void GUI::draw_keybind_prompt(bool nested) {
-    if (GUI::get().prompt.empty() || GUI::get().prompt_nested != nested) return;
+char const* const GUI::BIND_POPUP = "Confirm Keybind###Confirm Keybind";
+
+void GUI::show_keybind_prompt(bool nested) {
+    if (GUI::get().prompt.empty() || GUI::get().prompt_nested != nested)
+        return;
     if (GUI::get().prompt_shown != GUI::get().prompt) {
         GUI::get().prompt_shown = GUI::get().prompt;
         GUI::get().pressed.reset();
         GUI::get().bind_ctrl = false;
         GUI::get().bind_shift = false;
         GUI::get().bind_alt = false;
+#ifdef GEODE_IS_MACOS
+        GUI::get().bind_super = false;
+#endif
     }
-    if (!ImGui::IsPopupOpen("Confirm Keybind")) ImGui::OpenPopup("Confirm Keybind");
-    if (!ImGui::BeginPopupModal("Confirm Keybind", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) return;
+    if (!ImGui::IsPopupOpen(BIND_POPUP)) {
+        ImGui::OpenPopup(BIND_POPUP);
+    }
+    if (!eui::BeginModal(BIND_POPUP, 18.f, false))
+        return;
+#ifdef GEODE_IS_MACOS
+    GUI::get().prompt_drawn_frame = ImGui::GetFrameCount();
+#endif
 
     std::string label = GUI::get().prompt;
-    for (auto const& action : kListed) {
-        if (GUI::get().prompt == action.setting) label = action.label;
+    for (auto const& action : LISTED) {
+        if (GUI::get().prompt == action.setting) {
+            label = action.label;
+        }
     }
     auto existing = GUI::get().stored_bind(GUI::get().prompt.c_str());
-    if (existing != "None") ImGui::Text("Existing keybind: %s", existing.c_str());
+    if (existing != "None") {
+        ImGui::Text("Existing keybind: %s", existing.c_str());
+    }
     ImGui::Text("Press a key for '%s'", label.c_str());
 
+#ifndef GEODE_IS_MACOS
     for (int key = ImGuiKey_NamedKey_BEGIN; key < ImGuiKey_NamedKey_END; ++key) {
-        auto imguiKey = static_cast<ImGuiKey>(key);
-        if (imguiKey >= ImGuiKey_MouseLeft) continue;
-        if (GUI::get().is_modifier(imguiKey)) {
-            if (GUI::get().pressed || !ImGui::IsKeyReleased(imguiKey)) continue;
-            auto mapped = GUI::get().cocos_key(imguiKey);
-            if (!mapped) continue;
+        auto imgui_key = static_cast<ImGuiKey>(key);
+        if (imgui_key >= ImGuiKey_MouseLeft) {
+            continue;
+        }
+        if (GUI::get().is_modifier(imgui_key)) {
+            if (GUI::get().pressed || !ImGui::IsKeyReleased(imgui_key)) {
+                continue;
+            }
+            auto mapped = GUI::get().cocos_key(imgui_key);
+            if (!mapped) {
+                continue;
+            }
             auto own = GUI::get().modifier_for_key(*mapped);
             GUI::get().pressed = mapped;
             GUI::get().bind_ctrl = static_cast<bool>(own & KeyboardModifier::Control);
@@ -906,69 +1048,108 @@ void GUI::draw_keybind_prompt(bool nested) {
             GUI::get().bind_alt = static_cast<bool>(own & KeyboardModifier::Alt);
             break;
         }
-        if (!ImGui::IsKeyPressed(imguiKey, false)) continue;
-        auto mapped = GUI::get().cocos_key(imguiKey);
-        if (!mapped) continue;
+        if (!ImGui::IsKeyPressed(imgui_key, false)) {
+            continue;
+        }
+        auto mapped = GUI::get().cocos_key(imgui_key);
+        if (!mapped) {
+            continue;
+        }
         GUI::get().pressed = mapped;
         GUI::get().bind_ctrl = ImGui::GetIO().KeyCtrl;
         GUI::get().bind_shift = ImGui::GetIO().KeyShift;
         GUI::get().bind_alt = ImGui::GetIO().KeyAlt;
         break;
     }
+#endif
 
-    float bindW = GUI::get().shared_button_width({"Save", "Remove"});
+    float bind_w = GUI::get().shared_button_width({ "Save", "Remove" });
     if (GUI::get().pressed) {
         auto own = GUI::get().modifier_for_key(*GUI::get().pressed);
         std::string pressed = "Pressed key: " + GUI::get().key_name(*GUI::get().pressed);
-        if (GUI::get().bind_ctrl && !(own & KeyboardModifier::Control)) pressed += " + Ctrl";
-        if (GUI::get().bind_shift && !(own & KeyboardModifier::Shift)) pressed += " + Shift";
-        if (GUI::get().bind_alt && !(own & KeyboardModifier::Alt)) pressed += " + Alt";
+        if (GUI::get().bind_ctrl && !(own & KeyboardModifier::Control)) {
+            pressed += " + Ctrl";
+        }
+        if (GUI::get().bind_shift && !(own & KeyboardModifier::Shift)) {
+            pressed += " + Shift";
+        }
+        if (GUI::get().bind_alt && !(own & KeyboardModifier::Alt)) {
+            pressed += " + Alt";
+        }
+#ifdef GEODE_IS_MACOS
+        if (GUI::get().bind_super && !(own & KeyboardModifier::Super)) {
+            pressed += " + Cmd";
+        }
+#endif
         ImGui::TextUnformatted(pressed.c_str());
-        if (ImGui::Button("Save", ImVec2(bindW, 0.f))) {
+        if (eui::Button("Save", ImVec2(bind_w, 0.f))) {
             GUI::get().store_bind(GUI::get().prompt.c_str(), *GUI::get().pressed, GUI::get().bind_ctrl, GUI::get().bind_shift, GUI::get().bind_alt);
             GUI::get().prompt.clear();
             GUI::get().prompt_shown.clear();
             GUI::get().prompt_nested = false;
             ImGui::CloseCurrentPopup();
         }
-    } else {
+    }
+    else {
         ImGui::BeginDisabled();
-        ImGui::Button("Save", ImVec2(bindW, 0.f));
+        eui::Button("Save", ImVec2(bind_w, 0.f));
         ImGui::EndDisabled();
     }
     ImGui::SameLine();
     if (existing != "None") {
-        if (ImGui::Button("Remove", ImVec2(bindW, 0.f))) {
-            GUI::get().store_bind(GUI::get().prompt.c_str(), cocos2d::KEY_None, false, false, false);
+        if (eui::Button("Remove", ImVec2(bind_w, 0.f))) {
+            GUI::get().store_bind(GUI::get().prompt.c_str(), KEY_None, false, false, false);
             GUI::get().prompt.clear();
             GUI::get().prompt_shown.clear();
             GUI::get().prompt_nested = false;
             ImGui::CloseCurrentPopup();
         }
-    } else {
+    }
+    else {
         ImGui::BeginDisabled();
-        ImGui::Button("Remove", ImVec2(bindW, 0.f));
+        eui::Button("Remove", ImVec2(bind_w, 0.f));
         ImGui::EndDisabled();
     }
-    if (ImGui::Button("Exit", ImVec2(GUI::get().shared_button_width({"Exit"}), 0.f))) {
+    if (eui::Button("Exit", ImVec2(GUI::get().shared_button_width({ "Exit" }), 0.f))) {
         GUI::get().prompt.clear();
         GUI::get().prompt_shown.clear();
         GUI::get().prompt_nested = false;
         ImGui::CloseCurrentPopup();
     }
-    ImGui::EndPopup();
+    eui::EndModal();
 }
 
+#ifdef GEODE_IS_MACOS
+bool echo_scroll_is_precise();
+#endif
+
 $execute {
-    static ListenerHandle menuDrag = MouseMoveEvent().listen([](int32_t, int32_t) {
+    static ListenerHandle menu_drag = MouseMoveEvent().listen([](int32_t, int32_t) {
         auto& imgui = ImGuiCocos::get();
-        if (!imgui.isInitialized() || !imgui.isVisible()) return false;
+        if (!imgui.isInitialized() || !imgui.isVisible())
+            return false;
         return ImGui::GetIO().WantCaptureMouse || ImGui::IsAnyItemActive();
     });
-    static ListenerHandle rightClick = MouseInputEvent().listen([](MouseInputData& data) {
-        if (data.button != MouseInputData::Button::Right) return false;
+#ifdef GEODE_IS_MACOS
+    static ListenerHandle wheel = ScrollWheelEvent().listen([](double x, double y) {
         auto& imgui = ImGuiCocos::get();
-        if (!imgui.isInitialized() || !imgui.isVisible()) return false;
+        if (!imgui.isInitialized() || !imgui.isVisible())
+            return false;
+        auto& io = ImGui::GetIO();
+        if (!io.WantCaptureMouse)
+            return false;
+        double scale = echo_scroll_is_precise() ? .1 : 1.;
+        io.AddMouseSourceEvent(ImGuiMouseSource_Mouse);
+        io.AddMouseWheelEvent((float)(x * scale), (float)(y * scale));
+        return true;
+    });
+#endif
+    static ListenerHandle right_click = MouseInputEvent().listen([](MouseInputData& data) {
+        if (data.button != MouseInputData::Button::Right)
+            return false;
+        auto& imgui = ImGuiCocos::get();
+        if (!imgui.isInitialized() || !imgui.isVisible())
+            return false;
         ImGui::GetIO().AddMouseButtonEvent(1, data.action == MouseInputData::Action::Press);
         return ImGui::GetIO().WantCaptureMouse;
     });
@@ -985,44 +1166,56 @@ std::string GUI::lower_copy(std::string text) {
     return text;
 }
 
-ShownReplay GUI::shown_replay(std::filesystem::path const& path) {
+ShownReplay GUI::shown_replay(fs::path const& path) {
     std::string file = geode::utils::string::pathToString(path.filename());
     std::string lower = GUI::get().lower_copy(file);
     auto cut = [&](char const* ext) {
         size_t n = std::char_traits<char>::length(ext);
-        if (lower.size() < n || lower.compare(lower.size() - n, n, ext) != 0) return false;
+        if (lower.size() < n || lower.compare(lower.size() - n, n, ext) != 0) {
+            return false;
+        }
         file.resize(file.size() - n);
         lower.resize(lower.size() - n);
         return true;
     };
-    auto const extensions = {".echo.json", ".json", ".echo", ".txt", ".slc", ".tcm", ".gdr"};
-    auto found = std::ranges::find_if(extensions, cut);
-    std::string ext = found == extensions.end() ? std::string() : std::string(*found);
+    auto const extensions = { ".echo.json", ".json", ".echo", ".txt", ".slc", ".tcm", ".gdr" };
+    auto it = std::ranges::find_if(extensions, cut);
+    std::string ext = it == extensions.end() ? std::string() : std::string(*it);
     bool autosave = ext == ".echo" && cut(".autosave");
-    if (file.empty()) file = geode::utils::string::pathToString(path.stem());
-    std::string tag = autosave ? "(autosave)" : ext.empty() || ext == ".echo" ? std::string() : "(" + ext + ")";
-    if (path.parent_path().filename() == "converted") tag = tag.empty() ? "(converted)" : "(converted) " + tag;
-    return {file, tag};
+    if (file.empty()) {
+        file = geode::utils::string::pathToString(path.stem());
+    }
+    std::string tag = autosave ? "(autosave)" : ext.empty() || ext == ".echo" ? std::string()
+                                                                              : "(" + ext + ")";
+    if (path.parent_path().filename() == "converted") {
+        tag = tag.empty() ? "(converted)" : "(converted) " + tag;
+    }
+    return { file, tag };
 }
 
 void GUI::refresh_files() {
     auto& state = GUI::get().picker();
     state.files.clear();
-    auto take = [&](std::filesystem::path const& dir) {
+    auto take = [&](fs::path const& dir) {
         std::error_code error;
-        if (!std::filesystem::exists(dir, error)) return;
-        for (auto const& entry : std::filesystem::directory_iterator(dir, error)) {
-            if (error || !entry.is_regular_file()) continue;
+        if (!fs::exists(dir, error))
+            return;
+        for (auto const& entry : fs::directory_iterator(dir, error)) {
+            if (error || !entry.is_regular_file()) {
+                continue;
+            }
             auto name = GUI::get().lower_copy(geode::utils::string::pathToString(entry.path().filename()));
             bool replay = name.ends_with(".echo") || name.ends_with(".json") || name.ends_with(".txt") || name.ends_with(".slc") ||
-                name.ends_with(".tcm") || name.ends_with(".gdr");
-            if (!replay) continue;
+                          name.ends_with(".tcm") || name.ends_with(".gdr");
+            if (!replay) {
+                continue;
+            }
             state.files.push_back(entry.path());
         }
     };
     take(Logic::get().save_root() / "replays");
     take(Logic::get().save_root() / "converted");
-    std::sort(state.files.begin(), state.files.end(), [](std::filesystem::path const& a, std::filesystem::path const& b) {
+    std::sort(state.files.begin(), state.files.end(), [](fs::path const& a, fs::path const& b) {
         return GUI::get().lower_copy(geode::utils::string::pathToString(a.filename())) < GUI::get().lower_copy(geode::utils::string::pathToString(b.filename()));
     });
 }
@@ -1031,62 +1224,95 @@ void GUI::open_macro_picker(bool sequence, int amount) {
     GUI::get().reveal_menu();
     auto& state = GUI::get().picker();
     state.sequence = sequence;
+    state.merge = false;
     state.amount = std::max(amount, 1);
     state.filter.clear();
     if (!sequence) {
         GJGameLevel* level = nullptr;
-        if (auto* play = PlayLayer::get()) level = play->m_level;
-        else if (auto* editor = LevelEditorLayer::get()) level = editor->m_level;
-        if (level) state.filter = level->m_levelName;
+        if (auto* play = PlayLayer::get())
+            level = play->m_level;
+        else if (auto* editor = LevelEditorLayer::get())
+            level = editor->m_level;
+        if (level) {
+            state.filter = level->m_levelName;
+        }
     }
     state.want_open = true;
     GUI::get().refresh_files();
 }
+
+void GUI::open_merge_picker() {
+    GUI::get().open_macro_picker(false, 1);
+    GUI::get().picker().merge = true;
+}
+
+namespace {
+    void focus_search_on_open() {
+#ifndef GEODE_IS_MOBILE
+        if (ImGui::IsWindowAppearing())
+            ImGui::SetKeyboardFocusHere();
+#endif
+    }
+}
+
 void GUI::draw_macro_picker() {
     auto& state = GUI::get().picker();
-    static int drawnFrame = -1;
-    if (drawnFrame == ImGui::GetFrameCount()) return;
-    if (state.want_open) ImGui::OpenPopup("Echo Macros###echo-macro-picker");
-    float pickerScale = ImGui::GetFontSize() / 18.f;
-    ImGui::SetNextWindowSize(ImVec2(420.f * pickerScale, 360.f * pickerScale), ImGuiCond_Always);
-    if (!ImGui::BeginPopup("Echo Macros###echo-macro-picker")) return;
-    drawnFrame = ImGui::GetFrameCount();
+    static int drawn_frame = -1;
+    if (drawn_frame == ImGui::GetFrameCount())
+        return;
+    if (state.want_open) {
+        ImGui::OpenPopup("Echo Macros###echo-macro-picker");
+    }
+    float picker_scale = ImGui::GetFontSize() / 18.f, picker_wide = 400.f * picker_scale;
+    if (!ImGui::BeginPopup("Echo Macros###echo-macro-picker", ImGuiWindowFlags_AlwaysAutoResize))
+        return;
+    drawn_frame = ImGui::GetFrameCount();
     state.want_open = false;
-    ImGui::TextUnformatted(state.sequence ? "Add a macro to the sequence" : "Load a macro");
-    ImGui::SetNextItemWidth(-1.f);
-    if (ImGui::IsWindowAppearing()) ImGui::SetKeyboardFocusHere();
-    ImGui::InputTextWithHint("##macro-filter", "Type to filter macros", &state.filter);
-    ImGui::BeginChild("##macro-list", ImVec2(0.f, 240.f * pickerScale), ImGuiChildFlags_Borders);
+    if (eui::TitleBar(state.sequence ? "Add to the Sequence" : state.merge ? "Merge a Replay In"
+                                                                           : "Load a Replay",
+            eui::Icon::Macro, true, picker_wide))
+        ImGui::CloseCurrentPopup();
+    ImGui::SetNextItemWidth(picker_wide);
+    focus_search_on_open();
+    eui::InputTextWithHint("##macro-filter", "Type to filter macros", &state.filter);
+    ImGui::BeginChild("##macro-list", ImVec2(picker_wide, 240.f * picker_scale), ImGuiChildFlags_Borders);
     std::string needle = GUI::get().lower_copy(state.filter);
     int shown = 0;
     for (auto const& path : state.files) {
-        auto shownName = GUI::get().shown_replay(path);
-        std::string blob = GUI::get().lower_copy(shownName.name + " " + shownName.tag + " " + geode::utils::string::pathToString(path.filename()));
-        if (!needle.empty() && blob.find(needle) == std::string::npos) continue;
+        auto shown_name = GUI::get().shown_replay(path);
+        std::string blob = GUI::get().lower_copy(shown_name.name + " " + shown_name.tag + " " + geode::utils::string::pathToString(path.filename()));
+        if (!needle.empty() && blob.find(needle) == std::string::npos) {
+            continue;
+        }
         ++shown;
         ImVec2 row = ImGui::GetCursorScreenPos();
-        float rowH = ImGui::GetTextLineHeight();
-        std::string rowId = "##replay-" + geode::utils::string::pathToString(path);
-        bool picked = ImGui::Selectable(rowId.c_str(), false, 0, ImVec2(0.f, rowH));
+        float row_h = ImGui::GetTextLineHeight();
+        std::string row_id = "##replay-" + geode::utils::string::pathToString(path);
+        bool picked = eui::Selectable(row_id.c_str(), false, 0, ImVec2(0.f, row_h));
         auto* draw = ImGui::GetWindowDrawList();
-        float textX = row.x + ImGui::GetStyle().FramePadding.x;
-        draw->AddText(ImVec2(textX, row.y), ImGui::GetColorU32(ImGuiCol_Text), shownName.name.c_str());
-        if (!shownName.tag.empty()) {
-            float tagX = textX + ImGui::CalcTextSize(shownName.name.c_str()).x + ImGui::GetStyle().ItemSpacing.x;
-            draw->AddText(ImVec2(tagX, row.y), ImGui::GetColorU32(ImGuiCol_TextDisabled), shownName.tag.c_str());
+        float text_x = row.x + ImGui::GetStyle().FramePadding.x;
+        draw->AddText(ImVec2(text_x, row.y), ImGui::GetColorU32(ImGuiCol_Text), shown_name.name.c_str());
+        if (!shown_name.tag.empty()) {
+            float tag_x = text_x + ImGui::CalcTextSize(shown_name.name.c_str()).x + ImGui::GetStyle().ItemSpacing.x;
+            draw->AddText(ImVec2(tag_x, row.y), ImGui::GetColorU32(ImGuiCol_TextDisabled), shown_name.tag.c_str());
         }
         if (picked) {
-            if (state.sequence) Logic::get().append_sequence_file(path, state.amount);
-            else Logic::get().read_file(path);
+            if (state.sequence)
+                Logic::get().append_sequence_file(path, state.amount);
+            else if (state.merge)
+                Logic::get().merge_replay(path);
+            else
+                Logic::get().read_file(path);
             ImGui::CloseCurrentPopup();
         }
     }
-    if (shown == 0) ImGui::TextDisabled("No macros match");
+    if (shown == 0) {
+        ImGui::TextDisabled("No macros match");
+    }
     ImGui::EndChild();
-    float pickerW = GUI::get().shared_button_width({"Refresh", "Close"});
-    if (ImGui::Button("Refresh", ImVec2(pickerW, 0.f))) GUI::get().refresh_files();
-    ImGui::SameLine();
-    if (ImGui::Button("Close", ImVec2(pickerW, 0.f))) ImGui::CloseCurrentPopup();
+    if (eui::Button("Refresh", ImVec2(picker_wide, 0.f))) {
+        GUI::get().refresh_files();
+    }
     ImGui::EndPopup();
 }
 
@@ -1099,15 +1325,22 @@ void GUI::refresh_themes() {
     state.files.clear();
     auto dir = Logic::get().save_root() / "themes";
     std::error_code error;
-    if (!std::filesystem::exists(dir, error)) return;
-    for (auto const& entry : std::filesystem::directory_iterator(dir, error)) {
-        if (error || !entry.is_regular_file()) continue;
+    if (!fs::exists(dir, error))
+        return;
+    for (auto const& entry : fs::directory_iterator(dir, error)) {
+        if (error || !entry.is_regular_file()) {
+            continue;
+        }
         auto name = GUI::get().lower_copy(geode::utils::string::pathToString(entry.path().filename()));
-        if (!name.ends_with(".ui.json")) continue;
-        if (name == "current.ui.json") continue;
+        if (!name.ends_with(".ui.json") && !name.ends_with(".ui")) {
+            continue;
+        }
+        if (name == "current.ui.json") {
+            continue;
+        }
         state.files.push_back(entry.path());
     }
-    std::sort(state.files.begin(), state.files.end(), [](std::filesystem::path const& a, std::filesystem::path const& b) {
+    std::sort(state.files.begin(), state.files.end(), [](fs::path const& a, fs::path const& b) {
         return GUI::get().lower_copy(geode::utils::string::pathToString(a.filename())) < GUI::get().lower_copy(geode::utils::string::pathToString(b.filename()));
     });
 }
@@ -1119,43 +1352,51 @@ void GUI::open_theme_picker() {
     state.want_open = true;
     GUI::get().refresh_themes();
 }
+
 void GUI::draw_theme_picker() {
     auto& state = GUI::get().themes();
-    static int drawnFrame = -1;
-    if (drawnFrame == ImGui::GetFrameCount()) return;
-    if (state.want_open) ImGui::OpenPopup("Echo Themes###echo-theme-picker");
-    float pickerScale = ImGui::GetFontSize() / 18.f;
-    ImGui::SetNextWindowSize(ImVec2(420.f * pickerScale, 360.f * pickerScale), ImGuiCond_Always);
-    if (!ImGui::BeginPopup("Echo Themes###echo-theme-picker")) return;
-    drawnFrame = ImGui::GetFrameCount();
+    static int drawn_frame = -1;
+    if (drawn_frame == ImGui::GetFrameCount())
+        return;
+    if (state.want_open) {
+        ImGui::OpenPopup("Echo Themes###echo-theme-picker");
+    }
+    float picker_scale = ImGui::GetFontSize() / 18.f, picker_wide = 400.f * picker_scale;
+    if (!ImGui::BeginPopup("Echo Themes###echo-theme-picker", ImGuiWindowFlags_AlwaysAutoResize))
+        return;
+    drawn_frame = ImGui::GetFrameCount();
     state.want_open = false;
-    ImGui::TextUnformatted("Load a theme");
-    ImGui::SetNextItemWidth(-1.f);
-    if (ImGui::IsWindowAppearing()) ImGui::SetKeyboardFocusHere();
-    ImGui::InputTextWithHint("##theme-filter", "Type to filter themes", &state.filter);
-    ImGui::BeginChild("##theme-list", ImVec2(0.f, 240.f * pickerScale), ImGuiChildFlags_Borders);
+    if (eui::TitleBar("Load a Theme", eui::Icon::Theme, true, picker_wide)) {
+        ImGui::CloseCurrentPopup();
+    }
+    ImGui::SetNextItemWidth(picker_wide);
+    focus_search_on_open();
+    eui::InputTextWithHint("##theme-filter", "Type to filter themes", &state.filter);
+    ImGui::BeginChild("##theme-list", ImVec2(picker_wide, 240.f * picker_scale), ImGuiChildFlags_Borders);
     std::string needle = GUI::get().lower_copy(state.filter);
     int shown = 0;
     for (auto const& path : state.files) {
         std::string name = geode::utils::string::pathToString(path.filename());
-        if (name.size() >= 8) name.resize(name.size() - 8);
-        if (!needle.empty() && GUI::get().lower_copy(name).find(needle) == std::string::npos) continue;
+        if (name.ends_with(".ui.json"))
+            name.resize(name.size() - 8);
+        else if (name.ends_with(".ui"))
+            name.resize(name.size() - 3);
+        if (!needle.empty() && GUI::get().lower_copy(name).find(needle) == std::string::npos) {
+            continue;
+        }
         ++shown;
-        if (ImGui::Selectable(name.c_str(), false)) {
-            std::ifstream file(path);
-            auto parsed = matjson::Value::parse(file);
-            if (parsed) {
-                GUI::get().apply_theme_json(parsed.unwrap());
-            }
+        if (eui::Selectable(name.c_str(), false)) {
+            GUI::get().import_theme(path);
             ImGui::CloseCurrentPopup();
         }
     }
-    if (shown == 0) ImGui::TextDisabled("No themes match");
+    if (shown == 0) {
+        ImGui::TextDisabled("No themes match");
+    }
     ImGui::EndChild();
-    float pickerW = GUI::get().shared_button_width({"Refresh", "Close"});
-    if (ImGui::Button("Refresh", ImVec2(pickerW, 0.f))) GUI::get().refresh_themes();
-    ImGui::SameLine();
-    if (ImGui::Button("Close", ImVec2(pickerW, 0.f))) ImGui::CloseCurrentPopup();
+    if (eui::Button("Refresh", ImVec2(picker_wide, 0.f))) {
+        GUI::get().refresh_themes();
+    }
     ImGui::EndPopup();
 }
 
@@ -1168,12 +1409,15 @@ void GUI::refresh_clickpacks() {
     state.folders.clear();
     auto dir = Logic::get().save_root() / "clickpacks";
     std::error_code error;
-    if (!std::filesystem::exists(dir, error)) return;
-    for (auto const& entry : std::filesystem::directory_iterator(dir, error)) {
-        if (error || !entry.is_directory()) continue;
+    if (!fs::exists(dir, error))
+        return;
+    for (auto const& entry : fs::directory_iterator(dir, error)) {
+        if (error || !entry.is_directory()) {
+            continue;
+        }
         state.folders.push_back(entry.path());
     }
-    std::sort(state.folders.begin(), state.folders.end(), [](std::filesystem::path const& a, std::filesystem::path const& b) {
+    std::sort(state.folders.begin(), state.folders.end(), [](fs::path const& a, fs::path const& b) {
         return GUI::get().lower_copy(geode::utils::string::pathToString(a.filename())) < GUI::get().lower_copy(geode::utils::string::pathToString(b.filename()));
     });
 }
@@ -1185,44 +1429,56 @@ void GUI::open_clickpack_picker() {
     state.want_open = true;
     GUI::get().refresh_clickpacks();
 }
+
 void GUI::draw_clickpack_picker() {
     auto& state = GUI::get().clickpacks();
-    static int drawnFrame = -1;
-    if (drawnFrame == ImGui::GetFrameCount()) return;
-    if (state.want_open) ImGui::OpenPopup("Echo Clickpacks###echo-clickpack-picker");
-    float pickerScale = ImGui::GetFontSize() / 18.f;
-    ImGui::SetNextWindowSize(ImVec2(420.f * pickerScale, 360.f * pickerScale), ImGuiCond_Always);
-    if (!ImGui::BeginPopup("Echo Clickpacks###echo-clickpack-picker")) return;
-    drawnFrame = ImGui::GetFrameCount();
+    static int drawn_frame = -1;
+    if (drawn_frame == ImGui::GetFrameCount())
+        return;
+    if (state.want_open) {
+        ImGui::OpenPopup("Echo Clickpacks###echo-clickpack-picker");
+    }
+    float picker_scale = ImGui::GetFontSize() / 18.f, picker_wide = 400.f * picker_scale;
+    if (!ImGui::BeginPopup("Echo Clickpacks###echo-clickpack-picker", ImGuiWindowFlags_AlwaysAutoResize))
+        return;
+    drawn_frame = ImGui::GetFrameCount();
     state.want_open = false;
-    ImGui::TextUnformatted(state.player == 0 ? "Pick a clickpack for Player 1" : "Pick a clickpack for Player 2");
-    ImGui::SetNextItemWidth(-1.f);
-    if (ImGui::IsWindowAppearing()) ImGui::SetKeyboardFocusHere();
-    ImGui::InputTextWithHint("##clickpack-filter", "Type to filter clickpacks", &state.filter);
-    ImGui::BeginChild("##clickpack-list", ImVec2(0.f, 240.f * pickerScale), ImGuiChildFlags_Borders);
+    if (eui::TitleBar(state.player == 0 ? "Click Pack for Player 1" : "Click Pack for Player 2", eui::Icon::Clickbot, true, picker_wide)) {
+        ImGui::CloseCurrentPopup();
+    }
+    ImGui::SetNextItemWidth(picker_wide);
+    focus_search_on_open();
+    eui::InputTextWithHint("##clickpack-filter", "Type to filter clickpacks", &state.filter);
+    ImGui::BeginChild("##clickpack-list", ImVec2(picker_wide, 240.f * picker_scale), ImGuiChildFlags_Borders);
     std::string needle = GUI::get().lower_copy(state.filter);
     int shown = 0;
     for (auto const& path : state.folders) {
         std::string name = geode::utils::string::pathToString(path.filename());
-        if (!needle.empty() && GUI::get().lower_copy(name).find(needle) == std::string::npos) continue;
+        if (!needle.empty() && GUI::get().lower_copy(name).find(needle) == std::string::npos) {
+            continue;
+        }
         ++shown;
-        if (ImGui::Selectable(name.c_str(), false)) {
+        if (eui::Selectable(name.c_str(), false)) {
             try {
-                if (state.player == 0) Logic::get().clickpack = path.string();
-                else Logic::get().clickpack_p2 = path.string();
-            } catch (...) {
+                if (state.player == 0)
+                    Logic::get().clickpack = path.string();
+                else
+                    Logic::get().clickpack_p2 = path.string();
+            }
+            catch (...) {
                 Logic::get().notify("Rename the clickpack folder to use plain characters", false);
             }
             Logic::get().push_runtime_settings();
             ImGui::CloseCurrentPopup();
         }
     }
-    if (shown == 0) ImGui::TextDisabled("No clickpacks match");
+    if (shown == 0) {
+        ImGui::TextDisabled("No clickpacks match");
+    }
     ImGui::EndChild();
-    float pickerW = GUI::get().shared_button_width({"Refresh", "Close"});
-    if (ImGui::Button("Refresh", ImVec2(pickerW, 0.f))) GUI::get().refresh_clickpacks();
-    ImGui::SameLine();
-    if (ImGui::Button("Close", ImVec2(pickerW, 0.f))) ImGui::CloseCurrentPopup();
+    if (eui::Button("Refresh", ImVec2(picker_wide, 0.f))) {
+        GUI::get().refresh_clickpacks();
+    }
     ImGui::EndPopup();
 }
 
@@ -1235,28 +1491,39 @@ void GUI::refresh_renders() {
     state.files.clear();
     auto dir = Logic::get().save_root() / "renders";
     std::error_code error;
-    std::filesystem::create_directories(dir, error);
-    if (!std::filesystem::exists(dir, error)) return;
+    fs::create_directories(dir, error);
+    if (!fs::exists(dir, error))
+        return;
     std::string extra = GUI::get().lower_copy(Logic::get().render_extension);
-    if (!extra.empty() && extra.front() != '.') extra.insert(extra.begin(), '.');
-    for (auto const& entry : std::filesystem::directory_iterator(dir, error)) {
-        if (error || !entry.is_regular_file()) continue;
+    if (!extra.empty() && extra.front() != '.') {
+        extra.insert(extra.begin(), '.');
+    }
+    for (auto const& entry : fs::directory_iterator(dir, error)) {
+        if (error || !entry.is_regular_file()) {
+            continue;
+        }
         auto name = GUI::get().lower_copy(geode::utils::string::pathToString(entry.path().filename()));
         bool video = name.ends_with(".mp4") || name.ends_with(".mkv") || name.ends_with(".mov") || name.ends_with(".webm");
-        if (!video && !extra.empty() && extra != ".") video = name.ends_with(extra);
-        if (!video) continue;
+        if (!video && !extra.empty() && extra != ".") {
+            video = name.ends_with(extra);
+        }
+        if (!video) {
+            continue;
+        }
         state.files.push_back(entry.path());
     }
-    std::sort(state.files.begin(), state.files.end(), [](std::filesystem::path const& a, std::filesystem::path const& b) {
+    std::sort(state.files.begin(), state.files.end(), [](fs::path const& a, fs::path const& b) {
         return GUI::get().lower_copy(geode::utils::string::pathToString(a.filename())) < GUI::get().lower_copy(geode::utils::string::pathToString(b.filename()));
     });
 }
 
 void GUI::open_render_picker() {
+    log::debug("open render picker");
     GUI::get().reveal_menu();
     auto& state = GUI::get().renders();
-    state.second = false;
+    state.second = state.confirm = false;
     state.first.clear();
+    state.last.clear();
     state.filter.clear();
     state.want_open = true;
     GUI::get().refresh_renders();
@@ -1264,44 +1531,73 @@ void GUI::open_render_picker() {
 
 void GUI::draw_render_picker() {
     auto& state = GUI::get().renders();
-    static int drawnFrame = -1;
-    if (drawnFrame == ImGui::GetFrameCount()) return;
-    if (state.want_open) ImGui::OpenPopup("Echo Renders###echo-render-picker");
-    float pickerScale = ImGui::GetFontSize() / 18.f;
-    ImGui::SetNextWindowSize(ImVec2(420.f * pickerScale, 360.f * pickerScale), ImGuiCond_Always);
-    if (!ImGui::BeginPopup("Echo Renders###echo-render-picker")) return;
-    drawnFrame = ImGui::GetFrameCount();
+    static int drawn_frame = -1;
+    if (drawn_frame == ImGui::GetFrameCount())
+        return;
+    if (state.want_open) {
+        ImGui::OpenPopup("Echo Renders###echo-render-picker");
+    }
+    float picker_scale = ImGui::GetFontSize() / 18.f, picker_wide = 400.f * picker_scale;
+    if (!ImGui::BeginPopup("Echo Renders###echo-render-picker", ImGuiWindowFlags_AlwaysAutoResize))
+        return;
+    drawn_frame = ImGui::GetFrameCount();
     state.want_open = false;
-    ImGui::TextUnformatted(state.second ? "Select the second video" : "Select the first video");
-    if (state.second) ImGui::TextDisabled("%s", geode::utils::string::pathToString(state.first.filename()).c_str());
-    ImGui::SetNextItemWidth(-1.f);
-    if (ImGui::IsWindowAppearing()) ImGui::SetKeyboardFocusHere();
-    ImGui::InputTextWithHint("##render-filter", "Type to filter videos", &state.filter);
-    ImGui::BeginChild("##render-list", ImVec2(0.f, 240.f * pickerScale), ImGuiChildFlags_Borders);
+    if (state.confirm) {
+        if (eui::TitleBar("Join These Videos?", eui::Icon::Render, true, picker_wide)) {
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::TextUnformatted(geode::utils::string::pathToString(state.first.filename()).c_str());
+        ImGui::TextUnformatted(geode::utils::string::pathToString(state.last.filename()).c_str());
+        ImGui::TextDisabled("Uses your render codec and quality settings.");
+        float half = (picker_wide - ImGui::GetStyle().ItemSpacing.x) * 0.5f;
+        if (eui::Button("Join", ImVec2(half, 0.f))) {
+            Logic::get().merge_renders(state.first, state.last);
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (eui::Button("Cancel", ImVec2(half, 0.f))) {
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+        return;
+    }
+    if (eui::TitleBar(state.second ? "Pick the Second Video" : "Pick the First Video", eui::Icon::Render, true, picker_wide)) {
+        ImGui::CloseCurrentPopup();
+    }
+    if (state.second) {
+        ImGui::TextDisabled("%s", geode::utils::string::pathToString(state.first.filename()).c_str());
+    }
+    ImGui::SetNextItemWidth(picker_wide);
+    focus_search_on_open();
+    eui::InputTextWithHint("##render-filter", "Type to filter videos", &state.filter);
+    ImGui::BeginChild("##render-list", ImVec2(picker_wide, 240.f * picker_scale), ImGuiChildFlags_Borders);
     std::string needle = GUI::get().lower_copy(state.filter);
     int shown = 0;
     for (auto const& path : state.files) {
         std::string name = geode::utils::string::pathToString(path.filename());
-        if (!needle.empty() && GUI::get().lower_copy(name).find(needle) == std::string::npos) continue;
+        if (!needle.empty() && GUI::get().lower_copy(name).find(needle) == std::string::npos) {
+            continue;
+        }
         ++shown;
-        std::string rowId = name + "##render-" + geode::utils::string::pathToString(path);
-        if (!ImGui::Selectable(rowId.c_str(), false)) continue;
+        std::string row_id = name + "##render-" + geode::utils::string::pathToString(path);
+        if (!eui::Selectable(row_id.c_str(), false)) {
+            continue;
+        }
         if (!state.second) {
             state.first = path;
             state.second = true;
             state.filter.clear();
             continue;
         }
-        Logic::get().merge_renders(state.first, path);
-        state.second = false;
-        state.first.clear();
-        ImGui::CloseCurrentPopup();
+        state.last = path;
+        state.confirm = true;
     }
-    if (shown == 0) ImGui::TextDisabled("No videos match");
+    if (shown == 0) {
+        ImGui::TextDisabled("No videos match");
+    }
     ImGui::EndChild();
-    float pickerW = GUI::get().shared_button_width({"Refresh", "Close"});
-    if (ImGui::Button("Refresh", ImVec2(pickerW, 0.f))) GUI::get().refresh_renders();
-    ImGui::SameLine();
-    if (ImGui::Button("Close", ImVec2(pickerW, 0.f))) ImGui::CloseCurrentPopup();
+    if (eui::Button("Refresh", ImVec2(picker_wide, 0.f))) {
+        GUI::get().refresh_renders();
+    }
     ImGui::EndPopup();
 }

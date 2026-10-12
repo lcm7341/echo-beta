@@ -19,7 +19,6 @@ if ((ANDROID OR IOS OR CMAKE_SYSTEM_NAME STREQUAL "Android" OR CMAKE_SYSTEM_NAME
 endif()
 
 file(GLOB_RECURSE SOURCES CONFIGURE_DEPENDS src/*.cpp)
-list(FILTER SOURCES EXCLUDE REGEX "src/eUI/")
 
 add_library(${PROJECT_NAME} SHARED ${SOURCES})
 if (ANDROID)
@@ -78,5 +77,7 @@ if (APPLE AND NOT IOS)
     enable_language(OBJCXX)
     target_sources(${PROJECT_NAME} PRIVATE src/Logic/mac_promotion.mm)
     set_source_files_properties(src/Logic/mac_promotion.mm PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_sources(${PROJECT_NAME} PRIVATE src/GUI/mac_scroll.mm)
+    set_source_files_properties(src/GUI/mac_scroll.mm PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_link_libraries(${PROJECT_NAME} "-framework CoreVideo" "-framework QuartzCore" "-framework AppKit")
 endif()
