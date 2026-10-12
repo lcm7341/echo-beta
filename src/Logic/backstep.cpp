@@ -43,9 +43,8 @@ struct UsedMark {
 std::vector<UsedMark> used_marks(PlayLayer* play) {
     std::vector<UsedMark> out;
     auto* p1 = play ? play->m_player1 : nullptr;
-    if (!p1) {
+    if (!p1)
         return out;
-    }
     auto& grid = play->m_nonEffectObjects;
     auto& sizes = play->m_nonEffectObjectsSizes;
     float factor = play->m_sectionXFactor > 0.f ? play->m_sectionXFactor : 0.01f;
@@ -54,20 +53,17 @@ std::vector<UsedMark> used_marks(PlayLayer* play) {
     for (int x = std::max(center - 10, 0); x <= std::min(center + 10, last); ++x) {
         auto* column = grid[x];
         auto* counts = sizes[x];
-        if (!column || !counts) {
+        if (!column || !counts)
             continue;
-        }
         for (std::size_t y = 0; y < std::min(column->size(), counts->size()); ++y) {
             auto* bucket = (*column)[y];
-            if (!bucket) {
+            if (!bucket)
                 continue;
-            }
             int amt = std::min<int>((*counts)[y], static_cast<int>(bucket->size()));
             for (int i = 0; i < amt; ++i) {
                 auto* obj = (*bucket)[i];
-                if (!obj) {
+                if (!obj)
                     continue;
-                }
                 switch (obj->m_objectType) {
                 case GameObjectType::Solid:
                 case GameObjectType::Hazard:
@@ -78,9 +74,8 @@ std::vector<UsedMark> used_marks(PlayLayer* play) {
                 default:
                     break;
                 }
-                if (auto* enhanced = typeinfo_cast<EnhancedGameObject*>(obj)) {
+                if (auto* enhanced = typeinfo_cast<EnhancedGameObject*>(obj))
                     out.push_back({ enhanced, enhanced->m_activatedByPlayer1, enhanced->m_activatedByPlayer2 });
-                }
             }
         }
     }
@@ -189,18 +184,16 @@ void Logic::note_shown_camera(PlayLayer* play, bool stepped) {
     if (!play || !Logic::get().backstep)
         return;
     if (std::exchange(pinned_this_frame, false)) {
-        if (auto& pin = pinned_camera()) {
+        if (auto& pin = pinned_camera())
             show_camera(play, *pin);
-        }
         return;
     }
     if (stepped) {
         pinned_camera().reset();
         return;
     }
-    if (auto& pin = pinned_camera()) {
+    if (auto& pin = pinned_camera())
         show_camera(play, *pin);
-    }
 }
 
 struct BackstepExtra {
@@ -372,9 +365,8 @@ namespace {
 
 int Logic::backstep_interval() const {
     double rate = sample_rate();
-    if (!std::isfinite(rate) || rate <= 60.0) {
+    if (!std::isfinite(rate) || rate <= 60.0)
         return 1;
-    }
     return std::max(1, static_cast<int>(std::lround(rate / 60.0)));
 }
 
@@ -386,6 +378,7 @@ void Logic::release_backstep(BackstepSave& save, char const* why) {
         save.object->release();
     }
     else {
+        // its broken so i leak it. gds destructor would crash
     }
     save.object = nullptr;
 }
@@ -401,22 +394,19 @@ void Logic::clear_backsteps() {
     pinned_this_frame = false;
     logic.backsteps.clear();
     Logic::get().clear_backstep_objects();
-    if (!logic.backstep_swapped) {
+    if (!logic.backstep_swapped)
         logic.backstep_inputs.clear();
-    }
 }
 
 // runs BEFORE the step so the save is the state at step_frame
 void Logic::save_backstep(PlayLayer* play) {
-    log::debug("save backstep");
     auto& logic = Logic::get();
     if (!play || logic.predicting || logic.backstepping)
         return;
     bool resim = logic.backstep_target >= 0;
     if (!logic.backstep || Logic::get().render_capturing()) {
-        if (!logic.backsteps.empty()) {
+        if (!logic.backsteps.empty())
             Logic::get().clear_backsteps();
-        }
         return;
     }
     RunState mode = resim ? logic.backstep_state : logic.state;
@@ -437,21 +427,20 @@ void Logic::save_backstep(PlayLayer* play) {
         return;
     if (!logic.backsteps.empty() && logic.backsteps.back().echo.frame >= frame)
         return;
+    // createCheckpoint must NOT change the object counters
     auto* obj = play->createCheckpoint();
     if (!obj)
         return;
     obj->retain();
     auto extra = std::make_shared<BackstepExtra>();
-    if (play->m_player1) {
+    if (play->m_player1)
         extra->player1 = SavedPlayerCheckpoint::create(play->m_player1);
-    }
     if (play->m_player2) {
         extra->player2 = SavedPlayerCheckpoint::create(play->m_player2);
         extra->has_player2 = true;
     }
-    if (play->m_effectManager) {
+    if (play->m_effectManager)
         extra->persistent_items = play->m_effectManager->m_persistentItemCountMap;
-    }
     extra->calc_non_effect = play->m_calcNonEffectObjects;
     extra->calc_non_effect_size = play->m_calcNonEffectObjectsSize;
     extra->used = used_marks(play);
@@ -459,9 +448,8 @@ void Logic::save_backstep(PlayLayer* play) {
     logic.backsteps.push_back({ obj, Logic::get().capture_checkpoint(play, obj, frame), std::move(extra), {} });
     Logic::get().note_backstep_objects(play);
     double rate = logic.sample_rate();
-    if (!std::isfinite(rate) || rate <= 0.0) {
+    if (!std::isfinite(rate) || rate <= 0.0)
         rate = 240.0;
-    }
     size_t keep = static_cast<size_t>(std::clamp(std::llround(rate * logic.backstep_percent / 100.0), 1ll, 100000ll));
     while (!resim && logic.backsteps.size() > keep) {
         Logic::get().release_backstep(logic.backsteps.front(), "trim");
@@ -500,9 +488,8 @@ bool Logic::step_to(PlayLayer* play, int target, int keep_up_to) {
     }
     if (!logic.backstep || logic.backstep_target >= 0 || logic.backstepping || Logic::get().render_capturing() ||
         play->m_hasCompletedLevel || play->m_levelEndAnimationStarted) {
-        if (!logic.backstep) {
+        if (!logic.backstep)
             logic.message = "Turn on Backstep first";
-        }
         return false;
     }
     int keep = std::min(target, keep_up_to);
@@ -512,6 +499,7 @@ bool Logic::step_to(PlayLayer* play, int target, int keep_up_to) {
         logic.message = "Nothing saved to step back to";
         return false;
     }
+    // DONT load a broken save
     while (!logic.backsteps.empty() && (logic.backsteps.back().broken || !echo::state_check::broken(logic.backsteps.back().object->m_gameState).empty())) {
         logic.backsteps.back().broken = true;
         Logic::get().pop_backstep();
@@ -555,14 +543,12 @@ bool Logic::step_to(PlayLayer* play, int target, int keep_up_to) {
     Logic::get().sync_checkpoints(play);
     while (auto* last = play->getLastCheckpoint()) {
         auto it = std::ranges::find(logic.checkpoints, last, &Checkpoint::object);
-        if (it == logic.checkpoints.end() || it->frame <= keep) {
+        if (it == logic.checkpoints.end() || it->frame <= keep)
             break;
-        }
         auto amt = play->m_checkpointArray->count();
         play->removeCheckpoint(false);
-        if (play->m_checkpointArray->count() >= amt) {
+        if (play->m_checkpointArray->count() >= amt)
             break;
-        }
     }
     logic.object_capture = nullptr;
     if (auto* extra = save.extra.get()) {
@@ -585,14 +571,12 @@ bool Logic::step_to(PlayLayer* play, int target, int keep_up_to) {
             body->m_pendingCheckpoint = pending;
         };
         put(play->m_player1, extra->player1);
-        if (extra->has_player2) {
+        if (extra->has_player2)
             put(play->m_player2, extra->player2);
-        }
         Logic::get().apply_player(play->m_player1, save.echo.player1);
         Logic::get().apply_player(play->m_player2, save.echo.player2);
-        if (play->m_effectManager) {
+        if (play->m_effectManager)
             play->m_effectManager->m_persistentItemCountMap = extra->persistent_items;
-        }
         play->m_calcNonEffectObjects = extra->calc_non_effect;
         play->m_calcNonEffectObjectsSize = extra->calc_non_effect_size;
         for (auto const& mark : extra->used) {
@@ -616,9 +600,8 @@ bool Logic::step_to(PlayLayer* play, int target, int keep_up_to) {
             for (auto const& [key, tween] : saved)
                 tweens.find(key)->second = tween;
         show_camera(play, extra->camera);
-        if (!resim) {
+        if (!resim)
             pin_camera(play);
-        }
     }
     logic.backstepping = false;
     logic.frame_advance = true;
@@ -639,9 +622,8 @@ void Logic::finish_backstep(PlayLayer* play) {
     auto& logic = Logic::get();
     if (logic.backstep_target < 0)
         return;
-    if (play && logic.step_frame == logic.backstep_target && !play->m_playerDied) {
+    if (play && logic.step_frame == logic.backstep_target && !play->m_playerDied)
         pin_camera(play);
-    }
     logic.backstep_target = -1;
     logic.state = logic.backstep_state;
     logic.play_p1 = logic.backstep_play_p1;
@@ -666,9 +648,8 @@ void Logic::finish_backstep(PlayLayer* play) {
         return;
     if (logic.is_recording()) {
         Logic::get().trim_recorded_inputs(logic, frame);
-        if (!logic.is_playing()) {
+        if (!logic.is_playing())
             Logic::get().trim_rates(frame);
-        }
         Logic::get().sort_inputs();
     }
     if (logic.is_playing())
@@ -679,7 +660,6 @@ void Logic::finish_backstep(PlayLayer* play) {
 }
 
 void Logic::poll_back_hold() {
-    log::debug("poll back hold");
     auto& logic = Logic::get();
     auto* play = PlayLayer::get();
     if (!logic.holding_back || !play)
@@ -703,9 +683,8 @@ void Logic::poll_back_hold() {
         return;
     int steps = static_cast<int>(std::min(wanted, 1e6));
     logic.last_back_step = from + chrono::duration_cast<chrono::steady_clock::duration>(chrono::duration<double>(steps / rate));
-    if (!Logic::get().step_back(play, steps)) {
+    if (!Logic::get().step_back(play, steps))
         logic.holding_back = false;
-    }
 }
 
 #ifdef GEODE_IS_WINDOWS
