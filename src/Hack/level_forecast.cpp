@@ -651,6 +651,9 @@ namespace {
         auto live_now = live_steps();
         auto live_step = p1 ? node1 - p1->m_lastPosition : CCPoint{};
         play->m_effectManager = f.shadow;
+        // mega hack hooks updateSpawnTriggers & reads the managers PARENT as the level, no null check
+        // my copy has no parent so it crashed (megahack + 0x4f7ffc). pretend the level is its parent while i use it
+        f.shadow->setParent(play);
         f.recording = true;
         CCPoint fire_from;
         for (int step = 0; step < count && f.records.size() < RECORD_LIMIT; ++step) {
