@@ -2215,8 +2215,10 @@ void Logic::flip_input_players() {
 void Logic::sort_inputs() {
     auto& logic = Logic::get();
     auto& inputs = logic.inputs;
+    // by frame ONLY. outside 2 player levels p1 & p2 inputs drive the same icon, so their order on a frame matters
+    // (it used to put p1 first: "p2 release, p1 press" became "p1 press, p2 release" & let go of a hold)
     if (std::is_sorted(inputs.begin(), inputs.end(), [](Frame const& a, Frame const& b) {
-            return a.number < b.number || (a.number == b.number && !a.player2 && b.player2);
+            return a.number < b.number;
         })) {
         logic.touch_inputs();
         Logic::get().refresh_live_hold();
@@ -2226,7 +2228,7 @@ void Logic::sort_inputs() {
     std::vector<size_t> order(inputs.size());
     std::iota(order.begin(), order.end(), 0);
     std::stable_sort(order.begin(), order.end(), [&](size_t a, size_t b) {
-        return inputs[a].number < inputs[b].number || (inputs[a].number == inputs[b].number && !inputs[a].player2 && inputs[b].player2);
+        return inputs[a].number < inputs[b].number;
     });
     bool moved = false;
     for (size_t i = 0; i < order.size(); ++i)
