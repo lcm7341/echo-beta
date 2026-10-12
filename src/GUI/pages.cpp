@@ -496,14 +496,12 @@ void GUI::main() {
     if (eui::BeginCard("Session", card_width())) {
         float half = eui::RowButton(2);
         ImVec2 big(half, eui::em(2.3f));
-        if (eui::ActionButton(logic.is_recording() ? "Stop Recording" : "Record", eui::Icon::Record, logic.is_recording(), big, RECORD_RED)) {
+        if (eui::ActionButton(logic.is_recording() ? "Stop Recording" : "Record", eui::Icon::Record, logic.is_recording(), big, RECORD_RED))
             Logic::get().toggle_recording();
-        }
         GUI::get().offer_rebind("toggle-record");
         ImGui::SameLine();
-        if (eui::ActionButton(logic.is_playing() ? "Stop Playing" : "Play", eui::Icon::Play, logic.is_playing(), big)) {
+        if (eui::ActionButton(logic.is_playing() ? "Stop Playing" : "Play", eui::Icon::Play, logic.is_playing(), big))
             Logic::get().toggle_playing();
-        }
         GUI::get().offer_rebind("toggle-play");
         ImGui::BeginDisabled(busy);
         eui::Row("Record", "Which player's inputs are recorded.");
@@ -522,15 +520,13 @@ void GUI::main() {
         toggle("Ignore Inputs During Playback", logic.ignore_inputs);
         GUI::get().offer_rebind("key-ignore");
         if (eui::Button("Reset Level", ImVec2(half, 0.f))) {
-            if (auto* level = PlayLayer::get()) {
+            if (auto* level = PlayLayer::get())
                 level->resetLevel();
-            }
         }
         GUI::get().offer_rebind("key-reset");
         ImGui::SameLine();
-        if (eui::Button("Close Menu", ImVec2(half, 0.f))) {
+        if (eui::Button("Close Menu", ImVec2(half, 0.f)))
             GUI::get().begin_close();
-        }
         GUI::get().offer_rebind("open-menu");
     }
     eui::EndCard();
@@ -540,27 +536,23 @@ void GUI::main() {
         ImGuiID speed_id = ImGui::GetID("##speed");
         bool typing = ImGui::TempInputIsActive(speed_id);
         bool dragging = ImGui::GetActiveID() == speed_id && !typing;
-        if (!dragging) {
+        if (!dragging)
             dragged = logic.speedhack;
-        }
         float stepped = std::clamp(std::round(dragged / .05f) * .05f, .01f, 5.f);
         auto shown = fmt::format("{:.2f}x", stepped);
         if (eui::DragFloat("##speed", &dragged, 0.005f, 0.01f, 5.f, dragging ? shown.c_str() : "%.3fx", dragging ? ImGuiSliderFlags_NoRoundToFormat : ImGuiSliderFlags_None)) {
             GUI::get().setSpeed(typing ? dragged : std::clamp(std::round(dragged / .05f) * .05f, .01f, 5.f), false);
         }
         GUI::get().offer_rebind("key-speedhack");
-        if (ImGui::IsItemDeactivatedAfterEdit()) {
+        if (ImGui::IsItemDeactivatedAfterEdit())
             GUI::get().setSpeed(logic.speedhack, true);
-        }
 
         static float input_tps = -1.f;
-        if (input_tps < 0.f) {
+        if (input_tps < 0.f)
             input_tps = logic.fps;
-        }
         static float input_fps = -1.f;
-        if (input_fps < 0.f) {
+        if (input_fps < 0.f)
             input_fps = logic.playback_fps >= 1.f ? logic.playback_fps : 240.f;
-        }
         float set_em = 3.2f;
         eui::RowWith("TPS", set_em, "Physics steps per second.");
         eui::DragFloat("##tps", &input_tps, 1.f, 1.f, FLT_MAX, "%.2f");
@@ -580,165 +572,138 @@ void GUI::main() {
             input_fps = std::clamp(input_fps, 1.f, FLT_MAX);
             GUI::get().set_playback_fps(input_fps);
         }
-        if (toggle("Lock TPS", logic.lock_delta)) {
+        if (toggle("Lock TPS", logic.lock_delta))
             GUI::get().drop_carry();
-        }
         tip("Forces your TPS value to this. Turn this on for maximum accuracy, but it shouldn't be necessary.");
         eui::RowHalf();
-        if (toggle("Real Time", logic.real_time_mode)) {
+        if (toggle("Real Time", logic.real_time_mode))
             GUI::get().drop_carry();
-        }
         tip("Keeps the game at full speed when it lags instead of slowing it down.");
         toggle("Audio Speedhack", logic.audio_speedhack);
         tip("Makes the audio follow your speedhack.");
         eui::RowHalf();
         toggle("Sync Audio", logic.sync_audio);
         tip("Syncs the audio if the game lags");
-        if (eui::Gear("##sync-audio-settings")) {
+        if (eui::Gear("##sync-audio-settings"))
             open_sync_audio = true;
-        }
     }
     eui::EndCard();
     eui::EndCardRow();
     eui::BeginCardRow("replay-1");
     if (eui::BeginCard("Replay", card_width())) {
         ImGui::SetNextItemWidth(-FLT_MIN);
-        if (eui::InputTextWithHint("###replay_name", "Replay name", &logic.macro_name)) {
+        if (eui::InputTextWithHint("###replay_name", "Replay name", &logic.macro_name))
             logic.macro_name_typed = true;
-        }
-        if (ImGui::IsItemDeactivatedAfterEdit()) {
+        if (ImGui::IsItemDeactivatedAfterEdit())
             logic.macro_path.clear();
-        }
         ImGui::TextDisabled("%i inputs   %s TPS%s", (int)(logic.inputs.size()), fmt::format("{:g}", logic.fps).c_str(), !logic.macro_ldm_known ? "" : logic.macro_ldm ? "   LDM on" : "   LDM off");
         float half = eui::RowButton(2);
-        if (eui::Button("Save", ImVec2(half, 0.f))) {
+        if (eui::Button("Save", ImVec2(half, 0.f)))
             Logic::get().write_file();
-        }
         GUI::get().offer_rebind("key-save");
         ImGui::SameLine();
-        if (eui::Button("Load", ImVec2(half, 0.f))) {
+        if (eui::Button("Load", ImVec2(half, 0.f)))
             Logic::get().pick_replay();
-        }
         GUI::get().offer_rebind("key-load");
         ImGui::BeginDisabled(busy);
-        if (eui::Button("Merge In", ImVec2(half, 0.f))) {
+        if (eui::Button("Merge In", ImVec2(half, 0.f)))
             GUI::get().open_merge_picker();
-        }
         ImGui::EndDisabled();
         tip("Merges another replay's inputs into this one. Both replays need the same TPS.");
         ImGui::SameLine();
         ImGui::BeginDisabled(logic.inputs.empty());
-        if (eui::Button("Clear", ImVec2(half, 0.f))) {
+        if (eui::Button("Clear", ImVec2(half, 0.f)))
             want_reset = true;
-        }
         ImGui::EndDisabled();
         tip("Removes every input from the current replay.");
         toggle("No Overwrite", logic.no_overwrite);
         GUI::get().offer_rebind("key-no-overwrite", "Saves as a new file instead of overwriting the current replay.");
-        if (eui::Gear("##overwrite-settings")) {
+        if (eui::Gear("##overwrite-settings"))
             open_overwrite = true;
-        }
         eui::Separator();
         ImGui::BeginDisabled(!logic.backstep && !logic.best_frame_running);
 #ifdef GEODE_IS_MOBILE
-        if (eui::Button(logic.best_frame_running ? "Stop Searching" : "Stop On Best Frame", ImVec2(-FLT_MIN, 0.f))) {
+        if (eui::Button(logic.best_frame_running ? "Stop Searching" : "Stop On Best Frame", ImVec2(-FLT_MIN, 0.f)))
             Logic::get().request_best_frame();
-        }
         tip("Finds the frame where your next click is the safest and stops there. Requires Backstep.");
 #else
-        if (eui::Button(logic.best_frame_running ? "Stop Searching" : "Find Best Frame", ImVec2(-FLT_MIN, 0.f))) {
+        if (eui::Button(logic.best_frame_running ? "Stop Searching" : "Find Best Frame", ImVec2(-FLT_MIN, 0.f)))
             Logic::get().request_best_frame();
-        }
         GUI::get().offer_rebind("find-best-frame", "Finds the frame where your next click is the safest and steps to it. Requires Backstep.");
-        if (toggle("Click That Frame", logic.best_frame_click)) {
+        if (toggle("Click That Frame", logic.best_frame_click))
             persist();
-        }
         tip("Automatically clicks on the best frame instead of only stopping there.");
         eui::RowHalf();
-        if (toggle("Keep Going", logic.best_frame_auto)) {
+        if (toggle("Keep Going", logic.best_frame_auto))
             persist();
-        }
         tip("Keeps finding the next best frame after each click until none survive.");
 #endif
         ImGui::EndDisabled();
         eui::Row("Search range", "How many steps ahead to search. Limited by how far Backstep can go back.");
-        if (eui::DragInt("##best-frame-range", &logic.best_frame_range, 1.f, 1, 2000, "%d steps")) {
+        if (eui::DragInt("##best-frame-range", &logic.best_frame_range, 1.f, 1, 2000, "%d steps"))
             logic.best_frame_range = std::clamp(logic.best_frame_range, 1, 2000);
-        }
         saved_on_release();
     }
     eui::EndCard();
     if (eui::BeginCard("Frame Advance", card_width())) {
         bool advancing = logic.frame_advance;
-        if (eui::Checkbox("Frame Advance", &advancing)) {
+        if (eui::Checkbox("Frame Advance", &advancing))
             GUI::get().set_frame_advance(advancing);
-        }
         GUI::get().offer_rebind("toggle-advance");
         float step_w = eui::RowRight(4.6f);
-        if (eui::Button("Step", ImVec2(step_w, 0.f))) {
+        if (eui::Button("Step", ImVec2(step_w, 0.f)))
             Logic::get().advance_one_frame();
-        }
         GUI::get().offer_rebind("step-frame");
         eui::Row("Hold delay", "How long Step is held before it starts repeating.");
         int hold = (int)(logic.advance_hold_ms);
-        if (eui::DragInt("##advance-hold", &hold, 1.f, 0, 1000, "%d ms")) {
+        if (eui::DragInt("##advance-hold", &hold, 1.f, 0, 1000, "%d ms"))
             logic.advance_hold_ms = static_cast<unsigned>(std::max(hold, 0));
-        }
         saved_on_release();
         eui::Row("Held speed", "Percent of your TPS, scaled with speedhack. 100% at 1x will advance you in real time.");
         int held = (int)(std::lround(logic.advance_speed));
-        if (eui::DragInt("##advance-speed", &held, 1.f, 1, 100, "%d%%")) {
+        if (eui::DragInt("##advance-speed", &held, 1.f, 1, 100, "%d%%"))
             logic.advance_speed = (float)(std::clamp(held, 1, 200));
-        }
         saved_on_release();
         eui::Separator();
-        if (toggle("Backstep", logic.backstep) && !logic.backstep) {
+        if (toggle("Backstep", logic.backstep) && !logic.backstep)
             Logic::get().clear_backsteps();
-        }
         tip("Allows you to step backwards while recording. Higher TPS saves less often and replays your inputs from the last save.");
         float back_w = eui::RowRight(4.6f);
-        if (eui::Button("Back", ImVec2(back_w, 0.f))) {
+        if (eui::Button("Back", ImVec2(back_w, 0.f)))
             Logic::get().step_back(PlayLayer::get(), 1);
-        }
         GUI::get().offer_rebind("step-back");
         eui::Row("Saved states", "How many states to keep as a percent of your TPS. 100% at 240 TPS keeps 240.");
-        if (eui::DragInt("##backstep-saves", &logic.backstep_percent, 1.f, 1, 200, "%d%%")) {
+        if (eui::DragInt("##backstep-saves", &logic.backstep_percent, 1.f, 1, 200, "%d%%"))
             logic.backstep_percent = std::clamp(logic.backstep_percent, 1, 200);
-        }
         saved_on_release();
     }
     eui::EndCard();
     eui::EndCardRow();
 
-    if (open_sync_audio) {
+    if (open_sync_audio)
         ImGui::OpenPopup("Sync Audio Settings");
-    }
     if (eui::BeginModal("Sync Audio Settings", 20.f)) {
         eui::Row("Threshold", "How far the audio can drift before it gets synced.");
-        if (eui::DragInt("##sync-threshold", &logic.sync_audio_threshold, 5.f, 20, 2000, "%d ms")) {
+        if (eui::DragInt("##sync-threshold", &logic.sync_audio_threshold, 5.f, 20, 2000, "%d ms"))
             logic.sync_audio_threshold = std::clamp(logic.sync_audio_threshold, 20, 2000);
-        }
         saved_on_release();
         eui::EndModal();
     }
-    if (open_overwrite) {
+    if (open_overwrite)
         ImGui::OpenPopup("Overwrite Settings");
-    }
     if (eui::BeginModal("Overwrite Settings", 20.f)) {
         eui::Row("Rename format", "Added to the name instead of overwriting. # is the number, so _# saves Replay_1.");
         eui::InputText("##rename-format", &logic.rename_format);
         saved_on_release();
         std::string shown = logic.rename_format.empty() ? std::string("_#") : logic.rename_format;
-        if (shown.find('#') == std::string::npos) {
+        if (shown.find('#') == std::string::npos)
             shown += "#";
-        }
         shown.replace(shown.find('#'), 1, "1");
         ImGui::TextDisabled("Replay%s.echo", shown.c_str());
         eui::EndModal();
     }
-    if (want_reset) {
+    if (want_reset)
         ImGui::OpenPopup("Clear Replay");
-    }
     if (eui::BeginModal("Clear Replay", 16.f)) {
         ImGui::TextUnformatted("Remove every input from this replay?");
         float half = eui::RowButton(2);
@@ -747,9 +712,8 @@ void GUI::main() {
             ImGui::CloseCurrentPopup();
         }
         ImGui::SameLine();
-        if (eui::Button("Keep", ImVec2(half, 0.f))) {
+        if (eui::Button("Keep", ImVec2(half, 0.f)))
             ImGui::CloseCurrentPopup();
-        }
         eui::EndModal();
     }
 }
@@ -760,24 +724,20 @@ void GUI::tools() {
 
     eui::BeginCardRow("assists-0");
     if (eui::BeginCard("Safety and Auto Input", card_width())) {
-        if (quad_row("Noclip", "##noclip", logic.noclip_p1, logic.noclip_p2)) {
+        if (quad_row("Noclip", "##noclip", logic.noclip_p1, logic.noclip_p2))
             GUI::get().persist();
-        }
         toggle("Safe Mode", logic.safeMode);
         tip("Removes the ability to make progress when using hacks. You can still make progress if no hacks are on, though.");
-        if (toggle("Prevent Death", logic.pause_before_kill)) {
+        if (toggle("Prevent Death", logic.pause_before_kill))
             Logic::get().reset_traj();
-        }
         GUI::get().offer_rebind("key-pause-before-kill", "Stops on the frame before you die while recording. Works without Show Trajectory.");
         eui::Separator();
         toggle("Autoclicker", logic.autoclicker);
         GUI::get().offer_rebind("key-autoclick");
-        if (eui::Gear("##autoclicker-settings")) {
+        if (eui::Gear("##autoclicker-settings"))
             open_autoclicker = true;
-        }
-        if (toggle("Trajectory Autoclicker", logic.traj_autoclicker)) {
+        if (toggle("Trajectory Autoclicker", logic.traj_autoclicker))
             Logic::get().reset_traj();
-        }
         tip("Automatically clicks or releases when the next frame would kill you. Works without Show Trajectory.");
     }
     eui::EndCard();
@@ -786,22 +746,18 @@ void GUI::tools() {
         GUI::get().offer_rebind("key-click-both");
         toggle("Swap Player Input", logic.swap_players);
         GUI::get().offer_rebind("key-swap");
-        if (quad_row("Inverse inputs", "##inverse", logic.inverse_p1, logic.inverse_p2)) {
+        if (quad_row("Inverse inputs", "##inverse", logic.inverse_p1, logic.inverse_p2))
             GUI::get().persist();
-        }
         char const* follow[] = { "Off", "P2 follows P1", "P1 follows P2" };
         eui::Row("Follow", "For two player levels, the following player will copy the followed player after that many frames or milliseconds.");
-        if (eui::Combo("##follow", &logic.follow_mode, follow, 3)) {
+        if (eui::Combo("##follow", &logic.follow_mode, follow, 3))
             GUI::get().persist();
-        }
         if (logic.follow_mode != 0) {
             eui::RowWith("Delay", 5.f);
-            if (eui::DragFloat("##follow-delay", &logic.follow_delay, logic.follow_delay_ms ? 1.f : 0.25f, 0.f, 100000.f, logic.follow_delay_ms ? "%.1f" : "%.0f")) {
+            if (eui::DragFloat("##follow-delay", &logic.follow_delay, logic.follow_delay_ms ? 1.f : 0.25f, 0.f, 100000.f, logic.follow_delay_ms ? "%.1f" : "%.0f"))
                 logic.follow_delay = std::max(logic.follow_delay, 0.f);
-            }
-            if (ImGui::IsItemHovered()) {
+            if (ImGui::IsItemHovered())
                 ImGui::SetTooltip("How far behind the follower is. %d steps at the current TPS.", Logic::get().follow_steps());
-            }
             persist_on_release();
             char const* units[] = { "frames", "ms" };
             int unit = logic.follow_delay_ms ? 1 : 0;
@@ -817,21 +773,17 @@ void GUI::tools() {
     eui::BeginCardRow("assists-1");
     if (eui::BeginCard("Orb Assists", card_width())) {
         ImGui::TextDisabled("While recording");
-        if (toggle("Click Dash Orbs", logic.click_dash_orbs)) {
+        if (toggle("Click Dash Orbs", logic.click_dash_orbs))
             Logic::get().reset_traj();
-        }
         GUI::get().offer_rebind("key-click-dash-orbs", "Automatically swift clicks stacked dash orbs. Does not affect playback.");
-        if (toggle("Click Black Orbs", logic.click_black_orbs)) {
+        if (toggle("Click Black Orbs", logic.click_black_orbs))
             Logic::get().reset_traj();
-        }
         GUI::get().offer_rebind("key-click-black-orbs", "Automatically swift clicks black orbs as UFO. Does not affect playback.");
-        if (toggle("Black Orb on Pad", logic.pad_black_orb)) {
+        if (toggle("Black Orb on Pad", logic.pad_black_orb))
             Logic::get().reset_traj();
-        }
         GUI::get().offer_rebind("key-pad-black-orb", "Automatically swift clicks black orbs when hitting a pad.");
-        if (toggle("Blue Orb on Pad", logic.pad_blue_orb)) {
+        if (toggle("Blue Orb on Pad", logic.pad_blue_orb))
             Logic::get().reset_traj();
-        }
         GUI::get().offer_rebind("key-pad-blue-orb", "Automatically swift clicks blue orbs when hitting a pad.");
     }
     eui::EndCard();
@@ -849,9 +801,8 @@ void GUI::tools() {
             auto* level = PlayLayer::get() ? PlayLayer::get()->m_level : nullptr;
             bool ldm = logic.macro_ldm_known ? logic.macro_ldm : level && level->m_lowDetailModeToggled;
             ImGui::BeginDisabled(locked);
-            if (eui::Checkbox("Low Detail Mode", &ldm)) {
+            if (eui::Checkbox("Low Detail Mode", &ldm))
                 logic.set_macro_ldm(ldm);
-            }
             ImGui::EndDisabled();
             tip("Saves LDM setting in the macro, as it sometimes breaks if not set correctly.");
         }
@@ -865,9 +816,8 @@ void GUI::tools() {
     eui::EndCard();
     eui::EndCardRow();
 
-    if (open_autoclicker) {
+    if (open_autoclicker)
         ImGui::OpenPopup("Autoclicker");
-    }
     if (eui::BeginModal("Autoclicker", 18.f)) {
         toggle("Enabled", logic.autoclicker);
         char const* players[] = { "Player 1", "Player 2", "Both" };
@@ -881,29 +831,25 @@ void GUI::tools() {
         }
         eui::Row("Click length", "0 makes every click a swift click.");
         int press = logic.auto_click.press_interval;
-        if (eui::DragInt("##autoclick-press", &press, 1.f, 0, 10000, "%d frames")) {
+        if (eui::DragInt("##autoclick-press", &press, 1.f, 0, 10000, "%d frames"))
             logic.auto_click.press_interval = std::max(press, 0);
-        }
         persist_on_release();
         eui::Row("Swift clicks", "Adds extra clicks/releases on the same frame for each autoclick.");
         int swifts = logic.auto_click.swifts;
-        if (eui::DragInt("##autoclick-swifts", &swifts, .1f, 0, 8, "%d extra")) {
+        if (eui::DragInt("##autoclick-swifts", &swifts, .1f, 0, 8, "%d extra"))
             logic.auto_click.swifts = std::clamp(swifts, 0, 8);
-        }
         persist_on_release();
         eui::Row("Release length");
         int release = logic.auto_click.release_interval;
-        if (eui::DragInt("##autoclick-release", &release, 1.f, 1, 10000, "%d frames")) {
+        if (eui::DragInt("##autoclick-release", &release, 1.f, 1, 10000, "%d frames"))
             logic.auto_click.release_interval = std::max(release, 1);
-        }
         persist_on_release();
         toggle("Turn off by itself", logic.autoclick_auto_disable);
         ImGui::BeginDisabled(!logic.autoclick_auto_disable);
         eui::Row("After");
         int disable_in = logic.auto_click.disable_in;
-        if (eui::DragInt("##autoclick-disable", &disable_in, 1.f, 1, 10000, "%d frames")) {
+        if (eui::DragInt("##autoclick-disable", &disable_in, 1.f, 1, 10000, "%d frames"))
             logic.auto_click.disable_in = std::max(disable_in, 1);
-        }
         saved_on_release();
         ImGui::EndDisabled();
         eui::EndModal();
@@ -911,7 +857,6 @@ void GUI::tools() {
 }
 
 void GUI::draw_visuals() {
-    log::debug("draw visuals");
     auto& logic = Logic::get();
     bool open_hitboxes = false, open_traj = false, open_layout = false, open_labels = false;
 
@@ -919,26 +864,22 @@ void GUI::draw_visuals() {
     if (eui::BeginCard("Overlays", card_width())) {
         toggle("Hitboxes", logic.show_hitboxes);
         GUI::get().offer_rebind("key-hitboxes");
-        if (eui::Gear("##hitbox-settings")) {
+        if (eui::Gear("##hitbox-settings"))
             open_hitboxes = true;
-        }
         toggle("Trajectory", logic.show_traj);
         GUI::get().offer_rebind("key-trajectory");
-        if (eui::Gear("##trajectory-settings")) {
+        if (eui::Gear("##trajectory-settings"))
             open_traj = true;
-        }
         toggle("Layout Mode", logic.layout_mode);
         GUI::get().offer_rebind("key-layout");
-        if (eui::Gear("##layout-settings")) {
+        if (eui::Gear("##layout-settings"))
             open_layout = true;
-        }
     }
     eui::EndCard();
     if (eui::BeginCard("Player", card_width())) {
         if (quad_row("Hide player", "##hide-player", logic.hide_p1, logic.hide_p2)) {
-            if (logic.traj_follow_hide_player) {
+            if (logic.traj_follow_hide_player)
                 Logic::get().reset_traj();
-            }
             GUI::get().persist();
         }
         toggle("Fix Rotation Bug", logic.fix_tps_rotation);
@@ -952,21 +893,17 @@ void GUI::draw_visuals() {
         for (std::size_t i = 0; i < order.size(); ++i) {
             auto const& label = *order[i];
             std::string title = label.title;
-            if (title.starts_with("Show ")) {
+            if (title.starts_with("Show "))
                 title = title.substr(5);
-            }
-            if (i % 2) {
+            if (i % 2)
                 eui::RowHalf();
-            }
             ImGui::PushID(label.key);
-            if (eui::Checkbox(title.c_str(), &(logic.*label.shown))) {
+            if (eui::Checkbox(title.c_str(), &(logic.*label.shown)))
                 save();
-            }
             ImGui::PopID();
         }
-        if (eui::Button("Position, Size and Font", ImVec2(-FLT_MIN, 0.f))) {
+        if (eui::Button("Position, Size and Font", ImVec2(-FLT_MIN, 0.f)))
             open_labels = true;
-        }
         tip("Changes where each label sits, its size, opacity, font and order.");
     }
     eui::EndCard();
@@ -974,45 +911,38 @@ void GUI::draw_visuals() {
         toggle("Disable Shake", logic.disable_shakes);
         GUI::get().offer_rebind("key-shakes");
         toggle("Disable Death Effect", logic.disable_death_effect);
-        if (toggle("No Mirror Portals", logic.no_mirror_portals)) {
+        if (toggle("No Mirror Portals", logic.no_mirror_portals))
             GUI::get().apply_no_mirror();
-        }
         tip("Stops mirror portals from flipping the level.");
     }
     eui::EndCard();
     eui::EndCardRow();
 
-    if (open_hitboxes) {
+    if (open_hitboxes)
         ImGui::OpenPopup("Hitboxes");
-    }
     if (eui::BeginModal("Hitboxes", 26.f)) {
         draw_hitbox_settings();
         eui::EndModal();
     }
-    if (open_traj) {
+    if (open_traj)
         ImGui::OpenPopup("Trajectory");
-    }
     if (eui::BeginModal("Trajectory", 20.f)) {
         draw_traj_settings();
         eui::EndModal();
     }
-    if (open_layout) {
+    if (open_layout)
         ImGui::OpenPopup("Layout Mode");
-    }
     if (eui::BeginModal("Layout Mode", 18.f)) {
         toggle("Use Regular Background", logic.layout_use_regular_bg);
         tip("Uses the level's actual background");
-        if (eui::ColorEdit3("Background color", logic.backgroundColor)) {
+        if (eui::ColorEdit3("Background color", logic.backgroundColor))
             save();
-        }
-        if (eui::ColorEdit3("Ground color", logic.blocks_color)) {
+        if (eui::ColorEdit3("Ground color", logic.blocks_color))
             save();
-        }
         eui::EndModal();
     }
-    if (open_labels) {
+    if (open_labels)
         ImGui::OpenPopup("On-Screen Labels");
-    }
     if (eui::BeginModal("On-Screen Labels", 34.f)) {
         draw_label_settings();
         eui::EndModal();
@@ -1029,23 +959,19 @@ void GUI::draw_macro() {
         eui::Row("Format");
         eui::Combo("##convert-format", &format, formats, 5);
         float half = eui::RowButton(2);
-        if (eui::Button("Export", ImVec2(half, 0.f))) {
+        if (eui::Button("Export", ImVec2(half, 0.f)))
             Logic::get().export_kind(formats[format]);
-        }
         tip("Converts the current replay to the converted folder");
         ImGui::SameLine();
-        if (eui::Button("Import", ImVec2(half, 0.f))) {
+        if (eui::Button("Import", ImVec2(half, 0.f)))
             Logic::get().import_replays();
-        }
         tip("Import a replay of the selected type to convert to Echo");
-        if (eui::Button("Convert Folder", ImVec2(half, 0.f))) {
+        if (eui::Button("Convert Folder", ImVec2(half, 0.f)))
             Logic::get().convert_legacy_echoes();
-        }
         tip("Converts every replay in the replays folder to .echo. Old Echo replays are renamed to .old.echo.");
         ImGui::SameLine();
-        if (eui::Button("Open Folder", ImVec2(half, 0.f))) {
+        if (eui::Button("Open Folder", ImVec2(half, 0.f)))
             geode::utils::file::openFolder(Logic::get().save_root() / "replays");
-        }
     }
     eui::EndCard();
     if (eui::BeginCard("Saving", card_width())) {
@@ -1074,9 +1000,8 @@ void GUI::draw_macro() {
         stat("Attempts", fmt::format("{}", logic.attempts));
         stat("Clicks", fmt::format("{}", clicks));
         stat("Level seed", logic.lvl_seed_known && PlayLayer::get() ? fmt::format("{}", logic.lvl_seed) : std::string("not set"));
-        if (toggle("Override seed", logic.seed_override)) {
+        if (toggle("Override seed", logic.seed_override))
             GUI::get().apply_seed_override();
-        }
         tip("Overrides the game seed to this value");
         ImGui::BeginDisabled(!logic.seed_override);
         eui::Row("Seed");
@@ -1114,9 +1039,8 @@ void GUI::clickbot() {
         std::vector<std::string> folders;
         std::error_code folder_error;
         for (auto const& entry : fs::directory_iterator(folders_root, folder_error)) {
-            if (!entry.is_directory(folder_error)) {
+            if (!entry.is_directory(folder_error))
                 continue;
-            }
             try {
                 folders.push_back(entry.path().filename().string());
             }
@@ -1129,9 +1053,8 @@ void GUI::clickbot() {
         }
         catch (...) {
         }
-        if (cur.empty()) {
+        if (cur.empty())
             cur = pack;
-        }
         eui::RowWith("Click pack", 5.f);
         if (eui::BeginCombo(player == 0 ? "##clickpack-p1" : "##clickpack-p2", cur.empty() ? "None" : cur.c_str())) {
             for (auto const& folder : folders) {
@@ -1172,9 +1095,8 @@ void GUI::renderer() {
             ImGui::TextUnformatted(blocker.c_str());
             ImGui::PopTextWrapPos();
 #ifdef GEODE_IS_WINDOWS
-            if (eui::Button("Download FFmpeg")) {
+            if (eui::Button("Download FFmpeg"))
                 geode::utils::web::openLinkInBrowser("https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip");
-            }
             tip("Place ffmpeg.exe next to Geometry Dash once downloaded!");
 #endif
 #ifdef GEODE_IS_MACOS
@@ -1194,25 +1116,21 @@ void GUI::renderer() {
         bool recording = Logic::get().render_active();
         ImVec2 big(-FLT_MIN, eui::em(2.3f));
         if (recording) {
-            if (eui::ActionButton("Stop Rendering", eui::Icon::Render, true, big, RECORD_RED)) {
+            if (eui::ActionButton("Stop Rendering", eui::Icon::Render, true, big, RECORD_RED))
                 Logic::get().stop_render();
-            }
         }
         else if (PlayLayer::get()) {
-            if (eui::ActionButton("Start Rendering Here", eui::Icon::Render, false, big)) {
+            if (eui::ActionButton("Start Rendering Here", eui::Icon::Render, false, big))
                 Logic::get().start_render();
-            }
             tip("Begins rendering from your current position.");
         }
         else if (logic.render_queued) {
-            if (eui::ActionButton("Cancel (waiting for a level)", eui::Icon::Render, true, big)) {
+            if (eui::ActionButton("Cancel (waiting for a level)", eui::Icon::Render, true, big))
                 logic.render_queued = false;
-            }
         }
         else {
-            if (eui::ActionButton("Start Rendering", eui::Icon::Render, false, big)) {
+            if (eui::ActionButton("Start Rendering", eui::Icon::Render, false, big))
                 Logic::get().start_render();
-            }
             tip("Starts when you enter a level.");
         }
         if (Logic::get().render_capturing()) {
@@ -1223,9 +1141,8 @@ void GUI::renderer() {
         eui::InputTextWithHint("##render-name", logic.macro_name.empty() ? "Replay" : logic.macro_name.c_str(), &logic.render_name);
         float half = eui::RowButton(2);
         ImGui::BeginDisabled(logic.merge_busy);
-        if (eui::Button("Join Two Videos", ImVec2(half, 0.f))) {
+        if (eui::Button("Join Two Videos", ImVec2(half, 0.f)))
             GUI::get().open_render_picker();
-        }
         ImGui::EndDisabled();
 #ifdef GEODE_IS_MACOS
         tip("Joins two videos back to back with a crossfade.");
@@ -1321,9 +1238,8 @@ void GUI::renderer() {
     }
     eui::EndCard();
     eui::EndCardRow();
-    if (open_save_preset) {
+    if (open_save_preset)
         ImGui::OpenPopup("Save Video Preset");
-    }
     if (eui::BeginModal("Save Video Preset", 16.f)) {
         static std::string name;
         ImGui::TextDisabled("%i x %i   %i FPS", logic.render_width, logic.render_height, logic.render_fps);
@@ -1347,18 +1263,15 @@ void GUI::renderer() {
 CCTexture2D* GUI::theme_logo_texture() {
     auto const& name = Logic::get().theme_name;
     for (int i = 1; i < eui::preset_count(); ++i) {
-        if (name != eui::preset(i).name) {
+        if (name != eui::preset(i).name)
             continue;
-        }
         auto const& preset = eui::preset(i);
         auto sprite = fmt::format("{}/echo-logo-{}.png", Mod::get()->getID(), GUI::get().lower_copy(preset.name));
-        if (auto image = eui::logo_texture(sprite.c_str())) {
+        if (auto image = eui::logo_texture(sprite.c_str()))
             return image;
-        }
     }
-    if (!GUI::get().has_palette || name == "Echo") {
+    if (!GUI::get().has_palette || name == "Echo")
         return eui::logo_texture("logo.png"_spr);
-    }
     auto const& palette = GUI::get().palette;
     char const* base = nullptr;
     if (palette.rainbow)
@@ -1371,9 +1284,8 @@ CCTexture2D* GUI::theme_logo_texture() {
         base = palette.depth < .8f ? "black" : "silver";
     if (base) {
         auto sprite = fmt::format("{}/echo-logo-{}.png", Mod::get()->getID(), base);
-        if (auto image = eui::logo_texture(sprite.c_str())) {
+        if (auto image = eui::logo_texture(sprite.c_str()))
             return image;
-        }
     }
     return eui::logo_tinted_texture(palette.accent_hue);
 }
@@ -1384,7 +1296,6 @@ ImTextureID GUI::theme_logo() {
 }
 
 void GUI::draw_theme() {
-    log::debug("draw theme");
     auto& logic = Logic::get();
     auto& gui = GUI::get();
     auto& style = ImGui::GetStyle();
@@ -1394,19 +1305,16 @@ void GUI::draw_theme() {
     if (eui::BeginCard("Theme", card_width())) {
         for (int i = 0; i < eui::preset_count(); ++i) {
             auto const& preset = eui::preset(i);
-            if (i % 6 != 0) {
+            if (i % 6 != 0)
                 ImGui::SameLine(0.f, (eui::RowButton(6) - eui::em(2.5f)) + ImGui::GetStyle().ItemSpacing.x);
-            }
             auto sprite = i == 0 ? std::string("logo.png"_spr) : fmt::format("{}/echo-logo-{}.png", Mod::get()->getID(), gui.lower_copy(preset.name));
-            if (eui::ThemeTile(preset.name, eui::logo_image(sprite.c_str()), logic.theme_name == preset.name)) {
+            if (eui::ThemeTile(preset.name, eui::logo_image(sprite.c_str()), logic.theme_name == preset.name))
                 gui.use_palette(preset.palette, preset.name);
-            }
             tip(preset.name);
         }
         float half = eui::RowButton(2);
-        if (eui::Button("Randomize", ImVec2(half, 0.f))) {
+        if (eui::Button("Randomize", ImVec2(half, 0.f)))
             gui.randomize_theme();
-        }
         tip("Picks a random color for the menu and logo.");
         ImGui::SameLine();
         if (eui::Button("Reset", ImVec2(half, 0.f))) {
@@ -1426,24 +1334,20 @@ void GUI::draw_theme() {
             save();
         }
         ImGui::SameLine();
-        if (eui::Button("Load", ImVec2(half, 0.f))) {
+        if (eui::Button("Load", ImVec2(half, 0.f)))
             gui.open_theme_picker();
-        }
     }
     eui::EndCard();
     if (eui::BeginCard("Interface", card_width())) {
         eui::Row("Size");
         float drag_max = gui.scale_cap;
         float& menu_size = logic.docked_menu ? logic.menu_scale : logic.menu_scale_undocked;
-        if (eui::DragFloat("##menu-scale", &menu_size, 0.01f, 0.35f, drag_max, "%.2fx")) {
+        if (eui::DragFloat("##menu-scale", &menu_size, 0.01f, 0.35f, drag_max, "%.2fx"))
             menu_size = std::clamp(menu_size, 0.35f, drag_max);
-        }
-        if (ImGui::IsItemHovered()) {
+        if (ImGui::IsItemHovered())
             ImGui::SetTooltip(logic.docked_menu ? "The docked menu's size. The undocked menu has its own." : "The undocked menu's size. The docked menu has its own.");
-        }
-        if (ImGui::IsItemActivated()) {
+        if (ImGui::IsItemActivated())
             gui.scale_dragging = true;
-        }
         if (ImGui::IsItemDeactivated()) {
             gui.scale_dragging = false;
             menu_size = std::clamp(menu_size, 0.35f, gui.scale_cap);
@@ -1453,14 +1357,12 @@ void GUI::draw_theme() {
             gui.export_theme(gui.theme_path("current"));
         }
         eui::Row("Animation speed");
-        if (eui::DragFloat("##menu-anim", &logic.menu_anim_speed, 0.01f, 0.25f, 4.f, "%.2fx")) {
+        if (eui::DragFloat("##menu-anim", &logic.menu_anim_speed, 0.01f, 0.25f, 4.f, "%.2fx"))
             logic.menu_anim_speed = std::clamp(logic.menu_anim_speed, 0.25f, 4.f);
-        }
         saved_on_release();
 #ifndef GEODE_IS_MOBILE
-        if (eui::Checkbox("One window (docked)", &logic.docked_menu)) {
+        if (eui::Checkbox("One window (docked)", &logic.docked_menu))
             save();
-        }
         tip("Turning this off makes every page its own window.");
 #endif
 #ifdef GEODE_IS_MOBILE
@@ -1470,30 +1372,26 @@ void GUI::draw_theme() {
 #endif
         if (floating_logo) {
             eui::Row("Icon size", "The size of the floating Echo button.");
-            if (eui::DragFloat("##icon-size", &logic.floating_size, 0.25f, 24.f, 72.f, "%.0f")) {
+            if (eui::DragFloat("##icon-size", &logic.floating_size, 0.25f, 24.f, 72.f, "%.0f"))
                 logic.floating_size = std::clamp(logic.floating_size, 24.f, 72.f);
-            }
             EchoUI::preview_logo(ImGui::IsItemActive());
             saved_on_release();
-            if (eui::Checkbox("Hide Icon When Playing", &logic.floating_hide_in_lvl)) {
+            if (eui::Checkbox("Hide Icon When Playing", &logic.floating_hide_in_lvl))
                 save();
-            }
             tip("Hides the floating Echo icon while playing a level. It comes back when you pause.");
         }
         toggle("TPS Changes During Playback", logic.playback_tps_changes);
         tip("Lets you set the macro's starting TPS while it is playing.");
         if (toggle("Practice Music Hack", logic.practice_music_hack)) {
-            if (auto* play = PlayLayer::get(); play && logic.practice_music_hack) {
+            if (auto* play = PlayLayer::get(); play && logic.practice_music_hack)
                 play->m_practiceMusicSync = true;
-            }
         }
         tip("Plays the level music in practice mode.");
         toggle("Logging", logic.trace_logging);
         tip("Saves a trace of each playback for bug reports.");
         eui::RowHalf();
-        if (eui::Button("Open Logs Folder")) {
+        if (eui::Button("Open Logs Folder"))
             geode::utils::file::openFolder(logic.save_root() / "logs");
-        }
         tip("Opens the folder the logs are saved in.");
 #ifdef GEODE_IS_WINDOWS
         tip("Prefetches the next objects in the collision loops.");
@@ -1503,9 +1401,8 @@ void GUI::draw_theme() {
         eui::RowHalf();
         tip("Merges and batches dash, orb and ring effects.");
 #endif
-        if (eui::Checkbox("Button Effects", &eui::button_effects())) {
+        if (eui::Checkbox("Button Effects", &eui::button_effects()))
             gui.export_theme(gui.theme_path("current"));
-        }
         tip("Enables button animations for the animated themes.");
         eui::RowHalf();
         bool sharp = style.CircleTessellationMaxError >= 2.5f;
@@ -1516,13 +1413,11 @@ void GUI::draw_theme() {
         }
         tip("Draws curves with fewer segments.");
         bool disabled = Logic::bot_disabled();
-        if (eui::Checkbox("Disable Bot", &disabled)) {
+        if (eui::Checkbox("Disable Bot", &disabled))
             Logic::set_bot_disabled(disabled);
-        }
         tip("Completely disables the bot.");
-        if (eui::Button("Advanced Style...", ImVec2(-FLT_MIN, 0.f))) {
+        if (eui::Button("Advanced Style...", ImVec2(-FLT_MIN, 0.f)))
             open_advanced = true;
-        }
         tip("Lets you edit every size and color.");
     }
     eui::EndCard();
@@ -1534,12 +1429,10 @@ void GUI::draw_theme() {
         bool settled = false;
         auto slider = [&](char const* label, char const* id, float* field, float min, float max, bool rainbow, char const* hint) {
             eui::Row(label, hint);
-            if (eui::Slider(id, field, min, max, rainbow ? "" : "%.2f", rainbow)) {
+            if (eui::Slider(id, field, min, max, rainbow ? "" : "%.2f", rainbow))
                 live = true;
-            }
-            if (ImGui::IsItemDeactivatedAfterEdit()) {
+            if (ImGui::IsItemDeactivatedAfterEdit())
                 settled = true;
-            }
         };
         slider("Body", "##palette-hue", &palette.hue, 0.f, 1.f, true, "The color the menu's dark body is tinted with.");
         slider("Accent", "##palette-accent", &palette.accent_hue, 0.f, 1.f, true, "The bright color of the rim, toggles and markers. The logo takes it too.");
@@ -1552,9 +1445,8 @@ void GUI::draw_theme() {
             eui::apply_palette(palette);
             gui.paint_editor_from_theme();
         }
-        if (settled) {
+        if (settled)
             gui.use_palette(palette, "Custom");
-        }
     }
     eui::EndCard();
 #ifndef GEODE_IS_MOBILE
@@ -1569,16 +1461,14 @@ void GUI::draw_theme() {
             ImGui::SameLine(ImGui::GetWindowWidth() - key_w - ImGui::GetStyle().WindowPadding.x - ImGui::GetStyle().ScrollbarSize);
             auto bound = gui.stored_bind(action.setting);
             bool none = bound == "None";
-            if (none) {
+            if (none)
                 ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
-            }
             if (eui::Button((bound + "##bind").c_str(), ImVec2(key_w, 0.f))) {
                 gui.prompt = action.setting;
                 gui.prompt_nested = false;
             }
-            if (none) {
+            if (none)
                 ImGui::PopStyleColor();
-            }
             ImGui::PopID();
         }
         ImGui::EndChild();
@@ -1591,9 +1481,8 @@ void GUI::draw_theme() {
     style.AntiAliasedLinesUseTex = true;
     style.AntiAliasedFill = true;
 
-    if (open_advanced) {
+    if (open_advanced)
         ImGui::OpenPopup("Advanced Style");
-    }
     if (eui::BeginModal("Advanced Style", 27.f)) {
         gui.ui_editor();
         eui::EndModal();
