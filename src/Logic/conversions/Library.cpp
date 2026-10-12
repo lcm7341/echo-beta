@@ -309,8 +309,63 @@ bool Logic::read_file(fs::path const& path) {
 }
 
 bool Logic::merge_replay(fs::path const& path) {
-    // TODO
-    return {};
+    auto& logic = Logic::get();
+    if (logic.is_recording() || logic.is_playing()) {
+        Logic::get().notify("Stop recording and playing to merge", false);
+        return false;
+    }
+    if (!fs::exists(path)) {
+        Logic::get().notify("File not found", false);
+        return false;
+    }
+    if (logic.inputs.empty())
+        return Logic::get().read_file(path);
+    auto snap = ReplayIO::load_snap(path);
+    if (!snap) {
+        Logic::get().notify("Unrecognized replay", false);
+        return false;
+    }
+    auto title = ReplayIO::import_stem(path);
+    if (title.empty())
+        title = path.stem().string();
+    if (std::abs(snap->fps - logic.macro_fps) > .001f || !snap->rates.empty() || !logic.rates.empty()) {
+        Logic::get().notify(fmt::format("Can't merge {}: it needs the same TPS ({:g} vs {:g}) and no TPS changes", title, snap->fps, logic.macro_fps), false);
+        return false;
+    }
+    auto const& mine = logic.inputs;
+    auto const& theirs = snap->inputs;
+    bool keep_poses = logic.poses.size() == mine.size() && snap->poses.size() == theirs.size();
+    std::vector<Frame> merged;
+    std::vector<FramePose> poses;
+    merged.reserve(mine.size() + theirs.size());
+    if (keep_poses)
+        poses.reserve(mine.size() + theirs.size());
+    size_t a = 0, b = 0;
+    while (a < mine.size() || b < theirs.size()) {
+        bool take_mine = b >= theirs.size() || (a < mine.size() && mine[a].number <= theirs[b].number);
+        if (take_mine) {
+            merged.push_back(mine[a]);
+            if (keep_poses)
+                poses.push_back(logic.poses[a]);
+            ++a;
+        }
+        else {
+            merged.push_back(theirs[b]);
+            if (keep_poses)
+                poses.push_back(snap->poses[b]);
+            ++b;
+        }
+    }
+    size_t added = theirs.size();
+    logic.inputs = std::move(merged);
+    logic.poses = std::move(poses);
+    logic.input_ids.clear();
+    logic.touch_inputs();
+    Logic::get().refresh_live_hold();
+    Logic::get().recompute_cps(logic);
+    Logic::get().autosave_replay();
+    Logic::get().notify(fmt::format("Merged {} ({} inputs added, {} total)", title, added, logic.inputs.size()), true);
+    return true;
 }
 
 void Logic::pick_replay() {
