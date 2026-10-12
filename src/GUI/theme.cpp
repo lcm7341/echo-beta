@@ -390,6 +390,7 @@ void GUI::paint_editor_from_theme() {
     ImGui::ColorConvertRGBtoHSV(accent.x, accent.y, accent.z, h, sat, val);
     ImVec4 second = accent;
     if (sat < .08f) {
+        ImGui::ColorConvertHSVtoRGB(.6f, .4f, std::max(val, .6f), second.x, second.y, second.z);
     }
     else {
         float turned = h + 50.f / 360.f;
