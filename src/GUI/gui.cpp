@@ -430,7 +430,57 @@ void GUI::draw_floating(std::vector<TabPage> const& pages) {
 }
 
 void GUI::draw_frame_bar() {
-    // port this
+    auto& gui = GUI::get();
+    auto& logic = Logic::get();
+    auto* play = PlayLayer::get();
+    if (!play)
+        return;
+    float font = ImGui::GetFontSize();
+    ImVec2 display = ImGui::GetIO().DisplaySize;
+    ImVec2 spot(display.x * .5f, font * .5f);
+    if (logic.frame_bar_x >= 0.f && logic.frame_bar_y >= 0.f) {
+        spot = ImVec2(logic.frame_bar_x * display.x, logic.frame_bar_y * display.y);
+    }
+    float half = std::max(gui.bar_area.z - gui.bar_area.x, 0.f) * .5f, tall = std::max(gui.bar_area.w - gui.bar_area.y, 0.f);
+    spot.x = std::clamp(spot.x, half, std::max(display.x - half, half));
+    spot.y = std::clamp(spot.y, 0.f, std::max(display.y - tall, 0.f));
+    ImGui::SetNextWindowPos(spot, ImGuiCond_Always, ImVec2(.5f, 0.f));
+    ImGuiWindowFlags flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_AlwaysAutoResize |
+                             ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoBringToFrontOnFocus;
+    if (ImGui::Begin("###echo-frame-bar", nullptr, flags)) {
+        ImGui::SetWindowFontScale(.85f);
+        font = ImGui::GetFontSize();
+        ImVec2 size(font * 4.f, font * 1.9f);
+        ImVec2 at = ImGui::GetCursorPos();
+        ImGui::SetCursorPosY(at.y + (size.y - font) * .5f);
+        ImGui::TextDisabled("Frame %d", logic.get_frame(play) + 1);
+        ImGui::SetCursorPos(ImVec2(at.x + font * 6.f, at.y));
+        auto button = [&](char const* label, int which, bool enabled, ImVec4& where) {
+            ImGui::BeginDisabled(!enabled);
+            bool held = gui.bar_pressed == which;
+            if (held) {
+                ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+            }
+            eui::Button(label, size);
+            if (held) {
+                ImGui::PopStyleColor();
+            }
+            ImGui::EndDisabled();
+            ImVec2 min = ImGui::GetItemRectMin(), max = ImGui::GetItemRectMax();
+            where = enabled ? ImVec4(min.x, min.y, max.x, max.y) : ImVec4();
+        };
+        button("Back", 1, logic.backstep, gui.bar_back);
+        ImGui::SameLine();
+        button("Step", 2, true, gui.bar_step);
+        ImGui::SameLine();
+        button("Best", 4, logic.backstep, gui.bar_best);
+        ImGui::SameLine();
+        button("Resume", 3, true, gui.bar_resume);
+        ImVec2 min = ImGui::GetWindowPos();
+        ImVec2 size2 = ImGui::GetWindowSize();
+        gui.bar_area = ImVec4(min.x, min.y, min.x + size2.x, min.y + size2.y);
+    }
+    ImGui::End();
 }
 
 void GUI::draw_window() {
