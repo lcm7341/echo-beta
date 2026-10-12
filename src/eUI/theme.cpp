@@ -1120,6 +1120,7 @@ void GUI::show_keybind_prompt(bool nested) {
 }
 
 #ifdef GEODE_IS_MACOS
+bool echo_scroll_is_precise();
 #endif
 
 $execute {
