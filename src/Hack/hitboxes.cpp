@@ -1068,6 +1068,21 @@ void Logic::draw_hitboxes(GJBaseGameLayer* play) {
             if (!column || !counts)
                 continue;
             int rows = (int)(std::min(column->size(), counts->size()));
+            // on keres everything is in row 0 xd
+            for (int y = 0; y < rows; ++y) {
+                auto* bucket = (*column)[y];
+                if (!bucket)
+                    continue;
+                int amt = std::min<int>((*counts)[y], (int)(bucket->size()));
+                for (int i = 0; i < amt; ++i) {
+                    auto* obj = (*bucket)[i];
+                    if (!obj || obj->m_isDisabled)
+                        continue;
+                    if (std::fabs(obj->getPositionX() - view_x) > reach || obj->getPositionY() < minY || obj->getPositionY() > maxY)
+                        continue;
+                    Hitboxes::get().draw_object_hitbox(node, play, obj, width, value.fill_hitboxes);
+                }
+            }
         }
         // moving objects arent actually in the grid
         auto const& moving = play->m_calcNonEffectObjects;
