@@ -37,9 +37,8 @@ float GUI::columnWidth(std::initializer_list<char const*> labels) {
 
 std::string GUI::ordinal(int number) {
     int teen = number % 100;
-    if (teen >= 11 && teen <= 13) {
+    if (teen >= 11 && teen <= 13)
         return std::to_string(number) + "th";
-    }
     switch (number % 10) {
     case 1:
         return std::to_string(number) + "st";
@@ -59,9 +58,8 @@ std::string GUI::format_plain(Session const& value) {
         auto const& input = value.inputs[i];
         int button = input.button == 0 ? 1 : input.button;
         out << input.number << " " << (input.holding ? 1 : 0) << " " << (input.player2 ? 1 : 0) << " " << button;
-        if (i + 1 != value.inputs.size()) {
+        if (i + 1 != value.inputs.size())
             out << "\n";
-        }
     }
     return out.str();
 }
@@ -75,30 +73,26 @@ void GUI::apply_plain(std::string const& text) {
     std::istringstream header(line);
     if (header >> fps && std::isfinite(fps) && fps >= 1.f) {
         auto& logic = Logic::get();
-        if (!(logic).is_recording() && !(logic).is_playing()) {
+        if (!(logic).is_recording() && !(logic).is_playing())
             Logic::get().set_tps(fps);
-        }
     }
     std::vector<Frame> next;
     while (std::getline(lines, line)) {
-        if (line.empty()) {
+        if (line.empty())
             continue;
-        }
         std::istringstream row(line);
         Frame input;
         int holding = 0;
         int player2 = 0;
         int button = 1;
-        if (!(row >> input.number >> holding >> player2)) {
+        if (!(row >> input.number >> holding >> player2))
             continue;
-        }
         row >> button;
         input.holding = holding != 0;
         input.player2 = player2 != 0;
         input.button = button == 0 ? 1 : button;
-        if (input.number < 0) {
+        if (input.number < 0)
             input.number = 0;
-        }
         next.push_back(input);
     }
     Logic::get().inputs = std::move(next);
@@ -112,9 +106,8 @@ void GUI::apply_plain(std::string const& text) {
 
 void GUI::draw_edit_fields(bool enabled, float column) {
     auto& inputs = Logic::get().inputs;
-    if (!enabled) {
+    if (!enabled)
         ImGui::BeginDisabled();
-    }
     int amt = enabled ? GUI::get().selected_count() : 0;
     if (amt > 1)
         ImGui::Text("%i Inputs Selected", amt);
@@ -148,9 +141,8 @@ void GUI::draw_edit_fields(bool enabled, float column) {
         });
     char const* button_names[] = { "Jump", "Left", "Right" };
     int button = enabled ? GUI::get().draft.button : (int)(PlayerButton::Jump);
-    if (button == 0) {
+    if (button == 0)
         button = (int)(PlayerButton::Jump);
-    }
     int button_sel = button == (int)(PlayerButton::Left) ? 1 : button == (int)(PlayerButton::Right) ? 2
                                                                                                                           : 0;
     float button_label = ImGui::CalcTextSize("Button").x + ImGui::GetStyle().ItemInnerSpacing.x;
@@ -165,23 +157,18 @@ void GUI::draw_edit_fields(bool enabled, float column) {
     int first = 0, last = 0;
     bool span = GUI::get().selection_span(first, last);
     float move_w = std::max(GUI::get().labelWidth("Move Up"), GUI::get().labelWidth("Move Down"));
-    if (eui::Button("Move Up", ImVec2(move_w, 0.f)) && enabled && span && first > 0) {
+    if (eui::Button("Move Up", ImVec2(move_w, 0.f)) && enabled && span && first > 0)
         move_selected(-1);
-    }
     ImGui::SameLine();
-    if (eui::Button("Move Down", ImVec2(move_w, 0.f)) && enabled && span && last + 1 < (int)(inputs.size())) {
+    if (eui::Button("Move Down", ImVec2(move_w, 0.f)) && enabled && span && last + 1 < (int)(inputs.size()))
         move_selected(1);
-    }
-    if (!enabled) {
+    if (!enabled)
         ImGui::EndDisabled();
-    }
 }
 
 void GUI::show_cps_range(int first, int last, bool player2) {
-    log::debug("show cps range");
-    if (last < first) {
+    if (last < first)
         std::swap(first, last);
-    }
     mark_first = first;
     mark_last = last;
     mark_player = player2 ? 1 : 0;
@@ -195,24 +182,20 @@ void GUI::show_cps_range(int first, int last, bool player2) {
     select_input(-1);
     auto const& inputs = Logic::get().inputs;
     for (int i = 0; i < (int)(inputs.size()); ++i) {
-        if (!in_cps_mark(inputs[i])) {
+        if (!in_cps_mark(inputs[i]))
             continue;
-        }
         select_input(i);
         break;
     }
 }
 
 bool GUI::shift_selecting() const {
-    if (ImGui::GetIO().KeyShift) {
+    if (ImGui::GetIO().KeyShift)
         return true;
-    }
-    if (ImGui::IsKeyDown(ImGuiKey_LeftShift) || ImGui::IsKeyDown(ImGuiKey_RightShift)) {
+    if (ImGui::IsKeyDown(ImGuiKey_LeftShift) || ImGui::IsKeyDown(ImGuiKey_RightShift))
         return true;
-    }
-    if (auto* keys = CCKeyboardDispatcher::get()) {
+    if (auto* keys = CCKeyboardDispatcher::get())
         return keys->getShiftKeyPressed();
-    }
     return false;
 }
 
@@ -225,9 +208,8 @@ void GUI::select_input(int index, bool range) {
         anchor_id = 0;
         return;
     }
-    if (Logic::get().input_id(static_cast<size_t>(index)) == 0) {
+    if (Logic::get().input_id(static_cast<size_t>(index)) == 0)
         Logic::get().identify_inputs(true);
-    }
     selected = index;
     selected_id = Logic::get().input_id(static_cast<size_t>(index));
     draft = inputs[index];
@@ -248,22 +230,19 @@ void GUI::follow_selection() {
                 return fallback;
 #endif
             for (int i = 0; i < (int)(inputs.size()); ++i) {
-                if (logic.input_id(static_cast<size_t>(i)) == id) {
+                if (logic.input_id(static_cast<size_t>(i)) == id)
                     return i;
-                }
             }
             return -1;
         }
-        if (fallback >= 0 && fallback < (int)(inputs.size())) {
+        if (fallback >= 0 && fallback < (int)(inputs.size()))
             return fallback;
-        }
         return -1;
     };
     selected = find(selected_id, selected);
     if (selected >= 0) {
-        if (selected_id == 0) {
+        if (selected_id == 0)
             selected_id = logic.input_id(static_cast<size_t>(selected));
-        }
         draft = inputs[selected];
     }
     else {
@@ -271,9 +250,8 @@ void GUI::follow_selection() {
     }
     anchor = find(anchor_id, anchor_id != 0 ? anchor : selected);
     if (anchor >= 0) {
-        if (anchor_id == 0) {
+        if (anchor_id == 0)
             anchor_id = logic.input_id(static_cast<size_t>(anchor));
-        }
     }
     else {
         anchor = selected;
@@ -294,9 +272,8 @@ void GUI::editor() {
     auto& inputs = logic.inputs;
     Logic::get().identify_inputs();
     GUI::get().follow_selection();
-    if (GUI::get().selected >= 0 && !GUI::get().editor_shows(inputs[GUI::get().selected])) {
+    if (GUI::get().selected >= 0 && !GUI::get().editor_shows(inputs[GUI::get().selected]))
         GUI::get().select_input(-1);
-    }
 
     ImGuiStyle const& edit_style = ImGui::GetStyle();
     float list_w = GUI::get().labelWidth("Release Right at 0000000") + edit_style.ScrollbarSize + edit_style.WindowPadding.x * 2.f + edit_style.ChildBorderSize * 2.f;
@@ -311,9 +288,8 @@ void GUI::editor() {
     float card_em = Logic::get().docked_menu ? 21.f : 18.f;
     bool editor_shown = eui::BeginTileOfCards("Input Editor", card_em * 2.f + 1.2f);
     if (editor_shown) {
-        if (!Logic::get().docked_menu) {
+        if (!Logic::get().docked_menu)
             card_em = (ImGui::GetContentRegionAvail().x - edit_style.ItemSpacing.x) * .5f / ImGui::GetFontSize();
-        }
         eui::BeginCardRow("editor-0");
         bool list_shown = eui::BeginCard("Inputs", card_em);
         if (list_shown) {
@@ -322,12 +298,10 @@ void GUI::editor() {
             int show_sel = GUI::get().pair_index(GUI::get().show_editor_p1, GUI::get().show_editor_p2);
             std::string tps_label = logic.rates.empty() ? "TPS Changes" : fmt::format("TPS Changes - {}", logic.rates.size());
             eui::Row("Show");
-            if (eui::Combo("##editor_show", &show_sel, players, 3)) {
+            if (eui::Combo("##editor_show", &show_sel, players, 3))
                 GUI::get().apply_pair(show_sel, GUI::get().show_editor_p1, GUI::get().show_editor_p2);
-            }
-            if (eui::Button(tps_label.c_str(), ImVec2(list_w, 0.f))) {
+            if (eui::Button(tps_label.c_str(), ImVec2(list_w, 0.f)))
                 ImGui::OpenPopup("TPS Changes###editor_tps");
-            }
             if (eui::BeginModal("TPS Changes###editor_tps", 16.f)) {
                 if (logic.rates.empty()) {
                     ImGui::TextUnformatted("No TPS changes");
@@ -349,9 +323,8 @@ void GUI::editor() {
                     }
                     ImGui::EndChild();
                 }
-                if (eui::Button("Close")) {
+                if (eui::Button("Close"))
                     ImGui::CloseCurrentPopup();
-                }
                 ImGui::EndPopup();
             }
 
@@ -363,12 +336,10 @@ void GUI::editor() {
             }
             else if (GUI::get().plain) {
                 GUI::get().selected = -1;
-                if (GUI::get().plain_text.empty()) {
+                if (GUI::get().plain_text.empty())
                     GUI::get().plain_text = GUI::get().format_plain(logic);
-                }
-                if (ImGui::InputTextMultiline("##echo-plain", &GUI::get().plain_text, ImVec2(-1.f, -1.f))) {
+                if (ImGui::InputTextMultiline("##echo-plain", &GUI::get().plain_text, ImVec2(-1.f, -1.f)))
                     GUI::get().apply_plain(GUI::get().plain_text);
-                }
             }
             else {
                 bool every_row = GUI::get().show_editor_p1 && GUI::get().show_editor_p2;
@@ -392,9 +363,8 @@ void GUI::editor() {
                         filtered.count = 0;
                     }
                     for (size_t i = filtered.count; i < inputs.size(); ++i) {
-                        if (GUI::get().editor_shows(inputs[i])) {
+                        if (GUI::get().editor_shows(inputs[i]))
                             filtered.rows.push_back((int)(i));
-                        }
                     }
                     filtered = { &inputs, inputs.data(), inputs.size(), logic.inputs_revision, GUI::get().show_editor_p1, GUI::get().show_editor_p2, std::move(filtered.rows) };
                 }
@@ -403,9 +373,8 @@ void GUI::editor() {
                     return every_row ? row : filtered.rows[static_cast<size_t>(row)];
                 };
                 auto row_of = [&](int i) {
-                    if (every_row) {
+                    if (every_row)
                         return i;
-                    }
                     auto at = std::lower_bound(filtered.rows.begin(), filtered.rows.end(), i);
                     return at != filtered.rows.end() && *at == i ? (int)(std::distance(filtered.rows.begin(), at)) : 0;
                 };
@@ -475,12 +444,11 @@ void GUI::editor() {
                         int picked = GUI::get().selected;
                         bool picked_shown = GUI::get().selected_id != 0 && picked >= 0 && picked < (int)(inputs.size()) &&
                                             Logic::get().input_id(static_cast<size_t>(picked)) == GUI::get().selected_id && GUI::get().editor_shows(inputs[picked]);
-                        if (picked_shown && std::abs(inputs[picked].number - frame) == best) {
+                        if (picked_shown && std::abs(inputs[picked].number - frame) == best)
                             chosen = picked;
-                        }
-                        if (chosen != picked && !ImGui::IsAnyItemActive()) {
+                        // dont reselect while editing cuz it will rewrite every input xd
+                        if (chosen != picked && !ImGui::IsAnyItemActive())
                             GUI::get().select_input(chosen);
-                        }
                         int row = row_of(chosen);
                         float target = std::max(0.f, row * row_h - (ImGui::GetWindowHeight() - row_h) * 0.5f);
                         float now = ImGui::GetScrollY();
@@ -495,16 +463,14 @@ void GUI::editor() {
                             bool chosen = GUI::get().selected == i;
                             bool marked = chosen || GUI::get().input_in_range(i) || GUI::get().in_cps_mark(inputs[i]);
                             float const* tint = inputs[i].player2 ? logic.editor_p2 : logic.editor_p1;
-                            if (marked) {
+                            if (marked)
                                 tint = inputs[i].player2 ? logic.editor_sel_p2 : logic.editor_sel_p1;
-                            }
                             bool passed = !marked && (PlayLayer::get() || logic.editor_testing) && inputs[i].number <= frame;
                             float lit = passed ? .45f : 1.f;
                             ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(tint[0] * lit, tint[1] * lit, tint[2] * lit, tint[3]));
                             ImVec4 ink = ImGui::GetStyleColorVec4(ImGuiCol_Text);
-                            if (passed) {
+                            if (passed)
                                 ink.w *= .55f;
-                            }
                             ImGui::PushStyleColor(ImGuiCol_Text, ink);
                             int button = inputs[i].button == 0 ? (int)(PlayerButton::Jump) : inputs[i].button;
                             char const* action = inputs[i].holding ? "Click" : "Release";
@@ -519,9 +485,8 @@ void GUI::editor() {
                                 GUI::get().auto_scroll = false;
                                 GUI::get().clear_cps_mark();
                             }
-                            if (GUI::get().input_in_range(i)) {
+                            if (GUI::get().input_in_range(i))
                                 stroke_selected_button();
-                            }
                             ImGui::PopStyleColor(2);
                         }
                     }
@@ -540,43 +505,36 @@ void GUI::editor() {
             eui::Separator();
             int frame = (PlayLayer::get() ? Logic::get().get_frame(PlayLayer::get()) : (logic.editor_testing ? logic.step_frame : 0)) + 1;
             ImGui::Text("Current Frame: %i", frame);
-            if (!live) {
+            if (!live)
                 ImGui::BeginDisabled();
-            }
             if (eui::Button("Set to Current Frame", ImVec2(edit_inner, 0.f))) {
                 int delta = frame - GUI::get().draft.number;
                 rewrite_selected([&](Frame& input) {
                     input.number = std::max(input.number + delta, 0);
                 });
             }
-            if (!live) {
+            if (!live)
                 ImGui::EndDisabled();
-            }
             eui::Checkbox("Auto Scroll To Frame", &GUI::get().auto_scroll);
             if (eui::Checkbox("Edit Plain Text", &GUI::get().plain)) {
                 GUI::get().plain_text = GUI::get().plain ? GUI::get().format_plain(logic) : std::string();
             }
             eui::Separator();
-            if (eui::Button("Add Input", ImVec2(pair_w, 0.f))) {
+            if (eui::Button("Add Input", ImVec2(pair_w, 0.f)))
                 GUI::get().addInput(frame);
-            }
             ImGui::SameLine();
             int delete_first = 0, deleteLast = 0;
             bool can_delete = GUI::get().selection_span(delete_first, deleteLast);
-            if (!can_delete) {
+            if (!can_delete)
                 ImGui::BeginDisabled();
-            }
-            if (eui::Button(GUI::get().has_range() ? "Delete Inputs" : "Delete Input", ImVec2(pair_w, 0.f)) && can_delete) {
+            if (eui::Button(GUI::get().has_range() ? "Delete Inputs" : "Delete Input", ImVec2(pair_w, 0.f)) && can_delete)
                 GUI::get().deleteSelected();
-            }
-            if (!can_delete) {
+            if (!can_delete)
                 ImGui::EndDisabled();
-            }
 
             eui::Separator();
-            if (eui::Button("Actions", ImVec2(edit_inner, 0.f))) {
+            if (eui::Button("Actions", ImVec2(edit_inner, 0.f)))
                 ImGui::OpenPopup("Editor Actions");
-            }
             if (eui::BeginModal("Editor Actions", 0.f)) {
                 float gap = ImGui::GetStyle().ItemSpacing.x;
                 float half = std::max(GUI::get().labelWidth("Random Offset"), GUI::get().labelWidth("Remove Player 1"));
@@ -593,35 +551,28 @@ void GUI::editor() {
                 float frames_label = ImGui::CalcTextSize("Frames").x + ImGui::GetStyle().ItemInnerSpacing.x;
                 ImGui::SetNextItemWidth(std::max(ImGui::GetFontSize() * 6.f, row - frames_label));
                 eui::InputInt("Frames###offset_frames", &GUI::get().input_offset);
-                if (eui::Button("Offset", ImVec2(half, 0.f))) {
+                if (eui::Button("Offset", ImVec2(half, 0.f)))
                     offset_chosen(GUI::get().input_offset);
-                }
-                if (ImGui::IsItemHovered()) {
+                if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("Moves %s by that many frames", scope);
-                }
                 ImGui::SameLine();
-                if (eui::Button("Random Offset", ImVec2(half, 0.f))) {
+                if (eui::Button("Random Offset", ImVec2(half, 0.f)))
                     random_offset();
-                }
-                if (ImGui::IsItemHovered()) {
+                if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("Moves each input in %s by a random amount from -frames to +frames", scope);
-                }
-                if (eui::Button("-1 Frame", ImVec2(half, 0.f))) {
+                if (eui::Button("-1 Frame", ImVec2(half, 0.f)))
                     offset_chosen(-1);
-                }
                 ImGui::SameLine();
-                if (eui::Button("+1 Frame", ImVec2(half, 0.f))) {
+                if (eui::Button("+1 Frame", ImVec2(half, 0.f)))
                     offset_chosen(1);
-                }
 
                 GUI::get().section_label("Order");
                 if (eui::Button("Sort", ImVec2(row, 0.f))) {
                     Logic::get().sort_inputs();
                     GUI::get().sync_draft();
                 }
-                if (ImGui::IsItemHovered()) {
+                if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("Sorts inputs by frame");
-                }
 
                 GUI::get().section_label("Players");
                 if (eui::Button("Remove Player 1", ImVec2(half, 0.f))) {
@@ -652,21 +603,17 @@ void GUI::editor() {
             }
             ImGui::SameLine();
             eui::Help();
-            if (ImGui::IsItemHovered()) {
+            if (ImGui::IsItemHovered())
                 ImGui::SetTooltip("Sorts new clicks by frame when recording while playing.");
-            }
             eui::Separator();
             ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5.f);
             eui::DragInt("Max CPS", &logic.max_cps, 0.2f, 1, 30);
-            if (ImGui::IsItemHovered()) {
+            if (ImGui::IsItemHovered())
                 ImGui::SetTooltip("This is based on ILL CPS rules.");
-            }
-            if (ImGui::IsItemDeactivatedAfterEdit()) {
+            if (ImGui::IsItemDeactivatedAfterEdit())
                 Logic::get().save_settings_file();
-            }
-            if (eui::Button("CPS Breaks", ImVec2(edit_inner, 0.f))) {
+            if (eui::Button("CPS Breaks", ImVec2(edit_inner, 0.f)))
                 ImGui::OpenPopup("CPS Breaks###cps_breaks");
-            }
             if (eui::BeginModal("CPS Breaks###cps_breaks", 22.f)) {
                 ImGui::Text("Highest CPS: %s", logic.highest_cps.c_str());
                 ImGui::Text("Current CPS: %.2f", logic.current_cps);
