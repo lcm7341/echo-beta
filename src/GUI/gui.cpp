@@ -748,16 +748,63 @@ void GUI::sync_menu_scale() {
 }
 
 float GUI::touch_scale() {
-    // todo
-    return {};
+#ifdef GEODE_IS_MOBILE
+    return std::clamp(ImGui::GetIO().DisplaySize.y / 620.f, 1.f, 2.2f);
+#else
+    return 1.f;
+#endif
 }
 
 void GUI::apply_touch_style() {
-    // TODO
+#ifdef GEODE_IS_MOBILE
+    if (!GUI::get().has_base)
+        return;
+    auto& style = ImGui::GetStyle();
+    auto const& base = GUI::get().base_style;
+    float grow = touch_scale();
+    (void)base;
+    style.TouchExtraPadding = ImVec2(std::max(style.TouchExtraPadding.x, 4.f * grow), std::max(style.TouchExtraPadding.y, 4.f * grow));
+    style.ScrollbarSize = std::max(style.ScrollbarSize, 16.f * grow);
+    style.GrabMinSize = std::max(style.GrabMinSize, 14.f * grow);
+    auto& io = ImGui::GetIO();
+    io.MouseDoubleClickMaxDist = 30.f * grow;
+    io.MouseDoubleClickTime = .4f;
+#endif
 }
 
 void GUI::touch_scroll() {
-    // TODO
+    auto& io = ImGui::GetIO();
+    ImGuiContext& g = *ImGui::GetCurrentContext();
+    static ImGuiWindow* target = nullptr;
+    static bool scrolling = false;
+    if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+        target = nullptr;
+        scrolling = false;
+        return;
+    }
+    if (io.MouseSource != ImGuiMouseSource_TouchScreen)
+        return;
+    if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+        target = g.HoveredWindow;
+        scrolling = false;
+    }
+    if (!target || io.WantTextInput)
+        return;
+    if (g.ActiveId && g.ActiveIdWindow && g.ActiveId == ImGui::GetWindowScrollbarID(g.ActiveIdWindow, ImGuiAxis_Y))
+        return;
+    ImGuiWindow* window = target;
+    while (window && window->ScrollMax.y <= 0.f)
+        window = window->ParentWindow;
+    if (!window)
+        return;
+    if (!scrolling) {
+        ImVec2 drag = ImGui::GetMouseDragDelta(ImGuiMouseButton_Left, 0.f);
+        if (std::abs(drag.y) < 10.f * touch_scale() || std::abs(drag.y) < std::abs(drag.x) * 1.5f)
+            return;
+        scrolling = true;
+        ImGui::ClearActiveID();
+    }
+    ImGui::SetScrollY(window, std::clamp(window->Scroll.y - io.MouseDelta.y, 0.f, window->ScrollMax.y));
 }
 
 void GUI::restore_base_sizes() {
