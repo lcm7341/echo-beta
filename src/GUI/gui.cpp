@@ -769,6 +769,7 @@ void GUI::apply_touch_style() {
     auto& io = ImGui::GetIO();
     io.MouseDoubleClickMaxDist = 30.f * grow;
     io.MouseDoubleClickTime = .4f;
+    io.MouseDragThreshold = std::max(io.MouseDragThreshold, 10.f * grow);
 #endif
 }
 
