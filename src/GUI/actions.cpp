@@ -11,12 +11,10 @@ void GUI::rewrite_selected(std::function<void(Frame&)> const& edit) {
     if (!selection_span(first, last))
         return;
     std::ranges::for_each(inputs.begin() + first, inputs.begin() + last + 1, edit);
-    if (selected >= first && selected <= last) {
+    if (selected >= first && selected <= last)
         draft = inputs[static_cast<size_t>(selected)];
-    }
-    if (selected >= 0) {
+    if (selected >= 0)
         selected_id = Logic::get().input_id(static_cast<size_t>(selected));
-    }
     Logic::get().touch_inputs();
     Logic::get().refresh_live_hold();
     Logic::get().autosave_replay();
@@ -45,13 +43,11 @@ void GUI::move_selected(int dir) {
     rotate(Logic::get().poses);
     rotate(Logic::get().input_ids);
     selected += dir;
-    if (anchor >= 0) {
+    if (anchor >= 0)
         anchor += dir;
-    }
     selected_id = Logic::get().input_id(static_cast<size_t>(selected));
-    if (anchor >= 0) {
+    if (anchor >= 0)
         anchor_id = Logic::get().input_id(static_cast<size_t>(anchor));
-    }
     sync_draft();
     Logic::get().touch_inputs();
     Logic::get().refresh_live_hold();
@@ -99,7 +95,6 @@ void GUI::addInput(int frame) {
 }
 
 void GUI::deleteSelected() {
-    log::debug("delete selected");
     auto& logic = Logic::get();
     auto& inputs = logic.inputs;
     int first = 0, last = 0;
@@ -142,7 +137,6 @@ void GUI::offset_chosen(int delta) {
 }
 
 void GUI::random_offset_chosen() {
-    log::debug("random offset chosen");
     int first = 0, last = 0;
     if (has_range() && selection_span(first, last))
         Logic::get().offset_inputs(input_offset, first, last);
@@ -157,9 +151,8 @@ void GUI::set_frame_advance(bool on) {
     persist();
     logic.advance_queued = false;
     logic.holding_advance = false;
-    if (logic.frame_advance) {
+    if (logic.frame_advance)
         Logic::get().disarm_length_pause_if_holding();
-    }
     logic.message = logic.frame_advance ? "Frame advance on" : "Frame advance off";
 }
 
@@ -173,18 +166,15 @@ void GUI::apply_seed_override() {
 }
 
 void GUI::setSpeed(float speed, bool settle) {
-    log::debug("set speed");
     auto& logic = Logic::get();
     logic.speedhack = std::clamp(speed, 0.01f, 100.f);
     bool normal = std::abs(logic.speedhack - 1.f) < .00001f;
-    if (!normal) {
+    if (!normal)
         logic.speedhack_memory = logic.speedhack;
-    }
     Logic::get().sync_time_scale();
     Logic::get().sync_playback_fps();
-    if (settle) {
+    if (settle)
         persist();
-    }
 }
 
 void GUI::set_playback_fps(float fps) {
@@ -206,9 +196,8 @@ std::string GUI::render_blocker() {
 #if defined(GEODE_IS_IOS)
     return {};
 #else
-    if (Logic::get().ffmpeg_ready()) {
+    if (Logic::get().ffmpeg_ready())
         return {};
-    }
 #ifdef GEODE_IS_WINDOWS
 #if ECHO_FFMPEG_API_ENABLED
     return "ffmpeg.exe was not found. Place it next to Geometry Dash, or install the FFmpeg API mod (eclipse.ffmpeg-api).";
@@ -229,9 +218,8 @@ std::string GUI::render_blocker() {
 
 bool GUI::two_player_dual() {
     auto* live = PlayLayer::get();
-    if (!live) {
+    if (!live)
         return false;
-    }
     bool two = live->m_levelSettings && live->m_levelSettings->m_twoPlayerMode;
     return two && live->m_gameState.m_isDualMode;
 }
