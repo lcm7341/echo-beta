@@ -1361,6 +1361,10 @@ class $modify(EchoGameLayer, GJBaseGameLayer) {
         }
         else {
 #ifdef GEODE_IS_IOS
+            // ios gd keeps a list of (button, down) it already did & skips repeats
+            // so a swift click only got its 1st press. empty the list before mine
+            if (value.applying_playback || orb_swift)
+                reinterpret_cast<std::unordered_set<int>*>(reinterpret_cast<std::uint8_t*>(this) + 0x850)->clear(); // found in handleButton (ios 0x1fabbc)
 #endif
 #ifdef GEODE_IS_ANDROID64
             // android has the same list, in isButtonAllowed (0x88370c in the arm64 lib off my phone)
