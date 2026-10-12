@@ -1882,6 +1882,12 @@ void Logic::prepare_buttons(GJBaseGameLayer* play) {
         ++logic.replay_clicks_left;
         echo::step::trace_button('Q', holding, static_cast<int>(play->m_queuedButtons.size()));
     };
+    // ignore inputs just emptied the queue. if the macros inputs for ts frame were already in it (the reset queues frame 1 early)
+    // they got thrown out with mine, so go back & queue them again
+    if (!logic.restoring_holds && logic.ignore_inputs) {
+        while (logic.replay_pos > 0 && logic.replay_pos <= logic.inputs.size() && logic.inputs[logic.replay_pos - 1].number >= frame)
+            --logic.replay_pos;
+    }
     while (logic.replay_pos < logic.inputs.size() && logic.inputs[logic.replay_pos].number < frame)
         ++logic.replay_pos;
     while (logic.replay_pos < logic.inputs.size() && logic.inputs[logic.replay_pos].number == frame) {
