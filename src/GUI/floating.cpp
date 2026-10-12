@@ -81,7 +81,7 @@ namespace EchoUI {
             }
 
         private:
-            static constexpr float SLOP = 5.f;
+            static constexpr float SLOP = 8.f;
             static constexpr double AWAKE = 2.5;
             static constexpr double FADE = .4;
 
