@@ -478,6 +478,9 @@ void GUI::editor() {
                         if (picked_shown && std::abs(inputs[picked].number - frame) == best) {
                             chosen = picked;
                         }
+                        if (chosen != picked && !ImGui::IsAnyItemActive()) {
+                            GUI::get().select_input(chosen);
+                        }
                         int row = row_of(chosen);
                         float target = std::max(0.f, row * row_h - (ImGui::GetWindowHeight() - row_h) * 0.5f);
                         float now = ImGui::GetScrollY();
