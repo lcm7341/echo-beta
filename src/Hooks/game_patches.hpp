@@ -9,6 +9,7 @@
 //
 //    win: exe in steamapps
 //    mac: Geometry Dash.app/Contents/MacOS/Geometry Dash. arm & intel are in 1 file so lipo -thin arm64 / x86_64 first
+//    ios: GeometryJump from launcher: xcrun devicectl device copy from
 //    android64: adb pull libcocos2dcpp.so
 //
 // !! disassemble ONLY the function. llvm-objdump -d --start-address=STARTADDR --stop-address=ENDADDR 

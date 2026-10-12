@@ -1,6 +1,7 @@
 // renders a macro to a video
 //
 // gd draws into a texture at the videos size, 1 fixed step per frame, so the video is smooth no matter how slow the pc is
+// windows & mac pipe the frames to an ffmpeg process. android uses the ffmpeg api mod. ios uses apples encoder (ios_encoder)
 // the window keeps its real size while gd is told it has the videos size, & the shader layer is resized to match (silicate)
 // audio is tapped off gds own mixer (AudioTap): frozen between frames & moved on by exactly 1 frame of sound each time,
 //   so it cant drift from the picture. it is muxed into the video in a 2nd pass
@@ -43,6 +44,9 @@
 
 #if ECHO_FFMPEG_API_ENABLED && __has_include(<eclipse.ffmpeg-api/include/events.hpp>)
 #include <eclipse.ffmpeg-api/include/events.hpp>
+#define ECHO_FFMPEG_API 1
+#elif defined(GEODE_IS_IOS)
+#include "Recorder/ios_encoder.hpp"
 #define ECHO_FFMPEG_API 1
 #endif
 
@@ -232,6 +236,11 @@ public:
     void drawFrame();
     void show_overlay();
     void draw_preview(CCSize pixels);
+#ifdef GEODE_IS_IOS
+    bool draw_direct();
+    GLuint direct_fbo = 0;
+    bool direct_failed = false;
+#endif
     void draw_progress();
     void queue_frame(std::vector<uint8_t> frame);
     std::vector<uint8_t> acquire_frame();
@@ -1864,6 +1873,12 @@ void Recorder::close_target() {
     pbo.fill(0);
     Recorder::get().close_nv12();
 #endif
+#ifdef GEODE_IS_IOS
+    if (direct_fbo)
+        glDeleteFramebuffers(1, &direct_fbo);
+    direct_fbo = 0;
+    direct_failed = false;
+#endif
     if (fbo)
         glDeleteFramebuffers(1, &fbo);
     if (color)
@@ -1928,6 +1943,13 @@ void Recorder::drawFrame() {
     while (Recorder::get().harvest(false)) {
     }
 #else
+#ifdef GEODE_IS_IOS
+    if (Recorder::get().draw_direct()) {
+        glBindFramebuffer(GL_FRAMEBUFFER, window);
+        return;
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+#endif
     auto frame = Recorder::get().acquire_frame();
     glPixelStorei(GL_PACK_ALIGNMENT, 1);
     {
@@ -1992,6 +2014,95 @@ void Recorder::show_overlay() {
     if (scissor)
         glEnable(GL_SCISSOR_TEST);
 }
+
+#ifdef GEODE_IS_IOS
+namespace {
+    GLuint flip_program() {
+        static GLuint program = 0;
+        static bool tried = false;
+        if (tried)
+            return program;
+        tried = true;
+        auto compile = [](GLenum type, char const* source) {
+            GLuint shader = glCreateShader(type);
+            glShaderSource(shader, 1, &source, nullptr);
+            glCompileShader(shader);
+            GLint ok = GL_FALSE;
+            glGetShaderiv(shader, GL_COMPILE_STATUS, &ok);
+            if (ok != GL_TRUE) {
+                glDeleteShader(shader);
+                return GLuint{ 0 };
+            }
+            return shader;
+        };
+        GLuint vertex = compile(GL_VERTEX_SHADER, "attribute vec2 a_position; attribute vec2 a_texCoord; varying vec2 v_texCoord; void main() { v_texCoord = a_texCoord; gl_Position = vec4(a_position, 0.0, 1.0); }");
+        GLuint fragment = compile(GL_FRAGMENT_SHADER, "precision mediump float; varying vec2 v_texCoord; uniform sampler2D u_texture; void main() { gl_FragColor = texture2D(u_texture, v_texCoord); }");
+        if (!vertex || !fragment)
+            return 0;
+        GLuint made = glCreateProgram();
+        glAttachShader(made, vertex);
+        glAttachShader(made, fragment);
+        glBindAttribLocation(made, kCCVertexAttrib_Position, "a_position");
+        glBindAttribLocation(made, kCCVertexAttrib_TexCoords, "a_texCoord");
+        glLinkProgram(made);
+        glDeleteShader(vertex);
+        glDeleteShader(fragment);
+        GLint ok = GL_FALSE;
+        glGetProgramiv(made, GL_LINK_STATUS, &ok);
+        if (ok != GL_TRUE) {
+            glDeleteProgram(made);
+            return 0;
+        }
+        ccGLUseProgram(made);
+        glUniform1i(glGetUniformLocation(made, "u_texture"), 0);
+        program = made;
+        return program;
+    }
+}
+
+bool Recorder::draw_direct() {
+    if (!use_api || !api || direct_failed)
+        return false;
+    Timed timed{ g_timing.read_ns };
+    GLuint program = flip_program();
+    unsigned target = 0;
+    std::string failed;
+    if (!program || !api->beginDirect(target, failed)) {
+        direct_failed = true;
+        return false;
+    }
+    if (!direct_fbo)
+        glGenFramebuffers(1, &direct_fbo);
+    glBindFramebuffer(GL_FRAMEBUFFER, direct_fbo);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, target, 0);
+    bool complete = glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
+    if (complete) {
+        glViewport(0, 0, width, height);
+        GLfloat const corners[] = { -1.f, -1.f, 1.f, -1.f, -1.f, 1.f, 1.f, 1.f };
+        GLfloat const coords[] = { 0.f, 1.f, 1.f, 1.f, 0.f, 0.f, 1.f, 0.f };
+        ccGLUseProgram(program);
+        ccGLBindTexture2D(color);
+        ccGLBlendFunc(GL_ONE, GL_ZERO);
+        ccGLEnableVertexAttribs(kCCVertexAttribFlag_Position | kCCVertexAttribFlag_TexCoords);
+        glVertexAttribPointer(kCCVertexAttrib_Position, 2, GL_FLOAT, GL_FALSE, 0, corners);
+        glVertexAttribPointer(kCCVertexAttrib_TexCoords, 2, GL_FLOAT, GL_FALSE, 0, coords);
+        glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+        ccGLBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    }
+    bool sent = complete ? api->endDirect(failed) : true;
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, 0, 0);
+    if (!complete) {
+        direct_failed = true;
+        return false;
+    }
+    if (!sent) {
+        std::lock_guard guard(lock);
+        failure = failed;
+        broken = true;
+    }
+    return true;
+}
+#endif
 
 void Recorder::draw_preview(CCSize pixels) {
     if (!color || width < 1 || height < 1 || pixels.width < 1.f || pixels.height < 1.f)
@@ -2175,7 +2286,9 @@ void Recorder::finish_video() {
 }
 
 bool Recorder::api_available() {
-#if   defined(ECHO_FFMPEG_API)
+#if defined(GEODE_IS_IOS)
+    return true;
+#elif defined(ECHO_FFMPEG_API)
     return Loader::get()->isModLoaded("eclipse.ffmpeg-api") && ffmpeg::events::impl::getVTable().createRecorder;
 #else
     return false;
@@ -2243,7 +2356,9 @@ void Recorder::go_live() {
     uncap_pace();
     active = true;
     logic.render_speed_locked = audio_speed;
-#if   defined(ECHO_FFMPEG_API)
+#if defined(GEODE_IS_IOS)
+    logic.message = "Rendering";
+#elif defined(ECHO_FFMPEG_API)
     logic.message = use_api ? "Rendering (FFmpeg API)" : nv12 ? "Rendering (GPU)"
                                                               : "Rendering";
 #else
@@ -2432,6 +2547,11 @@ void Recorder::save_api_render() {
             try {
                 // mixVideoRaw takes the samples as 44100 no matter what (phones are 48000, & render speed moves it too)
                 // so anything else goes in as a wav, the api reads the real rate off that & converts it
+#ifdef GEODE_IS_IOS
+                // ios is my own mixer, it works the rate out from the videos length
+                if (auto mixed = ffmpeg::events::AudioMixer::mixVideoRaw(video, stereo, temp); mixed.isErr())
+                    failed = mixed.unwrapErr();
+#else
                 if (rate == 44100) {
                     if (auto mixed = ffmpeg::events::AudioMixer::mixVideoRaw(video, stereo, temp); mixed.isErr())
                         failed = mixed.unwrapErr();
@@ -2444,6 +2564,7 @@ void Recorder::save_api_render() {
                     else
                         fs::remove(wav, error);
                 }
+#endif
             }
             catch (std::exception const& error) {
                 failed = error.what();
@@ -2685,7 +2806,10 @@ void Logic::sync_render_pause_button() {
 }
 
 bool Logic::render_uses_screen_shape() {
-#if   defined(GEODE_IS_MOBILE)
+#if defined(GEODE_IS_IOS)
+    // ios keeps the screen shape no matter what i tell it :/
+    return true;
+#elif defined(GEODE_IS_MOBILE)
     return render_screen_shape;
 #else
     return false;

@@ -173,6 +173,9 @@ void GUI::apply_no_mirror() {
 }
 
 std::string GUI::render_blocker() {
+#if defined(GEODE_IS_IOS)
+    return "Rendering isn't supported on iOS.";
+#else
     if (Logic::get().ffmpeg_ready()) return {};
 #ifdef GEODE_IS_WINDOWS
 #if ECHO_FFMPEG_API_ENABLED
@@ -185,6 +188,7 @@ std::string GUI::render_blocker() {
     return "Rendering needs the FFmpeg API mod (eclipse.ffmpeg-api). Install it from the Geode mod index.";
 #else
     return "Rendering is currently available on Windows only.";
+#endif
 #endif
 #endif
 }

@@ -1247,7 +1247,7 @@ class $modify(EchoGameLayer, GJBaseGameLayer) {
         auto& value = Logic::get();
         // flip 2 player controls: i do the swap myself & tell gd not to (see the native call)
         // so a macro always holds the REAL player & records / plays the same with the option on or off
-        bool flips = value.flip_controls() && !m_isPlatformer && !m_useReplay;
+        bool flips = value.flip_controls() && !m_isPlatformer && !m_useReplay; // same checks gd does (handleButton, ios 0x1fabbc)
         bool mine = !value.applying_playback && !value.routing_input && !value.restoring_holds && !value.maintaining_gravity && !value.injecting && !value.follow_injecting && !orb_swift;
         if (flips && mine && m_levelSettings && m_levelSettings->m_twoPlayerMode)
             player1 = !player1;
@@ -1360,6 +1360,8 @@ class $modify(EchoGameLayer, GJBaseGameLayer) {
             Logic::get().play_input(this, icon2, down, button);
         }
         else {
+#ifdef GEODE_IS_IOS
+#endif
 #ifdef GEODE_IS_ANDROID64
             // android has the same list, in isButtonAllowed (0x88370c in the arm64 lib off my phone)
             if (value.applying_playback || orb_swift)
@@ -1415,11 +1417,14 @@ class $modify(EchoGameLayer, GJBaseGameLayer) {
         GJBaseGameLayer::activateSongEditTrigger(object);
     }
 
+// not on ios it crashes there
+#ifndef GEODE_IS_IOS
     void activatedAudioTrigger(SFXTriggerGameObject* object) {
         if (Logic::get().predicting)
             return;
         GJBaseGameLayer::activatedAudioTrigger(object);
     }
+#endif
 
     void shakeCamera(float duration, float strength, float interval) {
         if (Logic::get().predicting)
@@ -1603,6 +1608,7 @@ class $modify(EchoPlayerObject, PlayerObject) {
             });
     }
 
+#ifndef GEODE_IS_IOS
     void updateRotation(float dt, float rotation) {
         restore_tilt(this);
         if (!tilt_applies(this)) {
@@ -1614,6 +1620,7 @@ class $modify(EchoPlayerObject, PlayerObject) {
         };
         turn_both(this, turn, turn);
     }
+#endif
 
     void setPosition(CCPoint const& position) {
         if (Trajectory::get().isFake(this) && phys::fast_prediction_pos()) {
@@ -1635,6 +1642,8 @@ class $modify(EchoPlayerObject, PlayerObject) {
         setRotation(gameplay);
     }
 
+// not on ios the function is too short to hook :/
+#ifndef GEODE_IS_IOS
     void setVisible(bool visible) {
         auto* layer = GJBaseGameLayer::get();
         if (layer && !Logic::get().is_traj_player(this)) {
@@ -1645,6 +1654,7 @@ class $modify(EchoPlayerObject, PlayerObject) {
         }
         PlayerObject::setVisible(visible);
     }
+#endif
 
     void ringJump(RingObject* ring, bool skipCheck) {
         if (Orbs::blockHoldRing(this, ring))
@@ -1936,6 +1946,29 @@ class $modify(EchoPlayerObject, PlayerObject) {
         PlayerObject::placeStreakPoint();
     }
 };
+
+#ifdef GEODE_IS_IOS
+namespace {
+    constexpr std::uintptr_t ROTATE_BODY = 0x21d4a4;
+
+    void ios_rotate_body(PlayerObject* self, float dt, float rotation) {
+        auto original = reinterpret_cast<void (*)(PlayerObject*, float, float)>(geode::base::get() + ROTATE_BODY);
+        restore_tilt(self);
+        if (!tilt_applies(self)) {
+            original(self, dt, rotation);
+            return;
+        }
+        auto turn = [&] {
+            original(self, dt, rotation);
+        };
+        turn_both(self, turn, turn);
+    }
+}
+
+$execute {
+    auto hooked = GEODE_MOD_STATIC_HOOK(0x21d4a4, &ios_rotate_body, PlayerObject::updateRotation_body);
+}
+#endif
 
 class $modify(EchoSchedulerDepth, CCScheduler) {
     static void onModify(auto& self) {
@@ -2472,6 +2505,32 @@ class $modify(EchoDirector, CCDirector) {
     void drawScene() {
         auto& logic = Logic::get();
         logic.sync_render_pause_button();
+#ifdef GEODE_IS_IOS
+        struct DrawHidden {
+            std::array<std::pair<CCNode*, bool>, 2> held{};
+
+            DrawHidden() {
+                auto* layer = GJBaseGameLayer::get();
+                if (!layer)
+                    return;
+                PlayerObject* players[2] = { layer->m_player1, layer->m_player2 };
+                bool hide[2] = { Logic::get().hide_p1, Logic::get().hide_p2 };
+                for (int i = 0; i < 2; ++i) {
+                    if (!hide[i] || !players[i])
+                        continue;
+                    held[i] = { players[i], players[i]->isVisible() };
+                    players[i]->CCNode::setVisible(false);
+                }
+            }
+
+            ~DrawHidden() {
+                for (auto& [node, was] : held) {
+                    if (node)
+                        node->CCNode::setVisible(was);
+                }
+            }
+        } hidden;
+#endif
         if (auto* play = PlayLayer::get(); play && (logic.show_hitboxes || logic.show_traj)) {
             logic.sync_overlay_seats(play);
         }

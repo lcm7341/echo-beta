@@ -356,7 +356,11 @@ namespace {
             mine = i;
         }
 #ifdef GEODE_IS_MOBILE
+#ifdef GEODE_IS_IOS
+        bool forced = true;
+#else
         bool forced = false;
+#endif
         ImGui::BeginDisabled(forced);
         if (toggle("Match Screen Shape", logic.render_screen_shape))
             save();
@@ -1256,6 +1260,13 @@ void GUI::renderer() {
     eui::BeginCardRow("render-1");
     if (eui::BeginCard("Video", card_width())) {
         draw_video_shape(open_save_preset);
+#ifdef GEODE_IS_IOS
+        toggle("Hide Labels", logic.render_hide_labels);
+        tip("Hides Echo's labels while rendering.");
+        eui::RowHalf();
+        toggle("Hide Pause Button", logic.render_hide_pause);
+        tip("Hides the pause button while rendering. Use the Echo icon to stop the render.");
+#else
         eui::Separator();
 #ifdef GEODE_IS_ANDROID
         eui::Row("Codec, extension");
@@ -1287,6 +1298,7 @@ void GUI::renderer() {
 #ifdef GEODE_IS_ANDROID
         toggle("Hide Pause Button", logic.render_hide_pause);
         tip("Hides the pause button while rendering. Use the Echo icon to stop the render.");
+#endif
 #endif
     }
     eui::EndCard();

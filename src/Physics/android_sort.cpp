@@ -12,6 +12,7 @@ using namespace geode::prelude;
 
 // gd sorts w/ the systems qsort in spiderTestJumpX/Y, sortAllGroupsX, sortGroups & createObjectsFromSetupFinished
 // equal things come out in whatever order that qsort feels like, & androids is NOT apples
+// DARK SHEEP: p2s spider landed 1 block lower than on mac & ios (frame 58683) bc 3 objects sit on the same spot
 // so the games qsort slot (0x1228de8 in the arm64 lib off my phone) gets apples sort, only the game uses that slot
 namespace echo::sort {
     // for the log

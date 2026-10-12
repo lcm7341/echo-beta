@@ -36,6 +36,10 @@ namespace {
 #define ECHO_NO_MIRROR_DRAW
     constexpr std::ptrdiff_t PLAIN_DRAW = 0x305c;
     constexpr std::ptrdiff_t MIRROR_DIRECTION = 0x306c;
+#elif defined(GEODE_IS_IOS)
+#define ECHO_NO_MIRROR_DRAW
+    constexpr std::ptrdiff_t PLAIN_DRAW = 0x3084;
+    constexpr std::ptrdiff_t MIRROR_DIRECTION = 0x3094;
 #endif
 
 #ifdef ECHO_NO_MIRROR_DRAW
