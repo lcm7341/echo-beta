@@ -1371,6 +1371,8 @@ void Logic::restore_holds(PlayLayer* play) {
     auto& logic = Logic::get();
     if (!play)
         return;
+    if (logic.is_playing())
+        logic.repair_player_order(play);
     if (!logic.is_playing() && !logic.is_recording()) {
         logic.restart_hold_captured = false;
         logic.death_jump_p1 = logic.death_jump_p2 = false;

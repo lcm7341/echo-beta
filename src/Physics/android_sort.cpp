@@ -25,6 +25,11 @@ namespace {
         ++echo::sort::calls;
         if (!base || !compare || count < 2 || !size)
             return;
+        // the slot is plain memory NOT a geode patch, so disable bot is honoured in here
+        if (Logic::bot_disabled()) {
+            qsort(base, count, size, compare);
+            return;
+        }
         echo::sort::apple_qsort(base, count, size, compare);
     }
 }

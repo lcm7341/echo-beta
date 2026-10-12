@@ -1557,6 +1557,11 @@ class $modify(EchoPlayerObject, PlayerObject) {
     }
 
     void update(float dt) {
+        if (Logic::bot_disabled()) {
+            PlayerObject::update(dt);
+            echo::step::trace_plain(this);
+            return;
+        }
         if (Trajectory::get().isFake(this) && !Logic::get().predicting)
             return;
         if (!Trajectory::get().isFake(this))
@@ -2507,6 +2512,13 @@ class $modify(EchoHardStreak, HardStreak) {
 
 class $modify(EchoDirector, CCDirector) {
     void drawScene() {
+        if (Logic::bot_disabled()) {
+#ifdef GEODE_IS_WINDOWS
+            echo_guard_step_site();
+#endif
+            CCDirector::drawScene();
+            return;
+        }
         auto& logic = Logic::get();
         logic.sync_render_pause_button();
 #ifdef GEODE_IS_IOS

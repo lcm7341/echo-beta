@@ -849,6 +849,9 @@ void GUI::tools() {
             auto* level = PlayLayer::get() ? PlayLayer::get()->m_level : nullptr;
             bool ldm = logic.macro_ldm_known ? logic.macro_ldm : level && level->m_lowDetailModeToggled;
             ImGui::BeginDisabled(locked);
+            if (eui::Checkbox("Low Detail Mode", &ldm)) {
+                logic.set_macro_ldm(ldm);
+            }
             ImGui::EndDisabled();
             tip("Saves LDM setting in the macro, as it sometimes breaks if not set correctly.");
         }
@@ -1428,6 +1431,100 @@ void GUI::draw_theme() {
         }
     }
     eui::EndCard();
+    if (eui::BeginCard("Interface", card_width())) {
+        eui::Row("Size");
+        float drag_max = gui.scale_cap;
+        float& menu_size = logic.docked_menu ? logic.menu_scale : logic.menu_scale_undocked;
+        if (eui::DragFloat("##menu-scale", &menu_size, 0.01f, 0.35f, drag_max, "%.2fx")) {
+            menu_size = std::clamp(menu_size, 0.35f, drag_max);
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip(logic.docked_menu ? "The docked menu's size. The undocked menu has its own." : "The undocked menu's size. The docked menu has its own.");
+        }
+        if (ImGui::IsItemActivated()) {
+            gui.scale_dragging = true;
+        }
+        if (ImGui::IsItemDeactivated()) {
+            gui.scale_dragging = false;
+            menu_size = std::clamp(menu_size, 0.35f, gui.scale_cap);
+        }
+        if (ImGui::IsItemDeactivatedAfterEdit()) {
+            save();
+            gui.export_theme(gui.theme_path("current"));
+        }
+        eui::Row("Animation speed");
+        if (eui::DragFloat("##menu-anim", &logic.menu_anim_speed, 0.01f, 0.25f, 4.f, "%.2fx")) {
+            logic.menu_anim_speed = std::clamp(logic.menu_anim_speed, 0.25f, 4.f);
+        }
+        saved_on_release();
+#ifndef GEODE_IS_MOBILE
+        if (eui::Checkbox("One window (docked)", &logic.docked_menu)) {
+            save();
+        }
+        tip("Turning this off makes every page its own window.");
+#endif
+#ifdef GEODE_IS_MOBILE
+        bool floating_logo = true;
+#else
+        bool floating_logo = false;
+#endif
+        if (floating_logo) {
+            eui::Row("Icon size", "The size of the floating Echo button.");
+            if (eui::DragFloat("##icon-size", &logic.floating_size, 0.25f, 24.f, 72.f, "%.0f")) {
+                logic.floating_size = std::clamp(logic.floating_size, 24.f, 72.f);
+            }
+            EchoUI::preview_logo(ImGui::IsItemActive());
+            saved_on_release();
+            if (eui::Checkbox("Hide Icon When Playing", &logic.floating_hide_in_lvl)) {
+                save();
+            }
+            tip("Hides the floating Echo icon while playing a level. It comes back when you pause.");
+        }
+        toggle("TPS Changes During Playback", logic.playback_tps_changes);
+        tip("Lets you set the macro's starting TPS while it is playing.");
+        if (toggle("Practice Music Hack", logic.practice_music_hack)) {
+            if (auto* play = PlayLayer::get(); play && logic.practice_music_hack) {
+                play->m_practiceMusicSync = true;
+            }
+        }
+        tip("Plays the level music in practice mode.");
+        toggle("Logging", logic.trace_logging);
+        tip("Saves a trace of each playback for bug reports.");
+        eui::RowHalf();
+        if (eui::Button("Open Logs Folder")) {
+            geode::utils::file::openFolder(logic.save_root() / "logs");
+        }
+        tip("Opens the folder the logs are saved in.");
+#ifdef GEODE_IS_WINDOWS
+        tip("Prefetches the next objects in the collision loops.");
+        eui::RowHalf();
+        tip("Inlines the rect getters in the collision check.");
+        tip("Uses the SSE matrix multiply.");
+        eui::RowHalf();
+        tip("Merges and batches dash, orb and ring effects.");
+#endif
+        if (eui::Checkbox("Button Effects", &eui::button_effects())) {
+            gui.export_theme(gui.theme_path("current"));
+        }
+        tip("Enables button animations for the animated themes.");
+        eui::RowHalf();
+        bool sharp = style.CircleTessellationMaxError >= 2.5f;
+        if (eui::Checkbox("Sharp Edges", &sharp)) {
+            style.CircleTessellationMaxError = sharp ? 5.f : 0.1f;
+            gui.base_style.CircleTessellationMaxError = style.CircleTessellationMaxError;
+            gui.export_theme(gui.theme_path("current"));
+        }
+        tip("Draws curves with fewer segments.");
+        bool disabled = Logic::bot_disabled();
+        if (eui::Checkbox("Disable Bot", &disabled)) {
+            Logic::set_bot_disabled(disabled);
+        }
+        tip("Completely disables the bot.");
+        if (eui::Button("Advanced Style...", ImVec2(-FLT_MIN, 0.f))) {
+            open_advanced = true;
+        }
+        tip("Lets you edit every size and color.");
+    }
     eui::EndCard();
     eui::EndCardRow();
     eui::BeginCardRow("settings-1");

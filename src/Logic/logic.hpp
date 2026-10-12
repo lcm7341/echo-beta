@@ -533,7 +533,11 @@ struct Session {
 	bool velocity_unrounding = false;
 	bool macro_unrounded = false, macro_silicate_variance = false;
 	bool macro_ldm = false, macro_ldm_known = false; // low detail mode when it was recorded (old macros dont know)
+	void set_macro_ldm(bool on);
+	void repair_player_order(PlayLayer* play);
 	// everything off after a restart, only the menu & the step trace stay. for comparing against another bot
+	static bool bot_disabled();
+	static void set_bot_disabled(bool on);
 
 	bool unrounded_physics() const {
 		return is_playing() || is_recording() ? macro_unrounded : velocity_unrounding;
