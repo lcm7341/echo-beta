@@ -197,6 +197,9 @@ float GUI::shared_button_width(std::initializer_list<char const*> labels) {
         need = std::max(need, GUI::get().labelWidth(label));
     ImGuiWindow* window = ImGui::GetCurrentWindow();
     bool stretches = (window->Flags & ImGuiWindowFlags_AlwaysAutoResize) != 0 || (window->ChildFlags & ImGuiChildFlags_AutoResizeX) != 0;
+    if (stretches) {
+        return need;
+    }
     float along = window->DC.CursorPos.x - window->DC.CursorStartPos.x;
     float inner = along + std::max(0.f, ImGui::GetContentRegionAvail().x);
     float spacing = ImGui::GetStyle().ItemSpacing.x * (float)(std::max(amt - 1, 0));
