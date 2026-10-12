@@ -735,6 +735,7 @@ bool read_varint(std::istream& file, uint64_t& value) {
 
 constexpr uint8_t FLAG_SAMPLES = 1, FLAG_WHOLE_FPS = 2, FLAG_SEED = 4, FLAG_UNROUNDED = 8;
 constexpr uint8_t FLAG_SILICATE_VARIANCE = 16;
+constexpr uint8_t FLAG_LDM_KNOWN = 32, FLAG_LDM = 64; // old macros have neither = dont know
 
 struct PackedBody {
     float fps = 240.f;
@@ -745,6 +746,7 @@ struct PackedBody {
     bool has_seed = false;
     bool unrounded = false;
     bool silicate_variance = false;
+    bool ldm = false, ldm_known = false;
     std::vector<Frame> inputs;
     std::vector<FramePose> poses;
     std::vector<RateChange> rates;
@@ -914,6 +916,8 @@ void store_packed(PackedBody& body) {
     logic.lvl_seed_from_file = body.has_seed;
     logic.macro_unrounded = body.unrounded;
     logic.macro_silicate_variance = body.silicate_variance;
+    logic.macro_ldm = body.ldm;
+    logic.macro_ldm_known = body.ldm_known;
     logic.format = ReplayFormat::Meta;
 }
 
@@ -958,6 +962,8 @@ bool ReplayIO::write_packed_echo(fs::path const& path) {
         flags = static_cast<uint8_t>(flags | FLAG_UNROUNDED);
     if (logic.macro_silicate_variance)
         flags = static_cast<uint8_t>(flags | FLAG_SILICATE_VARIANCE);
+    if (logic.macro_ldm_known)
+        flags = static_cast<uint8_t>(flags | FLAG_LDM_KNOWN | (logic.macro_ldm ? FLAG_LDM : 0));
     ReplayIO::write_pod(file, version);
     ReplayIO::write_pod(file, flags);
     if (!body.bytes.empty())
@@ -982,6 +988,8 @@ bool ReplayIO::read_packed_echo(fs::path const& path) {
     bool loaded = false;
     body.unrounded = (flags & FLAG_UNROUNDED) != 0;
     body.silicate_variance = (flags & FLAG_SILICATE_VARIANCE) != 0;
+    body.ldm_known = (flags & FLAG_LDM_KNOWN) != 0;
+    body.ldm = (flags & FLAG_LDM) != 0;
     if (version == 1)
         loaded = load_version1(file, flags, body);
     else if (version == 2)
