@@ -8,6 +8,9 @@ namespace echo::step {
 	void end(GJBaseGameLayer* self, GJBaseGameLayer* layer, bool isHalfTick);
 	void trace(GJBaseGameLayer* self);
 	void trace_button(char what, bool down, int extra);
+	void trace_event(std::string const& line);
+	void trace_flush();
+	bool tracing();
 	std::string pace();
 	void trace_plain(class PlayerObject* player);
 }

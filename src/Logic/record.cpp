@@ -7,6 +7,7 @@
 // capture_player / apply_player copy a players whole state. setting the flags alone leaves the sprite in the wrong mode, so it goes thru gds setters
 // recompute_cps marks where the click rules break (16 a second, 3 on a frame, 5+ faster than 48/s)
 #include "Logic/logic.hpp"
+#include "Hooks/step.hpp"
 #include "Hooks/rotation.hpp"
 #include "GUI/gui.hpp"
 #include <Geode/utils/async.hpp>
@@ -758,8 +759,13 @@ void Logic::record_input(GJBaseGameLayer* play, bool down, bool player1, int but
         if (last != logic.inputs.rend() && last->number > now)
             return;
     }
-    if (!force && down == Logic::get().held_at(logic, player2, now, button))
+    if (!force && down == Logic::get().held_at(logic, player2, now, button)) {
+        if (echo::step::tracing())
+            echo::step::trace_event(fmt::format("SKIP frame={} down={} p2={} button={} (macro already has it {})\n", now, down, player2, button, down ? "held" : "released"));
         return;
+    }
+    if (echo::step::tracing())
+        echo::step::trace_event(fmt::format("REC frame={} down={} p2={} button={} force={}\n", now, down, player2, button, force));
 
     Frame frame;
     frame.number = now;

@@ -2,6 +2,7 @@
 #include "Hack/trajectory.hpp"
 
 #include "Logic/logic.hpp"
+#include "Hooks/step.hpp"
 
 #include <Geode/binding/EnhancedGameObject.hpp>
 #include <Geode/binding/GJBaseGameLayer.hpp>
@@ -19,7 +20,7 @@ using namespace geode::prelude;
 
 bool Orbs::click_orb_assist(bool player2) {
     auto& logic = Logic::get();
-    if (!logic.click_dash_orbs && !logic.click_black_orbs)
+    if (!logic.click_dash_orbs && !logic.black_orb_assist())
         return false;
     // playback uses the saved clicks only
     if (logic.plays_player(player2))
@@ -35,6 +36,8 @@ namespace {
     constexpr int GREEN_DASH_ORB = 1704, BLACK_ORB = 1330;
 
     std::unordered_set<int> used_p1, used_p2;
+    // orbs the assist clicked for me, kept until i let go. see blockHoldRing
+    std::unordered_set<int> claimed_p1, claimed_p2;
     bool jump_press_p1 = false, jump_press_p2 = false, hold_after_p1 = false, hold_after_p2 = false;
     bool tool_press_p1 = false, tool_press_p2 = false, tool_hit_p1 = false, tool_hit_p2 = false;
     bool pending_hit_p1 = false, pending_hit_p2 = false;
@@ -77,9 +80,17 @@ namespace {
         auto& logic = Logic::get();
         if (logic.click_dash_orbs && (object->m_objectID == GREEN_DASH_ORB || object->m_objectType == GameObjectType::DashRing || object->m_objectType == GameObjectType::GravityDashRing))
             return Kind::Dash;
-        if (logic.click_black_orbs && (object->m_objectID == BLACK_ORB || object->m_objectType == GameObjectType::DropRing))
+        if (logic.black_orb_assist() && (object->m_objectID == BLACK_ORB || object->m_objectType == GameObjectType::DropRing))
             return Kind::Black;
         return Kind::None;
+    }
+
+    // easy black orb ufo: a black orb is left alone while the icon is still going up (down, upside down), so a ufo click
+    // near one doesnt slam it back. click black orbs on its own takes them every time
+    bool moving_up(PlayerObject* player) {
+        if (Logic::get().click_black_orbs || !player)
+            return false;
+        return player->m_isUpsideDown ? player->m_yVelocity < 0.0 : player->m_yVelocity > 0.0;
     }
 
     bool taken(GameObject* object, bool player2, std::unordered_set<int> const& used) {
@@ -212,13 +223,20 @@ namespace {
         player->m_stateJumpBuffered = 1;
     }
 
+    // clicks an assist put in gds queue & that still have to reach the macro
+    int queued_assist = 0;
+
     void queue_jump(PlayLayer* play, bool player2, bool down) {
+        ++queued_assist;
+        if (echo::step::tracing())
+            echo::step::trace_event(fmt::format("ASSIST_QUEUE frame={} p2={} down={}\n", Logic::get().step_frame + 1, player2, down));
         play->queueButton(static_cast<int>(PlayerButton::Jump), down, player2, Logic::get().click_stamp());
     }
 
     struct PadStep {
         bool pending = false;
         bool live_black = false;
+        bool dash = false; // a held click started a dash, click it off next step
         int black = 0;
         bool anon = false;
         std::vector<GameObject*> blue;
@@ -325,7 +343,7 @@ std::vector<Orbs::Pose> Orbs::capture(GJBaseGameLayer* play, PlayerObject* playe
     if (!play || !player)
         return poses;
     auto& logic = Logic::get();
-    if (!logic.click_dash_orbs && !logic.click_black_orbs && !logic.pad_blue_orb && !logic.pad_black_orb)
+    if (!logic.click_dash_orbs && !logic.black_orb_assist() && !logic.pad_blue_orb && !logic.pad_black_orb)
         return poses;
     each_near(play, player->getPosition(), travel_span(play, player), [&](GameObject* object) {
         bool listed = classify(object) != Kind::None || blue_orb(object) || black_orb(object);
@@ -383,6 +401,8 @@ uint32_t Orbs::pose_hash(GJBaseGameLayer* play, PlayerObject* player) {
 void Orbs::clear() {
     used_p1.clear();
     used_p2.clear();
+    claimed_p1.clear();
+    claimed_p2.clear();
     jump_press_p1 = false;
     jump_press_p2 = false;
     hold_after_p1 = false;
@@ -433,6 +453,36 @@ void Orbs::click_pads(PlayLayer* play, PlayerObject* player, int objectType, Gam
         step.pads.push_back(pad->m_uniqueID);
 }
 
+// a dash a HELD click started (i was already holding when the icon got to the orb). the assist clicks every dash orb, so
+// ts one is let go & pressed again at the start of the next step, before the icon moves: same as a click, the dash is 0 steps long.
+// its done with real inputs that go in the macro, so playback (where gd starts the same dash off the same hold) ends it the same way
+void Orbs::note_dash(PlayLayer* play, PlayerObject* player, GameObject* ring) {
+    auto& logic = Logic::get();
+    if (!play || !player || logic.predicting || !logic.click_dash_orbs || tool_armed)
+        return;
+    bool player2 = player == play->m_player2;
+    if (!Orbs::click_orb_assist(player2) || (ring && classify(ring) != Kind::Dash))
+        return;
+    auto& step = player2 ? pad_p2 : pad_p1;
+    step.pending = true;
+    step.dash = true;
+}
+
+// the trajectorys side of note_dash. w/ the assist on no dash is ever still going when a steps clicks are done: a fresh click
+// is swifted on the spot, & a dash a held click started gets let go + pressed again the step after. so a fake icon thats
+// dashing & holding right here can only be that 2nd kind, & it gets the same 2 inputs the real icon is about to get.
+// a stack of dash orbs comes apart 1 orb a step ts way (the press goes straight into the next orb), on the real icon too
+void Orbs::click_fake_dash(PlayerObject* player, bool player2) {
+    if (!player || !Logic::get().click_dash_orbs || !Orbs::click_orb_assist(player2))
+        return;
+    if (!player->m_isDashing || !holding_jump(player))
+        return;
+    if (player->m_dashRing && classify(player->m_dashRing) != Kind::Dash)
+        return;
+    player->releaseButton(PlayerButton::Jump);
+    player->pushButton(PlayerButton::Jump);
+}
+
 bool Orbs::has_pending_pads() {
     return pad_p1.pending || pad_p2.pending;
 }
@@ -451,6 +501,10 @@ void Orbs::flush_pads(PlayLayer* play) {
             return;
         auto& spent_pads = player2 ? spent_pad_p2 : spent_pad_p1;
         auto& spent_blue = player2 ? spent_blue_p2 : spent_blue_p1;
+        if (step.dash && player->m_isDashing && holding_jump(player)) {
+            queue_jump(play, player2, false);
+            queue_jump(play, player2, true);
+        }
         if (step.black > 0)
             queue_pad_swift(play, player2, step.black, step.live_black);
         if (step.blue.empty() || (step.pads.empty() && !step.anon))
@@ -510,6 +564,15 @@ namespace {
     }
 }
 
+// an assists click must ALWAYS be recorded. record_input drops a press on a button it thinks is already held,
+// & after a swift that guess can be wrong. so these skip that check
+bool Orbs::take_queued_assist() {
+    if (queued_assist <= 0)
+        return false;
+    --queued_assist;
+    return true;
+}
+
 void Orbs::arm_tool(bool on) {
     tool_armed = on;
 }
@@ -517,6 +580,13 @@ void Orbs::arm_tool(bool on) {
 void Orbs::begin_step() {
     used_p1.clear();
     used_p2.clear();
+    if (!claimed_p1.empty() || !claimed_p2.empty()) {
+        auto* layer = GJBaseGameLayer::get();
+        if (!layer || !holding_jump(layer->m_player1))
+            claimed_p1.clear();
+        if (!layer || !holding_jump(layer->m_player2))
+            claimed_p2.clear();
+    }
     jump_press_p1 = false;
     jump_press_p2 = false;
     tool_hit_p1 = false;
@@ -548,10 +618,10 @@ bool Orbs::blockHoldRing(PlayerObject* player, GameObject* object) {
         return false;
     if (tool_armed)
         return false;
-    if (player2 ? swift_p2 : swift_p1)
-        return true;
-    bool fresh = pushing && !(player2 ? held_before_p2 : held_before_p1);
-    return !fresh;
+    // ONLY the orbs the assist clicked itself are held back: the swift it put in the macro already used them, so playback
+    // wont fire them again either. every other orb goes off the way gd does it. ts used to block every held click, so
+    // holding into a dash orb did nothing while recording & then dashed when the macro played (nothing in the macro can stop that)
+    return (player2 ? claimed_p2 : claimed_p1).contains(object->m_uniqueID);
 }
 
 void Orbs::begin_push(PlayerObject* player) {
@@ -601,9 +671,10 @@ int Orbs::claim_click(GJBaseGameLayer* layer, PlayerObject* player, bool player2
 
     auto& used = player2 ? used_p2 : used_p1;
 
-    GameObject* orb = find_orb(layer, player, player2, used, logic.click_dash_orbs, logic.click_black_orbs);
+    GameObject* orb = find_orb(layer, player, player2, used, logic.click_dash_orbs, logic.black_orb_assist());
 
     if (!orb) return 0;
+    if (classify(orb) == Kind::Black && moving_up(player)) return 0;
 
     auto stack = orb_stack(layer, player, player2, used, orb);
     for (auto* obj : stack) {
@@ -617,8 +688,14 @@ int Orbs::claim_click(GJBaseGameLayer* layer, PlayerObject* player, bool player2
     if (classify(orb) == Kind::Black) (player2 ? pad_p2 : pad_p1).live_black = true;
     
     for (auto* obj : stack) {
-        if (obj) used.insert(obj->m_uniqueID);
+        if (obj) {
+            used.insert(obj->m_uniqueID);
+            (player2 ? claimed_p2 : claimed_p1).insert(obj->m_uniqueID);
+        }
     }
+    if (echo::step::tracing())
+        echo::step::trace_event(fmt::format("ASSIST_CLICK frame={} p2={} orb_id={} orb_uid={} stack={} (that many extra release+press on ts press)\n",
+            Logic::get().step_frame + 1, player2, orb->m_objectID, orb->m_uniqueID, stack.size()));
     return std::max(1, static_cast<int>(stack.size()));
 }
 
@@ -761,8 +838,10 @@ void Orbs::click_fake(GJBaseGameLayer* play, PlayerObject* player, bool player2,
         return;
     }
     auto key = PlayerButton::Jump;
-    GameObject* orb = find_orb(play, player, player2, used, logic.click_dash_orbs, logic.click_black_orbs);
+    GameObject* orb = find_orb(play, player, player2, used, logic.click_dash_orbs, logic.black_orb_assist());
     if (!orb)
+        return;
+    if (classify(orb) == Kind::Black && moving_up(player))
         return;
     auto stack = orb_stack(play, player, player2, used, orb);
     if (auto* rings = player->m_touchingRings) {

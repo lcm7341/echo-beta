@@ -237,7 +237,7 @@ Trajectory::Key Trajectory::make_key(PlayLayer* play) const {
     key.swift = logic.traj_swift;
     key.release = logic.traj_release;
     key.dash_orbs = Orbs::click_orb_assist(false) || Orbs::click_orb_assist(true);
-    key.black_orbs = key.dash_orbs && logic.click_black_orbs;
+    key.black_orbs = key.dash_orbs && logic.black_orb_assist();
     key.pad_black = logic.pad_black_orb;
     key.pad_blue = logic.pad_blue_orb;
     key.pause_kill = logic.pause_before_kill && logic.is_recording() && logic.show_traj;
@@ -868,6 +868,7 @@ void Trajectory::simulate(PlayLayer* play, bool player1, Click click, bool both,
             bool icon2 = body == fake2;
             bool fresh = orb_press[icon2 ? 1 : 0] || (!logic.plays_player(icon2) && pressed_now);
             Orbs::click_fake(play, body, icon2, orb_clicks[icon2 ? 1 : 0], fresh);
+            Orbs::click_fake_dash(body, icon2);
             Orbs::apply_prediction_pads(play, body, icon2);
         });
         each_body(maintain);
@@ -1017,7 +1018,7 @@ void Trajectory::refresh(PlayLayer* play) {
         if (node->isVisible())
             node->setVisible(false);
         bool pause_kill = logic.pause_before_kill && logic.is_recording();
-        if (!rendering && (logic.show_death_next || pause_kill)) {
+        if (!rendering && ((logic.show_death_next && !(logic.is_playing() && !logic.is_recording())) || pause_kill)) {
             lookahead(play);
             Logic::get().check_advance_pause(play);
             Logic::get().sync_death_label(play);

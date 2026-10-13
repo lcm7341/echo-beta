@@ -21,8 +21,6 @@
 #include "Physics/gravity.hpp"
 #include "Physics/player.hpp"
 #include "Physics/prediction_art.hpp"
-#include "Rendering/dash_end.hpp"
-#include "Rendering/dash_bursts.hpp"
 #include <unordered_set>
 #include <Geode/binding/PauseLayer.hpp>
 #include <Geode/modify/PauseLayer.hpp>
@@ -71,6 +69,10 @@
 #include <Geode/modify/FMODAudioEngine.hpp>
 #include <Geode/modify/AppDelegate.hpp>
 
+namespace echo::step {
+    void trace_note(std::string const& line);
+}
+
 namespace chrono = std::chrono;
 
 using namespace geode::prelude;
@@ -97,9 +99,16 @@ namespace {
     }
 }
 
+void echo_forecast_section_hook(bool on);
+void echo_touch_hook(bool on);
+
 void Logic::sync_predict_hooks() {
     auto const& logic = Logic::get();
-    bool want = logic.show_traj || logic.pause_before_kill || logic.traj_autoclicker || logic.show_death_next || logic.predicting;
+    // death next frame is a recording aid. while a macro just plays it must not cost anything
+    bool watching = logic.is_playing() && !logic.is_recording();
+    bool want = logic.show_traj || logic.pause_before_kill || logic.traj_autoclicker || (logic.show_death_next && !watching) || logic.predicting;
+    echo_forecast_section_hook(want && logic.traj_moving_objects);
+    echo_touch_hook(logic.backstep || logic.is_recording());
     if (want == predict_hooks_on)
         return;
     for (auto* hook : predict_hooks()) {
@@ -479,6 +488,9 @@ class $modify(EchoPlayLayer, PlayLayer) {
     }
 
     void addObject(GameObject* object) {
+        // no effects. mirror portals keep theirs, w/out it the flip happens with no warning at all
+        if (Logic::get().no_effects && object && object->m_objectType != GameObjectType::InverseMirrorPortal && object->m_objectType != GameObjectType::NormalMirrorPortal)
+            object->m_hasNoEffects = true;
         if (!Logic::get().layout_active()) {
             PlayLayer::addObject(object);
             return;
@@ -621,7 +633,7 @@ class $modify(EchoPlayLayer, PlayLayer) {
 
     void showNewBest(bool newReward, int orbs, int diamonds, bool demonKey, bool noRetry, bool noTitle) {
         auto& logic = Logic::get();
-        if (logic.predicting || logic.showed_new_best)
+        if (logic.predicting || logic.showed_new_best || logic.hide_new_best)
             return;
         logic.showed_new_best = true;
         PlayLayer::showNewBest(newReward, orbs, diamonds, demonKey, noRetry, noTitle);
@@ -664,6 +676,7 @@ class $modify(EchoPlayLayer, PlayLayer) {
 
     void pauseGame(bool unfocused) {
         PlayLayer::pauseGame(unfocused);
+        echo::step::trace_flush();
         if (unfocused)
             Logic::get().on_focus_change();
     }
@@ -682,6 +695,7 @@ class $modify(EchoPlayLayer, PlayLayer) {
         restore_tilt(m_player1);
         restore_tilt(m_player2);
         clear_tilt();
+        echo::step::trace_flush();
         Logic::get().onQuit(this);
         Trajectory::get().detach();
         PlayLayer::onQuit();
@@ -822,8 +836,10 @@ namespace echo::step {
             --logic.ignore_record_frames;
 
         logic.buttons_prepared = false;
-        if (play)
+        if (play) {
             Logic::get().tick_autoclicker(play);
+            Logic::get().tick_straight(play);
+        }
         dash_spin_post(isHalfTick);
     }
 }
@@ -902,10 +918,16 @@ class $modify(EchoGameLayer, GJBaseGameLayer) {
         if (Logic::get().defer_physics())
             return original;
         float warp = std::min(m_gameState.m_timeWarp, 1.f);
-        float step = logic.physics_step();
-        if (!std::isfinite(warp) || warp < 0.f || !std::isfinite(step) || !(step > 0.f))
+        double rate = logic.sample_rate();
+        if (!std::isfinite(warp) || warp < 0.f || !std::isfinite(rate) || !(rate > 0.0))
             return 0.0;
-        return static_cast<double>(step) * static_cast<double>(warp) * static_cast<double>(logic.steps_this_tick);
+        // the length of ONE step is worked out in double & only then rounded to a float, the way silicate does it for a single step.
+        // rounding 1/tps to a float first & multiplying by the warp after is 1 bit off under a time warp, & that adds up over a level.
+        // the batch is that float times the count, so gd dividing it back out gets the exact same step every time
+        float step = static_cast<float>((1.0 / rate) * static_cast<double>(warp));
+        if (!std::isfinite(step) || !(step > 0.f))
+            return 0.0;
+        return static_cast<double>(step) * static_cast<double>(logic.steps_this_tick);
     }
 
     // advanced follow can throw stuff to like 1e12 xd
@@ -1252,7 +1274,14 @@ class $modify(EchoGameLayer, GJBaseGameLayer) {
         bool mine = !value.applying_playback && !value.routing_input && !value.restoring_holds && !value.maintaining_gravity && !value.injecting && !value.follow_injecting && !orb_swift;
         if (flips && mine && m_levelSettings && m_levelSettings->m_twoPlayerMode)
             player1 = !player1;
-        echo::step::trace_button('H', down, player1);
+        // auto swift: every press lets go by itself on the same step, so my own release has nothing left to do
+        bool auto_swift = value.auto_swift && mine && (button == 0 || button == static_cast<int>(PlayerButton::Jump)) && !(value.is_playing() && !value.is_recording());
+        if (auto_swift && !down)
+            return;
+        if (echo::step::tracing())
+            echo::step::trace_event(fmt::format("H frame={} down={} p1={} button={} playback={} swift={} inject={} routing={} restoring={} gravity={} held_p1={} held_p2={}\n",
+                value.step_frame + 1, down, player1, button, value.applying_playback, orb_swift, value.injecting, value.routing_input, value.restoring_holds, value.maintaining_gravity,
+                m_player1 && Logic::button_held(m_player1, static_cast<int>(PlayerButton::Jump)), m_player2 && Logic::button_held(m_player2, static_cast<int>(PlayerButton::Jump))));
         auto* live = Logic::as_play(this);
         if (!down && ((live && live->m_isPaused) || Logic::get().pause_menu_open()) && (value.is_playing() || value.is_recording()))
             return;
@@ -1317,6 +1346,9 @@ class $modify(EchoGameLayer, GJBaseGameLayer) {
         if (down && jump_button && !orb_swift && !value.applying_playback && !value.injecting && !value.restoring_holds && !value.maintaining_gravity) {
             PlayerObject* body = player1 ? m_player1 : m_player2;
             swifts = Orbs::claim_click(this, body, !player1);
+            // extra clicks: that many more let go + press pairs on every press, on the same step
+            if (value.extra_clicks && !value.routing_input && !value.follow_injecting && !(value.is_playing() && !value.is_recording()))
+                swifts += std::clamp(value.extra_click_count, 1, 16);
         }
         if (swifts > 0)
             Orbs::arm_tool(true);
@@ -1344,13 +1376,13 @@ class $modify(EchoGameLayer, GJBaseGameLayer) {
             if (!logic.injecting && !orb_swift && !logic.routing_input && !ignored_p2)
                 Logic::get().note_click(play, down, player1, button);
             if (!logic.applying_playback && logic.is_recording() && !logic.injecting && !logic.restoring_holds) {
-                Logic::get().record_input(play, down, player1, button);
+                Logic::get().record_input(play, down, player1, button, orb_swift);
             }
         }
         else if (Logic::get().editor_testing && Logic::as_editor(this)) {
             auto& logic = Logic::get();
             if (!logic.applying_playback && logic.is_recording() && !logic.injecting && !logic.restoring_holds) {
-                Logic::get().record_input(this, down, player1, button);
+                Logic::get().record_input(this, down, player1, button, orb_swift);
             }
         }
         bool one_replay = value.applying_playback && value.play_p1 != value.play_p2;
@@ -1365,12 +1397,12 @@ class $modify(EchoGameLayer, GJBaseGameLayer) {
             // ios gd keeps a list of (button, down) it already did & skips repeats
             // so a swift click only got its 1st press. empty the list before mine
             if (value.applying_playback || orb_swift)
-                reinterpret_cast<std::unordered_set<int>*>(reinterpret_cast<std::uint8_t*>(this) + 0x850)->clear(); // found in handleButton (ios 0x1fabbc)
+                m_allowedButtons.clear();
 #endif
 #ifdef GEODE_IS_ANDROID64
             // android has the same list, in isButtonAllowed (0x88370c in the arm64 lib off my phone)
             if (value.applying_playback || orb_swift)
-                reinterpret_cast<gd::unordered_set<int>*>(reinterpret_cast<std::uint8_t*>(this) + 0x970)->clear(); // gd:: bc the game is NOT built w/ my stl
+                m_allowedButtons.clear();
 #endif
             auto* manager = GameManager::get();
             if (flips && manager)
@@ -1391,6 +1423,14 @@ class $modify(EchoGameLayer, GJBaseGameLayer) {
                 handleButton(false, jump, player1);
                 handleButton(true, jump, player1);
             }
+            value.routing_input = was_routing;
+            orb_swift = false;
+        }
+        if (auto_swift && down) {
+            orb_swift = true;
+            bool was_routing = value.routing_input;
+            value.routing_input = true;
+            handleButton(false, jump, player1);
             value.routing_input = was_routing;
             orb_swift = false;
         }
@@ -1673,6 +1713,20 @@ class $modify(EchoPlayerObject, PlayerObject) {
             phys::ringJump(this, ring);
             return;
         }
+        // 1 line for every orb that DID something (the velocity, gravity or dash changed)
+        struct RingNote {
+            PlayerObject* player; RingObject* ring; bool on, dashing, flipped; double vel;
+            RingNote(PlayerObject* p, RingObject* r) : player(p), ring(r), on(echo::step::tracing()), dashing(p->m_isDashing), flipped(p->m_isUpsideDown), vel(p->m_yVelocity) {}
+            ~RingNote() {
+                if (!on || !ring || (dashing == player->m_isDashing && flipped == player->m_isUpsideDown && vel == player->m_yVelocity))
+                    return;
+                auto* layer = GJBaseGameLayer::get();
+                echo::step::trace_event(fmt::format("ORB frame={} p2={} id={} uid={} type={} dashing={}->{} upside_down={}->{} yvel={:.4f}->{:.4f} held={} x={:.3f} y={:.4f}\n",
+                    Logic::get().step_frame + 1, layer && player == layer->m_player2, ring->m_objectID, ring->m_uniqueID, static_cast<int>(ring->m_objectType),
+                    dashing, player->m_isDashing, flipped, player->m_isUpsideDown, vel, player->m_yVelocity,
+                    Logic::button_held(player, static_cast<int>(PlayerButton::Jump)), player->getPositionX(), player->getPositionY()));
+            }
+        } ring_note{ this, ring };
         if (!Logic::get().player_hidden(this)) {
             PlayerObject::ringJump(ring, skipCheck);
             return;
@@ -1716,17 +1770,25 @@ class $modify(EchoPlayerObject, PlayerObject) {
             phys::startDashing(this, ring);
             return;
         }
-#ifdef GEODE_IS_WINDOWS
-        CCNode* object_layer = nullptr;
+        if (echo::step::tracing()) {
+            auto* layer = GJBaseGameLayer::get();
+            echo::step::trace_event(fmt::format("DASH_START frame={} p2={} id={} uid={} was_dashing={} x={:.3f} y={:.4f}\n", Logic::get().step_frame + 1,
+                layer && this == layer->m_player2, ring ? ring->m_objectID : 0, ring ? ring->m_uniqueID : 0, m_isDashing, getPositionX(), getPositionY()));
+        }
+        // a 2nd dash off the same kind of orb on 1 step starts w/out its burst (scarlet utils does ts for stacked orbs).
+        // 50 stacked dash orbs = 50 bursts on 1 frame otherwise
+        static int last_step = std::numeric_limits<int>::min(), last_orb = 0;
+        int step = Logic::get().step_frame;
+        bool repeat = echo::opt::effects && ring && step == last_step && ring->m_objectID == last_orb;
+        last_step = step;
+        last_orb = ring ? ring->m_objectID : 0;
+        bool loud = m_playEffects;
+        if (Logic::get().no_effects || repeat)
+            m_playEffects = false;
+        PlayerObject::startDashing(ring);
+        m_playEffects = loud;
         if (auto* play = PlayLayer::get())
-            object_layer = play->m_objectLayer;
-        unsigned before = object_layer && object_layer->getChildren() ? object_layer->getChildren()->count() : 0;
-        PlayerObject::startDashing(ring);
-        if (object_layer && ring)
-            echo::bursts::note_start(object_layer, before, ring->m_objectID);
-#else
-        PlayerObject::startDashing(ring);
-#endif
+            Orbs::note_dash(play, this, ring);
     }
 
     void stopDashing() {
@@ -1737,31 +1799,32 @@ class $modify(EchoPlayerObject, PlayerObject) {
         bool was_dashing = m_isDashing;
         auto* node = m_fields->tick_spin.data();
         bool use_tick = dash_spin_enabled() && was_dashing && m_iconSprite && node && dash_spin_manager()->numberOfRunningActionsInTarget(node) > 0;
+        float visual_spin = m_iconSprite ? m_iconSprite->getRotation() : 0.f;
+        float tick_spin = use_tick ? node->getRotation() : visual_spin;
         if (use_tick)
             m_iconSprite->setRotation(node->getRotation());
         stop_tick_spin();
-#ifdef GEODE_IS_WINDOWS
-        using echo::dash::EndEffect;
-        auto mode = EndEffect::Native;
-        if (echo::opt::effects && was_dashing && echo::dash::end_effect_skippable(this)) {
-            auto& logic = Logic::get();
-            double tps = logic.sample_rate();
-            bool gpu = echo::dash::prefer_gpu();
-            bool merge = tps > VANILLA_TPS && gpu && !echo_dash_compare && echo::dash::merge_ready();
-            if (merge)
-                echo::dash::set_merge(true);
-            if (echo_dash_compare && echo::dash::gpu_effects_ready())
-                mode = EndEffect::Record;
-            else if (gpu)
-                mode = EndEffect::RecordOnly;
-        }
-        echo::dash::set_end_effect(mode);
+        struct DashNote {
+            PlayerObject* player; bool was; float visual, tick; bool used;
+            ~DashNote() {
+                if (!was || Logic::get().predicting)
+                    return;
+                auto* layer = GJBaseGameLayer::get();
+                echo::step::trace_event(fmt::format("DASH_END frame={} p2={} visual_spin={:.4f} tick_spin={:.4f} used_tick={} rot_after={:.4f} yvel={:.4f} x={:.3f} y={:.4f}\n",
+                    Logic::get().step_frame + 1, layer && player == layer->m_player2, visual, tick, used, player->getRotation(), player->m_yVelocity, player->getPositionX(), player->getPositionY()));
+            }
+        } dash_note{ this, was_dashing, visual_spin, tick_spin, use_tick };
+        // same idea as startDashing: only the 1st dash that ends on a step gets the full end effect
+        static int last_end = std::numeric_limits<int>::min();
+        int step = Logic::get().step_frame;
+        bool repeat = echo::opt::effects && was_dashing && step == last_end;
+        if (was_dashing)
+            last_end = step;
+        bool reduced = m_maybeReducedEffects;
+        if (Logic::get().no_effects || repeat)
+            m_maybeReducedEffects = true;
         PlayerObject::stopDashing();
-        echo::dash::set_end_effect(EndEffect::Native);
-        echo::dash::set_merge(false);
-#else
-        PlayerObject::stopDashing();
-#endif
+        m_maybeReducedEffects = reduced;
     }
 
     void incrementJumps() {
@@ -1845,10 +1908,10 @@ class $modify(EchoPlayerObject, PlayerObject) {
         for (int i = 0; i < swifts; ++i) {
             releaseButton(PlayerButton::Jump);
             if (layer && logic.is_recording())
-                Logic::get().record_input(layer, false, player1, jump);
+                Logic::get().record_input(layer, false, player1, jump, true);
             pushButton(PlayerButton::Jump);
             if (layer && logic.is_recording())
-                Logic::get().record_input(layer, true, player1, jump);
+                Logic::get().record_input(layer, true, player1, jump, true);
         }
         orb_swift = false;
         return pressed;
@@ -1905,7 +1968,7 @@ class $modify(EchoPlayerObject, PlayerObject) {
     }
 
     void playSpiderDashEffect(CCPoint from, CCPoint to) {
-        if (Logic::get().predicting || Logic::get().is_traj_player(this) || Logic::get().player_hidden(this))
+        if (Logic::get().predicting || Logic::get().is_traj_player(this) || Logic::get().player_hidden(this) || Logic::get().no_effects)
             return;
         PlayerObject::playSpiderDashEffect(from, to);
     }
@@ -1929,7 +1992,7 @@ class $modify(EchoPlayerObject, PlayerObject) {
     }
 
     void spawnPortalCircle(ccColor3B color, float startRadius) {
-        if (Logic::get().predicting || Logic::get().is_traj_player(this) || Logic::get().player_hidden(this))
+        if (Logic::get().predicting || Logic::get().is_traj_player(this) || Logic::get().player_hidden(this) || Logic::get().no_effects)
             return;
         PlayerObject::spawnPortalCircle(color, startRadius);
     }
@@ -2110,7 +2173,7 @@ class $modify(EchoGameObject, GameObject) {
     }
 
     void playShineEffect() {
-        if (Logic::get().predicting)
+        if (Logic::get().predicting || Logic::get().no_effects)
             return;
         GameObject::playShineEffect();
     }
@@ -2150,6 +2213,8 @@ class $modify(EchoRandTrigger, RandTriggerGameObject) {
         if (Logic::get().predicting && !forecast::firing())
             return;
         if (m_objectID != 2068) {
+            if (!Logic::get().predicting)
+                echo::step::trace_note(fmt::format("N frame={} uid={} rand={}\n", Logic::get().step_frame, m_uniqueID, Logic::get().game_random_state()));
             RandTriggerGameObject::triggerObject(layer, uniqueID, remapKeys);
             return;
         }
@@ -2161,7 +2226,8 @@ class $modify(EchoRandTrigger, RandTriggerGameObject) {
         int sum = 0;
         for (auto const& chance : m_chanceObjects)
             sum += chance.m_chance;
-        int threshold = static_cast<int>(std::round((static_cast<float>((roll >> 16) & 0x7FFF) / 32767.f) * static_cast<float>(sum)));
+        // silicate divides by a double 32767.0, so the product is a double & only the roundf arg is a float. all float can round the other way
+        int threshold = static_cast<int>(roundf(static_cast<float>(static_cast<double>(static_cast<float>((roll >> 16) & 0x7FFF)) / 32767.0 * static_cast<double>(static_cast<float>(sum)))));
         int running = 0;
         int group = 0;
         for (size_t i = 0; i < m_chanceObjects.size(); ++i) {
@@ -2173,6 +2239,8 @@ class $modify(EchoRandTrigger, RandTriggerGameObject) {
         gd::vector<int> keys;
         if (remapKeys)
             keys = *remapKeys;
+        if (!Logic::get().predicting)
+            echo::step::trace_note(fmt::format("A frame={} uid={} roll={} sum={} threshold={} group={}\n", Logic::get().step_frame, m_uniqueID, roll, sum, threshold, group));
         layer->spawnGroup(group, false, 0.0, keys, m_uniqueID, m_controlID);
     }
 };
@@ -2205,6 +2273,19 @@ class $modify(EchoRingObject, RingObject) {
             };
             if (caused(play->m_player1) || caused(play->m_player2))
                 return;
+        }
+        // stacked orbs of the same kind on the same spot all make the SAME ring on the same step. only the first one is made,
+        // so there is nothing to merge or throw away after
+        if (echo::opt::effects) {
+            static int last_kind = 0, last_frame = -1;
+            static CCPoint last_spot;
+            int frame = Logic::get().step_frame;
+            CCPoint spot = getPosition();
+            if (m_objectID == last_kind && frame == last_frame && spot.x == last_spot.x && spot.y == last_spot.y)
+                return;
+            last_kind = m_objectID;
+            last_frame = frame;
+            last_spot = spot;
         }
         RingObject::spawnCircle();
     }

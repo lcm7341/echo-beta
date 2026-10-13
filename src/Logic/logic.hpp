@@ -439,7 +439,12 @@ struct Session {
 	float frame_bar_x = -1.f, frame_bar_y = -1.f; // where the mobile frame advance bar sits, -1 = top middle
 	bool floating_hide_in_lvl = true;
 	float floating_size = 38.f;
+#ifdef GEODE_IS_MOBILE
+	// .96 is where the menu fits a phone screen top to bottom
+	float menu_scale = .96f, menu_scale_undocked = 1.f, menu_anim_speed = 1.f;
+#else
 	float menu_scale = 1.f, menu_scale_undocked = 1.f, menu_anim_speed = 1.f;
+#endif
 	std::string theme_name = "Default";
 	bool layout_mode = false, layout_use_regular_bg = false, layout_default_art = true, layout_styled = false;
 	bool disable_shakes = false;
@@ -450,6 +455,23 @@ struct Session {
 	bool click_dash_orbs = false, click_black_orbs = false;
 	int orb_click_count = 1;
 	bool pad_black_orb = false, pad_blue_orb = false;
+	// these came from scarlet utils (Mefistic). the ideas, not the code: that repo has no licence to copy under
+	bool easy_black_ufo = false, auto_swift = false, extra_clicks = false;
+	int extra_click_count = 1;
+	bool straight_fly_p1 = false, straight_fly_p2 = false;
+	float straight_fly_threshold_p1 = 0.f, straight_fly_threshold_p2 = 0.f;
+	bool straight_ufo_p1 = false, straight_ufo_p2 = false;
+	float straight_ufo_target_p1 = 135.f, straight_ufo_target_p2 = 135.f, straight_ufo_threshold_p1 = 0.f, straight_ufo_threshold_p2 = 0.f;
+	bool hide_endscreen = false, hide_new_best = false, no_effects = false;
+	bool straight_fly() const {
+		return straight_fly_p1 || straight_fly_p2;
+	}
+	bool straight_ufo() const {
+		return straight_ufo_p1 || straight_ufo_p2;
+	}
+	bool black_orb_assist() const {
+		return click_black_orbs || easy_black_ufo;
+	}
 	bool death_next_p1 = false, noclip_dead_p1 = false, noclip_dead_p2 = false, death_next_p2 = false;
 	float traj_alive_p1 = 0.f, traj_alive_p2 = 0.f;
 	bool traj_dies_p1 = false, traj_dies_p2 = false;
@@ -757,6 +779,7 @@ public:
 	void check_advance_pause(PlayLayer* play);
 	void on_keybind(std::string_view key, bool down);
 	void tick_autoclicker(PlayLayer* play);
+	void tick_straight(PlayLayer* play);
 	void after_frame(PlayLayer* play, float dt);
 	std::vector<std::string_view> active_cheats() const;
 	std::vector<std::string_view> const& attempt_cheats() const;
@@ -900,6 +923,10 @@ public:
 	float scroll_speed_factor();
 	float render_game_step();
 	float render_frame_game_step = 0.f;
+	// for logs/render.txt: how far the ssb fix moved the game clock away from the video clock
+	double render_game_seconds = 0.0, render_factor_sum = 0.0;
+	float render_factor_low = 1.f, render_factor_high = 1.f;
+	int render_factor_count = 0;
 	bool begin_render_frame();
 	bool capture_frame();
 	bool render_batch_more(chrono::steady_clock::time_point started);

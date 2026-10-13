@@ -125,6 +125,13 @@ namespace {
 }
 #endif
 
+// the fast capture: the gpu turns the frame into nv12 itself & it is read back a few frames late through a ring of buffers,
+// so nothing waits on the gpu. windows had it first. mac had been reading every frame back as full bgra, on the spot
+// (133mb a frame at 8k) & leaving the colour conversion to ffmpeg on the cpu
+#if defined(GEODE_IS_WINDOWS) || defined(GEODE_IS_MACOS)
+#define ECHO_GPU_CAPTURE 1
+#endif
+
 namespace {
     struct RenderTiming {
         std::atomic<long long> read_ns{ 0 }, wait_ns{ 0 }, encode_ns{ 0 };
@@ -139,6 +146,8 @@ namespace {
     };
 
     RenderTiming g_timing;
+    // lines for logs/render.txt, 1 every 5 seconds of video: where the level, the song & the icon are
+    std::string g_render_notes;
 
     struct Timed {
         std::atomic<long long>& into;
@@ -169,6 +178,7 @@ public:
     int rate = 0;
     int channels = 0;
     uint64_t written = 0;
+    unsigned song_at_start = 0; // where the song was when the render took it over
     uint64_t stray_blocks = 0;
 
 private:
@@ -205,12 +215,14 @@ public:
     fs::path game_directory();
     std::string ffmpeg_path();
     std::string run_hidden(std::string command, fs::path const& log_path);
+    bool mux_audio();
+#endif
+#ifdef ECHO_GPU_CAPTURE
     bool harvest(bool wait);
     bool setup_nv12();
     void close_nv12();
     void convert_nv12();
     void draw_full_quad();
-    bool mux_audio();
 #endif
 #ifdef GEODE_IS_MACOS
     static fs::path ffmpeg_path();
@@ -301,15 +313,18 @@ public:
     int saved_swap = 1;
     float saved_interval = 1.f / 60.f;
     bool pace_held = false;
-#ifdef GEODE_IS_WINDOWS
+#ifdef ECHO_GPU_CAPTURE
     std::array<GLuint, RING> pbo{};
-    std::array<GLsync, RING> fences{};
     std::deque<int> in_flight;
     int next_slot = 0;
 #endif
+#ifdef GEODE_IS_WINDOWS
+    std::array<GLsync, RING> fences{};
+#endif
     CCLayerColor* shade = nullptr;
-    CCLayerColor* bar_back = nullptr;
-    CCLayerColor* bar_fill = nullptr;
+    // gds own level progress bar (the groove sprite w/ the fill behind it), drawn in the middle of the window
+    CCSprite* bar_back = nullptr;
+    CCSprite* bar_fill = nullptr;
     CCLabelBMFont* bar_text = nullptr;
     std::string bar_shown;
     double text_clock = 0.0;
@@ -318,6 +333,9 @@ public:
     bool ticked = false;
     float wall_delta = 0.f;
     double busy_seconds = 0.0;
+    // how fast the last few seconds went, for the time left. the average of the whole render is way off whenever
+    // the level gets heavier or lighter part way
+    double pace_video = 0.0, pace_wall = 0.0, pace = 0.0;
     float start_fraction = -1.f;
     int last_input_frame = 0;
 
@@ -458,6 +476,12 @@ bool AudioTap::attach(float music, float sfx, fs::path const& file) {
         auto* channel = engine->getActiveMusicChannel(0);
         if (channel)
             channel->setLoopCount(0);
+        // jukebox (replaced songs) adds the songs start offset inside queueStartMusic. song_ms was read off the channel, so it
+        // already had that offset in it & the song came back that much AHEAD for the whole render (0.4s on wndystein).
+        // setting the spot on the channel itself goes around every hook
+        if (channel)
+            channel->setPosition(song_ms, FMOD_TIMEUNIT_MS);
+        song_at_start = song_ms;
         bool playing = false;
         if (channel)
             channel->isPlaying(&playing);
@@ -1527,7 +1551,7 @@ size_t Recorder::frame_bytes() const {
     return nv12 ? pixels + pixels / 2 : pixels * 4;
 }
 
-#ifdef GEODE_IS_WINDOWS
+#ifdef ECHO_GPU_CAPTURE
 namespace {
     GLuint compileShader(GLenum kind, char const* source) {
         GLuint shader = glCreateShader(kind);
@@ -1590,7 +1614,11 @@ namespace {
         }
         return buf;
     }
+}
+#endif
 
+#ifdef GEODE_IS_WINDOWS
+namespace {
     std::string encoder_flags(std::string const& codec, std::string const& extra, bool with_rate) {
         auto has = [&](char const* key) {
             return extra.find(key) != std::string::npos;
@@ -1645,7 +1673,9 @@ namespace {
     using SwapIntervalFn = BOOL(WINAPI*)(int);
     using GetSwapIntervalFn = int(WINAPI*)();
 }
+#endif
 
+#ifdef ECHO_GPU_CAPTURE
 void Recorder::draw_full_quad() {
     glBegin(GL_QUADS);
     glTexCoord2f(0.f, 0.f);
@@ -1830,28 +1860,60 @@ bool Recorder::open_target() {
     glBindFramebuffer(GL_FRAMEBUFFER, old_fbo);
     glBindTexture(GL_TEXTURE_2D, old_texture);
 
-#ifdef GEODE_IS_WINDOWS
-    nv12 = !use_api && Recorder::get().setup_nv12();
+#ifdef ECHO_GPU_CAPTURE
+    bool want_nv12 = !use_api;
+#ifdef GEODE_IS_MACOS
+    {
+        // nv12 only has half the colour detail (4:2:0), so its just for renders that end up 4:2:0 anyway.
+        // bitrate 0 w/ a software codec = lossless 4:4:4, that keeps getting whole bgra frames like before.
+        // (lossless 4:2:0 is also a file apples decoder refuses, players open it & show nothing)
+        auto const& logic = Logic::get();
+        bool hardware = logic.render_codec.find("videotoolbox") != std::string::npos;
+        bool own_format = logic.render_args.find("-pix_fmt") != std::string::npos;
+        if ((logic.render_bitrate <= 0 && !hardware && !own_format) || logic.render_args.find("444") != std::string::npos)
+            want_nv12 = false;
+    }
+#endif
+    nv12 = want_nv12 && Recorder::get().setup_nv12();
     if (!nv12)
         Recorder::get().close_nv12();
-    auto bytes = static_cast<GLsizeiptr>(Recorder::get().frame_bytes());
-    glGenBuffers(RING, pbo.data());
-    for (auto buf : pbo) {
-        glBindBuffer(GL_PIXEL_PACK_BUFFER, buf);
-        glBufferData(GL_PIXEL_PACK_BUFFER, bytes, nullptr, GL_STREAM_READ);
+    bool ring = true;
+#ifdef GEODE_IS_MACOS
+    // mac only has the ring when the nv12 shaders worked. w/out them it reads frames the old way
+    ring = nv12;
+#endif
+    if (ring) {
+        auto bytes = static_cast<GLsizeiptr>(Recorder::get().frame_bytes());
+        glGenBuffers(RING, pbo.data());
+        for (auto buf : pbo) {
+            glBindBuffer(GL_PIXEL_PACK_BUFFER, buf);
+            glBufferData(GL_PIXEL_PACK_BUFFER, bytes, nullptr, GL_STREAM_READ);
+        }
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
     }
-    glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+#ifdef GEODE_IS_WINDOWS
     fences.fill(nullptr);
+#endif
     in_flight.clear();
     next_slot = 0;
 #endif
 
     shade = CCLayerColor::create(ccc4(0, 0, 0, 0));
     shade->retain();
-    bar_back = CCLayerColor::create(ccc4(255, 255, 255, 45));
-    bar_back->retain();
-    bar_fill = CCLayerColor::create(ccc4(80, 210, 130, 255));
-    bar_fill->retain();
+    bar_back = CCSprite::create("slidergroove2.png");
+    bar_fill = CCSprite::create("sliderBar2.png");
+    if (bar_back)
+        bar_back->retain();
+    if (bar_fill)
+        bar_fill->retain();
+    if (bar_back && bar_fill) {
+        // same setup PlayLayer does for its bar: the fill repeats sideways & sits 2px in, behind the groove
+        ccTexParams params = { GL_LINEAR, GL_LINEAR, GL_REPEAT, GL_CLAMP_TO_EDGE };
+        bar_fill->getTexture()->setTexParameters(&params);
+        bar_fill->setAnchorPoint({ 0.f, 0.5f });
+        bar_fill->setPosition({ 2.f, bar_back->getContentSize().height * 0.5f });
+        bar_back->addChild(bar_fill, -1);
+    }
     bar_text = CCLabelBMFont::create("Rendering", "bigFont.fnt");
     if (bar_text)
         bar_text->retain();
@@ -1867,6 +1929,8 @@ void Recorder::close_target() {
             glDeleteSync(fence);
         fence = nullptr;
     }
+#endif
+#ifdef ECHO_GPU_CAPTURE
     in_flight.clear();
     if (pbo[0])
         glDeleteBuffers(RING, pbo.data());
@@ -1918,31 +1982,43 @@ void Recorder::drawFrame() {
     }
     kmGLPopMatrix();
 
+#ifdef ECHO_GPU_CAPTURE
+    bool ring = true;
+#ifdef GEODE_IS_MACOS
+    ring = nv12;
+#endif
+    if (ring) {
+        if (nv12)
+            Recorder::get().convert_nv12();
+        int slot = next_slot;
+        // the slot ts frame goes in has to be empty first
+        while (static_cast<int>(in_flight.size()) >= RING && Recorder::get().harvest(true)) {
+        }
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, pbo[slot]);
+        glPixelStorei(GL_PACK_ALIGNMENT, 1);
+        if (nv12) {
+            glBindFramebuffer(GL_FRAMEBUFFER, y_fbo);
+            glReadPixels(0, 0, width, height, GL_RED, GL_UNSIGNED_BYTE, nullptr);
+            glBindFramebuffer(GL_FRAMEBUFFER, uv_fbo);
+            auto offset = static_cast<uintptr_t>(width) * static_cast<uintptr_t>(height);
+            glReadPixels(0, 0, width / 2, height / 2, GL_RG, GL_UNSIGNED_BYTE, reinterpret_cast<void*>(offset));
+        }
+        else {
+            glReadPixels(0, 0, width, height, GL_BGRA, GL_UNSIGNED_BYTE, nullptr);
+        }
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
 #ifdef GEODE_IS_WINDOWS
-    if (nv12)
-        Recorder::get().convert_nv12();
-    int slot = next_slot;
-    while (fences[slot] && Recorder::get().harvest(true)) {
+        fences[slot] = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+#endif
+        in_flight.push_back(slot);
+        next_slot = (slot + 1) % RING;
+        while (Recorder::get().harvest(false)) {
+        }
+        glBindFramebuffer(GL_FRAMEBUFFER, window);
+        return;
     }
-    glBindBuffer(GL_PIXEL_PACK_BUFFER, pbo[slot]);
-    glPixelStorei(GL_PACK_ALIGNMENT, 1);
-    if (nv12) {
-        glBindFramebuffer(GL_FRAMEBUFFER, y_fbo);
-        glReadPixels(0, 0, width, height, GL_RED, GL_UNSIGNED_BYTE, nullptr);
-        glBindFramebuffer(GL_FRAMEBUFFER, uv_fbo);
-        auto offset = static_cast<uintptr_t>(width) * static_cast<uintptr_t>(height);
-        glReadPixels(0, 0, width / 2, height / 2, GL_RG, GL_UNSIGNED_BYTE, reinterpret_cast<void*>(offset));
-    }
-    else {
-        glReadPixels(0, 0, width, height, GL_BGRA, GL_UNSIGNED_BYTE, nullptr);
-    }
-    glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
-    fences[slot] = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
-    in_flight.push_back(slot);
-    next_slot = (slot + 1) % RING;
-    while (Recorder::get().harvest(false)) {
-    }
-#else
+#endif
+#ifndef GEODE_IS_WINDOWS
 #ifdef GEODE_IS_IOS
     if (Recorder::get().draw_direct()) {
         glBindFramebuffer(GL_FRAMEBUFFER, window);
@@ -2131,18 +2207,22 @@ void Recorder::draw_preview(CCSize pixels) {
 }
 
 void Recorder::draw_progress() {
-    if (!bar_back || !bar_fill || !bar_text)
+    if (!bar_text)
         return;
     auto status = Logic::get().render_status();
     if (!status.active)
         return;
     auto win = CCDirector::sharedDirector()->getWinSize();
-    float bar_w = win.width * 0.6f, bar_h = std::max(win.height * 0.014f, 2.f);
-    float x = (win.width - bar_w) * 0.5f, y = win.height * 0.08f;
-    bar_back->setContentSize({ bar_w, bar_h });
-    bar_back->setPosition({ x, y });
-    bar_fill->setContentSize({ bar_w * (status.known ? status.progress : 0.f), bar_h });
-    bar_fill->setPosition({ x, y });
+    float scale = win.height / 320.f;
+    CCPoint middle = { win.width * 0.5f, win.height * 0.5f };
+    if (bar_back && bar_fill) {
+        float full = bar_back->getTextureRect().size.width - 4.f;
+        bar_fill->setTextureRect({ 0.f, 0.f, full * std::clamp(status.known ? status.progress : 0.f, 0.f, 1.f), 8.f });
+        if (auto* manager = GameManager::get())
+            bar_fill->setColor(manager->colorForIdx(manager->getPlayerColor()));
+        bar_back->setScale(1.3f * scale);
+        bar_back->setPosition(middle);
+    }
     text_clock += wall_delta;
     if (bar_shown.empty() || text_clock >= 0.2) {
         text_clock = 0.0;
@@ -2151,25 +2231,33 @@ void Recorder::draw_progress() {
             bar_text->setString(bar_shown.c_str());
         }
     }
-    bar_text->setScale(0.4f * win.height / 320.f);
-    bar_text->setPosition({ win.width * 0.5f, y + bar_h + win.height * 0.04f });
+    bar_text->setScale(0.4f * scale);
+    bar_text->setPosition({ middle.x, middle.y + 22.f * scale });
     kmGLPushMatrix();
-    bar_back->visit();
-    bar_fill->visit();
+    if (bar_back && bar_fill)
+        bar_back->visit();
     bar_text->visit();
     kmGLPopMatrix();
 }
 
-#ifdef GEODE_IS_WINDOWS
+#ifdef ECHO_GPU_CAPTURE
 bool Recorder::harvest(bool wait) {
     if (in_flight.empty())
         return false;
     int slot = in_flight.front();
+#ifdef GEODE_IS_WINDOWS
     GLenum state = glClientWaitSync(fences[slot], wait ? GL_SYNC_FLUSH_COMMANDS_BIT : 0, wait ? 5'000'000'000ull : 0);
     if (!wait && state != GL_ALREADY_SIGNALED && state != GL_CONDITION_SATISFIED)
         return false;
     glDeleteSync(fences[slot]);
     fences[slot] = nullptr;
+#else
+    // macs old gl has no fences to ask. a frame is only taken back once the ring is nearly full,
+    // which is frames after it was drawn, so the map below doesnt have to wait for the gpu
+    if (!wait && static_cast<int>(in_flight.size()) < RING - 1)
+        return false;
+    Timed timed{ g_timing.read_ns };
+#endif
     in_flight.pop_front();
     glBindBuffer(GL_PIXEL_PACK_BUFFER, pbo[slot]);
     if (auto const* data = static_cast<uint8_t const*>(glMapBuffer(GL_PIXEL_PACK_BUFFER, GL_READ_ONLY))) {
@@ -2237,7 +2325,7 @@ void Recorder::encode_loop() {
 }
 
 void Recorder::finish_video() {
-#ifdef GEODE_IS_WINDOWS
+#ifdef ECHO_GPU_CAPTURE
     while (Recorder::get().harvest(true)) {
     }
 #endif
@@ -2742,7 +2830,7 @@ namespace {
 }
 
 RenderStatus Logic::render_status() {
-    auto const& film = Recorder::get();
+    auto& film = Recorder::get();
     RenderStatus status;
     if (!film.active)
         return status;
@@ -2755,17 +2843,53 @@ RenderStatus Logic::render_status() {
     double video = (double)(film.frames) * (double)(Logic::get().render_step());
     if (film.busy_seconds > 0.05)
         status.speed = (float)(video / film.busy_seconds);
-    std::string speed = status.speed > 0.f ? fmt::format("{:.1f}x realtime", status.speed) : std::string("measuring speed");
+    // the pace of the last second or so, smoothed. the time left uses ts, NOT the average since the start
+    if (film.busy_seconds < film.pace_wall || video < film.pace_video)
+        film.pace_wall = film.pace_video = film.pace = 0.0;
+    if (film.busy_seconds - film.pace_wall >= 1.0) {
+        double fresh = (video - film.pace_video) / (film.busy_seconds - film.pace_wall);
+        film.pace = film.pace > 0.0 ? film.pace * 0.7 + fresh * 0.3 : fresh;
+        film.pace_wall = film.busy_seconds;
+        film.pace_video = video;
+    }
+    double pace = film.pace > 0.0 ? film.pace : (double)(status.speed);
+    std::string speed = pace > 0.0 ? fmt::format("{:.2f}x", pace) : std::string("measuring speed");
+    std::string elapsed = clock_text(film.busy_seconds) + " elapsed";
     if (play && play->m_hasCompletedLevel) {
         status.known = true;
         status.finishing = true;
         status.progress = 1.f;
-        status.text = fmt::format("Finishing  |  {}", speed);
+        status.text = fmt::format("Finishing  |  {}  |  {}", speed, elapsed);
+        return status;
+    }
+    // how much level is left in SECONDS (gd works it out from the speed portals), not in distance.
+    // by distance a 4x speed part counted the same as a half speed part & the time left jumped around
+    double left_game = -1.0;
+    if (play && !play->m_isPlatformer && play->m_player1 && play->m_endPortal) {
+        int channel = play->m_gameState.m_currentChannel;
+        double end = play->timeForPos(play->m_endPortal->getPosition(), 0, channel, true, 0);
+        double here = play->timeForPos(play->m_player1->getPosition(), 0, channel, true, 0);
+        if (std::isfinite(end) && std::isfinite(here) && end > 0.0)
+            left_game = std::max(end - here, 0.0);
+    }
+    double game_speed = std::max((double)(Logic::get().render_speed()), 0.01);
+    double tail = (double)(Logic::get().render_after_end);
+    if (left_game >= 0.0) {
+        double left_video = left_game / game_speed + tail;
+        double whole = video + left_video;
+        status.known = true;
+        status.progress = whole > 0.0 ? (float)(std::clamp(video / whole, 0.0, 1.0)) : 0.f;
+        std::string left = "estimating";
+        if (pace > 0.0 && film.busy_seconds > 1.0) {
+            status.eta = (float)(left_video / pace);
+            left = clock_text(status.eta) + " left";
+        }
+        status.text = fmt::format("{:.1f}%  |  {}  |  {}  |  {}", status.progress * 100.f, speed, elapsed, left);
         return status;
     }
     float now = lvl_fraction(play, film.last_input_frame);
     if (now < 0.f) {
-        status.text = fmt::format("{} rendered  |  {}", clock_text(video), speed);
+        status.text = fmt::format("{} rendered  |  {}  |  {}", clock_text(video), speed, elapsed);
         return status;
     }
     status.known = true;
@@ -2773,11 +2897,11 @@ RenderStatus Logic::render_status() {
     float done = now - std::max(film.start_fraction, 0.f);
     std::string left = "estimating";
     if (done > 0.002f && film.busy_seconds > 0.5) {
-        double tail = status.speed > 0.f ? (double)(Logic::get().render_after_end) / status.speed : 0.0;
-        status.eta = (float)(film.busy_seconds * (1.0 - now) / done + tail);
+        double after = pace > 0.0 ? tail / pace : 0.0;
+        status.eta = (float)(film.busy_seconds * (1.0 - now) / done + after);
         left = clock_text(status.eta) + " left";
     }
-    status.text = fmt::format("{:.1f}%  |  {}  |  {}", now * 100.f, speed, left);
+    status.text = fmt::format("{:.1f}%  |  {}  |  {}  |  {}", now * 100.f, speed, elapsed, left);
     return status;
 }
 
@@ -2929,6 +3053,17 @@ bool Logic::capture_frame() {
         film.start_fraction = lvl_fraction(play, film.last_input_frame);
     AudioTap::get().advance(dt * film.audio_speed, film.fade);
     film.drawFrame();
+    if (film.frames % (std::max(logic.render_fps, 1) * 5) == 0 && g_render_notes.size() < 60000) {
+        auto* engine = FMODAudioEngine::get();
+        auto& tap = AudioTap::get();
+        unsigned raw_song = 0;
+        if (auto* channel = engine ? engine->getActiveMusicChannel(0) : nullptr)
+            channel->getPosition(&raw_song, FMOD_TIMEUNIT_MS);
+        g_render_notes += fmt::format("at video={:.3f}s level_time={:.4f}s song={}ms raw_song={}ms audio_written={:.3f}s x={:.3f} tps={:g} step_frame={}\n",
+            static_cast<double>(film.frames) * dt, play->m_gameState.m_levelTime, engine ? engine->getMusicTimeMS(0) : 0, raw_song,
+            tap.rate > 0 ? static_cast<double>(tap.written) / tap.rate : 0.0, play->m_player1 ? play->m_player1->getPositionX() : 0.f,
+            logic.sample_rate(), logic.step_frame);
+    }
     ++film.frames;
     if (film.broken) {
         std::string reason = film.use_api ? "Encoding failed: " + film.failure : std::string("The render pipe closed");
@@ -2975,6 +3110,32 @@ void Logic::stop_render() {
         auto each = [frames](std::atomic<long long> const& ns) {
             return (double)(ns.load()) / 1e6 / frames;
         };
+        // where the time went & whether the song stayed with the level. logs/render.txt, written over by every render
+        auto& logic = Logic::get();
+        auto& tap = AudioTap::get();
+        std::error_code error;
+        fs::create_directories(logic.save_root() / "logs", error);
+        std::ofstream out(logic.save_root() / "logs" / "render.txt", std::ios::trunc);
+        out << fmt::format("render {}x{} @{}fps codec={} platform={} capture={}\n", film.width, film.height, logic.render_fps, logic.render_codec,
+            GEODE_PLATFORM_NAME, film.use_api ? "api" : film.nv12 ? "nv12 ring" : "bgra direct");
+        out << fmt::format("frames={} video={:.3f}s wall={:.3f}s speed={:.2f} fps ({:.2f}x real time)\n", film.frames, frames / std::max(logic.render_fps, 1), wall,
+            frames / std::max(wall, 1e-6), frames / std::max(logic.render_fps, 1) / std::max(wall, 1e-6));
+        out << fmt::format("per frame: total={:.2f}ms read_back={:.2f}ms waiting_on_encoder={:.2f}ms encoder_write={:.2f}ms (encoder is on its own thread)\n",
+            wall * 1000.0 / frames, each(g_timing.read_ns), each(g_timing.wait_ns), each(g_timing.encode_ns));
+        out << fmt::format("ssb_fix={} factor low={:.6f} high={:.6f} mean={:.6f} samples={} tps={:g} render_speed={:g}\n", logic.render_ssb_fix, logic.render_factor_low,
+            logic.render_factor_high, logic.render_factor_count > 0 ? logic.render_factor_sum / logic.render_factor_count : 1.0, logic.render_factor_count,
+            logic.sample_rate(), film.audio_speed);
+        out << fmt::format("audio rate={} channels={} written={} ({:.3f}s) stray_blocks={}\n", tap.rate, tap.channels, tap.written,
+            tap.rate > 0 ? static_cast<double>(tap.written) / tap.rate : 0.0, tap.stray_blocks);
+        {
+            auto* play = PlayLayer::get();
+            auto* engine = FMODAudioEngine::get();
+            auto* manager = GameManager::get();
+            out << fmt::format("level song_offset={:.4f}s gd_music_offset={}ms gd_time_offset={:.4f} song_at_start={}ms\n",
+                play && play->m_levelSettings ? play->m_levelSettings->m_songOffset : -1.f, engine ? engine->m_musicOffset : 0,
+                manager ? manager->m_timeOffset : 0.f, tap.song_at_start);
+        }
+        out << g_render_notes;
     }
 #ifdef GEODE_IS_WINDOWS
     if (film.starting && !film.active) {
@@ -3077,6 +3238,15 @@ void Logic::start_render() {
         film.paused = false;
         film.frames = 0;
         g_timing.reset();
+        g_render_notes.clear();
+        film.pace_video = film.pace_wall = film.pace = 0.0;
+        {
+            auto& logic = Logic::get();
+            logic.render_game_seconds = 0.0;
+            logic.render_factor_sum = 0.0;
+            logic.render_factor_low = logic.render_factor_high = 1.f;
+            logic.render_factor_count = 0;
+        }
         film.seen_frames = 0;
         film.endTime = 0.f;
         film.fade = 1.f;
@@ -3212,10 +3382,13 @@ void Logic::start_render() {
     if (logic.render_color_fix)
         filters += ",colorspace=all=bt709:iall=bt470bg:fast=1";
     std::vector<std::string> args{
-        ffmpeg.string(), "-y", "-loglevel", "error", "-f", "rawvideo", "-pix_fmt", "bgra",
-        "-s", fmt::format("{}x{}", width, height), "-r", std::to_string(fps), "-i", "pipe:0", "-an",
-        "-vf", filters, "-c:v", codec
+        ffmpeg.string(), "-y", "-loglevel", "error", "-f", "rawvideo", "-pix_fmt", film.nv12 ? "nv12" : "bgra",
+        "-s", fmt::format("{}x{}", width, height), "-r", std::to_string(fps), "-i", "pipe:0", "-an"
     };
+    // nv12 frames come out of the shader the right way up & already bt709, so ffmpeg gets no filter at all
+    if (!film.nv12)
+        args.insert(args.end(), { "-vf", filters });
+    args.insert(args.end(), { "-c:v", codec });
     auto rate = video_rate(codec, logic.render_bitrate, logic.render_args, static_cast<int64_t>(width) * height * fps);
     args.insert(args.end(), rate.begin(), rate.end());
     if (!has_arg("-pix_fmt"))

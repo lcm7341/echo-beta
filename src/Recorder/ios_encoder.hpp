@@ -50,7 +50,7 @@ namespace ffmpeg {
 					return geode::Err(std::string("Only RGBA frames are supported"));
 				m_bytes = static_cast<std::size_t>(settings.m_width) * settings.m_height * 4;
 				m_bottomUp = settings.m_doVerticalFlip;
-				auto failed = echo::apple::open_video(m_writer, settings.m_outputFile.string(), static_cast<int>(settings.m_width), static_cast<int>(settings.m_height), settings.m_fps, settings.m_bitrate);
+				auto failed = echo::apple::open_video(m_writer, settings.m_outputFile.string(), static_cast<int>(settings.m_width), static_cast<int>(settings.m_height), settings.m_fps, settings.m_bitrate, !settings.m_colorspaceFilters.empty());
 				if (!failed.empty())
 					return geode::Err(std::move(failed));
 				return geode::Ok();

@@ -194,11 +194,25 @@ namespace {
         ImGui::TextDisabled(logic.labels_auto ? "Drag a label by its grip to reorder it." : "Auto Position stacks the labels in this order.");
         auto order = ordered_labels(logic);
         float font1 = ImGui::GetFontSize();
-        float title_x = ImGui::GetStyle().WindowPadding.x + font1 * 3.6f;
+#ifdef GEODE_IS_MOBILE
+        // a finger needs more than a mouse does
+        float grip_w = font1 * 1.9f;
+#else
+        float grip_w = font1 * .9f;
+#endif
+        float title_x = ImGui::GetStyle().WindowPadding.x + font1 * 2.7f + grip_w;
         float field_w = font1 * 3.4f;
         float gap = ImGui::GetStyle().ItemSpacing.x;
         int columns = logic.labels_auto ? 2 : 4;
-        float fields_x = ImGui::GetStyle().WindowPadding.x + eui::em(34.f) - (field_w + gap) * (float)(columns) + gap;
+        // the list of labels is the only part that scrolls. it gets whatever height the screen has left under the settings
+        // above, so the window itself never has to scroll (it did, all of it, & on a phone that was the only way to reach anything)
+        float inset = ImGui::GetStyle().WindowPadding.x;
+        float row_tall = ImGui::GetFrameHeightWithSpacing();
+        float list_needs = row_tall * (float)(order.size());
+        float room = ImGui::GetIO().DisplaySize.y * .95f - ImGui::GetCursorPosY() - row_tall - inset * 2.f;
+        float list_tall = std::min(list_needs, std::max(room, row_tall * 3.f));
+        float bar = list_needs > list_tall + 1.f ? ImGui::GetStyle().ScrollbarSize : 0.f;
+        float fields_x = inset + eui::em(34.f) - (field_w + gap) * (float)(columns) + gap - bar;
         ImGui::Dummy(ImVec2(0.f, 0.f));
         float column = fields_x;
         auto heading = [&](char const* text) {
@@ -212,13 +226,20 @@ namespace {
         }
         heading("Size");
         heading("Opacity");
+        ImGui::BeginChild("##label-list", ImVec2(eui::em(34.f), list_tall));
+        // a child starts at 0, the window started at its padding
+        title_x -= inset;
+        fields_x -= inset;
         for (std::size_t i = 0; i < order.size(); ++i) {
             auto const& label = *order[i];
             auto& place = logic.*label.place;
             ImGui::PushID(label.key);
-            eui::Selectable("=##grip", false, ImGuiSelectableFlags_NoAutoClosePopups, ImVec2(font1 * .9f, 0.f));
+            eui::Selectable("=##grip", false, ImGuiSelectableFlags_NoAutoClosePopups, ImVec2(grip_w, 0.f));
             if (ImGui::IsItemHovered() || ImGui::IsItemActive())
                 ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNS);
+            // the grip is dragged up & down, which is also how a touch scrolls the page. while its held the page stays put
+            if (ImGui::IsItemActive())
+                GUI::get().scroll_hold = ImGui::GetItemID();
             if (ImGui::IsItemActive()) {
                 float dy = ImGui::GetMouseDragDelta(ImGuiMouseButton_Left, 0.f).y;
                 float row_h = ImGui::GetFrameHeightWithSpacing();
@@ -262,6 +283,7 @@ namespace {
             ImGui::PopItemWidth();
             ImGui::PopID();
         }
+        ImGui::EndChild();
     }
 
     void draw_sequence_card() {
@@ -721,7 +743,7 @@ void GUI::main() {
 
 void GUI::tools() {
     auto& logic = Logic::get();
-    bool open_autoclicker = false;
+    bool open_autoclicker = false, open_straight = false;
 
     eui::BeginCardRow("assists-0");
     if (eui::BeginCard("Safety and Auto Input", card_width())) {
@@ -740,6 +762,14 @@ void GUI::tools() {
         if (toggle("Trajectory Autoclicker", logic.traj_autoclicker))
             Logic::get().reset_traj();
         tip("Automatically clicks or releases when the next frame would kill you. Works without Show Trajectory.");
+        if (quad_row("Auto Straight Fly", "##straight-fly", logic.straight_fly_p1, logic.straight_fly_p2, "Holds and lets go for you to keep the ship level. It can drift."))
+            GUI::get().persist();
+        if (quad_row("Auto Straight UFO", "##straight-ufo", logic.straight_ufo_p1, logic.straight_ufo_p2, "Clicks for you to keep the UFO at one height."))
+            GUI::get().persist();
+        if (logic.straight_fly() || logic.straight_ufo()) {
+            if (eui::Button("Straight Fly Settings...", ImVec2(-FLT_MIN, 0.f)))
+                open_straight = true;
+        }
     }
     eui::EndCard();
     if (eui::BeginCard("Two Players", card_width())) {
@@ -786,9 +816,12 @@ void GUI::tools() {
         if (toggle("Blue Orb on Pad", logic.pad_blue_orb))
             Logic::get().reset_traj();
         GUI::get().offer_rebind("key-pad-blue-orb", "Automatically swift clicks blue orbs when hitting a pad.");
+        if (toggle("Easy Black Orb UFO", logic.easy_black_ufo))
+            Logic::get().reset_traj();
+        tip("Swift clicks black orbs as UFO, but only while you are falling.");
     }
     eui::EndCard();
-    if (eui::BeginCard("Physics", card_width())) {
+    if (eui::BeginCard("Physics and Clicks", card_width())) {
         bool locked = logic.is_recording() || logic.is_playing();
         bool unrounded = logic.shown_unrounded();
         ImGui::BeginDisabled(locked);
@@ -813,9 +846,41 @@ void GUI::tools() {
             toggle("Same Gravity", logic.same_gravity);
             tip("Ensures that Maintain Gravity keeps both players on the same gravity.");
         }
+        toggle("Auto Swift", logic.auto_swift);
+        tip("Every click lets go on the same frame it was pressed.");
+        eui::RowHalf();
+        toggle("Extra Clicks", logic.extra_clicks);
+        tip("Adds extra clicks on the same frame for each click.");
+        if (logic.extra_clicks) {
+            eui::Row("Extra click amount");
+            if (eui::DragInt("##extra-clicks", &logic.extra_click_count, .1f, 1, 16, "%d extra"))
+                logic.extra_click_count = std::clamp(logic.extra_click_count, 1, 16);
+            persist_on_release();
+        }
     }
     eui::EndCard();
     eui::EndCardRow();
+    if (open_straight)
+        ImGui::OpenPopup("Straight Fly");
+    if (eui::BeginModal("Straight Fly", 18.f)) {
+        auto value_row = [&](char const* label, char const* id, float& value, float speed, char const* hint) {
+            eui::Row(label, hint);
+            if (eui::DragFloat(id, &value, speed, 0.f, 100000.f, "%.2f"))
+                value = std::max(value, 0.f);
+            persist_on_release();
+        };
+        char const* fly_hint = "How fast the ship has to be going up or down before it is corrected.";
+        char const* ufo_hint = "How far from that height the UFO can get before it clicks.";
+        eui::SectionLabel("Ship");
+        value_row("Threshold P1", "##fly-threshold-1", logic.straight_fly_threshold_p1, .01f, fly_hint);
+        value_row("Threshold P2", "##fly-threshold-2", logic.straight_fly_threshold_p2, .01f, fly_hint);
+        eui::SectionLabel("UFO");
+        value_row("Height P1", "##ufo-target-1", logic.straight_ufo_target_p1, .5f, "The Y position the UFO is kept at.");
+        value_row("Threshold P1", "##ufo-threshold-1", logic.straight_ufo_threshold_p1, .05f, ufo_hint);
+        value_row("Height P2", "##ufo-target-2", logic.straight_ufo_target_p2, .5f, "The Y position the UFO is kept at.");
+        value_row("Threshold P2", "##ufo-threshold-2", logic.straight_ufo_threshold_p2, .05f, ufo_hint);
+        eui::EndModal();
+    }
 
     if (open_autoclicker)
         ImGui::OpenPopup("Autoclicker");
@@ -912,6 +977,11 @@ void GUI::draw_visuals() {
         toggle("Disable Shake", logic.disable_shakes);
         GUI::get().offer_rebind("key-shakes");
         toggle("Disable Death Effect", logic.disable_death_effect);
+        toggle("No Effects", logic.no_effects);
+        tip("Stops most effects from showing. Open the level again after changing it.");
+        toggle("Hide New Best", logic.hide_new_best);
+        toggle("Hide Endscreen", logic.hide_endscreen);
+        tip("The end screen never shows, so leave the level from the pause menu.");
         if (toggle("No Mirror Portals", logic.no_mirror_portals))
             GUI::get().apply_no_mirror();
         tip("Stops mirror portals from flipping the level.");
@@ -1187,6 +1257,8 @@ void GUI::renderer() {
         eui::RowHalf();
         toggle("Hide Pause Button", logic.render_hide_pause);
         tip("Hides the pause button while rendering. Use the Echo icon to stop the render.");
+        toggle("Color Fix", logic.render_color_fix);
+        tip("Fixes video colors to be more accurate to the game.");
 #else
         eui::Separator();
 #ifdef GEODE_IS_ANDROID
@@ -1400,12 +1472,9 @@ void GUI::draw_theme() {
         eui::RowHalf();
         toggle("Inline Getters", echo::opt::getters);
         tip("Inlines the rect getters in the collision check.");
-        toggle("Fast Matrix", echo::opt::matrix);
-        tip("Uses the SSE matrix multiply.");
-        eui::RowHalf();
-        toggle("Merged Effects", echo::opt::effects);
-        tip("Merges and batches dash, orb and ring effects.");
 #endif
+        toggle("Stacked Orb Optimization", echo::opt::effects);
+        tip("Clicking many orbs on the same frame only shows one effect.");
         if (eui::Checkbox("Button Effects", &eui::button_effects()))
             gui.export_theme(gui.theme_path("current"));
         tip("Enables button animations for the animated themes.");

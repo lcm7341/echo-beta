@@ -17,6 +17,11 @@
 using namespace geode::prelude;
 
 namespace {
+    Hook* g_touch_hook = nullptr;
+    bool g_touch_tracking = true;
+}
+
+namespace {
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Winvalid-offsetof"
 
@@ -357,7 +362,7 @@ void Logic::note_backstep_objects(PlayLayer* play) {
     line.scratch.resize(STRIDE);
     // every 32nd save checks EVERYTHING
     bool verify = !line.full && !line.always_full && (++line.saves % 32) == 0;
-    bool everything = line.full || line.always_full || verify;
+    bool everything = line.full || line.always_full || verify || !g_touch_tracking;
     int missed = 0;
     std::string missed_sample;
     auto visit = [&](std::size_t i) {
@@ -486,7 +491,25 @@ void Logic::load_backstep_objects(int frame) {
     line.full = true;
 }
 
+// updateObjectSection runs for EVERY object that moves on EVERY step, & a hook on it costs more than the function itself.
+// so ts one is only on while something needs to know what moved (recording or backstep).
+// while its off a save just compares everything, & turning it back on forces 1 full save to catch up
+void echo_touch_hook(bool on) {
+    if (!g_touch_hook || on == g_touch_tracking)
+        return;
+    if (on ? g_touch_hook->enable().isOk() : g_touch_hook->disable().isOk()) {
+        g_touch_tracking = on;
+        if (on)
+            timeline().full = true;
+    }
+}
+
 class $modify(BackstepTouched, GJBaseGameLayer) {
+    static void onModify(auto& self) {
+        if (auto hook = self.getHook("GJBaseGameLayer::updateObjectSection"))
+            g_touch_hook = hook.unwrap();
+    }
+
     static void touch_all(CCArray* objects) {
         if (!objects || timeline().by_uid.empty() || Logic::get().predicting)
             return;

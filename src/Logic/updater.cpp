@@ -15,8 +15,6 @@
 #include "Physics/moving_objects.hpp"
 #include "Physics/collision_bounds.hpp"
 #include "Physics/prediction_art.hpp"
-#include "Rendering/dash_end.hpp"
-#include "Rendering/dash_bursts.hpp"
 #include <Geode/binding/PlayLayer.hpp>
 #include <Geode/binding/LevelEditorLayer.hpp>
 #include <algorithm>
@@ -63,6 +61,11 @@ bool Logic::lock_delta_active() const {
     return lock_delta;
 }
 
+namespace {
+    // the speedhack of the frame thats running, for the step cap
+    float g_frame_speed = 1.f;
+}
+
 int Logic::unlocked_step_cap() const {
     auto* director = CCDirector::sharedDirector();
     double interval = director ? director->getAnimationInterval() : 1.0 / 60.0;
@@ -70,8 +73,11 @@ int Logic::unlocked_step_cap() const {
         interval = 1.0 / 60.0;
     if (real_time_mode)
         interval = std::max(interval, 0.1);
-    double per_frame = std::ceil(sample_rate() * std::max(interval, 1.0 / 1000.0));
-    return static_cast<int>(std::clamp(per_frame, 1.0, 100000.0)) * 10;
+    // 10 frames worth of steps is the most 1 frame may run. that is counted at the CURRENT speed:
+    // w/out the speed in here a 99x speedhack topped out at 10-20x no matter how fast the pc is
+    double speed = std::isfinite(g_frame_speed) && g_frame_speed > 1.f ? g_frame_speed : 1.0;
+    double per_frame = std::ceil(sample_rate() * std::max(interval, 1.0 / 1000.0) * speed);
+    return static_cast<int>(std::clamp(per_frame * 10.0, 1.0, 10000000.0));
 }
 
 namespace {
@@ -281,8 +287,6 @@ void Logic::run_frame(GJBaseGameLayer* play, float dt, std::function<void(float)
     }
     echo::movement::prepare();
 #ifdef GEODE_IS_WINDOWS
-    echo::dash::prepare();
-    echo::bursts::prepare();
     echo::collision_bounds::prepare();
     echo::prefetch::prepare();
 #endif
@@ -356,6 +360,7 @@ void Logic::run_frame(GJBaseGameLayer* play, float dt, std::function<void(float)
     if (!rendering && !logic.real_time_mode && frame_dt > 0.25f)
         frame_dt = 0.25f;
     frame_dt *= speed;
+    g_frame_speed = speed;
 
     auto died = [&] {
         auto* live = Logic::as_play(play);

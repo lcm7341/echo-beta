@@ -1,4 +1,5 @@
 #include <Geode/Geode.hpp>
+#include <Geode/fmod/fmod.hpp>
 #include "Hooks/step.hpp"
 #include "Logic/logic.hpp"
 #include <chrono>
@@ -39,6 +40,14 @@ namespace {
     std::string g_head;
     std::uint32_t g_lastMs = 0;
     bool g_finished = false;
+    bool g_record = false; // ts trace is a recording, it goes to its own files so playing it back after doesnt wipe it
+    bool g_began = false;
+    bool g_deadNoted = false;
+
+    bool tracing() {
+        auto& logic = Logic::get();
+        return logic.trace_logging && (logic.is_playing() || logic.is_recording()) && !logic.predicting;
+    }
 
     // everything about the setup, once per attempt. costs nothing while playing
     std::string head(GJBaseGameLayer* self) {
@@ -69,6 +78,13 @@ namespace {
             return c == '\n' || c == '\r' || c == '\t';
         });
         out += "S " + text + "\n";
+        // what the macro holds when the attempt starts. playing = the whole thing, recording = whatever was kept
+        size_t shown = 0;
+        for (auto const& input : logic.inputs) {
+            if (++shown > 4000)
+                break;
+            out += fmt::format("IN frame={} down={} p2={} button={}\n", input.number, input.holding, input.player2, static_cast<int>(input.button));
+        }
         return out;
     }
 
@@ -87,11 +103,11 @@ namespace {
 
     void write_out() {
         {
-            std::ofstream events(Logic::get().save_root() / "logs" / "buttons.txt", std::ios::trunc);
+            std::ofstream events(Logic::get().save_root() / "logs" / (g_record ? "record-buttons.txt" : "buttons.txt"), std::ios::trunc);
             events << g_head << g_events << g_pace;
         }
-        write_rows("steps.bin", g_trace, g_saved);
-        write_rows("steps-p2.bin", g_trace2, g_saved2);
+        write_rows(g_record ? "record-steps.bin" : "steps.bin", g_trace, g_saved);
+        write_rows(g_record ? "record-steps-p2.bin" : "steps-p2.bin", g_trace2, g_saved2);
     }
     std::chrono::steady_clock::time_point g_start;
     int g_eventCount = 0;
@@ -99,9 +115,33 @@ namespace {
 }
 
 namespace echo::step {
+    // a free form line in the trace, for whatever is being chased
+    void trace_note(std::string const& line) {
+        if (Logic::get().trace_logging && g_pace.size() < 400000)
+            g_pace += line;
+    }
+
+    bool tracing() {
+        return ::tracing() && !g_written && g_eventCount < 20000;
+    }
+
+    // same as a button line but free form, & in the same list so the order inside a step is kept
+    void trace_event(std::string const& line) {
+        if (!tracing())
+            return;
+        ++g_eventCount;
+        g_events += line;
+    }
+
+    // pause / quit, so the last second of a recording is in the file
+    void trace_flush() {
+        if (Logic::get().trace_logging && g_began && !g_written)
+            write_out();
+    }
+
     void trace_button(char what, bool down, int extra) {
         auto& logic = Logic::get();
-        if (!logic.trace_logging || !logic.is_playing() || logic.predicting || g_written || g_eventCount >= 20000)
+        if (!tracing())
             return;
         ++g_eventCount;
         g_events += fmt::format("{} frame={} down={} playback={} restoring={} extra={}\n", what, logic.step_frame + 1, down, logic.applying_playback, logic.restoring_holds, extra);
@@ -112,9 +152,13 @@ namespace echo::step {
     void trace(GJBaseGameLayer* self) {
         auto& logic = Logic::get();
         auto* player = self->m_player1;
-        if (!logic.trace_logging || !player || !logic.is_playing() || logic.predicting)
+        if (!player || !::tracing())
             return;
-        if (logic.step_frame <= 1 && !self->m_playerDied) {
+        bool record = logic.is_recording();
+        if ((logic.step_frame <= 1 && !self->m_playerDied) || !g_began || record != g_record) {
+            g_record = record;
+            g_began = true;
+            g_deadNoted = false;
             g_trace.clear();
             g_trace2.clear();
             g_events.clear();
@@ -148,6 +192,18 @@ namespace echo::step {
         auto every = static_cast<std::uint64_t>(std::max(240.0, std::round(logic.sample_rate())));
         if (g_steps++ % every == 0 && g_pace.size() < 200000)
             g_pace += fmt::format("T frame={} ms={} {}\n", logic.step_frame, ms, echo::step::pace());
+        {
+            // where the song is against the level, once a game second. a render logs the same numbers (logs/render.txt)
+            // so the 2 can be put side by side
+            if (g_steps % every == 1 && g_pace.size() < 200000) {
+                auto* engine = FMODAudioEngine::get();
+                unsigned raw = 0;
+                if (auto* channel = engine ? engine->getActiveMusicChannel(0) : nullptr)
+                    channel->getPosition(&raw, FMOD_TIMEUNIT_MS);
+                g_pace += fmt::format("U frame={} level_time={:.4f} song={}ms raw_song={}ms x={:.3f}\n", logic.step_frame, self->m_gameState.m_levelTime,
+                    engine ? engine->getMusicTimeMS(0) : 0, raw, player->getPositionX());
+            }
+        }
         // a step that waited over 100ms of real time = a lag spike
         if (ms > g_lastMs + 100 && g_pace.size() < 200000)
             g_pace += fmt::format("L frame={} ms={} gap_ms={}\n", logic.step_frame, ms, ms - g_lastMs);
@@ -158,12 +214,15 @@ namespace echo::step {
             g_finished = true;
             g_pace += fmt::format("E frame={} ms={} x={} y={} level complete\n", logic.step_frame, ms, player->getPositionX(), player->getPositionY());
         }
-        if (self->m_playerDied)
+        // a recording keeps going after a death (practice mode), so 1 line a death & the trace stays open
+        bool note_death = self->m_playerDied && !g_deadNoted;
+        g_deadNoted = self->m_playerDied;
+        if (note_death)
             g_pace += fmt::format("D frame={} ms={} x={} y={} yvel={} rot={} upside_down={} mode={} {}\n", logic.step_frame, ms, player->getPositionX(),
                 player->getPositionY(), player->m_yVelocity, player->getRotation(), player->m_isUpsideDown,
                 player->m_isShip ? "ship" : player->m_isBall ? "ball" : player->m_isBird ? "ufo" : player->m_isDart ? "wave" : player->m_isRobot ? "robot" : player->m_isSpider ? "spider" : player->m_isSwing ? "swing" : "cube",
                 echo::step::pace());
-        if (self->m_playerDied)
+        if (note_death)
             if (auto* other = self->m_player2)
                 g_pace += fmt::format("D2 dual={} p1_dead={} p2_dead={} p2_x={} p2_y={} p2_yvel={} p2_rot={} p2_upside_down={} p2_mode={}\n", self->m_gameState.m_isDualMode,
                     player->m_isDead, other->m_isDead, other->getPositionX(), other->getPositionY(), other->m_yVelocity, other->getRotation(), other->m_isUpsideDown,
@@ -174,7 +233,7 @@ namespace echo::step {
             g_textMs = ms;
         if (!self->m_playerDied && !full && !finished)
             return;
-        if (self->m_playerDied)
+        if (self->m_playerDied && !g_record)
             g_written = true;
 #ifdef GEODE_IS_ANDROID64
         g_pace += fmt::format("A sort={} calls={}\n", echo::sort::status, echo::sort::calls);
