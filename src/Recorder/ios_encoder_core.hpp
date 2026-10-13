@@ -6,7 +6,7 @@
 namespace echo::apple {
 	struct VideoWriter;
 
-	std::string open_video(VideoWriter*& writer, std::string const& path, int width, int height, int fps, long long bitrate);
+	std::string open_video(VideoWriter*& writer, std::string const& path, int width, int height, int fps, long long bitrate, bool bt709);
 	// glReadPixels is bottom_up
 	std::string writeFrame(VideoWriter* writer, std::uint8_t const* rgba, bool bottom_up);
 	std::string close_video(VideoWriter* writer);

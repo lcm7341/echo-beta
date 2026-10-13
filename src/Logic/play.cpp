@@ -1864,14 +1864,21 @@ void Logic::prepare_buttons(GJBaseGameLayer* play) {
         return;
     int frame = Logic::get().step_frame + 1;
     std::array<char, 6> queued{};
+    bool two_player = play->m_levelSettings && play->m_levelSettings->m_twoPlayerMode;
     auto queue = [&](bool holding, int button, bool player2) {
         int jump = static_cast<int>(PlayerButton::Jump);
         int left = static_cast<int>(PlayerButton::Left), right = static_cast<int>(PlayerButton::Right);
         int slot = button == 0 || button == jump ? 0 : button == left ? 1
                                                    : button == right  ? 2
                                                                       : -1;
-        if (slot >= 0)
+        if (slot >= 0) {
             queued[static_cast<size_t>((player2 ? 3 : 0) + slot)] = 1;
+            // outside a 2 player lvl gd gives a p2 input to BOTH icons, so it counts for p1 too.
+            // w/o ts ensure() queued a 2nd p1 press on the same step, & a 2nd pushButton re-arms the orb buffer
+            // the 1st press just spent (desideration 79%: pink orb, then the green orb went off with no click)
+            if (!two_player)
+                queued[static_cast<size_t>((player2 ? 0 : 3) + slot)] = 1;
+        }
         PlayerButtonCommand cmd;
         cmd.m_button = static_cast<PlayerButton>(button == 0 ? jump : button);
         cmd.m_isPush = holding;
@@ -1984,7 +1991,7 @@ void run_orb_clicks(GJBaseGameLayer* play, GJBaseGameLayer* layer, float dt) {
     if (!play->m_queuedButtons.empty()) {
         if (logic.is_recording() && !logic.restoring_holds) {
             for (auto const& cmd : play->m_queuedButtons) {
-                Logic::get().record_input(play, cmd.m_isPush, !cmd.m_isPlayer2, static_cast<int>(cmd.m_button));
+                Logic::get().record_input(play, cmd.m_isPush, !cmd.m_isPlayer2, static_cast<int>(cmd.m_button), Orbs::take_queued_assist());
             }
         }
         logic.injecting = true;
@@ -2019,7 +2026,7 @@ void Logic::play_macro(GJBaseGameLayer* play, GJBaseGameLayer* layer, float dt, 
                 logic.suppress_click_hitbox = true;
                 if (logic.is_recording() && !logic.restoring_holds) {
                     for (auto const& cmd : orbs) {
-                        Logic::get().record_input(play, cmd.m_isPush, !cmd.m_isPlayer2, static_cast<int>(cmd.m_button));
+                        Logic::get().record_input(play, cmd.m_isPush, !cmd.m_isPlayer2, static_cast<int>(cmd.m_button), Orbs::take_queued_assist());
                     }
                 }
                 play->m_queuedButtons = orbs;
@@ -2675,6 +2682,52 @@ void Logic::tick_autoclicker(PlayLayer* play) {
             logic.message = "Autoclicker disabled";
         }
     }
+}
+
+// auto straight fly & auto straight ufo (scarlet utils has these). both just queue plain clicks at the end of a step, the way the
+// autoclicker does, so they are recorded & play back like anything i pressed myself.
+// fly: a ship that sinks faster than the threshold gets held, one that rises faster gets let go. it ends up wobbling around level.
+// ufo: under the target height & falling = 1 click (let go + press on the same step). over it & still rising = 1 click too,
+// which swaps whatever threw it up there for a normal ufo jump
+void Logic::tick_straight(PlayLayer* play) {
+    auto& logic = Logic::get();
+    if ((!logic.straight_fly() && !logic.straight_ufo()) || !play || play->m_isPaused || play->m_playerDied)
+        return;
+    if (logic.is_playing() && !logic.is_recording())
+        return;
+    bool two_player = play->m_levelSettings && play->m_levelSettings->m_twoPlayerMode;
+    int jump = static_cast<int>(PlayerButton::Jump);
+    auto run = [&](PlayerObject* player, bool player2) {
+        if (!player || player->m_isDead || logic.plays_player(player2))
+            return;
+        // p2 only has its own button in a 2 player lvl. anywhere else a p2 click moves BOTH icons
+        if (player2 && !(two_player && play->m_gameState.m_isDualMode))
+            return;
+        double vel = player->m_yVelocity;
+        if (player->m_isUpsideDown)
+            vel = -vel;
+        bool held = Logic::button_held(player, jump);
+        if ((player2 ? logic.straight_fly_p2 : logic.straight_fly_p1) && player->m_isShip) {
+            double limit = player2 ? logic.straight_fly_threshold_p2 : logic.straight_fly_threshold_p1;
+            if ((vel < -limit && !held) || (vel > limit && held))
+                play->queueButton(jump, !held, player2, logic.click_stamp());
+        }
+        if ((player2 ? logic.straight_ufo_p2 : logic.straight_ufo_p1) && player->m_isBird) {
+            double target = player2 ? logic.straight_ufo_target_p2 : logic.straight_ufo_target_p1;
+            double band = player2 ? logic.straight_ufo_threshold_p2 : logic.straight_ufo_threshold_p1;
+            double y = player->getPositionY();
+            bool flipped = player->m_isUpsideDown;
+            // "under" = the side gravity pulls to
+            bool under = flipped ? y > target + band : y < target - band;
+            bool over = flipped ? y < target - band : y > target + band;
+            if ((under && vel <= 0.0) || (over && vel > 0.0)) {
+                play->queueButton(jump, false, player2, logic.click_stamp());
+                play->queueButton(jump, true, player2, logic.click_stamp());
+            }
+        }
+    };
+    run(play->m_player1, false);
+    run(play->m_player2, true);
 }
 
 int Logic::follow_steps() const {

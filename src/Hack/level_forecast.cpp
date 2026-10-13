@@ -1051,7 +1051,29 @@ namespace forecast {
     }
 }
 
+namespace {
+    Hook* g_section_hook = nullptr;
+    bool g_section_hook_on = true;
+}
+
+// same story as the backstep one: a hook on updateObjectSection is paid for on every moving object every step.
+// it is only needed while predictions can run w/ moving objects on. coming back on, the forecast is rebuilt
+void echo_forecast_section_hook(bool on) {
+    if (!g_section_hook || on == g_section_hook_on)
+        return;
+    if (on ? g_section_hook->enable().isOk() : g_section_hook->disable().isOk()) {
+        g_section_hook_on = on;
+        if (on)
+            stale() = true;
+    }
+}
+
 class $modify(ForecastSections, GJBaseGameLayer) {
+    static void onModify(auto& self) {
+        if (auto hook = self.getHook("GJBaseGameLayer::updateObjectSection"))
+            g_section_hook = hook.unwrap();
+    }
+
     void removeObjectFromSection(GameObject* object) {
         auto& f = state();
         if (f.sections.active && object && f.sections.layer == this) {

@@ -46,6 +46,11 @@ std::vector<std::string_view> Logic::active_cheats() const {
     add(value.click_black_orbs, "Click Black Orbs");
     add(value.pad_black_orb, "Auto Black Orb on Pad");
     add(value.pad_blue_orb, "Auto Blue Orb on Pad");
+    add(value.easy_black_ufo, "Easy Black Orb UFO");
+    add(value.auto_swift, "Auto Swift");
+    add(value.extra_clicks, "Extra Clicks");
+    add(value.straight_fly(), "Auto Straight Fly");
+    add(value.straight_ufo(), "Auto Straight UFO");
     add(value.show_traj, "Trajectory");
     add(value.show_hitboxes, "Hitboxes");
     add(value.layout_mode, "Layout");

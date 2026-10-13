@@ -430,9 +430,16 @@ void GUI::draw_frame_bar() {
     ImGuiWindowFlags flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_AlwaysAutoResize |
                              ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoBringToFrontOnFocus;
     if (ImGui::Begin("###echo-frame-bar", nullptr, flags)) {
+#ifdef GEODE_IS_MOBILE
+        // big enough to hit w/ a thumb, & the same size whatever the menu got scaled to
+        ImGui::SetWindowFontScale(1.25f / std::max(gui.applied_scale, .35f));
+        font = ImGui::GetFontSize();
+        ImVec2 size(font * 4.4f, font * 2.3f);
+#else
         ImGui::SetWindowFontScale(.85f);
         font = ImGui::GetFontSize();
         ImVec2 size(font * 4.f, font * 1.9f);
+#endif
         ImVec2 at = ImGui::GetCursorPos();
         ImGui::SetCursorPosY(at.y + (size.y - font) * .5f);
         ImGui::TextDisabled("Frame %d", logic.get_frame(play) + 1);
@@ -571,13 +578,28 @@ void GUI::draw_window() {
         settings_measured = false;
     }
     float nav_top = ImGui::GetCursorScreenPos().y - ImGui::GetWindowPos().y;
-    GUI::get().draw_nav(pages, page_height);
+    // how tall the page part is allowed to be on a phone: the menu never gets taller than the screen. at the default scale
+    // every page fits & is stretched to end where the sidebar ends. at a bigger scale the page scrolls inside (drag it)
+    // & the header & sidebar stay put
+    float view_cap = FLT_MAX;
+#ifdef GEODE_IS_MOBILE
+    {
+        ImGuiStyle const& style = ImGui::GetStyle();
+        float under = ImGui::GetFrameHeightWithSpacing() + style.ItemSpacing.y * 2.f + style.WindowPadding.y;
+        view_cap = std::max(display.y * .98f - nav_top - under, ImGui::GetFrameHeight() * 6.f);
+    }
+#endif
+    float fill = std::min(page_height, view_cap);
+    GUI::get().draw_nav(pages, fill);
     {
         ImGuiStyle const& style = ImGui::GetStyle();
         float least = nav_top + GUI::get().nav_needs + ImGui::GetFrameHeightWithSpacing() + style.ItemSpacing.y * 2.f + style.WindowPadding.y;
         GUI::get().dock_least_tall = least / std::max(GUI::get().applied_scale, .01f);
     }
     ImGui::SameLine();
+    bool boxed = settings_measured && page_height > view_cap + 1.f;
+    if (boxed)
+        ImGui::BeginChild("##echo-page", ImVec2(0.f, view_cap), ImGuiChildFlags_AutoResizeX);
     ImGui::BeginGroup();
     eui::last_card_row() = 0;
     bool measuring = false;
@@ -603,7 +625,7 @@ void GUI::draw_window() {
         for (auto const& [row, natural] : rows) {
             if (!row)
                 continue;
-            float spare = page_height - natural;
+            float spare = std::min(page_height, view_cap) - natural;
             eui::card_row_extra(row) = spare > 1.f ? spare : 0.f;
         }
     }
@@ -619,9 +641,11 @@ void GUI::draw_window() {
     float natural = measuring ? page_height : ImGui::GetItemRectSize().y - (last_row ? eui::card_row_extra(last_row) : 0.f);
     page_height = std::max(page_height, natural);
     if (last_row) {
-        float spare = page_height - natural;
+        float spare = std::min(page_height, view_cap) - natural;
         eui::card_row_extra(last_row) = spare > 1.f ? spare : 0.f;
     }
+    if (boxed)
+        ImGui::EndChild();
     GUI::get().draw_status();
     GUI::get().show_keybind_prompt();
     GUI::get().draw_macro_picker();
@@ -763,6 +787,9 @@ void GUI::touch_scroll() {
     if (!target || io.WantTextInput)
         return;
     if (g.ActiveId && g.ActiveIdWindow && g.ActiveId == ImGui::GetWindowScrollbarID(g.ActiveIdWindow, ImGuiAxis_Y))
+        return;
+    // something that is dragged up & down itself (the label grips) has the finger, so no scrolling
+    if (g.ActiveId && g.ActiveId == GUI::get().scroll_hold)
         return;
     ImGuiWindow* window = target;
     while (window && window->ScrollMax.y <= 0.f)

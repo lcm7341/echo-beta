@@ -121,7 +121,7 @@ namespace echo::apple {
     }
 #endif
 
-    std::string open_video(VideoWriter*& out, std::string const& path, int width, int height, int fps, long long bitrate) {
+    std::string open_video(VideoWriter*& out, std::string const& path, int width, int height, int fps, long long bitrate, bool bt709) {
         out = nullptr;
         @autoreleasepool {
             [[NSFileManager defaultManager] removeItemAtURL:fileURL(path) error:nil];
@@ -129,7 +129,7 @@ namespace echo::apple {
             AVAssetWriter* writer = [AVAssetWriter assetWriterWithURL:fileURL(path) fileType:AVFileTypeMPEG4 error:&error];
             if (!writer)
                 return describe(error, "Could not create the video file");
-            NSDictionary* settings = @{
+            NSMutableDictionary* settings = [@{
                 AVVideoCodecKey : AVVideoCodecTypeH264,
                 AVVideoWidthKey : @(width),
                 AVVideoHeightKey : @(height),
@@ -139,7 +139,16 @@ namespace echo::apple {
                     AVVideoProfileLevelKey : AVVideoProfileLevelH264HighAutoLevel,
                     AVVideoExpectedSourceFrameRateKey : @(fps),
                 },
-            };
+            } mutableCopy];
+            // color fix: the frames are turned into yuv w/ the bt709 numbers & the file says so. w/out ts the encoder
+            // picks for itself & writes no tag at all, so a player has to guess & the colors come out a bit off
+            if (bt709) {
+                settings[AVVideoColorPropertiesKey] = @{
+                    AVVideoColorPrimariesKey : AVVideoColorPrimaries_ITU_R_709_2,
+                    AVVideoTransferFunctionKey : AVVideoTransferFunction_ITU_R_709_2,
+                    AVVideoYCbCrMatrixKey : AVVideoYCbCrMatrix_ITU_R_709_2,
+                };
+            }
             if (![writer canApplyOutputSettings:settings forMediaType:AVMediaTypeVideo])
                 return "This device cannot encode a video of that size";
             AVAssetWriterInput* input = [AVAssetWriterInput assetWriterInputWithMediaType:AVMediaTypeVideo outputSettings:settings];

@@ -2077,8 +2077,25 @@ namespace eui {
     }
 
     bool BeginModal(char const* title, float width_em, bool closable) {
-        if (!ImGui::BeginPopupModal(title, nullptr, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoTitleBar))
+        ImGuiWindowFlags flags = ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoTitleBar;
+        ImVec2 display = ImGui::GetIO().DisplaySize;
+        // never bigger than the screen
+        ImGui::SetNextWindowSizeConstraints(ImVec2(0.f, 0.f), ImVec2(display.x * .97f, display.y * .95f));
+#ifdef GEODE_IS_MOBILE
+        // on a phone it stays in the middle. a finger that scrolls it was dragging the whole thing around
+        ImGui::SetNextWindowPos(ImVec2(display.x * .5f, display.y * .5f), ImGuiCond_Always, ImVec2(.5f, .5f));
+        flags |= ImGuiWindowFlags_NoMove;
+#endif
+        if (!ImGui::BeginPopupModal(title, nullptr, flags))
             return false;
+        // a click / tap outside it closes it. only when its the top popup, so picking from a dropdown it opened doesnt count
+        {
+            ImGuiContext& g = *ImGui::GetCurrentContext();
+            ImGuiWindow* window = ImGui::GetCurrentWindow();
+            bool top = g.OpenPopupStack.Size > 0 && g.OpenPopupStack.back().Window == window;
+            if (top && !ImGui::IsWindowAppearing() && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !window->Rect().Contains(g.IO.MousePos))
+                ImGui::CloseCurrentPopup();
+        }
         float width = em(width_em);
         s_rowWidths.push_back(width > 0.f ? width : ImGui::GetContentRegionAvail().x);
         if (TitleBar(title, Icon::None, closable, width))

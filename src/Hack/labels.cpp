@@ -361,6 +361,11 @@ void Logic::draw_overlay(PlayLayer* play) {
         add(logic.click_black_orbs, "Click Black Orbs");
         add(logic.pad_black_orb, "Auto Black Orb on Pad");
         add(logic.pad_blue_orb, "Auto Blue Orb on Pad");
+        add(logic.easy_black_ufo, "Easy Black Orb UFO");
+        add(logic.auto_swift, "Auto Swift");
+        add(logic.extra_clicks, fmt::format("Extra Clicks x{}", logic.extra_click_count));
+        add(logic.straight_fly(), "Auto Straight Fly");
+        add(logic.straight_ufo(), "Auto Straight UFO");
         add(logic.speedhack != 1.f, fmt::format("Speedhack {:g}x", logic.speedhack));
         add(logic.sample_rate() != static_cast<double>(VANILLA_TPS), fmt::format("{:g} TPS", logic.sample_rate()));
         add(logic.frame_advance, "Frame Advance");

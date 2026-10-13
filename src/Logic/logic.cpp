@@ -190,8 +190,6 @@ void Logic::pull_settings() {
                 echo::opt::prefetch = flag.unwrap();
             if (auto flag = json["opt_getters"].asBool())
                 echo::opt::getters = flag.unwrap();
-            if (auto flag = json["opt_matrix"].asBool())
-                echo::opt::matrix = flag.unwrap();
             if (auto flag = json["opt_effects"].asBool())
                 echo::opt::effects = flag.unwrap();
             if (auto flag = json["record_p1"].asBool())
@@ -305,6 +303,40 @@ void Logic::pull_settings() {
                 logic.pad_black_orb = flag.unwrap();
             if (auto flag = json["pad_blue_orb"].asBool())
                 logic.pad_blue_orb = flag.unwrap();
+            if (auto flag = json["easy_black_ufo"].asBool())
+                logic.easy_black_ufo = flag.unwrap();
+            if (auto flag = json["auto_swift"].asBool())
+                logic.auto_swift = flag.unwrap();
+            if (auto flag = json["extra_clicks"].asBool())
+                logic.extra_clicks = flag.unwrap();
+            if (auto flag = json["straight_fly_p1"].asBool())
+                logic.straight_fly_p1 = flag.unwrap();
+            if (auto flag = json["straight_fly_p2"].asBool())
+                logic.straight_fly_p2 = flag.unwrap();
+            if (auto flag = json["straight_ufo_p1"].asBool())
+                logic.straight_ufo_p1 = flag.unwrap();
+            if (auto flag = json["straight_ufo_p2"].asBool())
+                logic.straight_ufo_p2 = flag.unwrap();
+            if (auto flag = json["hide_endscreen"].asBool())
+                logic.hide_endscreen = flag.unwrap();
+            if (auto flag = json["hide_new_best"].asBool())
+                logic.hide_new_best = flag.unwrap();
+            if (auto flag = json["no_effects"].asBool())
+                logic.no_effects = flag.unwrap();
+            if (auto number = json["straight_fly_threshold_p1"].asDouble())
+                logic.straight_fly_threshold_p1 = std::max(static_cast<float>(number.unwrap()), 0.f);
+            if (auto number = json["straight_fly_threshold_p2"].asDouble())
+                logic.straight_fly_threshold_p2 = std::max(static_cast<float>(number.unwrap()), 0.f);
+            if (auto number = json["straight_ufo_target_p1"].asDouble())
+                logic.straight_ufo_target_p1 = std::max(static_cast<float>(number.unwrap()), 0.f);
+            if (auto number = json["straight_ufo_target_p2"].asDouble())
+                logic.straight_ufo_target_p2 = std::max(static_cast<float>(number.unwrap()), 0.f);
+            if (auto number = json["straight_ufo_threshold_p1"].asDouble())
+                logic.straight_ufo_threshold_p1 = std::max(static_cast<float>(number.unwrap()), 0.f);
+            if (auto number = json["straight_ufo_threshold_p2"].asDouble())
+                logic.straight_ufo_threshold_p2 = std::max(static_cast<float>(number.unwrap()), 0.f);
+            if (auto number = json["extra_click_count"].asInt())
+                logic.extra_click_count = std::clamp(static_cast<int>(number.unwrap()), 1, 16);
             if (auto flag = json["autoclicker"].asBool())
                 logic.autoclicker = flag.unwrap();
             if (auto flag = json["sync_audio"].asBool())
@@ -491,6 +523,11 @@ void Logic::pull_settings() {
             }
             if (auto number = json["menu_scale"].asDouble())
                 logic.menu_scale = std::clamp(static_cast<float>(number.unwrap()), 0.35f, 3.f);
+#ifdef GEODE_IS_MOBILE
+            // phones that saved the old 1x default get the new one once
+            if (!json.contains("menu_scale_phone"))
+                logic.menu_scale = std::min(logic.menu_scale, .96f);
+#endif
             if (auto number = json["menu_scale_undocked"].asDouble())
                 logic.menu_scale_undocked = std::clamp(static_cast<float>(number.unwrap()), 0.35f, 3.f);
             if (auto number = json["menu_anim_speed"].asDouble())
@@ -805,7 +842,6 @@ void Logic::save_settings_file() {
     json["trace_logging"] = logic.trace_logging;
     json["opt_prefetch"] = echo::opt::prefetch;
     json["opt_getters"] = echo::opt::getters;
-    json["opt_matrix"] = echo::opt::matrix;
     json["opt_effects"] = echo::opt::effects;
     json["record_p1"] = logic.record_p1;
     json["record_p2"] = logic.record_p2;
@@ -862,6 +898,23 @@ void Logic::save_settings_file() {
     json["orb_click_count"] = logic.orb_click_count;
     json["pad_black_orb"] = logic.pad_black_orb;
     json["pad_blue_orb"] = logic.pad_blue_orb;
+    json["easy_black_ufo"] = logic.easy_black_ufo;
+    json["auto_swift"] = logic.auto_swift;
+    json["extra_clicks"] = logic.extra_clicks;
+    json["straight_fly_p1"] = logic.straight_fly_p1;
+    json["straight_fly_p2"] = logic.straight_fly_p2;
+    json["straight_ufo_p1"] = logic.straight_ufo_p1;
+    json["straight_ufo_p2"] = logic.straight_ufo_p2;
+    json["hide_endscreen"] = logic.hide_endscreen;
+    json["hide_new_best"] = logic.hide_new_best;
+    json["no_effects"] = logic.no_effects;
+    json["straight_fly_threshold_p1"] = logic.straight_fly_threshold_p1;
+    json["straight_fly_threshold_p2"] = logic.straight_fly_threshold_p2;
+    json["straight_ufo_target_p1"] = logic.straight_ufo_target_p1;
+    json["straight_ufo_target_p2"] = logic.straight_ufo_target_p2;
+    json["straight_ufo_threshold_p1"] = logic.straight_ufo_threshold_p1;
+    json["straight_ufo_threshold_p2"] = logic.straight_ufo_threshold_p2;
+    json["extra_click_count"] = logic.extra_click_count;
     json["autoclicker"] = logic.autoclicker;
     json["sync_audio"] = logic.sync_audio;
     json["sync_audio_threshold"] = logic.sync_audio_threshold;
@@ -946,6 +999,7 @@ void Logic::save_settings_file() {
     json["floating_hide_in_level"] = logic.floating_hide_in_lvl;
     json["floating_size"] = logic.floating_size;
     json["menu_scale"] = logic.menu_scale;
+    json["menu_scale_phone"] = true;
     json["menu_scale_undocked"] = logic.menu_scale_undocked;
     json["menu_anim_speed"] = logic.menu_anim_speed;
     json["theme_name"] = logic.theme_name;

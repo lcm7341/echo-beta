@@ -78,6 +78,11 @@ float Logic::render_game_step() {
     float dt = Logic::get().render_step() * Logic::get().render_speed();
     if (Logic::get().render_ssb_fix) {
         float factor = Logic::get().scroll_speed_factor();
+        auto& logic = Logic::get();
+        logic.render_factor_low = std::min(logic.render_factor_low, factor);
+        logic.render_factor_high = std::max(logic.render_factor_high, factor);
+        logic.render_factor_sum += factor;
+        ++logic.render_factor_count;
         if (factor > 0.f)
             dt /= factor;
     }
