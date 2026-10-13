@@ -1,5 +1,5 @@
 {
-	"geode": "5.8.2",
+	"geode": "5.11.1",
 	"gd": {
 		"win": "2.2081",
 		"mac": "2.2081",
@@ -8,15 +8,15 @@
 	},
 	"id": "decks.echo",
 	"name": "Echo",
-	"version": "v2.1.0",
+	"version": "v2.2.0",
 	"developer": "decks",
 	"description": "Echo is a replay tool with many features, all for free :)",
 	"links": {
-		"source": "https://github.com/lcm7341/Echo/"
+		"source": "https://github.com/lcm7341/echo-beta"
 	},
 	"issues": {
-		"info": "Echo for 2.2 is not open sourced yet but you can still report issues",
-		"url": "https://github.com/lcm7341/Echo/issues"
+		"info": "Report bugs on GitHub, send the macro and the level ID if you can",
+		"url": "https://github.com/lcm7341/echo-beta/issues"
 	},
 	"tags": [
 		"gameplay",

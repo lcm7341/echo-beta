@@ -1,3 +1,15 @@
+# v2.2.0
+
+## New
+
+- A new menu: Echo's own look, with pages reorganized into Replay, Assists, Visuals, Editor, Library, Clickbot, Render and Settings.
+- Themes: base color themes, custom colors, and a Randomize that keeps Echo's style. The logo takes the theme's color.
+- Undocked mode is now a mod menu: every section is a tile that packs across the screen, and tiles can be pinned or hidden.
+- A list of every keybind in Settings.
+- Merge In: add another replay's inputs to the current one.
+- Video presets, including your own, with common sizes and frame rates.
+- The docked and undocked menus each have their own size.
+
 # v2.1.0
 
 - Backstepping! hopefully not too laggy
