@@ -259,9 +259,12 @@ Trajectory::Key Trajectory::make_key(PlayLayer* play) const {
 
 // w silly cat skid
 void Trajectory::seed(PlayerObject* fake, PlayerObject* real) {
+    // mod 0 crashes on windows
+    auto own_fire = fake->m_shipStreakType;
     fake->copyAttributes(real);
     SavedPlayerCheckpoint checkpoint = SavedPlayerCheckpoint::create(real);
     checkpoint.apply(fake);
+    fake->m_shipStreakType = own_fire;
     fake->m_pendingCheckpoint = nullptr;
     fake->m_maybeReducedEffects = real->m_maybeReducedEffects;
     fake->m_isHidden = true;
@@ -392,6 +395,9 @@ bool Trajectory::advance(PlayLayer* play, PlayerObject* fake, float step_delta, 
     clear_log(fake->m_collisionLogRight);
     fake->m_playEffects = false;
     bool live_was_dead = play->m_playerDied || (play->m_player1 && play->m_player1->m_isDead) || (play->m_player2 && play->m_player2->m_isDead);
+    // a fire sprite w a type that has no frames must never reach update()
+    if (int fire = (int)(fake->m_shipStreakType); fake->m_shipStreak && (fire < 2 || fire > 6))
+        fake->m_shipStreakType = static_cast<ShipStreak>(2);
     fake->update(step_delta);
     fake->m_unkUnused3 = fake->getRotation();
     fake->updateRotation(step_delta);
