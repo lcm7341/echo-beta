@@ -11,6 +11,7 @@
 #include "Logic/logic.hpp"
 #include "Hooks/rotation.hpp"
 #include "Hooks/step.hpp"
+#include "Hooks/opt.hpp"
 #include "Hack/orbs.hpp"
 #include "GUI/gui.hpp"
 #include "Hack/trajectory.hpp"
@@ -1742,7 +1743,7 @@ class $modify(EchoPlayerObject, PlayerObject) {
 #ifdef GEODE_IS_WINDOWS
         using echo::dash::EndEffect;
         auto mode = EndEffect::Native;
-        if (was_dashing && echo::dash::end_effect_skippable(this)) {
+        if (echo::opt::effects && was_dashing && echo::dash::end_effect_skippable(this)) {
             auto& logic = Logic::get();
             double tps = logic.sample_rate();
             bool gpu = echo::dash::prefer_gpu();

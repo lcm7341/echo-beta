@@ -1,6 +1,8 @@
 #include <Geode/Geode.hpp>
 #ifdef GEODE_IS_WINDOWS
 #include "Rendering/circle_signatures.hpp"
+#include "Logic/logic.hpp"
+#include "Hooks/opt.hpp"
 #include <cstdint>
 #include <cstring>
 #include <initializer_list>
@@ -59,6 +61,8 @@ namespace {
         code.put({ 0x41, 0x0f, 0x18, 0x8b, 0x68, 0x03, 0x00, 0x00 }); // prefetcht0 [r11+0x368]
     }
 
+    std::vector<Patch*> patches;
+
     // jmp cave, then nops over whatever moved into the cave
     bool redirect(std::uintptr_t site, std::size_t length, std::uint8_t* cave) {
         auto dist = static_cast<std::int64_t>(reinterpret_cast<std::uintptr_t>(cave)) - static_cast<std::int64_t>(site + 5);
@@ -68,7 +72,22 @@ namespace {
         patch[0] = 0xe9;
         auto rel = static_cast<std::int32_t>(dist);
         std::memcpy(patch.data() + 1, &rel, 4);
-        return static_cast<bool>(Mod::get()->patch(reinterpret_cast<void*>(site), patch));
+        auto res = Mod::get()->patch(reinterpret_cast<void*>(site), patch);
+        if (!res)
+            return false;
+        patches.push_back(res.unwrap());
+        return true;
+    }
+}
+
+namespace echo::prefetch {
+    // the switch. while the bot is disabled its patches are not mine to touch
+    void prepare() {
+        if (Logic::bot_disabled())
+            return;
+        for (auto* patch : patches)
+            if (patch->isEnabled() != echo::opt::prefetch)
+                (void)(echo::opt::prefetch ? patch->enable() : patch->disable());
     }
 }
 
@@ -152,5 +171,11 @@ $execute {
     }
     if (candidates)
         (void)redirect(third, 7, cave + 0x100);
+}
+#else
+#include "Hooks/opt.hpp"
+namespace echo::prefetch {
+    void prepare() {
+    }
 }
 #endif

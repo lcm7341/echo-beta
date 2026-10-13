@@ -5,6 +5,7 @@
 #include <Geode/binding/PlayerObject.hpp>
 #include "circle_signatures.hpp"
 #include "wave_merge.hpp"
+#include "Hooks/opt.hpp"
 #include <cstdint>
 #include <cstring>
 #include <initializer_list>
@@ -47,6 +48,8 @@ namespace {
 // called from the cave. player is rdi, orb is rsi, color is bx (r, g) + r14b (b), packed r | g << 8 | b << 16
 extern "C" bool echo_ring_duplicate(PlayerObject* player, GameObject* orb, std::uint32_t color) noexcept {
     try {
+        if (!echo::opt::effects)
+            return false;
         if (!player || !orb)
             return false;
         auto* manager = GameManager::get();

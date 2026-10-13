@@ -7,6 +7,7 @@
 #include "circle_geometry.hpp"
 #include "circle_signatures.hpp"
 #include "wave_merge.hpp"
+#include "Hooks/opt.hpp"
 #include <algorithm>
 #include <bit>
 #ifdef GEODE_IS_MACOS
@@ -48,7 +49,7 @@ namespace {
 #endif
 
     bool draw_cached(CCPoint const& center, float radius, float angle, unsigned segments, bool filled) {
-        if (!drawing_wave || std::bit_cast<uint32_t>(angle) != 0 ||
+        if (!echo::opt::effects || !drawing_wave || std::bit_cast<uint32_t>(angle) != 0 ||
             !std::isfinite(center.x) || !std::isfinite(center.y) || !std::isfinite(radius) ||
             !shader || !*shader)
             return false;

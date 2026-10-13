@@ -1,4 +1,5 @@
 // whats on each page of the menu: replay, assists, visuals, library, clickbot, render & settings
+#include "Hooks/opt.hpp"
 #include "GUI/gui.hpp"
 #include "GUI/logo_texture.hpp"
 #include "Hack/label_kinds.hpp"
@@ -1394,11 +1395,15 @@ void GUI::draw_theme() {
             geode::utils::file::openFolder(logic.save_root() / "logs");
         tip("Opens the folder the logs are saved in.");
 #ifdef GEODE_IS_WINDOWS
+        toggle("Collision Prefetch", echo::opt::prefetch);
         tip("Prefetches the next objects in the collision loops.");
         eui::RowHalf();
+        toggle("Inline Getters", echo::opt::getters);
         tip("Inlines the rect getters in the collision check.");
+        toggle("Fast Matrix", echo::opt::matrix);
         tip("Uses the SSE matrix multiply.");
         eui::RowHalf();
+        toggle("Merged Effects", echo::opt::effects);
         tip("Merges and batches dash, orb and ring effects.");
 #endif
         if (eui::Checkbox("Button Effects", &eui::button_effects()))

@@ -3,6 +3,7 @@
 #include <Geode/binding/GameManager.hpp>
 #include <Geode/modify/CCSprite.hpp>
 #include "dash_bursts.hpp"
+#include "Hooks/opt.hpp"
 #include "circle_signatures.hpp"
 #include <Geode/binding/PlayLayer.hpp>
 #include <Geode/binding/PlayerObject.hpp>
@@ -348,6 +349,8 @@ namespace {
 // so ask me first & a duplicate jumps past the block
 extern "C" bool echo_burst_duplicate(PlayerObject* player, GameObject* orb, float rotation) noexcept {
     try {
+        if (!echo::opt::effects)
+            return false;
         if (!player || !orb || fresh.empty() || !stack_program)
             return false;
         auto* play = PlayLayer::get();

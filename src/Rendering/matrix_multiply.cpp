@@ -9,6 +9,7 @@
 #ifdef GEODE_IS_WINDOWS
 #include "circle_signatures.hpp"
 #include "matrix_multiply.hpp"
+#include "Hooks/opt.hpp"
 #include <array>
 
 using namespace geode::prelude;
@@ -19,7 +20,7 @@ namespace {
 
     // anything weird (nan, inf, ...) goes to the copy of the original
     float* multiply(float* out, float const* a, float const* b) {
-        if (!echo::matrix::supported(a, b))
+        if (!echo::opt::matrix || !echo::matrix::supported(a, b))
             return original_multiply(out, a, b);
         return echo::matrix::multiply(out, a, b);
     }

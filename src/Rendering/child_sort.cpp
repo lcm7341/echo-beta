@@ -16,6 +16,7 @@
 #include "circle_signatures.hpp"
 #include "wave_merge.hpp"
 #include "dash_bursts.hpp"
+#include "Hooks/opt.hpp"
 
 using namespace geode::prelude;
 
@@ -255,8 +256,10 @@ class $modify(EchoRemovalBatch, CCActionManager) {
         bool outer = !deferring;
         deferring = true;
         if (outer && this == CCDirector::sharedDirector()->getActionManager()) {
-            echo::waves::merge_fresh();
-            echo::bursts::merge_fresh();
+            if (echo::opt::effects) {
+                echo::waves::merge_fresh();
+                echo::bursts::merge_fresh();
+            }
         }
         CCActionManager::update(dt);
         if (outer) {

@@ -1,4 +1,5 @@
 #include "Logic/logic.hpp"
+#include "Hooks/opt.hpp"
 #include "GUI/gui.hpp"
 #include <Geode/binding/PlayerButtonCommand.hpp>
 #include <Geode/binding/GameManager.hpp>
@@ -185,6 +186,14 @@ void Logic::pull_settings() {
                 logic.playback_tps_changes = flag.unwrap();
             if (auto flag = json["trace_logging"].asBool())
                 logic.trace_logging = flag.unwrap();
+            if (auto flag = json["opt_prefetch"].asBool())
+                echo::opt::prefetch = flag.unwrap();
+            if (auto flag = json["opt_getters"].asBool())
+                echo::opt::getters = flag.unwrap();
+            if (auto flag = json["opt_matrix"].asBool())
+                echo::opt::matrix = flag.unwrap();
+            if (auto flag = json["opt_effects"].asBool())
+                echo::opt::effects = flag.unwrap();
             if (auto flag = json["record_p1"].asBool())
                 logic.record_p1 = flag.unwrap();
             if (auto flag = json["record_p2"].asBool())
@@ -794,6 +803,10 @@ void Logic::save_settings_file() {
     json["no_overwrite"] = logic.no_overwrite;
     json["playback_tps_changes"] = logic.playback_tps_changes;
     json["trace_logging"] = logic.trace_logging;
+    json["opt_prefetch"] = echo::opt::prefetch;
+    json["opt_getters"] = echo::opt::getters;
+    json["opt_matrix"] = echo::opt::matrix;
+    json["opt_effects"] = echo::opt::effects;
     json["record_p1"] = logic.record_p1;
     json["record_p2"] = logic.record_p2;
     json["play_p1"] = logic.play_p1;

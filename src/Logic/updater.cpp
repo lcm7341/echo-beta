@@ -10,6 +10,7 @@
 // find best frame is here too: step forward, ask the trajectory how long a flip would survive, stop on the best frame
 #include "Logic/logic.hpp"
 #include "Hooks/step.hpp"
+#include "Hooks/opt.hpp"
 #include "Hack/trajectory.hpp"
 #include "Physics/moving_objects.hpp"
 #include "Physics/collision_bounds.hpp"
@@ -283,6 +284,7 @@ void Logic::run_frame(GJBaseGameLayer* play, float dt, std::function<void(float)
     echo::dash::prepare();
     echo::bursts::prepare();
     echo::collision_bounds::prepare();
+    echo::prefetch::prepare();
 #endif
     logic.frame_steps = 0;
     bool paused = Logic::get().editor_paused;

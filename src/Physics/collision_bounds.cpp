@@ -1,4 +1,6 @@
 #include "collision_bounds.hpp"
+#include "Logic/logic.hpp"
+#include "Hooks/opt.hpp"
 #ifdef GEODE_IS_WINDOWS
 #include <Geode/Geode.hpp>
 #include "Rendering/circle_signatures.hpp"
@@ -37,11 +39,17 @@ namespace {
 namespace echo::collision_bounds {
     // another mod hooked it after me = take mine out & let theirs run
     void prepare() {
-        if (!bounds_patch || (getters_native() && !foreign_hook()))
+        if (!bounds_patch)
             return;
-        if (auto res = bounds_patch->disable(); res) {
-            bounds_patch = nullptr;
+        if (!getters_native() || foreign_hook()) {
+            if (auto res = bounds_patch->disable(); res) {
+                bounds_patch = nullptr;
+            }
+            return;
         }
+        // the switch. while the bot is disabled its patches are not mine to touch
+        if (!Logic::bot_disabled() && bounds_patch->isEnabled() != echo::opt::getters)
+            (void)(echo::opt::getters ? bounds_patch->enable() : bounds_patch->disable());
     }
 }
 
