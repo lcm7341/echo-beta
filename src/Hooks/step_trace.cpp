@@ -230,7 +230,8 @@ namespace echo::step {
                     player->m_isDead, other->m_isDead, other->getPositionX(), other->getPositionY(), other->m_yVelocity, other->getRotation(), other->m_isUpsideDown,
                     other->m_isShip ? "ship" : other->m_isBall ? "ball" : other->m_isBird ? "ufo" : other->m_isDart ? "wave" : other->m_isRobot ? "robot" : other->m_isSpider ? "spider" : other->m_isSwing ? "swing" : "cube");
         // 4000 new rows, or (past the cap, where no rows come anymore) the text every 2 real seconds
-        bool full = g_trace.size() - g_saved >= 4000 || ms >= g_textMs + 2000;
+        // & never more than 4 times a real second. sped up, 4000 rows is 1 frame: it wrote the files every frame
+        bool full = (g_trace.size() - g_saved >= 4000 && ms >= g_textMs + 250) || ms >= g_textMs + 2000;
         if (full)
             g_textMs = ms;
         if (!self->m_playerDied && !full && !finished)

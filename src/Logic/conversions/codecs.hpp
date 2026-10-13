@@ -128,6 +128,8 @@ public:
 
 class ReplayIO {
 public:
+	static constexpr uint64_t max_inputs = uint64_t{ 1 } << 26;
+
 	static std::string lower_ext(fs::path const& path);
 	static std::string sanitize(std::string name);
 	static std::string strip_numbering(std::string const& base, std::string const& format);

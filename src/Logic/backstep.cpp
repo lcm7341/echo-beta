@@ -371,7 +371,12 @@ int Logic::backstep_interval() const {
     double rate = sample_rate();
     if (!std::isfinite(rate) || rate <= 60.0)
         return 1;
-    return std::max(1, static_cast<int>(std::lround(rate / 60.0)));
+    // 60 saves a REAL second, not a game second. sped up it was 60 a game second: at 99x thats 5940 full saves a second
+    // & the lvl ran at 3x instead (desideration, 170us a step, all of it saving)
+    double speed = frame_advance ? 1.0 : std::clamp(static_cast<double>(speedhack), 1.0, 1000.0);
+    // & sped up nobody needs 60 a second: 10. a save of a big lvl is ~5ms, 60 of them was a third of every second
+    double per_second = speed > 1.0 ? 10.0 : 60.0;
+    return std::max(1, static_cast<int>(std::lround(rate / per_second * speed)));
 }
 
 void Logic::release_backstep(BackstepSave& save, char const* why) {
@@ -426,8 +431,16 @@ void Logic::save_backstep(PlayLayer* play) {
     compare(play, frame, resim);
     bool shown = logic.save_shown_step;
     logic.save_shown_step = false;
-    bool dense = resim || shown;
-    if (!dense && !logic.backsteps.empty() && frame - logic.backsteps.back().echo.frame < Logic::get().backstep_interval())
+    // the replay up to the frame a step back wants used to save EVERY step. that was fine when saves were 28 steps apart.
+    // sped up they are thousands apart now, so 1 back took thousands of saves (the hang at 99x). only the last bit
+    // before the target is saved every step, the way there gets 1 a game second
+    int close_by = std::max(1, static_cast<int>(std::lround(logic.sample_rate() / 60.0)));
+    bool close = resim && logic.backstep_target - frame <= close_by;
+    bool dense = close || shown;
+    int gap = Logic::get().backstep_interval();
+    if (resim && !close)
+        gap = std::max(close_by, static_cast<int>(std::lround(logic.sample_rate())));
+    if (!dense && !logic.backsteps.empty() && frame - logic.backsteps.back().echo.frame < gap)
         return;
     if (!logic.backsteps.empty() && logic.backsteps.back().echo.frame >= frame)
         return;
@@ -495,6 +508,11 @@ bool Logic::step_to(PlayLayer* play, int target, int keep_up_to) {
         if (!logic.backstep)
             logic.message = "Turn on Backstep first";
         return false;
+    }
+    // stepped back to before best frames last click: that click is gone, so is its finger & the rest of its tap
+    if (target <= logic.best_frame_clicked_at) {
+        logic.best_hold_owned = false;
+        logic.best_flip_back_at = -1;
     }
     int keep = std::min(target, keep_up_to);
     while (!logic.backsteps.empty() && logic.backsteps.back().echo.frame > keep)

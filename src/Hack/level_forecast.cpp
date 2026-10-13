@@ -14,6 +14,7 @@
 #include <Geode/binding/EffectManagerState.hpp>
 #include <Geode/binding/PlayerObject.hpp>
 #include <Geode/binding/GJEffectManager.hpp>
+#include <Geode/binding/CCMoveCNode.hpp>
 #include <Geode/binding/GroupCommandObject2.hpp>
 #include <Geode/binding/PlayLayer.hpp>
 #include <Geode/modify/GJBaseGameLayer.hpp>
@@ -25,6 +26,8 @@
 #include <array>
 #include <cstddef>
 #include <cstring>
+#include <deque>
+#include <fstream>
 #include <map>
 #include <unordered_map>
 #include <unordered_set>
@@ -172,6 +175,19 @@ namespace {
         GameObject* probe = nullptr;
         bool probed = false;
         bool probe_had = false;
+        // which section & slot every object i touch says its in, from BEFORE i touched it. the lists are put back below,
+        // but an object only got its indexes put back if it was in the main list of a cell i kept. a collision block isnt
+        // (it has its own grid & uses the same index fields), so after a look ahead it could say section -1 or the wrong
+        // cell while sitting in another: gd then takes it out of the wrong place (crash in updateCollisionBlocks)
+        struct Indexes {
+            int other, inner, outer, middle;
+        };
+        std::unordered_map<GameObject*, Indexes> indexes;
+
+        void keep_indexes(GameObject* object) {
+            if (active && object)
+                indexes.try_emplace(object, Indexes{ object->m_someOtherIndex, object->m_innerSectionIndex, object->m_outerSectionIndex, object->m_middleSectionIndex });
+        }
 
         static std::uint64_t key(int x, int y) {
             return (static_cast<std::uint64_t>(static_cast<std::uint32_t>(x)) << 32) | static_cast<std::uint32_t>(y);
@@ -206,6 +222,7 @@ namespace {
             layer = play;
             cells.clear();
             deactivated.clear();
+            indexes.clear();
             copy_list(calc_non_effect, &play->m_calcNonEffectObjects, &play->m_calcNonEffectObjectsSize);
             copy_list(calc_blocks, &play->m_calcCollisionBlockObjects, &play->m_calcCollisionBlockObjectsSize);
             moved_count = play->m_movedCount;
@@ -259,6 +276,15 @@ namespace {
             if (!active)
                 return;
             active = false;
+            // what each object said before, 1st. then the lists below fix the slot of everything thats in them
+            // (a slot can change bc ANOTHER object left the list, so the lists know better than what i wrote down)
+            for (auto const& [object, was] : indexes) {
+                object->m_someOtherIndex = was.other;
+                object->m_innerSectionIndex = was.inner;
+                object->m_outerSectionIndex = was.outer;
+                object->m_middleSectionIndex = was.middle;
+            }
+            indexes.clear();
             for (auto& [id, cell] : cells) {
                 int x = cell.x, y = cell.y;
                 put_list(cell.main, bucket_at(grid(), x, y), count_at(counts(), x, y), [x, y](GameObject* object, int slot) {
@@ -329,6 +355,26 @@ namespace {
         // fixes jitter
         std::vector<CCPoint> spot;
         std::vector<std::uint32_t> spot_stamp;
+
+        // follow player y. the forecast can only guess 1 path for the icon, but every line of the trajectory has its own,
+        // & a follower goes where THAT lines icon goes. so each line works its followers out itself, step by step, the
+        // way gd does (processPlayerFollowActions): y += clamp(speed * (icon y + offset - y), max speed)
+        struct Follow {
+            int group;
+            float speed, max, delay; // speed & max are per 1/60s like gd has them
+            int offset;
+        };
+        std::vector<std::vector<Follow>> follow_frames; // what follow commands run on each forecast step, next to frames
+        std::unordered_map<int, std::vector<std::uint32_t>> follow_members;
+        std::vector<double> line_y; // where the line being drawn has each follower right now
+        std::vector<std::uint32_t> line_stamp;
+        std::uint32_t line_epoch = 1;
+        // gd keeps the icons last 200 y's, 1 every 0.01s (PlayerObject::updateSpecial), & a follow w/ a delay reads back
+        // into that (getOldPosition). ts is the line being drawns own copy of it, carried on from the real icons
+        std::array<float, 200> ring{};
+        int ring_at = 0;
+        float ring_time = 0.f;
+        bool ring_ready = false;
 
         Sections sections;
         std::vector<std::uint32_t> touched;
@@ -454,6 +500,10 @@ namespace {
         f.objects.clear();
         f.index.clear();
         f.valid = false;
+        // these hold places in the object list that was just thrown away (crash: a new lvl, the old followers numbers
+        // pointed at whatever sat there now)
+        f.follow_members.clear();
+        f.follow_frames.clear();
         if (!play->m_objects)
             return;
         for (unsigned i = 0; i < play->m_objects->count(); ++i) {
@@ -472,6 +522,8 @@ namespace {
         f.pre_y.assign(amt, 0.0);
         f.spot.assign(amt, {});
         f.spot_stamp.assign(amt, 0);
+        f.line_y.assign(amt, 0.0);
+        f.line_stamp.assign(amt, 0);
         f.moved_stamp.assign(amt, 0);
         f.applied_stamp.assign(amt, 0);
         f.touch_stamp.assign(amt, 0);
@@ -495,6 +547,8 @@ namespace {
         f.pre_y.push_back(0.0);
         f.spot.emplace_back();
         f.spot_stamp.push_back(0);
+        f.line_y.push_back(0.0);
+        f.line_stamp.push_back(0);
         f.moved_stamp.push_back(0);
         f.applied_stamp.push_back(0);
         f.touch_stamp.push_back(0);
@@ -539,6 +593,12 @@ namespace {
                 obj->setOpacity(saved.opacity);
         }
         scatter(obj, f.base.data() + static_cast<std::size_t>(i) * STRIDE);
+        // the fields are back, but the hitbox the look ahead worked out for the place IT had the object is still sitting
+        // in the objects rect & oriented box (the box is its own thing, not in the spans). the dirty flags just went back
+        // to whatever they were, which can be "clean". so they are always set here: the next thing that asks gets a
+        // hitbox made from where the object really is. w/out ts a portal could go off where a line had put it
+        obj->m_isObjectRectDirty = true;
+        obj->m_isOrientedBoxDirty = true;
         // gd normally only moves the SPRITE later, in the visibility pass, so putting the fields back was enough before
         // but some objects get quickUpdatePosition at the end of the move step, which moves the sprite right away AND the color sprite (the detail part) with it
         // after a forecast they sat wherever the forecast last had them until the next live step: jittering, not where the hitbox was
@@ -735,26 +795,34 @@ namespace {
             }
             fire_ahead(f, play, fire_from);
             // follow player y doesnt go thru moveObjects the y is just set
-            for (auto* follow : f.shadow->m_unkVector600) {
+            auto& follows = f.follow_frames.emplace_back();
+            // m_unkVector6f0 is the list gd walks in processPlayerFollowActions (the effect manager + 0x608 on mac).
+            // each 1 is a CCMoveCNode: its tag is the group, 0a8 the speed, 0b0 the delay, 0b8 the offset, 0c0 the max speed.
+            // i had the wrong list here before (m_unkVector600), it was always empty so no follower was ever worked out
+            for (auto* follow : f.shadow->m_unkVector6f0) {
                 if (!follow)
                     continue;
-                auto id = static_cast<std::size_t>(std::clamp(follow->m_targetGroupID, 0, 9999));
+                auto id = static_cast<std::size_t>(std::clamp(follow->getTag(), 0, 9999));
                 auto* members = id < play->m_groups.size() ? play->m_groups[id] : nullptr;
                 if (!members)
                     continue;
+                follows.push_back({ static_cast<int>(id), static_cast<float>(follow->m_unk0a8), static_cast<float>(follow->m_unk0c0),
+                    static_cast<float>(follow->m_unk0b0), follow->m_unk0b8 });
+                auto [listed, fresh] = f.follow_members.try_emplace(static_cast<int>(id));
                 for (unsigned n = 0; n < members->count(); ++n) {
                     auto* obj = static_cast<GameObject*>(members->objectAtIndex(n));
                     if (!obj)
                         break;
                     auto i = ensure_index(f, obj);
                     keep_base(f, i);
-                    keep_spot(f, i);
-                    if (f.moved_stamp[i] != f.step_epoch) {
-                        f.moved_stamp[i] = f.step_epoch;
-                        f.moved.push_back(i);
-                    }
+                    // put back after the run & thats ALL. theyre not recorded: every line of the trajectory works them out
+                    // itself (apply). & no updateObjectSection for them, gd doesnt call it for a follow either (these sit
+                    // in the collision grid, not the normal sections)
+                    touch(f, i);
                     // 3 = follows the icons y
                     f.lock_y[i] = 3;
+                    if (fresh)
+                        listed->second.push_back(i);
                 }
             }
             f.shadow->updateSpawnTriggers(f.dt);
@@ -817,6 +885,8 @@ namespace {
     void rebuild(Forecast& f, PlayLayer* play, int steps) {
         f.live_moved.clear();
         f.frames.clear();
+        f.follow_frames.clear();
+        f.follow_members.clear();
         f.records.clear();
         std::fill(f.latest.begin(), f.latest.end(), UINT32_MAX);
         std::fill(f.has_quiet.begin(), f.has_quiet.end(), 0);
@@ -862,6 +932,7 @@ namespace {
                 f.shadow->release();
             f.shadow = nullptr;
             f.frames.resize(static_cast<std::size_t>(steps));
+            f.follow_frames.resize(f.frames.size());
             f.fired_from.resize(f.frames.size(), CCPoint{ NAN, NAN });
             f.horizon = steps;
             return;
@@ -1023,6 +1094,12 @@ namespace forecast {
             if ((f.latest[i] != UINT32_MAX || f.has_quiet[i]) && f.base_stamp[i])
                 cache_live(f, i);
         }
+        // followers too. gd moves them w/out telling anyone, so where they really are has to be read again every time
+        // (a stale 1 here = the follower gets thrown back to where it was a while ago after every look ahead)
+        for (auto const& [group, members] : f.follow_members)
+            for (auto i : members)
+                if (i < f.objects.size() && f.base_stamp[i])
+                    cache_live(f, i);
         if (f.valid && !stale() && !f.path.empty() && play->m_player1) {
             bool sideways = play->m_player1->m_isSideways;
             bool exact = player_exact(f, play);
@@ -1051,6 +1128,7 @@ namespace forecast {
         }
         if (elapsed > 0) {
             f.frames.erase(f.frames.begin(), f.frames.begin() + static_cast<std::ptrdiff_t>(elapsed));
+            f.follow_frames.erase(f.follow_frames.begin(), f.follow_frames.begin() + static_cast<std::ptrdiff_t>(std::min<std::uint64_t>(elapsed, f.follow_frames.size())));
             f.fired_from.erase(f.fired_from.begin(), f.fired_from.begin() + static_cast<std::ptrdiff_t>(std::min<std::uint64_t>(elapsed, f.fired_from.size())));
             f.player_at = f.player_at + f.player_step * static_cast<float>(elapsed);
             f.steps_run -= static_cast<int>(elapsed);
@@ -1061,6 +1139,7 @@ namespace forecast {
         if (f.horizon < steps) {
             if (!f.shadow || f.frames.empty() && f.records.empty()) {
                 f.frames.resize(static_cast<std::size_t>(steps));
+                f.follow_frames.resize(f.frames.size());
                 f.fired_from.resize(f.frames.size(), CCPoint{ NAN, NAN });
                 f.horizon = steps;
                 return;
@@ -1085,11 +1164,127 @@ namespace forecast {
         }
     }
 
+    namespace {
+        std::string* g_dump = nullptr;
+    }
+
+    void dump_to(std::string* text) {
+        g_dump = text;
+    }
+
+    void dump_line(std::string const& line) {
+        if (g_dump)
+            *g_dump += line;
+    }
+
+    // what the forecast knows about an object
+    std::string describe(GameObject* object) {
+        auto& f = state();
+        auto it = f.index.find(object);
+        if (it == f.index.end())
+            return "forecast: not a moving object";
+        auto i = it->second;
+        return fmt::format("forecast: index={} recorded={} quiet={} lock_y={} groups={}", i, f.latest[i] != UINT32_MAX, f.has_quiet[i] != 0, f.lock_y[i], object->m_groupCount);
+    }
+
     void apply(PlayLayer* play, int step, CCRect const& area, float player_y) {
         auto& f = state();
-        if (!play || play != f.play || !f.valid || step < 1 || step > f.horizon)
+        if (g_dump && step == 1)
+            *g_dump += fmt::format("  FORECAST valid={} horizon={} follow_frames={} follows_now={} dt={} player_y={}\n", f.valid, f.horizon, f.follow_frames.size(),
+                f.follow_frames.empty() ? 0 : f.follow_frames.front().size(), f.dt, player_y);
+        if (!play || play != f.play || !f.valid || step < 1)
+            return;
+        auto begin = [&] {
+            if (f.applying)
+                return;
+            f.applying = true;
+            ++f.apply_epoch;
+            f.applied.clear();
+            f.pending.clear();
+            f.sections.begin(play);
+        };
+        // followers (follow player y) 1st. they dont come from the forecast: ts lines icon is at player_y BEFORE the step
+        // runs, & gd moves a follower off that at the start of the step, so thats done here the same way
+        //   processPlayerFollowActions: y += clamp(clamp(speed * dt * 60, 0, 1) * (icon y + offset - y), +- max * dt * 60)
+        //   icon y = where it is now, or w/ a delay the y it had floor(delay / 0.01) slots back in its history
+        if (std::isfinite(player_y) && !f.follow_frames.empty() && play->m_player1) {
+            auto* body = play->m_player1;
+            auto slot = [&] {
+                int at = f.ring_at % 200;
+                return at < 0 ? at + 200 : at;
+            };
+            if (!f.ring_ready) {
+                f.ring_ready = true;
+                auto const& real = body->m_playerFollowFloats;
+                for (std::size_t n = 0; n < f.ring.size(); ++n)
+                    f.ring[n] = n < real.size() ? real[n] : player_y;
+                f.ring_at = body->m_followRelated;
+                f.ring_time = body->m_unk838;
+            }
+            else {
+                // what updateSpecial did at the end of the step before ts one
+                f.ring_time += f.dt;
+                if (f.ring_time >= 0.01f) {
+                    f.ring_time += -0.01f;
+                    ++f.ring_at;
+                }
+                f.ring[static_cast<std::size_t>(slot())] = player_y;
+            }
+            // past what the forecast has built the same follows are still running
+            auto const& follows = f.follow_frames[std::min(static_cast<std::size_t>(step - 1), f.follow_frames.size() - 1)];
+            float tick = f.dt * 60.f;
+            for (auto const& follow : follows) {
+                auto members = f.follow_members.find(follow.group);
+                if (members == f.follow_members.end())
+                    continue;
+                float pull = std::clamp(follow.speed * tick, 0.f, 1.f);
+                float most = follow.max * tick;
+                float icon = player_y;
+                if (follow.delay > 0.f) {
+                    int back = std::clamp(static_cast<int>(std::floor(follow.delay / 0.01f)), 0, 199);
+                    int at = slot() - back;
+                    icon = f.ring[static_cast<std::size_t>(at < 0 ? at + 200 : at)];
+                }
+                // gd skips a 0 too
+                if (icon == 0.f)
+                    continue;
+                float target = icon + static_cast<float>(follow.offset);
+                if (g_dump && (step == 1 || step % 20 == 0))
+                    *g_dump += fmt::format("  FOLLOW step={} group={} speed={} max={} delay={} offset={} members={} icon={:.3f} target={:.3f} pull={} most={}\n", step,
+                        follow.group, follow.speed, follow.max, follow.delay, follow.offset, members->second.size(), icon, target, pull, most);
+                begin();
+                for (auto i : members->second) {
+                    keep_base(f, i);
+                    if (f.line_stamp[i] != f.line_epoch) {
+                        // starts where it really is
+                        std::memcpy(&f.line_y[i], f.base.data() + static_cast<std::size_t>(i) * STRIDE + RECORD_POS + sizeof(double), sizeof(double));
+                        f.line_stamp[i] = f.line_epoch;
+                    }
+                    float move = pull * (target - static_cast<float>(f.line_y[i]));
+                    if (move != 0.f) {
+                        if (most > 0.f)
+                            move = std::clamp(move, -most, most);
+                        f.line_y[i] += static_cast<double>(move);
+                    }
+                    if (f.applied_stamp[i] != f.apply_epoch) {
+                        f.applied_stamp[i] = f.apply_epoch;
+                        f.applied.push_back(i);
+                    }
+                    auto* obj = f.objects[i];
+                    if (g_dump && (step == 1 || step % 20 == 0))
+                        *g_dump += fmt::format("    F uid={} id={} x={:.2f} was_y={:.3f} now_y={:.3f}\n", obj->m_uniqueID, obj->m_objectID, obj->m_positionX, obj->m_positionY, f.line_y[i]);
+                    if (obj->m_positionY != f.line_y[i]) {
+                        obj->m_positionY = f.line_y[i];
+                        obj->m_isObjectRectDirty = true;
+                        obj->m_isOrientedBoxDirty = true;
+                    }
+                }
+            }
+        }
+        if (step > f.horizon)
             return;
         auto const& frame = f.frames[static_cast<std::size_t>(step - 1)];
+        // a 1:1 lock to the icons y: the forecast had the icon on 1 path, on another line its that much higher / lower
         double lift = 0.0;
         if (std::isfinite(player_y) && static_cast<std::size_t>(step - 1) < f.fired_from.size()) {
             float assumed = f.fired_from[static_cast<std::size_t>(step - 1)].y;
@@ -1099,11 +1294,7 @@ namespace forecast {
         if (!f.applying) {
             if (frame.empty())
                 return;
-            f.applying = true;
-            ++f.apply_epoch;
-            f.applied.clear();
-            f.pending.clear();
-            f.sections.begin(play);
+            begin();
         }
         auto put = [&](std::uint32_t i, std::uint32_t offset) {
             keep_base(f, i);
@@ -1112,7 +1303,7 @@ namespace forecast {
                 f.applied.push_back(i);
             }
             scatter(f.objects[i], f.records.data() + offset);
-            if (lift != 0.0 && (f.lock_y[i] == 1 || f.lock_y[i] == 3)) {
+            if (lift != 0.0 && f.lock_y[i] == 1) {
                 f.objects[i]->m_positionY += lift;
                 f.objects[i]->m_isObjectRectDirty = true;
                 f.objects[i]->m_isOrientedBoxDirty = true;
@@ -1148,6 +1339,9 @@ namespace forecast {
 
     void rewind(PlayLayer* play) {
         auto& f = state();
+        // the next line starts its followers over
+        ++f.line_epoch;
+        f.ring_ready = false;
         if (!f.applying)
             return;
         f.applying = false;
@@ -1159,6 +1353,30 @@ namespace forecast {
         f.applied.clear();
         f.sections.end();
     }
+}
+
+// TEMP (the updateCollisionBlocks crash): the last 300 times a collision block was taken out of / put into a section.
+// kept in memory, echo_block_flush writes them (called right before gds function when the icon is way out there)
+namespace {
+    std::deque<std::string> g_block_notes;
+}
+
+void echo_block_note(char const* what, GJBaseGameLayer* layer, GameObject* object) {
+    if (!object || object->m_objectType != GameObjectType::CollisionObject)
+        return;
+    g_block_notes.push_back(fmt::format("{} frame={} uid={} id={} x={:.1f} y={:.1f} outer={} middle={} inner={} other={} off={} predicting={} sections={} block_sections={}\n", what,
+        Logic::get().step_frame, object->m_uniqueID, object->m_objectID, object->m_positionX, object->m_positionY, object->m_outerSectionIndex,
+        object->m_middleSectionIndex, object->m_innerSectionIndex, object->m_someOtherIndex, object->m_isGroupDisabled, Logic::get().predicting, layer->m_sections.size(),
+        layer->m_collisionBlockSections.size()));
+    if (g_block_notes.size() > 300)
+        g_block_notes.pop_front();
+}
+
+void echo_block_flush(std::string const& head) {
+    std::ofstream file(Logic::get().save_root() / "logs" / "blocks.txt", std::ios::trunc);
+    file << head;
+    for (auto const& line : g_block_notes)
+        file << line;
 }
 
 namespace {
@@ -1185,8 +1403,10 @@ class $modify(ForecastSections, GJBaseGameLayer) {
     }
 
     void removeObjectFromSection(GameObject* object) {
+        echo_block_note("remove", this, object);
         auto& f = state();
         if (f.sections.active && object && f.sections.layer == this) {
+            f.sections.keep_indexes(object);
             f.sections.note(object->m_outerSectionIndex, object->m_middleSectionIndex);
             if (object == f.sections.probe && !f.sections.probed) {
                 f.sections.probed = true;
@@ -1197,8 +1417,11 @@ class $modify(ForecastSections, GJBaseGameLayer) {
     }
 
     void addToSection(GameObject* object) {
-        GJBaseGameLayer::addToSection(object);
         auto& f = state();
+        if (f.sections.layer == this)
+            f.sections.keep_indexes(object);
+        GJBaseGameLayer::addToSection(object);
+        echo_block_note("added", this, object);
         if (f.sections.active && object && f.sections.layer == this)
             f.sections.note_appended(object);
     }
@@ -1221,6 +1444,7 @@ class $modify(ForecastSections, GJBaseGameLayer) {
                 }
             }
         }
+        f.sections.keep_indexes(object);
         f.sections.probe = object;
         f.sections.probed = false;
         GJBaseGameLayer::updateObjectSection(object);
@@ -1402,3 +1626,12 @@ class $modify(ForecastLiveTriggers, EffectGameObject) {
         EffectGameObject::triggerObject(layer, uniqueID, remapKeys);
     }
 };
+
+#ifdef GEODE_IS_MACOS
+// the 2 things the follow code leans on, checked against gds own code (processPlayerFollowActions reads these offsets)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Winvalid-offsetof"
+static_assert(offsetof(GJEffectManager, m_unkVector6f0) == 0x608);
+static_assert(offsetof(CCMoveCNode, m_unk0a8) == 0xa8 && offsetof(CCMoveCNode, m_unk0b0) == 0xb0 && offsetof(CCMoveCNode, m_unk0b8) == 0xb8 && offsetof(CCMoveCNode, m_unk0c0) == 0xc0);
+#pragma clang diagnostic pop
+#endif

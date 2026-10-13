@@ -117,6 +117,18 @@ bool Logic::pause_menu_open() {
 #endif
 }
 
+namespace {
+    // only when its really different. it was set every frame, even to the value it already had
+    void put_pitch(FMOD::ChannelGroup* group, float pitch) {
+        if (!group)
+            return;
+        float now = 0.f;
+        if (group->getPitch(&now) == FMOD_OK && now == pitch)
+            return;
+        group->setPitch(pitch);
+    }
+}
+
 void Logic::sync_music_pitch() {
     auto* engine = FMODAudioEngine::sharedEngine();
     if (!engine)
@@ -138,11 +150,10 @@ void Logic::sync_music_pitch() {
         if ((now > ms ? now - ms : ms - now) > 2)
             engine->setMusicTimeMS(ms, false, 0);
         if (engine->m_backgroundMusicChannel) {
-            engine->m_backgroundMusicChannel->setPitch(pitch);
+            put_pitch(engine->m_backgroundMusicChannel, pitch);
             engine->m_backgroundMusicChannel->setPaused(true);
         }
-        if (engine->m_globalChannel)
-            engine->m_globalChannel->setPitch(pitch);
+        put_pitch(engine->m_globalChannel, pitch);
         return;
     }
     if (g_liveOpeningHeld) {
@@ -155,10 +166,8 @@ void Logic::sync_music_pitch() {
         g_liveOpeningSec = 0.0;
     }
 
-    if (engine->m_backgroundMusicChannel)
-        engine->m_backgroundMusicChannel->setPitch(pitch);
-    if (engine->m_globalChannel)
-        engine->m_globalChannel->setPitch(pitch);
+    put_pitch(engine->m_backgroundMusicChannel, pitch);
+    put_pitch(engine->m_globalChannel, pitch);
     Logic::get().sync_audio_clock();
 }
 
@@ -414,9 +423,11 @@ void Logic::sync_audio_clock() {
             engine->setMusicTimeMS(expected, false, 0);
             drift = 0;
         }
-        double correction = std::clamp(-(double)(drift) / 1000.0 * 0.5, -0.01, 0.01);
-        if (music)
-            music->setPitch(static_cast<float>(base * (1.0 + correction)));
+        // under 15ms nobody hears the drift, but a pitch that changes a tiny bit EVERY frame they do. so its left alone
+        // there, & past it the correction goes in 0.25% steps instead of a new value each frame
+        double correction = std::abs(drift) < 15 ? 0.0 : std::clamp(-(double)(drift) / 1000.0 * 0.5, -0.01, 0.01);
+        correction = std::round(correction / 0.0025) * 0.0025;
+        put_pitch(music, static_cast<float>(base * (1.0 + correction)));
     }
 
     std::unordered_set<FMOD::Channel*> seen;

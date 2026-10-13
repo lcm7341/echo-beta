@@ -19,6 +19,8 @@
 #include <Geode/binding/PlayLayer.hpp>
 #include <Geode/binding/LevelEditorLayer.hpp>
 #include <algorithm>
+#include <fstream>
+#include <deque>
 #include <chrono>
 #include <cmath>
 #include <functional>
@@ -283,14 +285,15 @@ void Logic::run_frame(GJBaseGameLayer* play, float dt, std::function<void(float)
     if (Logic::get().render_paused())
         return;
     auto& logic = Logic::get();
-    if (!play) {
+    // a lvl that is on its way out (finished it, then edit level) is still what PlayLayer::get() hands back for a bit.
+    // its not on screen anymore & stepping it myself crashed in updateVisibility (android). gd runs whatever is left of it
+    if (!play || !play->isRunning()) {
         tick(dt);
         return;
     }
     echo::movement::prepare();
 #ifdef GEODE_IS_WINDOWS
     echo::collision_bounds::prepare();
-    echo::prefetch::prepare();
 #endif
     logic.frame_steps = 0;
     bool paused = Logic::get().editor_paused;
@@ -362,6 +365,10 @@ void Logic::run_frame(GJBaseGameLayer* play, float dt, std::function<void(float)
     if (!rendering && !logic.real_time_mode && frame_dt > 0.25f)
         frame_dt = 0.25f;
     frame_dt *= speed;
+    // a time warp over 1x: gd speeds the whole scheduler up for it (steps stay the same length, more of them run).
+    // i pin the schedulers speed to 1 in a lvl, so a warp over 1 did nothing at all
+    if (float warp = play->m_gameState.m_timeWarp; std::isfinite(warp) && warp > 1.f)
+        frame_dt *= std::min(warp, 10.f);
     g_frame_speed = speed;
 
     auto died = [&] {
@@ -583,6 +590,41 @@ void Logic::run_frame(GJBaseGameLayer* play, float dt, std::function<void(float)
     Trajectory::get().refresh(PlayLayer::get());
 }
 
+// TEMP: logs/best.txt, what best frame looked at & did (the last ~400 lines)
+namespace {
+    void best_note(std::string const& line) {
+        static std::deque<std::string> lines;
+        lines.push_back(line);
+        if (lines.size() > 400)
+            lines.pop_front();
+        std::ofstream file(Logic::get().save_root() / "logs" / "best.txt", std::ios::trunc);
+        for (auto const& each : lines)
+            file << each;
+    }
+
+    char const* mode_name(PlayerObject* p) {
+        return !p ? "?" : p->m_isShip ? "ship" : p->m_isBall ? "ball" : p->m_isBird ? "ufo" : p->m_isDart ? "wave" : p->m_isRobot ? "robot" : p->m_isSpider ? "spider" : p->m_isSwing ? "swing" : "cube";
+    }
+}
+
+namespace {
+    // how long a tap can be, in steps. short ones for a cube, up to about half a second for a ship
+    std::vector<int> tap_lengths(double rate) {
+        std::vector<int> out{ 1, 3 };
+        for (double seconds : { 0.03, 0.06, 0.1, 0.15, 0.22, 0.32, 0.45 }) {
+            int steps = static_cast<int>(std::lround(rate * seconds));
+            if (steps > out.back())
+                out.push_back(steps);
+        }
+        return out;
+    }
+
+    // the icons where holding is the whole point. a tap for these is picked from the middle of what works, not the shortest
+    bool hold_mode(PlayerObject* p) {
+        return p && (p->m_isShip || p->m_isDart || p->m_isSwing || p->m_isRobot);
+    }
+}
+
 void Logic::stop_best_frame(char const* why) {
     auto& logic = Logic::get();
     bool was = logic.best_frame_running;
@@ -650,8 +692,11 @@ void Logic::request_best_frame() {
     logic.holding_advance = false;
     logic.advance_queued = false;
     logic.find_best_queued = true;
-    logic.best_frame_running = logic.best_frame_auto;
-    logic.best_frame_step_first = false;
+    // keep going = keep clicking. w/ click that frame off there is nothing to keep going with, it just stops on the frame
+    logic.best_frame_running = logic.best_frame_auto && logic.best_frame_click;
+    // pressed again right where it just clicked: that click is still waiting for the next step. take that step 1st so the
+    // search starts from after it, or it would find ts same frame again & flip the click right back
+    logic.best_frame_step_first = logic.best_frame_click && logic.best_frame_clicked_at == logic.step_frame && !play->m_queuedButtons.empty();
 }
 
 void Logic::find_best_frame(PlayLayer* play, std::function<void(float)> const& tick) {
@@ -666,6 +711,8 @@ void Logic::find_best_frame(PlayLayer* play, std::function<void(float)> const& t
         float tick_dt = logic.physics_step();
         if (!std::isfinite(tick_dt) || !(tick_dt > 0.f) || tick_dt > 1.f)
             return false;
+        // a tap best frame planned ends on its frame, also while its me doing the stepping
+        Logic::get().best_auto_release(play);
         logic.steps_left = 1;
         logic.steps_this_tick = 1;
         tick(tick_dt);
@@ -673,6 +720,19 @@ void Logic::find_best_frame(PlayLayer* play, std::function<void(float)> const& t
         logic.steps_this_tick = 0;
         return !play->m_playerDied && !play->m_hasCompletedLevel;
     };
+    // the last click was a tap that isnt over yet: run it out 1st, the search starts after the release
+    bool ran_out = false;
+    while (logic.best_flip_back_at >= 0 && logic.best_hold_owned) {
+        ran_out = true;
+        if (!step())
+            break;
+    }
+    if (ran_out && !play->m_playerDied && !play->m_hasCompletedLevel) {
+        // 1 more so the release itself has happened
+        if (!play->m_queuedButtons.empty())
+            step();
+        logic.best_frame_step_first = false;
+    }
     if (std::exchange(logic.best_frame_step_first, false) && !step()) {
         logic.present = true;
         Logic::get().stop_best_frame(play->m_hasCompletedLevel ? "Level complete" : "Find Best Frame stopped");
@@ -697,18 +757,59 @@ void Logic::find_best_frame(PlayLayer* play, std::function<void(float)> const& t
     Window best;
     Window cur;
     int full = 0;
+    // a frame only counts if clicking there is worth it:
+    //   needed = leaving the button alone dies somewhere in the look ahead
+    //   acts   = the click changes where the icon goes RIGHT AWAY (a cube thats still in the air: it doesnt, so it waits
+    //            for the landing instead of clicking a few frames ahead over & over for nothing)
+    bool danger = false;
+    std::vector<CCPoint> flipped, stayed;
+    std::string seen;
+    {
+        auto* body = player1 ? play->m_player1 : play->m_player2;
+        seen = fmt::format("SEARCH from={} {} ground={} held={} yvel={:.3f} |", start, mode_name(body), body && body->m_isOnGround,
+            body && Logic::button_held(body, static_cast<int>(PlayerButton::Jump)), body ? body->m_yVelocity : 0.0);
+    }
     for (int i = 0; i <= range; ++i) {
         int len = 0;
-        int score = trajectory.flip_survival(play, player1, len);
+        flipped.clear();
+        int score = trajectory.flip_survival(play, player1, len, &flipped);
         if (len <= 0)
             break;
         full = std::max(full, len);
-        if (score == cur.score && cur.to == i - 1)
-            cur.to = i;
-        else
-            cur = { i, i, score };
-        if (cur.score > best.score || cur.from == best.from)
-            best = cur;
+        int stay_len = 0;
+        stayed.clear();
+        int stays = trajectory.flip_survival(play, player1, stay_len, &stayed, 0, true);
+        bool needed = stays < len;
+        danger = danger || needed;
+        bool acts = false;
+        for (std::size_t n = 0; n < 4 && !acts; ++n) {
+            if (n >= flipped.size() || n >= stayed.size())
+                acts = flipped.size() != stayed.size();
+            else
+                acts = std::abs(flipped[n].x - stayed[n].x) > 0.001f || std::abs(flipped[n].y - stayed[n].y) > 0.001f;
+        }
+        // a click can also be a tap: press, then let go a bit later. the frame is worth the best of those
+        if (needed && acts && logic.best_frame_release && score < len) {
+            for (int tap : tap_lengths(logic.sample_rate())) {
+                int tap_len = 0;
+                score = std::max(score, trajectory.flip_survival(play, player1, tap_len, nullptr, 0, false, tap));
+                if (score >= len)
+                    break;
+            }
+        }
+        if (i < 40)
+            seen += fmt::format(" {}:{}/{}{}{}", i, score, stays, needed ? "N" : "", acts ? "A" : "");
+        if (needed && acts) {
+            if (score == cur.score && cur.to == i - 1)
+                cur.to = i;
+            else
+                cur = { i, i, score };
+            if (cur.score > best.score || cur.from == best.from)
+                best = cur;
+        }
+        else {
+            cur = {};
+        }
         if (best.score >= full && cur.from != best.from)
             break;
         if (i == range)
@@ -719,6 +820,13 @@ void Logic::find_best_frame(PlayLayer* play, std::function<void(float)> const& t
             break;
     }
     logic.present = true;
+    best_note(seen + fmt::format(" | full={} best={}..{} score={} ended_at={} dead={}\n", full, best.from, best.to, best.score, logic.step_frame, play->m_playerDied));
+    if (best.score <= 0 && !danger && !play->m_playerDied) {
+        // nothing to click for in ts stretch. it stays where it got to, the next press carries on from here
+        Logic::get().stop_best_frame();
+        logic.message = fmt::format("Nothing to click for (+{})", logic.step_frame - start);
+        return;
+    }
     if (best.score <= 0) {
         Logic::get().stop_best_frame();
         logic.message = "No frame found";
@@ -756,7 +864,49 @@ void Logic::click_best_frame(PlayLayer* play) {
     }
     bool player1 = logic.best_frame_click_p1;
     bool held = Trajectory::get().held_next(play, player1);
+    // smart release: how long should ts click last? every tap length is tried against just staying flipped, the best wins.
+    // a tie goes to the tap (so there IS a release & the next best frame can look for the next press)
+    logic.best_flip_back_at = -1;
+    if (logic.best_frame_release) {
+        auto& trajectory = Trajectory::get();
+        int full = 0;
+        int stay = trajectory.flip_survival(play, player1, full);
+        auto taps = tap_lengths(logic.sample_rate());
+        std::vector<int> lives;
+        int top = -1;
+        for (int tap : taps) {
+            int tap_full = 0;
+            lives.push_back(trajectory.flip_survival(play, player1, tap_full, nullptr, 0, false, tap));
+            top = std::max(top, lives.back());
+        }
+        std::string note = fmt::format("  PLAN frame={} stay={} full={} taps:", logic.step_frame, stay, full);
+        for (std::size_t n = 0; n < taps.size(); ++n)
+            note += fmt::format(" {}={}", taps[n], lives[n]);
+        if (top >= stay && top > 0) {
+            // the 1st run of tap lengths that all do that well
+            std::size_t first = 0;
+            while (lives[first] != top)
+                ++first;
+            std::size_t last = first;
+            while (last + 1 < lives.size() && lives[last + 1] == top)
+                ++last;
+            auto* body = player1 ? play->m_player1 : play->m_player2;
+            std::size_t pick = hold_mode(body) ? first + (last - first) / 2 : first;
+            logic.best_flip_back_at = logic.step_frame + taps[pick];
+            note += fmt::format(" -> tap {} (back on frame {})", taps[pick], logic.best_flip_back_at);
+        }
+        else {
+            note += " -> stays";
+        }
+        best_note(note + "\n");
+    }
     play->queueButton(static_cast<int>(PlayerButton::Jump), !held, !player1, Logic::get().click_stamp());
+    logic.best_frame_clicked_at = logic.step_frame;
+    best_note(fmt::format("CLICK frame={} {}\n", logic.step_frame, held ? "release" : "press"));
+    logic.best_hold_owned = true;
+    logic.best_hold = !held;
+    logic.best_hold_raw = Logic::get().raw_jump(play, !player1);
+    logic.best_release_checked = -1;
     Logic::get().reset_traj();
     if (logic.best_frame_running && !logic.best_frame_auto)
         logic.best_frame_running = false;
@@ -764,6 +914,30 @@ void Logic::click_best_frame(PlayLayer* play) {
         logic.best_frame_step_first = true;
         logic.find_best_queued = true;
     }
+}
+
+// the other half of a tap best frame planned (click_best_frame): on its frame the button goes back the other way
+void Logic::best_auto_release(PlayLayer* play) {
+    auto& logic = Logic::get();
+    if (!play || logic.best_flip_back_at < 0)
+        return;
+    if (!logic.best_hold_owned || play->m_playerDied || !play->m_started) {
+        logic.best_flip_back_at = -1;
+        return;
+    }
+    if (logic.predicting || logic.backstepping || logic.backstep_target >= 0 || logic.step_frame < logic.best_flip_back_at)
+        return;
+    bool player1 = logic.best_frame_click_p1;
+    logic.best_flip_back_at = -1;
+    // touching the button myself takes it back
+    if (Logic::get().raw_jump(play, !player1) != logic.best_hold_raw) {
+        logic.best_hold_owned = false;
+        return;
+    }
+    best_note(fmt::format("TAP ENDS frame={} {}\n", logic.step_frame, logic.best_hold ? "release" : "press"));
+    play->queueButton(static_cast<int>(PlayerButton::Jump), !logic.best_hold, !player1, Logic::get().click_stamp());
+    logic.best_hold = !logic.best_hold;
+    Logic::get().reset_traj();
 }
 
 void Logic::cancel_steps() {

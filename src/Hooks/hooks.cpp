@@ -17,6 +17,7 @@
 #include "Physics/gravity.hpp"
 #include "Physics/player.hpp"
 #include "Physics/prediction_art.hpp"
+#include "Rendering/effect_frame.hpp"
 #include <unordered_set>
 #include <Geode/binding/PauseLayer.hpp>
 #include <Geode/modify/PauseLayer.hpp>
@@ -58,6 +59,7 @@
 #include <Geode/modify/ShaderLayer.hpp>
 #include <Geode/modify/GJEffectManager.hpp>
 #include <Geode/modify/HardStreak.hpp>
+#include <fstream>
 #include <Geode/binding/PointNode.hpp>
 #include <Geode/modify/CCEGLView.hpp>
 #include <Geode/modify/CCDirector.hpp>
@@ -115,6 +117,12 @@ void Logic::sync_predict_hooks() {
 
 namespace {
     constexpr int DASH_SPIN_TAG = 12;
+    echo::effects::Frame g_effectFrame;
+
+    bool repeated_effect(echo::effects::Key const& key) {
+        auto const& logic = Logic::get();
+        return echo::opt::effects && !logic.predicting && !logic.refresh_only && !logic.backstepping && g_effectFrame.repeated(key);
+    }
     bool in_orb_button = false;
     // the swifts own release & press. these must NOT start another one
     bool orb_swift = false;
@@ -434,6 +442,50 @@ void check_physics_step_patch();
 void echo_guard_step_site();
 #endif
 
+// TEMP: what killed the icon, real (logs/death.txt, 1 file per death) or in a look ahead (goes in logs/traj.txt).
+// the object gd names, its hitbox & the icons, so a line that lives where the real icon dies can be compared
+namespace forecast {
+    std::string describe(GameObject* object);
+    void dump_line(std::string const& line);
+}
+
+void echo_death_note(PlayLayer* play, PlayerObject* player, GameObject* object, bool predicted) {
+    if (!player)
+        return;
+    auto corners = [](OBB2D* box) {
+        if (!box)
+            return std::string("none");
+        std::string out;
+        for (auto const& c : box->m_corners)
+            out += fmt::format("({:.2f},{:.2f})", c.x, c.y);
+        return out;
+    };
+    auto mine = player->getObjectRect();
+    std::string text = fmt::format("{} frame={} icon={:.3f},{:.3f} yvel={:.4f} size={} rect={:.2f}..{:.2f} x {:.2f}..{:.2f} box={}\n", predicted ? "  DEATH" : "DEATH",
+        Logic::get().step_frame, player->getPositionX(), player->getPositionY(), player->m_yVelocity, player->m_vehicleSize, mine.getMinX(), mine.getMaxX(),
+        mine.getMinY(), mine.getMaxY(), corners(player->getOrientedBox()));
+    if (object) {
+        auto rect = object->getObjectRect();
+        text += fmt::format("{}  by uid={} id={} type={} at={:.3f},{:.3f} rot={:.2f} scale={:.2f},{:.2f} rect={:.2f}..{:.2f} x {:.2f}..{:.2f} box={} radius={} {}\n", predicted ? "  " : "",
+            object->m_uniqueID, object->m_objectID, static_cast<int>(object->m_objectType), object->m_positionX, object->m_positionY, object->getRotation(),
+            object->getScaleX(), object->getScaleY(), rect.getMinX(), rect.getMaxX(), rect.getMinY(), rect.getMaxY(), corners(object->m_orientedBox),
+            object->m_objectRadius, forecast::describe(object));
+    }
+    else {
+        text += predicted ? "    by nothing gd named (a solid / the edge)\n" : "  by nothing gd named (a solid / the edge)\n";
+    }
+    if (predicted) {
+        forecast::dump_line(text);
+        return;
+    }
+    std::ofstream file(Logic::get().save_root() / "logs" / "death.txt", std::ios::trunc);
+    file << text;
+    // & the last look ahead before it, traj.txt is already the dead frame by the time anyone looks
+    std::error_code ec;
+    std::filesystem::copy_file(Logic::get().save_root() / "logs" / "traj-prev.txt", Logic::get().save_root() / "logs" / "traj-before-death.txt",
+        std::filesystem::copy_options::overwrite_existing, ec);
+}
+
 class $modify(EchoPlayLayer, PlayLayer) {
     bool init(GJGameLevel* level, bool useReplay, bool dontCreateObjects) {
 #ifdef GEODE_IS_WINDOWS
@@ -510,6 +562,7 @@ class $modify(EchoPlayLayer, PlayLayer) {
     }
 
     void resetLevel() {
+        g_effectFrame.clear();
         restore_tilt(m_player1);
         restore_tilt(m_player2);
         clear_tilt();
@@ -592,9 +645,12 @@ class $modify(EchoPlayLayer, PlayLayer) {
         }
         // predicting must NEVER kill the real attempt
         if (Logic::get().predicting) {
+            echo_death_note(this, player, object, true);
             Trajectory::get().mark_predict_death(player);
             return;
         }
+        if (!m_playerDied)
+            echo_death_note(this, player, object, false);
         if (Trajectory::get().mark_dead(player) || m_player1->m_isDead || m_player2->m_isDead)
             return;
         if (Logic::get().should_noclip(this, player)) {
@@ -1771,14 +1827,9 @@ class $modify(EchoPlayerObject, PlayerObject) {
             echo::step::trace_event(fmt::format("DASH_START frame={} p2={} id={} uid={} was_dashing={} x={:.3f} y={:.4f}\n", Logic::get().step_frame + 1,
                 layer && this == layer->m_player2, ring ? ring->m_objectID : 0, ring ? ring->m_uniqueID : 0, m_isDashing, getPositionX(), getPositionY()));
         }
-        // a 2nd dash off the same kind of orb on 1 step starts w/out its burst (scarlet utils does ts for stacked orbs).
-        // 50 stacked dash orbs = 50 bursts on 1 frame otherwise
-        static int last_step = std::numeric_limits<int>::min(), last_orb = 0;
-        int step = Logic::get().step_frame;
-        bool repeat = echo::opt::effects && ring && step == last_step && ring->m_objectID == last_orb;
-        last_step = step;
-        last_orb = ring ? ring->m_objectID : 0;
         bool loud = m_playEffects;
+        // physics still runs; only repeated bursts within this shown frame are quiet
+        bool repeat = loud && ring && repeated_effect({ this, 0, ring->m_objectID });
         if (Logic::get().no_effects || repeat)
             m_playEffects = false;
         PlayerObject::startDashing(ring);
@@ -1810,13 +1861,8 @@ class $modify(EchoPlayerObject, PlayerObject) {
                     Logic::get().step_frame + 1, layer && player == layer->m_player2, visual, tick, used, player->getRotation(), player->m_yVelocity, player->getPositionX(), player->getPositionY()));
             }
         } dash_note{ this, was_dashing, visual_spin, tick_spin, use_tick };
-        // same idea as startDashing: only the 1st dash that ends on a step gets the full end effect
-        static int last_end = std::numeric_limits<int>::min();
-        int step = Logic::get().step_frame;
-        bool repeat = echo::opt::effects && was_dashing && step == last_end;
-        if (was_dashing)
-            last_end = step;
         bool reduced = m_maybeReducedEffects;
+        bool repeat = was_dashing && !reduced && repeated_effect({ this, 1, 0 });
         if (Logic::get().no_effects || repeat)
             m_maybeReducedEffects = true;
         PlayerObject::stopDashing();
@@ -2054,6 +2100,17 @@ class $modify(EchoSchedulerDepth, CCScheduler) {
 
 class $modify(EchoScheduler, CCScheduler) {
     void update(float dt) {
+        struct EffectsFrame {
+            bool outer;
+            EffectsFrame() : outer(Logic::get().scheduler_depth <= 1 && !Logic::get().in_scheduler && !Logic::get().refresh_only) {
+                if (outer)
+                    g_effectFrame.begin();
+            }
+            ~EffectsFrame() {
+                if (outer)
+                    g_effectFrame.end();
+            }
+        } effects_frame;
         Logic::get().sync_predict_hooks();
         keep_menu_cursor();
         auto& logic = Logic::get();
@@ -2119,6 +2176,7 @@ class $modify(EchoScheduler, CCScheduler) {
         });
         logic.in_scheduler = false;
         logic.save_shown_step = false;
+        Logic::get().best_auto_release(play);
         if (layer) {
             bool paused = logic.editor_paused;
             bool dead = false;
@@ -2247,6 +2305,20 @@ class $modify(EchoEnhancedObject, EnhancedGameObject) {
             phys::activateForTrajectory(static_cast<EffectGameObject*>(static_cast<GameObject*>(this)), player);
             return;
         }
+        // TEMP: logs/acts.txt, every portal / pad / orb the real icon sets off w/ where both of them were, to check
+        // "it went off before i touched it"
+        if (!Logic::get().predicting && player) {
+            static int lines = 0;
+            if (lines++ < 3000) {
+                auto mine = player->getObjectRect();
+                auto const& rect = m_objectRect;
+                std::ofstream file(Logic::get().save_root() / "logs" / "acts.txt", lines == 1 ? std::ios::trunc : std::ios::app);
+                file << fmt::format("frame={} uid={} id={} obj={:.2f},{:.2f} sprite_y={:.2f} rect={:.1f}..{:.1f} x {:.1f}..{:.1f} rect_dirty={} box_dirty={} | icon={:.2f},{:.2f} box={:.1f}..{:.1f} x {:.1f}..{:.1f}\n",
+                    Logic::get().step_frame, m_uniqueID, m_objectID, m_positionX, m_positionY, CCNode::getPositionY(), rect.getMinX(), rect.getMaxX(), rect.getMinY(),
+                    rect.getMaxY(), m_isObjectRectDirty, m_isOrientedBoxDirty, player->getPositionX(), player->getPositionY(), mine.getMinX(), mine.getMaxX(),
+                    mine.getMinY(), mine.getMaxY());
+            }
+        }
         // every portal / pad / orb the real icon sets off. a recording & its playback must have the same list
         if (Logic::get().trace_logging && !Logic::get().predicting)
             echo::step::trace_note(fmt::format("ACT frame={} uid={} id={} x={:.3f} y={:.3f} p2={} was={}{} off={} state={}\n", Logic::get().step_frame, m_uniqueID, m_objectID,
@@ -2275,19 +2347,9 @@ class $modify(EchoRingObject, RingObject) {
             if (caused(play->m_player1) || caused(play->m_player2))
                 return;
         }
-        // stacked orbs of the same kind on the same spot all make the SAME ring on the same step. only the first one is made,
-        // so there is nothing to merge or throw away after
-        if (echo::opt::effects) {
-            static int last_kind = 0, last_frame = -1;
-            static CCPoint last_spot;
-            int frame = Logic::get().step_frame;
-            CCPoint spot = getPosition();
-            if (m_objectID == last_kind && frame == last_frame && spot.x == last_spot.x && spot.y == last_spot.y)
-                return;
-            last_kind = m_objectID;
-            last_frame = frame;
-            last_spot = spot;
-        }
+        CCPoint spot = getPosition();
+        if (repeated_effect({ getParent(), 2, m_objectID, spot.x, spot.y }))
+            return;
         RingObject::spawnCircle();
     }
 };
@@ -2574,6 +2636,34 @@ class $modify(EchoEffectManager, GJEffectManager) {
     }
 };
 
+// TEMP, chasing the crash in gds updateCollisionBlocks (lvl 128272790, a start pos way out at 2^25): gd takes a block out
+// of section -1. ts only WRITES DOWN the odd blocks going in (logs/blocks.txt, closed every time so its there after the
+// crash, the last "call" is the 1 that died). it changes nothing: my 2 tries at pulling those blocks out 1st didnt stop
+// the crash & may have kept portals from ever getting into the list collisions use
+void echo_block_flush(std::string const& head);
+
+class $modify(EchoCollisionBlocks, GJBaseGameLayer) {
+    void updateCollisionBlocks() {
+        // only out where it crashes (the icon past x 100000), the file is rewritten before every call there
+        if (m_player1 && m_player1->getPositionX() > 100000.f && m_collisionBlocks) {
+            std::string head = fmt::format("call frame={} blocks={} sections={} block_sections={} calc={} icon x={:.1f} y={:.1f} factor={}\n", Logic::get().step_frame,
+                m_collisionBlocks->count(), m_sections.size(), m_collisionBlockSections.size(), m_calcCollisionBlockObjectsSize, m_player1->getPositionX(),
+                m_player1->getPositionY(), m_sectionXFactor);
+            for (unsigned i = 0; i < m_collisionBlocks->count() && i < 60; ++i) {
+                auto* obj = static_cast<GameObject*>(m_collisionBlocks->objectAtIndex(i));
+                if (!obj)
+                    continue;
+                auto const* raw = reinterpret_cast<std::uint8_t const*>(obj);
+                head += fmt::format("  i={} uid={} id={} x={:.1f} y={:.1f} other={} inner={} outer={} middle={} off={} ext={} b541={}\n", i, obj->m_uniqueID, obj->m_objectID,
+                    obj->m_positionX, obj->m_positionY, obj->m_someOtherIndex, obj->m_innerSectionIndex, obj->m_outerSectionIndex, obj->m_middleSectionIndex,
+                    obj->m_isGroupDisabled, obj->m_hasExtendedCollision, raw[0x541]);
+            }
+            echo_block_flush(head);
+        }
+        GJBaseGameLayer::updateCollisionBlocks();
+    }
+};
+
 class $modify(EchoHardStreak, HardStreak) {
     void addPoint(CCPoint point) {
         auto* points = m_pointArray;
@@ -2582,12 +2672,9 @@ class $modify(EchoHardStreak, HardStreak) {
             HardStreak::addPoint(point);
             return;
         }
-        auto* layer = GJBaseGameLayer::get();
-        float zoom = layer ? layer->m_gameState.m_cameraZoom : 1.f;
-        if (!std::isfinite(zoom) || zoom < 0.05f)
-            zoom = 1.f;
-        float reach = 0.25f / zoom;
-        if (ccpDistanceSQ(last->m_point, point) < reach * reach)
+        // only a point on the SAME spot is dropped (a click & release in 1 step). it used to drop anything within 0.25,
+        // but at 3000 tps a wave moves ~0.15 a step: spam there lost random corners & the trail came out all spikes
+        if (ccpDistanceSQ(last->m_point, point) < 1e-6f)
             return;
         HardStreak::addPoint(point);
     }

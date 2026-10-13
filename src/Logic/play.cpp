@@ -146,6 +146,14 @@ bool Logic::play_input(GJBaseGameLayer* play, bool icon2, bool down, int button)
     return true;
 }
 
+// the button itself: a finger / key / mouse really down for that icon
+bool Logic::raw_jump(GJBaseGameLayer* play, bool icon2) const {
+    if (!play || !play->m_uiLayer)
+        return false;
+    auto* ui = play->m_uiLayer;
+    return icon2 ? ui->m_p2Jumping || ui->m_p2TouchId != -1 || key_jump_p2 : ui->m_p1Jumping || ui->m_p1TouchId != -1 || key_jump_p1;
+}
+
 bool Logic::physical_hold(GJBaseGameLayer* play, bool icon2) {
     if (!play || !play->m_uiLayer)
         return false;
@@ -154,6 +162,14 @@ bool Logic::physical_hold(GJBaseGameLayer* play, bool icon2) {
     auto* ui = play->m_uiLayer;
     bool p1 = ui->m_p1Jumping || ui->m_p1TouchId != -1 || key_jump_p1 || (restart_hold_captured && death_jump_p1);
     bool p2 = ui->m_p2Jumping || ui->m_p2TouchId != -1 || key_jump_p2 || (restart_hold_captured && death_jump_p2);
+    if (best_hold_owned) {
+        bool icon = !best_frame_click_p1;
+        // i touched the button myself = its mine again
+        if (Logic::raw_jump(play, icon) != best_hold_raw)
+            best_hold_owned = false;
+        else
+            (icon ? p2 : p1) = best_hold;
+    }
     if (restart_hold_captured && ((death_jump_p1 && (ui->m_p1Jumping || ui->m_p1TouchId != -1)) || (death_jump_p2 && (ui->m_p2Jumping || ui->m_p2TouchId != -1)))) {
         restart_hold_captured = false;
     }
@@ -1239,6 +1255,9 @@ void reshuffle_sequence(Session& value) {
 
 void Logic::onReset(PlayLayer* play) {
     auto& logic = Logic::get();
+    // a new attempt (not a step back) starts w/ nothing held by best frame
+    if (!logic.backstepping)
+        logic.best_hold_owned = false;
     Logic::get().clear_click_hitbox();
     logic.trail_p1.clear();
     logic.trail_p2.clear();
@@ -1725,6 +1744,7 @@ void Logic::on_complete(PlayLayer* play) {
 
 void Logic::onQuit(PlayLayer*) {
     auto& logic = Logic::get();
+    logic.best_hold_owned = false;
     Logic::get().finish_backstep(nullptr);
     Logic::get().stop_best_frame();
     Logic::get().clear_backsteps();

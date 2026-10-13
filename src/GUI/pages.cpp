@@ -661,9 +661,16 @@ void GUI::main() {
             persist();
         tip("Automatically clicks on the best frame instead of only stopping there.");
         eui::RowHalf();
+        ImGui::BeginDisabled(!logic.best_frame_click);
         if (toggle("Keep Going", logic.best_frame_auto))
             persist();
+        ImGui::EndDisabled();
         tip("Keeps finding the next best frame after each click until none survive.");
+        ImGui::BeginDisabled(!logic.best_frame_click);
+        if (toggle("Smart Release", logic.best_frame_release))
+            persist();
+        ImGui::EndDisabled();
+        tip("Works out how long each click should be held and lets go by itself.");
 #endif
         ImGui::EndDisabled();
         eui::Row("Search range", "How many steps ahead to search. Limited by how far Backstep can go back.");
@@ -1515,9 +1522,6 @@ void GUI::draw_theme() {
             geode::utils::file::openFolder(logic.save_root() / "logs");
         tip("Opens the folder the logs are saved in.");
 #ifdef GEODE_IS_WINDOWS
-        toggle("Collision Prefetch", echo::opt::prefetch);
-        tip("Prefetches the next objects in the collision loops.");
-        eui::RowHalf();
         toggle("Inline Getters", echo::opt::getters);
         tip("Inlines the rect getters in the collision check.");
 #endif
