@@ -1200,11 +1200,11 @@ namespace eui {
         }
     }
 
-    void begin_field(char const* label, float fill, int parts) {
+    void begin_field(char const* label, float fill, int parts, float trim) {
         ImGuiWindow* window = ImGui::GetCurrentWindow();
         ImGuiID id = window->GetID(label);
         ImVec2 pos = window->DC.CursorPos;
-        float width = ImGui::CalcItemWidth();
+        float width = std::max(1.f, ImGui::CalcItemWidth() - trim);
         ImRect bb(pos, ImVec2(pos.x + width, pos.y + ImGui::GetFrameHeight()));
         s_field = { id, bb, window };
         if (!window->SkipItems && ImGui::IsRectVisible(bb.Min, bb.Max)) {
@@ -1695,6 +1695,22 @@ namespace eui {
         return on;
     }
 
+    void ScrollMark() {
+        ImGuiWindow* window = ImGui::GetCurrentWindow();
+        if (window->ScrollMax.y <= 0.f)
+            return;
+        ImRect box = window->Rect();
+        float tall = box.GetHeight();
+        float thumb = std::max(em(1.2f), tall * tall / (tall + window->ScrollMax.y));
+        float at = box.Min.y + (tall - thumb) * (window->Scroll.y / window->ScrollMax.y);
+        float wide = std::max(2.f, em(.14f));
+        float x = box.Max.x - wide;
+        ImDrawList* draw = window->DrawList;
+        draw->PushClipRect(box.Min, box.Max, false);
+        draw->AddRectFilled(ImVec2(x, at), ImVec2(x + wide, at + thumb), ImGui::GetColorU32(faded(color(ImGuiCol_CheckMark), .7f)), wide * .5f);
+        draw->PopClipRect();
+    }
+
     namespace {
         bool closeButton(ImGuiWindow* window, ImRect const& bb, char const* id_text);
     }
@@ -1993,6 +2009,9 @@ namespace eui {
             return begin_tile(title, width_em);
         ImGuiStyle const& style = ImGui::GetStyle();
         float width = em(width_em), height = 0.f;
+        // 1 card a row, as wide as the page
+        if (single_column())
+            width = std::max(width, ImGui::GetContentRegionAvail().x);
         if (!s_cardRows.empty() && !single_column()) {
             if (s_cardRows.back().cards++ > 0)
                 ImGui::SameLine();

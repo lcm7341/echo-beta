@@ -69,6 +69,8 @@ if (IOS)
     enable_language(OBJCXX)
     target_sources(${PROJECT_NAME} PRIVATE src/Recorder/ios_encoder.mm)
     set_source_files_properties(src/Recorder/ios_encoder.mm PROPERTIES SKIP_PRECOMPILE_HEADERS ON COMPILE_FLAGS "-fobjc-arc")
+    target_sources(${PROJECT_NAME} PRIVATE src/Hack/ios_screen.mm)
+    set_source_files_properties(src/Hack/ios_screen.mm PROPERTIES SKIP_PRECOMPILE_HEADERS ON COMPILE_FLAGS "-fobjc-arc -Wno-deprecated-declarations")
     target_link_libraries(${PROJECT_NAME} "-framework AVFoundation" "-framework CoreMedia" "-framework CoreVideo" "-framework AudioToolbox" "-framework QuartzCore" "-framework UIKit")
 endif()
 

@@ -754,8 +754,9 @@ void Trajectory::simulate(PlayLayer* play, bool player1, Click click, bool both,
                 bottom = std::min(bottom, other.y);
                 top = std::max(top, other.y);
             }
+            // the forecasts path is p1s, so only a line led by p1 can say how far off that path it is
             if (logic.traj_moving_objects)
-                forecast::apply(play, i + 1, { left - REACH, bottom - REACH, right - left + 2.f * REACH, top - bottom + 2.f * REACH });
+                forecast::apply(play, i + 1, { left - REACH, bottom - REACH, right - left + 2.f * REACH, top - bottom + 2.f * REACH }, fake == fake1 ? at.y : NAN);
         }
         std::array<bool, 2> orb_press{};
         if (played || (pair && logic.is_playing())) {

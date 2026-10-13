@@ -462,7 +462,7 @@ void GUI::draw_frame_bar() {
         ImGui::SameLine();
         button("Best", 4, logic.backstep, gui.bar_best);
         ImGui::SameLine();
-        button("Resume", 3, true, gui.bar_resume);
+        button(logic.frame_advance ? "Resume" : "Pause", 3, true, gui.bar_resume);
         ImVec2 min = ImGui::GetWindowPos();
         ImVec2 size2 = ImGui::GetWindowSize();
         gui.bar_area = ImVec4(min.x, min.y, min.x + size2.x, min.y + size2.y);
@@ -570,11 +570,13 @@ void GUI::draw_window() {
     if (eui::Header("Echo", Mod::get()->getVersion().toVString().c_str(), GUI::get().theme_logo()))
         GUI::get().begin_close();
     static float page_height = 0.f;
+    static float page_width = 0.f;
     static float measured_at = 0.f;
     static bool settings_measured = false;
     if (measured_at != ImGui::GetFontSize()) {
         measured_at = ImGui::GetFontSize();
         page_height = 0.f;
+        page_width = 0.f;
         settings_measured = false;
     }
     float nav_top = ImGui::GetCursorScreenPos().y - ImGui::GetWindowPos().y;
@@ -598,8 +600,74 @@ void GUI::draw_window() {
     }
     ImGui::SameLine();
     bool boxed = settings_measured && page_height > view_cap + 1.f;
+    // control sizes on mobile: the page keeps the room it has at 1x & everything in it is drawn bigger, and do only 1 card per row
+    // what doesnt fit we just scroll. there is probably a better way to do this too
+    // TODO: brainstorm a better way to scale UI for fat thumbs
+    float inner = 1.f;
+#ifdef GEODE_IS_MOBILE
+    inner = std::clamp(Logic::get().menu_inner_scale, 1.f, 1.5f);
+#endif
+    bool roomy = settings_measured && inner > 1.02f && page_width > 1.f && fill > 1.f;
+    auto finish = [] {
+        GUI::get().draw_status();
+        GUI::get().show_keybind_prompt();
+        GUI::get().draw_macro_picker();
+        GUI::get().draw_theme_picker();
+        GUI::get().draw_clickpack_picker();
+        GUI::get().draw_render_picker();
+        // best frame, 1st time in a lvl that moves things w/ moving objects off for the trajectory
+        auto& logic = Logic::get();
+        if (logic.ask_moving_objects && !ImGui::IsPopupOpen("Moving Objects"))
+            ImGui::OpenPopup("Moving Objects");
+        if (eui::BeginModal("Moving Objects", 22.f)) {
+            ImGui::PushTextWrapPos(0.f);
+            ImGui::TextUnformatted("This level moves objects and the trajectory is not following them, so Best Frame may not be accurate.");
+            ImGui::TextDisabled("Turn on Moving Objects for the trajectory?");
+            ImGui::PopTextWrapPos();
+            float half = eui::RowButton(2);
+            int picked = 0;
+            if (eui::Button("Keep Off", ImVec2(half, 0.f)))
+                picked = 1;
+            ImGui::SameLine();
+            if (eui::Button("Turn On", ImVec2(half, 0.f)))
+                picked = 2;
+            if (picked) {
+                if (picked == 2) {
+                    logic.traj_moving_objects = true;
+                    logic.save_settings_file();
+                }
+                logic.ask_moving_objects = false;
+                ImGui::CloseCurrentPopup();
+                GUI::get().begin_close();
+                logic.request_best_frame();
+            }
+            eui::EndModal();
+        }
+        ImGui::End();
+    };
+    if (roomy) {
+        ImGui::BeginChild("##echo-page-roomy", ImVec2(page_width, fill), ImGuiChildFlags_None, ImGuiWindowFlags_NoScrollbar);
+        // NOT SetWindowFontScale
+        ImGui::PushFont(nullptr, ImGui::GetCurrentContext()->FontSizeBase * inner);
+        ImGuiStyle const& style = ImGui::GetStyle();
+        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(style.FramePadding.x * inner, style.FramePadding.y * inner));
+        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(style.ItemSpacing.x * inner, style.ItemSpacing.y * inner));
+        ImGui::PushStyleVar(ImGuiStyleVar_ItemInnerSpacing, ImVec2(style.ItemInnerSpacing.x * inner, style.ItemInnerSpacing.y * inner));
+        eui::single_column() = true;
+        if (auto* page = GUI::get().active_page(pages)) {
+            GUI::get().page = page->name;
+            GUI::get().fade_page(page->name, page->draw);
+        }
+        eui::single_column() = false;
+        ImGui::PopStyleVar(3);
+        ImGui::PopFont();
+        eui::ScrollMark();
+        ImGui::EndChild();
+        finish();
+        return;
+    }
     if (boxed)
-        ImGui::BeginChild("##echo-page", ImVec2(0.f, view_cap), ImGuiChildFlags_AutoResizeX);
+        ImGui::BeginChild("##echo-page", ImVec2(0.f, view_cap), ImGuiChildFlags_AutoResizeX, ImGuiWindowFlags_NoScrollbar);
     ImGui::BeginGroup();
     eui::last_card_row() = 0;
     bool measuring = false;
@@ -619,6 +687,7 @@ void GUI::draw_window() {
             ImGuiID row = eui::single_column() ? 0 : eui::last_card_row();
             float natural = ImGui::GetItemRectSize().y - (row ? eui::card_row_extra(row) : 0.f);
             page_height = std::max(page_height, natural);
+            page_width = std::max(page_width, ImGui::GetItemRectSize().x);
             rows.emplace_back(row, natural);
         }
         ImGui::PopStyleVar();
@@ -644,15 +713,11 @@ void GUI::draw_window() {
         float spare = std::min(page_height, view_cap) - natural;
         eui::card_row_extra(last_row) = spare > 1.f ? spare : 0.f;
     }
-    if (boxed)
+    if (boxed) {
+        eui::ScrollMark();
         ImGui::EndChild();
-    GUI::get().draw_status();
-    GUI::get().show_keybind_prompt();
-    GUI::get().draw_macro_picker();
-    GUI::get().draw_theme_picker();
-    GUI::get().draw_clickpack_picker();
-    GUI::get().draw_render_picker();
-    ImGui::End();
+    }
+    finish();
 }
 
 $on_mod(Loaded) {
@@ -758,7 +823,8 @@ void GUI::apply_touch_style() {
     float grow = touch_scale();
     (void)base;
     style.TouchExtraPadding = ImVec2(std::max(style.TouchExtraPadding.x, 4.f * grow), std::max(style.TouchExtraPadding.y, 4.f * grow));
-    style.ScrollbarSize = std::max(style.ScrollbarSize, 16.f * grow);
+    // a phone scrolls by dragging anywhere (touch_scroll), nobody grabs the bar. a fat one just ate room from the rows & sat on top of them
+    style.ScrollbarSize = 4.f * grow;
     style.GrabMinSize = std::max(style.GrabMinSize, 14.f * grow);
     auto& io = ImGui::GetIO();
     io.MouseDoubleClickMaxDist = 30.f * grow;

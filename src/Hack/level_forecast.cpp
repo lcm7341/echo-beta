@@ -17,6 +17,7 @@
 #include <Geode/binding/GroupCommandObject2.hpp>
 #include <Geode/binding/PlayLayer.hpp>
 #include <Geode/modify/GJBaseGameLayer.hpp>
+#include <Geode/modify/PlayLayer.hpp>
 #include <Geode/modify/GJEffectManager.hpp>
 #include <Geode/modify/GameObject.hpp>
 #include <Geode/modify/EffectGameObject.hpp>
@@ -33,6 +34,10 @@
 #endif
 
 using namespace geode::prelude;
+
+namespace echo::step {
+    void trace_note(std::string const& line);
+}
 
 namespace {
 #pragma clang diagnostic push
@@ -314,6 +319,17 @@ namespace {
         std::vector<std::uint32_t> base_stamp;
         std::uint32_t base_epoch = 1;
 
+        // objects that go up & down exactly w/ the player (lock to player y, a 1:1 follow). lock_y: 0 = dont know yet,
+        // 1 = every step so far it moved by the players own dy, 2 = no. pre_y = where it was before the steps move
+        std::vector<std::uint8_t> lock_y;
+        std::vector<double> pre_y;
+
+        // where the SPRITE was right before ts forecast run could move it (not the objects position fields, those are in base).
+        // taken fresh every run. it used to live in the cached base & that could be a frame old, so objects got put back a frame behind
+        // fixes jitter
+        std::vector<CCPoint> spot;
+        std::vector<std::uint32_t> spot_stamp;
+
         Sections sections;
         std::vector<std::uint32_t> touched;
         std::vector<std::uint32_t> node_stamp, touch_stamp;
@@ -452,6 +468,10 @@ namespace {
         f.base.assign(amt * STRIDE, 0);
         f.nodes.assign(amt, {});
         f.base_stamp.assign(amt, 0);
+        f.lock_y.assign(amt, 0);
+        f.pre_y.assign(amt, 0.0);
+        f.spot.assign(amt, {});
+        f.spot_stamp.assign(amt, 0);
         f.moved_stamp.assign(amt, 0);
         f.applied_stamp.assign(amt, 0);
         f.touch_stamp.assign(amt, 0);
@@ -471,6 +491,10 @@ namespace {
         f.base.resize(f.objects.size() * STRIDE);
         f.nodes.emplace_back();
         f.base_stamp.push_back(0);
+        f.lock_y.push_back(0);
+        f.pre_y.push_back(0.0);
+        f.spot.emplace_back();
+        f.spot_stamp.push_back(0);
         f.moved_stamp.push_back(0);
         f.applied_stamp.push_back(0);
         f.touch_stamp.push_back(0);
@@ -492,6 +516,13 @@ namespace {
             cache_live(f, i);
     }
 
+    void keep_spot(Forecast& f, std::uint32_t i) {
+        if (f.spot_stamp[i] == f.touch_epoch)
+            return;
+        f.spot_stamp[i] = f.touch_epoch;
+        f.spot[i] = f.objects[i]->CCNode::getPosition();
+    }
+
     void put_base(Forecast& f, std::uint32_t i, bool node) {
         auto* obj = f.objects[i];
         if (node && f.node_stamp[i] == f.touch_epoch) {
@@ -508,6 +539,18 @@ namespace {
                 obj->setOpacity(saved.opacity);
         }
         scatter(obj, f.base.data() + static_cast<std::size_t>(i) * STRIDE);
+        // gd normally only moves the SPRITE later, in the visibility pass, so putting the fields back was enough before
+        // but some objects get quickUpdatePosition at the end of the move step, which moves the sprite right away AND the color sprite (the detail part) with it
+        // after a forecast they sat wherever the forecast last had them until the next live step: jittering, not where the hitbox was
+        // the detail was the problem
+        // fuck gd
+        if (node && f.spot_stamp[i] == f.touch_epoch) {
+            auto const& spot = f.spot[i];
+            if (!obj->CCNode::getPosition().equals(spot))
+                obj->CCNode::setPosition(spot);
+            if (auto* detail = obj->m_colorSprite; detail && !obj->m_colorSpriteLocked && !detail->getPosition().equals(spot))
+                detail->setPosition(spot);
+        }
     }
 
     void touch(Forecast& f, std::uint32_t i) {
@@ -515,6 +558,7 @@ namespace {
             return;
         f.touch_stamp[i] = f.touch_epoch;
         f.touched.push_back(i);
+        keep_spot(f, i);
     }
 
     std::uint32_t record(Forecast& f, std::uint32_t i) {
@@ -631,6 +675,15 @@ namespace {
         f.touched.clear();
         for (std::uint32_t i = 0; i < f.objects.size(); ++i)
             keep_base(f, i);
+        // safety net: keep objs pos before run
+        // anything the run moved w/out being seen is discovered & put back
+        static std::vector<std::pair<double, double>> before;
+        bool netted = f.objects.size() <= 60000;
+        if (netted) {
+            before.resize(f.objects.size());
+            for (std::uint32_t i = 0; i < f.objects.size(); ++i)
+                before[i] = { f.objects[i]->m_positionX, f.objects[i]->m_positionY };
+        }
         f.sections.begin(play);
         for (std::uint32_t i = 0; i < f.objects.size(); ++i) {
             bool quiet = f.has_quiet[i] && f.quiet.size() >= (static_cast<std::size_t>(i) + 1) * STRIDE;
@@ -656,6 +709,7 @@ namespace {
         f.shadow->setParent(play);
         f.recording = true;
         CCPoint fire_from;
+        double player_dy = 0.0;
         for (int step = 0; step < count && f.records.size() < RECORD_LIMIT; ++step) {
             ++f.step_epoch;
             f.moved.clear();
@@ -673,12 +727,36 @@ namespace {
                     p2->CCNode::setPosition(node2 + (at - node1));
                 f.shadow->m_unk780 = at.x - before.x;
                 f.shadow->m_unk784 = at.y - before.y;
+                player_dy = static_cast<double>(at.y) - static_cast<double>(before.y);
                 auto ahead = at - node1;
                 auto shift = sideways ? CCPoint{ 0.f, ahead.y } : CCPoint{ ahead.x, 0.f };
                 play->m_gameState.m_cameraPosition = camera + shift;
                 play->m_gameState.m_cameraPosition2 = camera2 + shift;
             }
             fire_ahead(f, play, fire_from);
+            // follow player y doesnt go thru moveObjects the y is just set
+            for (auto* follow : f.shadow->m_unkVector600) {
+                if (!follow)
+                    continue;
+                auto id = static_cast<std::size_t>(std::clamp(follow->m_targetGroupID, 0, 9999));
+                auto* members = id < play->m_groups.size() ? play->m_groups[id] : nullptr;
+                if (!members)
+                    continue;
+                for (unsigned n = 0; n < members->count(); ++n) {
+                    auto* obj = static_cast<GameObject*>(members->objectAtIndex(n));
+                    if (!obj)
+                        break;
+                    auto i = ensure_index(f, obj);
+                    keep_base(f, i);
+                    keep_spot(f, i);
+                    if (f.moved_stamp[i] != f.step_epoch) {
+                        f.moved_stamp[i] = f.step_epoch;
+                        f.moved.push_back(i);
+                    }
+                    // 3 = follows the icons y
+                    f.lock_y[i] = 3;
+                }
+            }
             f.shadow->updateSpawnTriggers(f.dt);
             note_needed_groups(f.shadow);
             f.shadow->prepareMoveActions(f.dt, false);
@@ -688,6 +766,12 @@ namespace {
             frame.reserve(f.moved.size());
             for (auto i : f.moved) {
                 touch(f, i);
+                // check if it moved by exactly what the player moved that step
+                if (!sideways && f.lock_y[i] < 2) {
+                    double dy = f.objects[i]->m_positionY - f.pre_y[i];
+                    if (std::abs(player_dy) > 0.0001 || std::abs(dy) > 0.0001)
+                        f.lock_y[i] = std::abs(dy - player_dy) <= 0.001 ? 1 : 2;
+                }
                 if (f.objects[i]->m_objectType == GameObjectType::Decoration) {
                     if (f.quiet.size() < f.objects.size() * STRIDE)
                         f.quiet.resize(f.objects.size() * STRIDE);
@@ -711,6 +795,18 @@ namespace {
         f.fired.clear();
         for (auto i : f.touched)
             put_base(f, i, true);
+        if (netted) {
+            for (std::uint32_t i = 0; i < before.size() && i < f.objects.size(); ++i) {
+                auto* obj = f.objects[i];
+                if (obj->m_positionX == before[i].first && obj->m_positionY == before[i].second)
+                    continue;
+                obj->m_positionX = before[i].first;
+                obj->m_positionY = before[i].second;
+                obj->dirtifyObjectPos();
+                obj->dirtifyObjectRect();
+                cache_live(f, i);
+            }
+        }
         f.sections.end();
         saved_state.restore(play->m_gameState);
         GameToolbox::fast_srand(random_state);
@@ -725,6 +821,7 @@ namespace {
         std::fill(f.latest.begin(), f.latest.end(), UINT32_MAX);
         std::fill(f.has_quiet.begin(), f.has_quiet.end(), 0);
         std::fill(f.base_stamp.begin(), f.base_stamp.end(), 0);
+        std::fill(f.lock_y.begin(), f.lock_y.end(), 0);
         f.horizon = 0;
         f.valid = false;
         f.fired_from.clear();
@@ -873,7 +970,7 @@ namespace forecast {
             float off = sideways ? std::abs(expected.y - live.y) : std::abs(expected.x - live.x);
             float speed = onPath ? 0.f : sideways ? std::abs(step.y - f.player_step.y)
                                                   : std::abs(step.x - f.player_step.x);
-            if (play->m_isPlatformer ? off > 30.f : off > 0.5f || speed > 1e-3f)
+            if (play->m_isPlatformer ? off > 30.f : off > 0.5f || speed > 0.001f)
                 stale() = true;
         }
         if (f.valid && !stale() && elapsed > 0 && elapsed <= static_cast<std::uint64_t>(f.frames.size())) {
@@ -897,6 +994,8 @@ namespace forecast {
                 std::memcpy(&px, f.records.data() + f.last_offset[i] + RECORD_POS, sizeof(double));
                 std::memcpy(&py, f.records.data() + f.last_offset[i] + RECORD_POS + sizeof(double), sizeof(double));
                 auto* obj = f.objects[i];
+                if (f.lock_y[i] == 3)
+                    continue;
                 if (std::abs(px - obj->m_positionX) > TOLERANCE || std::abs(py - obj->m_positionY) > TOLERANCE) {
                     wrong = true;
                     break;
@@ -986,11 +1085,17 @@ namespace forecast {
         }
     }
 
-    void apply(PlayLayer* play, int step, CCRect const& area) {
+    void apply(PlayLayer* play, int step, CCRect const& area, float player_y) {
         auto& f = state();
         if (!play || play != f.play || !f.valid || step < 1 || step > f.horizon)
             return;
         auto const& frame = f.frames[static_cast<std::size_t>(step - 1)];
+        double lift = 0.0;
+        if (std::isfinite(player_y) && static_cast<std::size_t>(step - 1) < f.fired_from.size()) {
+            float assumed = f.fired_from[static_cast<std::size_t>(step - 1)].y;
+            if (std::isfinite(assumed))
+                lift = static_cast<double>(player_y) - static_cast<double>(assumed);
+        }
         if (!f.applying) {
             if (frame.empty())
                 return;
@@ -1007,6 +1112,11 @@ namespace forecast {
                 f.applied.push_back(i);
             }
             scatter(f.objects[i], f.records.data() + offset);
+            if (lift != 0.0 && (f.lock_y[i] == 1 || f.lock_y[i] == 3)) {
+                f.objects[i]->m_positionY += lift;
+                f.objects[i]->m_isObjectRectDirty = true;
+                f.objects[i]->m_isOrientedBoxDirty = true;
+            }
             play->updateObjectSection(f.objects[i]);
         };
         for (auto [i, offset] : frame) {
@@ -1133,9 +1243,11 @@ class $modify(ForecastMoves, GJBaseGameLayer) {
                 break;
             auto i = ensure_index(f, obj);
             keep_base(f, i);
+            keep_spot(f, i);
             if (f.moved_stamp[i] != f.step_epoch) {
                 f.moved_stamp[i] = f.step_epoch;
                 f.moved.push_back(i);
+                f.pre_y[i] = obj->m_positionY;
             }
         }
     }
@@ -1157,6 +1269,8 @@ class $modify(ForecastToggles, GJBaseGameLayer) {
     void toggleGroupTriggered(int group, bool activate, gd::vector<int> const& remapKeys, int triggerID, int controlID) {
         if (state().recording)
             return;
+        if (Logic::get().trace_logging && !Logic::get().predicting)
+            echo::step::trace_note(fmt::format("TG frame={} group={} on={} trigger={} state={}\n", Logic::get().step_frame, group, activate, triggerID, static_cast<int>(Logic::get().state)));
         GJBaseGameLayer::toggleGroupTriggered(group, activate, remapKeys, triggerID, controlID);
     }
 
@@ -1241,6 +1355,7 @@ class $modify(ForecastNodes, GameObject) {
         if (f.node_stamp[i] == f.touch_epoch)
             return;
         f.node_stamp[i] = f.touch_epoch;
+        keep_spot(f, i);
         f.nodes[i] = node_of(this);
     }
 

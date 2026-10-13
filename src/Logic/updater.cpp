@@ -9,6 +9,7 @@
 // time warp below 1x makes each step SHORTER in level time, it does not add steps
 // find best frame is here too: step forward, ask the trajectory how long a flip would survive, stop on the best frame
 #include "Logic/logic.hpp"
+#include "GUI/gui.hpp"
 #include "Hooks/step.hpp"
 #include "Hooks/opt.hpp"
 #include "Hack/trajectory.hpp"
@@ -22,6 +23,7 @@
 #include <cmath>
 #include <functional>
 #include <limits>
+#include <unordered_set>
 #include <utility>
 #ifdef GEODE_IS_MACOS
 #include "Logic/mac_refresh_clock.hpp"
@@ -593,6 +595,30 @@ void Logic::stop_best_frame(char const* why) {
     }
 }
 
+namespace {
+    // move, rotate, follow, follow player y, scale
+    bool lvl_moves_objects(PlayLayer* play) {
+        if (!play->m_objects)
+            return false;
+        for (unsigned i = 0; i < play->m_objects->count(); ++i) {
+            auto* obj = static_cast<GameObject*>(play->m_objects->objectAtIndex(i));
+            if (!obj)
+                continue;
+            switch (obj->m_objectID) {
+            case 901:
+            case 1346:
+            case 1347:
+            case 1814:
+            case 2067:
+                return true;
+            default:
+                break;
+            }
+        }
+        return false;
+    }
+}
+
 void Logic::request_best_frame() {
     auto& logic = Logic::get();
     if (logic.best_frame_running) {
@@ -605,6 +631,16 @@ void Logic::request_best_frame() {
     if (!logic.backstep) {
         logic.message = "Turn on Backstep first";
         return;
+    }
+    // 1st time in a lvl moving obj suggestion
+    if (!logic.traj_moving_objects && play->m_level) {
+        static std::unordered_set<int> asked;
+        int id = play->m_level->m_levelID.value();
+        if (asked.insert(id).second && lvl_moves_objects(play)) {
+            logic.ask_moving_objects = true;
+            GUI::get().reveal_menu();
+            return;
+        }
     }
 #ifdef GEODE_IS_MOBILE
     logic.best_frame_click = false;

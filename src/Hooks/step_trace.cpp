@@ -154,7 +154,9 @@ namespace echo::step {
         auto* player = self->m_player1;
         if (!player || !::tracing())
             return;
-        bool record = logic.is_recording();
+        // a step back replays the macro up to the frame it wants (state goes to playing for that bit). that is still the
+        // same recording, w/out ts every back / best wiped the recordings trace & started a playback one D:
+        bool record = logic.backstep_target >= 0 && g_began ? g_record : logic.is_recording();
         if ((logic.step_frame <= 1 && !self->m_playerDied) || !g_began || record != g_record) {
             g_record = record;
             g_began = true;

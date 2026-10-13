@@ -528,6 +528,8 @@ void Logic::pull_settings() {
             if (!json.contains("menu_scale_phone"))
                 logic.menu_scale = std::min(logic.menu_scale, .96f);
 #endif
+            if (auto number = json["menu_inner_scale"].asDouble())
+                logic.menu_inner_scale = std::clamp(static_cast<float>(number.unwrap()), 1.f, 1.5f);
             if (auto number = json["menu_scale_undocked"].asDouble())
                 logic.menu_scale_undocked = std::clamp(static_cast<float>(number.unwrap()), 0.35f, 3.f);
             if (auto number = json["menu_anim_speed"].asDouble())
@@ -1000,6 +1002,7 @@ void Logic::save_settings_file() {
     json["floating_size"] = logic.floating_size;
     json["menu_scale"] = logic.menu_scale;
     json["menu_scale_phone"] = true;
+    json["menu_inner_scale"] = logic.menu_inner_scale;
     json["menu_scale_undocked"] = logic.menu_scale_undocked;
     json["menu_anim_speed"] = logic.menu_anim_speed;
     json["theme_name"] = logic.theme_name;

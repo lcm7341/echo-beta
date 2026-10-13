@@ -30,6 +30,10 @@
 #include <utility>
 #include <unordered_map>
 
+namespace echo::step {
+    void trace_note(std::string const& line);
+}
+
 namespace chrono = std::chrono;
 
 using namespace geode::prelude;
@@ -510,6 +514,8 @@ bool Logic::step_to(PlayLayer* play, int target, int keep_up_to) {
     }
     auto save = logic.backsteps.back();
     bool resim = save.echo.frame < target;
+    echo::step::trace_note(fmt::format("BACK from={} target={} save={} resim={} state={} inputs={} queued={}\n", logic.step_frame, target, save.echo.frame, resim,
+        static_cast<int>(logic.state), logic.inputs.size(), play->m_queuedButtons.size()));
     if (logic.state == RunState::Idle && !logic.backstep_swapped) {
         replay::compact(logic.backstep_inputs, logic.backstep_poses, logic.backstep_ids, [target](Frame const& input) {
             return input.number <= target;
@@ -580,6 +586,10 @@ bool Logic::step_to(PlayLayer* play, int target, int keep_up_to) {
         play->m_calcNonEffectObjects = extra->calc_non_effect;
         play->m_calcNonEffectObjectsSize = extra->calc_non_effect_size;
         for (auto const& mark : extra->used) {
+            // an object the save says is unused but is used right now = something the take being thrown away set off
+            if (logic.trace_logging && (mark.object->m_activatedByPlayer1 != mark.p1 || mark.object->m_activatedByPlayer2 != mark.p2))
+                echo::step::trace_note(fmt::format("UNUSE save={} uid={} id={} now={}{} saved={}{}\n", save.echo.frame, mark.object->m_uniqueID, mark.object->m_objectID,
+                    mark.object->m_activatedByPlayer1 ? 1 : 0, mark.object->m_activatedByPlayer2 ? 1 : 0, mark.p1 ? 1 : 0, mark.p2 ? 1 : 0));
             mark.object->m_activatedByPlayer1 = mark.p1;
             mark.object->m_activatedByPlayer2 = mark.p2;
         }
@@ -614,6 +624,9 @@ bool Logic::step_to(PlayLayer* play, int target, int keep_up_to) {
     else {
         logic.advance_queued = false;
         Logic::get().match_live_holds(play);
+        // the labels are only redrawn after a step runs, & landing right on a saved frame runs none. so the frame label
+        // (& every other label) kept showing the frame i stepped back FROM until the next step forward
+        Logic::get().draw_overlay(play);
     }
     return true;
 }
@@ -631,6 +644,7 @@ void Logic::finish_backstep(PlayLayer* play) {
     logic.advance_queued = false;
     logic.advance_steps = 1;
     int frame = logic.step_frame;
+    echo::step::trace_note(fmt::format("BACKDONE frame={} state={} inputs={} dead={}\n", frame, static_cast<int>(logic.state), logic.inputs.size(), play && play->m_playerDied));
     if (logic.backstep_swapped) {
         std::erase_if(logic.inputs, [frame](Frame const& input) {
             return input.number > frame;

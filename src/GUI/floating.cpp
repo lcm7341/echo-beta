@@ -233,7 +233,11 @@ namespace EchoUI {
                     return;
                 auto& logic = Logic::get();
                 bool menu = imgui.isVisible() && !gui.bar_only;
-                bool shown = in_lvl() && logic.frame_advance && touch_overlays() && !menu && !logic.render_capturing();
+                if (!PlayLayer::get())
+                    logic.frame_bar_open = false;
+                else if (logic.frame_advance)
+                    logic.frame_bar_open = true;
+                bool shown = in_lvl() && (logic.frame_advance || logic.frame_bar_open) && touch_overlays() && !menu && !logic.render_capturing();
                 if (shown && !gui.bar_only) {
                     gui.bar_only = true;
                     gui.bar_area = gui.bar_back = gui.bar_step = gui.bar_resume = gui.bar_best = ImVec4();
@@ -340,8 +344,9 @@ namespace EchoUI {
                     logic.holding_advance = false;
                     logic.disarm_length_pause_if_holding();
                 }
+                // resume & pause are the same button. the bar itself stays where it is
                 if (which == 3 && onResume)
-                    gui.set_frame_advance(false);
+                    gui.set_frame_advance(!logic.frame_advance);
                 if (which == 4 && onResume)
                     logic.request_best_frame();
             }

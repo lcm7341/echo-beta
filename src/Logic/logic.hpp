@@ -437,6 +437,7 @@ struct Session {
 	int ui_style = 0;
 	float floating_x = -1.f, floating_y = -1.f;
 	float frame_bar_x = -1.f, frame_bar_y = -1.f; // where the mobile frame advance bar sits, -1 = top middle
+	bool frame_bar_open = false;
 	bool floating_hide_in_lvl = true;
 	float floating_size = 38.f;
 #ifdef GEODE_IS_MOBILE
@@ -548,6 +549,10 @@ struct Session {
 	fs::path macro_path, autosaved_path;
 	std::string rename_format = "_#";
 	std::string message = "Ready";
+	bool ask_moving_objects = false; // best frame moving obj traj checker
+	chrono::steady_clock::time_point saved_at{}; // legit to wait 1 second . most certainly a better way to do this
+	// movil: how big everything INSIDE the menu is, not menu scale
+	float menu_inner_scale = 1.f;
 	int attempts = 1;
 	double recording_seconds = 0.0;
 	uint64_t lvl_seed = 0;

@@ -33,12 +33,12 @@ namespace eui {
 	float nav_icon_width();
 	void NavMarker(ImVec2 min, ImVec2 max);
 
-	void begin_field(char const* label, float fill = -1.f, int parts = 1);
+	void begin_field(char const* label, float fill = -1.f, int parts = 1, float trim = 0.f);
 	void end_field();
 
 	template <class Widget>
-	auto field(char const* label, Widget&& widget, float fill = -1.f, int parts = 1) {
-		begin_field(label, fill, parts);
+	auto field(char const* label, Widget&& widget, float fill = -1.f, int parts = 1, float trim = 0.f) {
+		begin_field(label, fill, parts, trim);
 		auto result = widget();
 		end_field();
 		return result;
@@ -88,7 +88,8 @@ namespace eui {
 	bool InputInt(char const* label, Args&&... args) {
 		return field(label, [&] {
 			return ImGui::InputInt(label, std::forward<Args>(args)...);
-		});
+		},
+			-1.f, 1, (ImGui::GetFrameHeight() + ImGui::GetStyle().ItemInnerSpacing.x) * 2.f);
 	}
 
 	template <class... Args>
@@ -116,6 +117,9 @@ namespace eui {
 	bool CollapseBar(char const* title, Icon icon, bool open);
 
 	bool& single_column();
+	
+	// the mark that says how far a touch scrolled child is
+	void ScrollMark();
 	void BeginTiles(float left, float top, float right, float bottom, float tile_width_em, float shown = 1.f, float rate = 1.f);
 
 	struct TileState {

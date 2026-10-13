@@ -621,8 +621,12 @@ void GUI::main() {
             logic.macro_path.clear();
         ImGui::TextDisabled("%i inputs   %s TPS%s", (int)(logic.inputs.size()), fmt::format("{:g}", logic.fps).c_str(), !logic.macro_ldm_known ? "" : logic.macro_ldm ? "   LDM on" : "   LDM off");
         float half = eui::RowButton(2);
-        if (eui::Button("Save", ImVec2(half, 0.f)))
+        // better saving info
+        bool just_saved = std::chrono::steady_clock::now() - logic.saved_at < std::chrono::seconds(1);
+        ImGui::BeginDisabled(just_saved);
+        if (eui::Button(just_saved ? "Saved###save-replay" : "Save###save-replay", ImVec2(half, 0.f)))
             Logic::get().write_file();
+        ImGui::EndDisabled();
         GUI::get().offer_rebind("key-save");
         ImGui::SameLine();
         if (eui::Button("Load", ImVec2(half, 0.f)))
@@ -670,12 +674,38 @@ void GUI::main() {
     eui::EndCard();
     if (eui::BeginCard("Frame Advance", card_width())) {
         bool advancing = logic.frame_advance;
-        if (eui::Checkbox("Frame Advance", &advancing))
+#ifdef GEODE_IS_MOBILE
+        // since resume/pause added, unticking fa takes the bar away
+        advancing = advancing || logic.frame_bar_open;
+#endif
+        if (eui::Checkbox("Frame Advance", &advancing)) {
             GUI::get().set_frame_advance(advancing);
+            logic.frame_bar_open = advancing;
+        }
         GUI::get().offer_rebind("toggle-advance");
+#ifdef GEODE_IS_MOBILE
+        // the fa bar is hidden while the menu is open
+        // same row as step so the card (& the whole menu) doesnt get taller
+        if (logic.frame_advance || logic.frame_bar_open) {
+            float both = eui::RowRight(9.6f);
+            float each = (both - ImGui::GetStyle().ItemSpacing.x) * .5f;
+            if (eui::Button(logic.frame_advance ? "Resume" : "Pause", ImVec2(each, 0.f)))
+                GUI::get().set_frame_advance(!logic.frame_advance);
+            tip("Keeps playing, or stops again. The bar stays on screen.");
+            ImGui::SameLine();
+            if (eui::Button("Step", ImVec2(each, 0.f)))
+                Logic::get().advance_one_frame();
+        }
+        else {
+            float step_w = eui::RowRight(4.6f);
+            if (eui::Button("Step", ImVec2(step_w, 0.f)))
+                Logic::get().advance_one_frame();
+        }
+#else
         float step_w = eui::RowRight(4.6f);
         if (eui::Button("Step", ImVec2(step_w, 0.f)))
             Logic::get().advance_one_frame();
+#endif
         GUI::get().offer_rebind("step-frame");
         eui::Row("Hold delay", "How long Step is held before it starts repeating.");
         int hold = (int)(logic.advance_hold_ms);
@@ -1429,6 +1459,24 @@ void GUI::draw_theme() {
             save();
             gui.export_theme(gui.theme_path("current"));
         }
+#ifdef GEODE_IS_MOBILE
+        {
+            // only applied when the finger lets go. not sure if i like this but eh
+            static float draft = 1.f;
+            static bool dragging = false;
+            if (!dragging)
+                draft = logic.menu_inner_scale;
+            eui::Row("Control size");
+            if (eui::DragFloat("##menu-inner", &draft, 0.005f, 1.f, 1.5f, "%.2fx"))
+                draft = std::clamp(draft, 1.f, 1.5f);
+            tip("Bigger controls in the same size menu. Pages scroll instead.");
+            dragging = ImGui::IsItemActive();
+            if (ImGui::IsItemDeactivatedAfterEdit()) {
+                logic.menu_inner_scale = draft;
+                save();
+            }
+        }
+#endif
         eui::Row("Animation speed");
         if (eui::DragFloat("##menu-anim", &logic.menu_anim_speed, 0.01f, 0.25f, 4.f, "%.2fx"))
             logic.menu_anim_speed = std::clamp(logic.menu_anim_speed, 0.25f, 4.f);

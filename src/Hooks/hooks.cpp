@@ -1,11 +1,7 @@
-// where echo hooks the game
-//
-// PlayLayer: level start, reset, completion, pause & checkpoints. reset is where the seed goes in & the macro rewinds
+// PlayLayer: level start, reset, completion, pause & checkpoints
 // GJBaseGameLayer: update (handed to run_frame), processCommands (1 physics step, echo::step::begin / end wrap it), handleButton (recording)
 // PlayerObject: buttons, death, rotation, trail & particles
-// most trajectory hooks do NOTHING unless a prediction is running
-// visual tilt: ship / ufo / wave / swing turn too little per step at high tps to look right, so a separate visual angle is kept & drawn.
-//   physics & hitboxes still use the real one
+// most trajectory hooks dont do nothin unless a prediction is running
 // the step count patches & silicates reset patches are at the bottom
 #include "Physics/object_counters.hpp"
 #include "Logic/logic.hpp"
@@ -2251,6 +2247,11 @@ class $modify(EchoEnhancedObject, EnhancedGameObject) {
             phys::activateForTrajectory(static_cast<EffectGameObject*>(static_cast<GameObject*>(this)), player);
             return;
         }
+        // every portal / pad / orb the real icon sets off. a recording & its playback must have the same list
+        if (Logic::get().trace_logging && !Logic::get().predicting)
+            echo::step::trace_note(fmt::format("ACT frame={} uid={} id={} x={:.3f} y={:.3f} p2={} was={}{} off={} state={}\n", Logic::get().step_frame, m_uniqueID, m_objectID,
+                m_positionX, m_positionY, player && player->m_isSecondPlayer, m_activatedByPlayer1 ? 1 : 0, m_activatedByPlayer2 ? 1 : 0, m_isGroupDisabled,
+                static_cast<int>(Logic::get().state)));
         if (!player || !Logic::get().player_hidden(player)) {
             EnhancedGameObject::activatedByPlayer(player);
             return;
