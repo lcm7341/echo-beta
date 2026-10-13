@@ -1459,7 +1459,7 @@ void GUI::draw_theme() {
             save();
             gui.export_theme(gui.theme_path("current"));
         }
-#ifdef GEODE_IS_MOBILE
+#if 0 // control size is off for now, it blanked every page on a real phone
         {
             // only applied when the finger lets go. not sure if i like this but eh
             static float draft = 1.f;

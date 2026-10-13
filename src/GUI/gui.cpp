@@ -604,7 +604,8 @@ void GUI::draw_window() {
     // what doesnt fit we just scroll. there is probably a better way to do this too
     // TODO: brainstorm a better way to scale UI for fat thumbs
     float inner = 1.f;
-#ifdef GEODE_IS_MOBILE
+    // off for now: on a real phone every card came out as just its heading. the setting is kept, nothing reads it
+#if 0
     inner = std::clamp(Logic::get().menu_inner_scale, 1.f, 1.5f);
 #endif
     bool roomy = settings_measured && inner > 1.02f && page_width > 1.f && fill > 1.f;
