@@ -17,6 +17,11 @@ namespace echo::effects {
 		// the circle waves the 1st one made (CCCircleWave, held til the frame ends)
 		std::array<void*, 4> waves{};
 		int wave_amt = 0;
+		// where the orb was the 1st time
+		float first_x = 0.f, first_y = 0.f;
+		bool has_first = false;
+		// dash bursts, see spread_effect
+		int last_step = 0, plays = 0;
 	};
 
 	struct Frame {
@@ -34,9 +39,19 @@ namespace echo::effects {
 			fresh = false;
 			if (!on)
 				return nullptr;
-			for (std::size_t i = 0; i < amt; ++i)
+			Seen* free = nullptr;
+			for (std::size_t i = 0; i < amt; ++i) {
 				if (seen[i].key == key)
 					return &seen[i];
+				// given back by a touch that didnt jump, or a spam frame runs out
+				if (!free && !seen[i].key.owner)
+					free = &seen[i];
+			}
+			if (free) {
+				fresh = true;
+				*free = { key };
+				return free;
+			}
 			if (amt >= seen.size())
 				return nullptr;
 			fresh = true;

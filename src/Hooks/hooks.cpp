@@ -8,6 +8,11 @@
 #include "Hooks/rotation.hpp"
 #include "Hooks/step.hpp"
 #include "Hooks/opt.hpp"
+#include <bit>
+#include <map>
+#include <optional>
+#include <unordered_map>
+#include <unordered_set>
 #include "Hack/orbs.hpp"
 #include "GUI/gui.hpp"
 #include "Hack/trajectory.hpp"
@@ -65,6 +70,8 @@
 #include <Geode/binding/PointNode.hpp>
 #include <Geode/modify/CCEGLView.hpp>
 #include <Geode/modify/CCDirector.hpp>
+#include <Geode/modify/CCSprite.hpp>
+#include <Geode/modify/CCNode.hpp>
 #include <imgui-cocos.hpp>
 #include <Geode/modify/FMODAudioEngine.hpp>
 #include <Geode/modify/AppDelegate.hpp>
@@ -126,7 +133,95 @@ namespace {
     bool quiet_orb = false;
     // waves gd made for a dud ahh orb!
     std::vector<CCCircleWave*> g_dudWaves;
+    // the dash booms 1 frame merged. the 1st gets drawn again everywhere the rest would have been
+    struct BoomStack {
+        std::vector<CCPoint> offsets;
+        // how many merged ones each copy stands for, they draw additive
+        std::vector<int> weights;
+        int base = 1;
+    };
+    std::unordered_map<CCSprite*, BoomStack> g_boomStacks;
+    // every node goes thru it so its only on while a stack exists
+    Hook* g_stackVisitHook = nullptr;
+    // ts frames 1st boom & where the orb was
+    struct BoomFirst {
+        CCSprite* sprite = nullptr;
+        CCPoint at;
+    };
+    // per orb AND player, in a dual each has its own color
+    std::map<std::pair<GameObject*, PlayerObject*>, BoomFirst> g_boomFirst;
+    // same for the dash end afterimage (the white trail)
+    std::unordered_map<PlayerObject*, BoomFirst> g_afterFirst;
+    bool g_boomCapture = false;
+    CCSprite* g_boomCaptured = nullptr;
+    constexpr float BOOM_SPACING = 0.5f;
 }
+
+class $modify(EchoBoomSprite, CCSprite) {
+    static CCSprite* createWithSpriteFrameName(char const* name) {
+        auto* made = CCSprite::createWithSpriteFrameName(name);
+        // the 1st one made is the effect, the rest are its children
+        if (g_boomCapture && !g_boomCaptured)
+            g_boomCaptured = made;
+        return made;
+    }
+};
+
+// CCSprite has no visit of its own, so the stacks are drawn from CCNode's
+class $modify(EchoStackNode, CCNode) {
+    static void onModify(auto& self) {
+        if (auto hook = self.getHook("cocos2d::CCNode::visit"); hook) {
+            hook.unwrap()->setAutoEnable(false);
+            g_stackVisitHook = hook.unwrap();
+        }
+    }
+
+    void visit() {
+        if (g_boomStacks.empty()) {
+            CCNode::visit();
+            return;
+        }
+        auto it = g_boomStacks.find(reinterpret_cast<CCSprite*>(this));
+        if (it == g_boomStacks.end() || !isVisible()) {
+            CCNode::visit();
+            return;
+        }
+        // offsets are in the parents space so a plain translate works. whole visit so the outline comes too
+        auto const& stack = it->second;
+        auto* sprite = it->first;
+        GLubyte own = sprite->getOpacity();
+        std::vector<std::pair<CCRGBAProtocol*, GLubyte>> kids;
+        for (auto* child : CCArrayExt<CCNode*>(getChildren())) {
+            if (auto* rgba = typeinfo_cast<CCRGBAProtocol*>(child))
+                kids.push_back({ rgba, rgba->getOpacity() });
+        }
+        auto weigh = [&](int weight) {
+            auto scaled = [&](GLubyte opacity) {
+                return static_cast<GLubyte>(std::min(255, static_cast<int>(opacity) * std::max(weight, 1)));
+            };
+            sprite->setOpacity(scaled(own));
+            for (auto& [kid, opacity] : kids)
+                kid->setOpacity(scaled(opacity));
+        };
+        // every copy gets the same share or the real one comes out dim
+        int total = stack.base;
+        for (int weight : stack.weights)
+            total += weight;
+        int share = (total + static_cast<int>(stack.offsets.size())) / (static_cast<int>(stack.offsets.size()) + 1);
+        for (size_t at = 0; at < stack.offsets.size(); ++at) {
+            weigh(share);
+            kmGLPushMatrix();
+            kmGLTranslatef(stack.offsets[at].x, stack.offsets[at].y, 0.f);
+            CCNode::visit();
+            kmGLPopMatrix();
+        }
+        weigh(share);
+        CCNode::visit();
+        sprite->setOpacity(own);
+        for (auto& [kid, opacity] : kids)
+            kid->setOpacity(opacity);
+    }
+};
 
 // stands in for a stack of the same wave from 1 shown frame & draws all of them, spread over their ages
 class $modify(EchoCircleWave, CCCircleWave) {
@@ -136,6 +231,8 @@ class $modify(EchoCircleWave, CCCircleWave) {
         float span = 0.f;
         bool stacked = false, drawn = false;
         float seen_radius = 0.f, seen_opacity = 0.f, was_radius = 0.f, was_opacity = 0.f;
+        // where each merged hit would have put its wave (an orb moving w/ the player)
+        std::vector<CCPoint> trail;
 
         ~Fields() {
             if (stacked)
@@ -160,9 +257,14 @@ class $modify(EchoCircleWave, CCCircleWave) {
         return true;
     }
 
-    void add_hit() {
+    void add_hit(CCPoint const* offset) {
         auto* fields = m_fields.self();
         fields->last = Logic::get().step_frame;
+        if (offset) {
+            CCPoint last = fields->trail.empty() ? CCPointZero : fields->trail.back();
+            if (ccpDistance(*offset, last) >= 0.5f && fields->trail.size() < 512)
+                fields->trail.push_back(*offset);
+        }
         if (++fields->hits == 2) {
             fields->stacked = true;
             ++g_stackedWaves;
@@ -200,6 +302,28 @@ class $modify(EchoCircleWave, CCCircleWave) {
         float old_radius = m_radius, old_opacity = m_opacity;
         float young_radius = old_radius + (fields->was_radius - old_radius) * fields->span;
         float young_opacity = old_opacity + (fields->was_opacity - old_opacity) * fields->span;
+        if (!fields->trail.empty()) {
+            // 1 copy on every spot, oldest to youngest
+            int copies = static_cast<int>(fields->trail.size()) + 1;
+            float each = std::max(1.f, static_cast<float>(fields->hits) / static_cast<float>(copies));
+            for (int at = 0; at < copies; ++at) {
+                float along = static_cast<float>(at) / static_cast<float>(copies - 1);
+                m_radius = old_radius + (young_radius - old_radius) * along;
+                m_opacity = std::min((old_opacity + (young_opacity - old_opacity) * along) * each, 255.f);
+                if (at == 0) {
+                    CCCircleWave::draw();
+                    continue;
+                }
+                auto const& offset = fields->trail[static_cast<size_t>(at - 1)];
+                kmGLPushMatrix();
+                kmGLTranslatef(offset.x, offset.y, 0.f);
+                CCCircleWave::draw();
+                kmGLPopMatrix();
+            }
+            m_radius = old_radius;
+            m_opacity = old_opacity;
+            return;
+        }
         // 1 circle every 0.15 units is already solid
         int amt = std::clamp(1 + static_cast<int>(std::fabs(old_radius - young_radius) / 0.15f), 1, std::min(fields->hits, 48));
         float each = static_cast<float>(fields->hits) / static_cast<float>(amt);
@@ -215,21 +339,69 @@ class $modify(EchoCircleWave, CCCircleWave) {
 };
 
 namespace {
-    // true = already played ts shown frame. the 1st time needs an EffectScope around the call
-    bool repeated_effect(echo::effects::Key const& key) {
+    // ts effects slot ts frame, nullptr = not stacking. fresh = 1st time
+    echo::effects::Seen* effect_slot(echo::effects::Key const& key, CCPoint const* at, bool& fresh) {
         auto const& logic = Logic::get();
+        fresh = false;
+        if (!echo::opt::effects || logic.predicting || logic.refresh_only || logic.backstepping)
+            return nullptr;
+        auto* seen = g_effectFrame.find(key, fresh);
+        if (!seen || !fresh)
+            return seen;
+        g_effectFrame.open = seen;
+        if (at) {
+            seen->first_x = at->x;
+            seen->first_y = at->y;
+            seen->has_first = true;
+        }
+        return seen;
+    }
+
+    // 1 more of the same on the circles the 1st one made
+    void count_repeat(echo::effects::Seen* seen, CCPoint const* at) {
+        CCPoint offset;
+        CCPoint const* moved = nullptr;
+        if (at && seen->has_first) {
+            offset = *at - CCPoint{ seen->first_x, seen->first_y };
+            moved = &offset;
+        }
+        for (int wave = 0; wave < seen->wave_amt; ++wave)
+            static_cast<EchoCircleWave*>(static_cast<CCCircleWave*>(seen->waves[wave]))->add_hit(moved);
+    }
+
+    // true = already played ts shown frame. the 1st time needs an EffectScope around the call
+    bool repeated_effect(echo::effects::Key const& key, CCPoint const* at = nullptr) {
+        bool fresh = false;
+        auto* seen = effect_slot(key, at, fresh);
+        if (!seen || fresh)
+            return false;
+        count_repeat(seen, at);
+        return true;
+    }
+
+    // dash bursts play up to 16 times a frame spread over its steps instead of once, 16 already looks like all of them
+    bool spread_effect(echo::effects::Key const& key) {
+        constexpr int PER_FRAME = 16;
+        auto& logic = Logic::get();
         if (!echo::opt::effects || logic.predicting || logic.refresh_only || logic.backstepping)
             return false;
         bool fresh = false;
         auto* seen = g_effectFrame.find(key, fresh);
         if (!seen)
             return false;
-        if (fresh) {
-            g_effectFrame.open = seen;
+        double interval = 1.0 / std::max(logic.render_fps, 1);
+        if (!logic.render_capturing()) {
+            auto* director = CCDirector::sharedDirector();
+            interval = director ? director->getAnimationInterval() : 1.0 / 60.0;
+            interval *= std::max(logic.speedhack, 0.01f);
+        }
+        int gap = std::max(static_cast<int>(logic.sample_rate() * interval / PER_FRAME), 1);
+        int step = logic.step_frame;
+        if (fresh || (seen->plays < PER_FRAME && step - seen->last_step >= gap)) {
+            seen->last_step = step;
+            ++seen->plays;
             return false;
         }
-        for (int at = 0; at < seen->wave_amt; ++at)
-            static_cast<EchoCircleWave*>(static_cast<CCCircleWave*>(seen->waves[at]))->add_hit();
         return true;
     }
 
@@ -249,8 +421,76 @@ namespace {
         }
     };
 
+    // the layer gd adds the dash afterimage to: GameManager+0x1f8 (the game layer) then +0xeb8, from stopDashing on m1
+    CCNode* effect_layer() {
+#ifdef GEODE_IS_ARM_MAC
+        auto* game = GJBaseGameLayer::get();
+        auto* gm = GameManager::get();
+        if (!game || !gm)
+            return nullptr;
+        if (*reinterpret_cast<GJBaseGameLayer**>(reinterpret_cast<char*>(gm) + 0x1f8) != game)
+            return nullptr;
+        auto* layer = *reinterpret_cast<CCNode**>(reinterpret_cast<char*>(game) + 0xeb8);
+        for (auto* up = layer ? layer->getParent() : nullptr; up; up = up->getParent()) {
+            if (up == game)
+                return layer;
+        }
+        return nullptr;
+#else
+        return nullptr;
+#endif
+    }
+
+    // the sprite gd added to it while ts ran
+    template <class F>
+    CCSprite* added_effect(F&& run) {
+        auto* layer = effect_layer();
+        unsigned before = layer ? layer->getChildrenCount() : 0;
+        run();
+        if (!layer || layer->getChildrenCount() <= before)
+            return nullptr;
+        return typeinfo_cast<CCSprite*>(static_cast<CCObject*>(layer->getChildren()->objectAtIndex(layer->getChildrenCount() - 1)));
+    }
+
+    void stack_offset(BoomFirst const& first, CCPoint now) {
+        auto offset = now - first.at;
+        auto& stack = g_boomStacks[first.sprite];
+        CCPoint last = stack.offsets.empty() ? CCPointZero : stack.offsets.back();
+        if (ccpDistance(offset, last) >= BOOM_SPACING && stack.offsets.size() < 2048) {
+            stack.offsets.push_back(offset);
+            stack.weights.push_back(1);
+        }
+        else if (stack.weights.empty())
+            ++stack.base;
+        else
+            ++stack.weights.back();
+    }
+
+    void keep_first(CCSprite* sprite) {
+        if (g_boomStacks.emplace(sprite, BoomStack{}).second)
+            sprite->retain();
+        if (g_stackVisitHook && !g_stackVisitHook->isEnabled())
+            (void)g_stackVisitHook->enable();
+    }
+
+    void forget_booms() {
+        g_boomFirst.clear();
+        g_afterFirst.clear();
+        for (auto it = g_boomStacks.begin(); it != g_boomStacks.end();) {
+            if (!it->first->getParent()) {
+                it->first->release();
+                it = g_boomStacks.erase(it);
+            }
+            else
+                ++it;
+        }
+        if (g_boomStacks.empty() && g_stackVisitHook && g_stackVisitHook->isEnabled())
+            (void)g_stackVisitHook->disable();
+    }
+
     // lets go of the waves & works out how much of the frame each stack was spread over
     void forget_effects() {
+        forget_booms();
         int steps = Logic::get().step_frame - g_effectFrame.began;
         for (std::size_t at = 0; at < g_effectFrame.amt; ++at) {
             auto& seen = g_effectFrame.seen[at];
@@ -1927,14 +2167,26 @@ class $modify(EchoPlayerObject, PlayerObject) {
         // m_playEffects also picks how a gravity orb flips in a dual, so ts never touches it
         bool hidden = Logic::get().player_hidden(this);
         EffectScope scope;
-        bool repeat = ring && m_playEffects && !hidden && repeated_effect({ this, 3, ring->m_uniqueID });
-        if (!repeat && !hidden) {
+        auto ring_at = ring ? ring->getPosition() : CCPointZero;
+        bool fresh = false;
+        auto* seen = ring && m_playEffects && !hidden ? effect_slot({ this, 3, ring->m_uniqueID }, &ring_at, fresh) : nullptr;
+        if (!hidden && (!seen || fresh)) {
             PlayerObject::ringJump(ring, skipCheck);
+            // touching it calls ts every step w/o jumping, those cant take the slot
+            if (seen && seen->wave_amt == 0)
+                seen->key = {};
             return;
         }
         bool was_quiet = std::exchange(quiet_orb, true);
+        auto duds = g_dudWaves.size();
+        bool dashing = m_isDashing, flipped = m_isUpsideDown;
+        double vel = m_yVelocity;
         PlayerObject::ringJump(ring, skipCheck);
         quiet_orb = was_quiet;
+        // only a jump that happened goes on the stack
+        bool jumped = g_dudWaves.size() > duds || dashing != m_isDashing || flipped != m_isUpsideDown || vel != m_yVelocity;
+        if (seen && jumped)
+            count_repeat(seen, &ring_at);
         drop_dud_waves();
     }
 
@@ -1979,11 +2231,26 @@ class $modify(EchoPlayerObject, PlayerObject) {
         bool loud = m_playEffects;
         // physics still runs; only repeated bursts within this shown frame are quiet
         EffectScope scope;
-        bool repeat = loud && ring && repeated_effect({ this, 0, ring->m_objectID });
+        // unique id, the object id is the same for every dash orb
+        bool repeat = loud && ring && spread_effect({ this, 0, ring->m_uniqueID });
+        if (repeat && ring && !m_isDashing) {
+            // merged, it goes on the 1st ones stack
+            if (auto first = g_boomFirst.find({ ring, this }); first != g_boomFirst.end() && first->second.sprite)
+                stack_offset(first->second, ring->getPosition());
+        }
         // in here m_playEffects only does the boom sprite
         if (Logic::get().no_effects || repeat || Logic::get().player_hidden(this))
             m_playEffects = false;
+        bool capture = !repeat && m_playEffects && ring && !m_isDashing && g_effectFrame.on && echo::opt::effects;
+        g_boomCapture = capture;
+        g_boomCaptured = nullptr;
         PlayerObject::startDashing(ring);
+        g_boomCapture = false;
+        if (capture && g_boomCaptured && !g_boomCaptured->getBatchNode()) {
+            g_boomFirst[{ ring, this }] = { g_boomCaptured, ring->getPosition() };
+            keep_first(g_boomCaptured);
+        }
+        g_boomCaptured = nullptr;
         m_playEffects = loud;
         if (auto* play = PlayLayer::get())
             Orbs::note_dash(play, this, ring);
@@ -2014,10 +2281,26 @@ class $modify(EchoPlayerObject, PlayerObject) {
         } dash_note{ this, was_dashing, visual_spin, tick_spin, use_tick };
         bool reduced = m_maybeReducedEffects;
         EffectScope scope;
-        bool repeat = was_dashing && !reduced && repeated_effect({ this, 1, 0 });
+        bool repeat = was_dashing && !reduced && spread_effect({ this, 1, 0 });
+        // merged, its afterimage goes on the 1st ones stack
+        if (repeat) {
+            if (auto first = g_afterFirst.find(this); first != g_afterFirst.end() && first->second.sprite)
+                stack_offset(first->second, getPosition());
+        }
         if (Logic::get().no_effects || repeat)
             m_maybeReducedEffects = true;
-        PlayerObject::stopDashing();
+        bool capture = was_dashing && !repeat && !m_maybeReducedEffects && g_effectFrame.on && echo::opt::effects && !Logic::get().no_effects;
+        auto at = getPosition();
+        g_boomCaptured = nullptr;
+        if (capture)
+            g_boomCaptured = added_effect([&] { PlayerObject::stopDashing(); });
+        else
+            PlayerObject::stopDashing();
+        if (capture && g_boomCaptured && !g_boomCaptured->getBatchNode()) {
+            g_afterFirst[this] = { g_boomCaptured, at };
+            keep_first(g_boomCaptured);
+        }
+        g_boomCaptured = nullptr;
         m_maybeReducedEffects = reduced;
     }
 
