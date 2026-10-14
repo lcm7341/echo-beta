@@ -201,6 +201,11 @@ public:
         static Recorder value;
         return value;
     }
+    // quitting mid render destroyed a running thread & aborted
+    ~Recorder() {
+        if (worker.joinable())
+            worker.detach();
+    }
 #ifdef GEODE_IS_WINDOWS
     void close_handle(HANDLE& handle);
     bool connect_pipe(HANDLE pipe);
