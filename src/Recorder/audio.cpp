@@ -90,6 +90,8 @@ float Logic::render_game_step() {
 }
 
 bool Logic::pause_menu_open() {
+    if (pause_known)
+        return pause_cached;
     auto* director = CCDirector::sharedDirector();
     auto* scene = director ? director->getRunningScene() : nullptr;
 #ifdef GEODE_IS_WINDOWS

@@ -47,18 +47,17 @@ public:
 
 constexpr int HITBOX_TAG = 0xEC06;
 
+namespace {
+    // looking it up by tag walked every child of the lvl every frame
+    CCDrawNode* g_hitbox_node = nullptr;
+}
+
 CCDrawNode* find_hitbox_node(GJBaseGameLayer* play) {
-    auto find = [](CCNode* parent) -> CCDrawNode* {
-        if (!parent)
-            return nullptr;
-        return typeinfo_cast<CCDrawNode*>(parent->getChildByTag(HITBOX_TAG));
-    };
-    if (auto* node = find(play))
-        return node;
-    if (auto* node = find(play->m_objectLayer))
-        return node;
-    if (auto* node = find(play->m_uiLayer))
-        return node;
+    auto* parent = g_hitbox_node ? g_hitbox_node->getParent() : nullptr;
+    if (!parent || !play)
+        return nullptr;
+    if (parent == play || parent == play->m_objectLayer || parent == play->m_uiLayer)
+        return g_hitbox_node;
     return nullptr;
 }
 
@@ -84,10 +83,16 @@ namespace {
             auto* node = new EchoHitboxNode();
             if (node && node->init()) {
                 node->autorelease();
+                g_hitbox_node = node;
                 return node;
             }
             CC_SAFE_DELETE(node);
             return nullptr;
+        }
+
+        ~EchoHitboxNode() override {
+            if (g_hitbox_node == this)
+                g_hitbox_node = nullptr;
         }
 
         void visit() override {

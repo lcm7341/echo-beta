@@ -337,6 +337,9 @@ struct Session {
 	int progress_base = 0;
 	bool progress_base_set = false;
 	bool in_step = false;
+	bool pause_known = false, pause_cached = false;
+	// GJBaseGameLayer::update calls, the camera pacing uses it to tell batches apart
+	uint64_t updates_run = 0;
 	uint32_t partner_presses = 0;
 	float fps = 240.f, macro_fps = 240.f;
 	// silicate saves the LAST tps it used, so a macro with tps changes can start on the wrong one. ts lets me fix it by hand

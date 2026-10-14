@@ -108,7 +108,8 @@ void Logic::sync_predict_hooks() {
     bool watching = logic.is_playing() && !logic.is_recording();
     bool want = logic.show_traj || logic.pause_before_kill || logic.traj_autoclicker || (logic.show_death_next && !watching) || logic.predicting;
     echo_forecast_section_hook(want && logic.traj_moving_objects);
-    echo_touch_hook(logic.backstep || logic.is_recording());
+    // ts hook was 12% of the physics in one fell swoop
+    echo_touch_hook((logic.backstep && !Logic::get().render_capturing()) || logic.is_recording());
     if (want == predict_hooks_on)
         return;
     for (auto* hook : predict_hooks()) {
@@ -895,6 +896,11 @@ class $modify(EchoEditor, LevelEditorLayer) {
 };
 
 class $modify(EchoPauseLayer, PauseLayer) {
+    void customSetup() {
+        Logic::get().pause_known = false;
+        PauseLayer::customSetup();
+    }
+
     void onRestart(CCObject* sender) {
         PauseLayer::onRestart(sender);
         if (auto* play = PlayLayer::get())
@@ -2245,6 +2251,16 @@ class $modify(EchoScheduler, CCScheduler) {
             restore_tilt(layer->m_player2);
         }
         bool pause_menu = Logic::get().pause_menu_open();
+        // every macro button asked & it walks the whole scene. a new PauseLayer drops ts
+        struct PauseKnown {
+            PauseKnown(bool open) {
+                Logic::get().pause_cached = open;
+                Logic::get().pause_known = true;
+            }
+            ~PauseKnown() {
+                Logic::get().pause_known = false;
+            }
+        } pause_known{ pause_menu };
         // releasing every frame broke dragging in the menu
         static bool was_paused = false;
         if (pause_menu && play) {
@@ -2350,6 +2366,17 @@ class $modify(EchoGameObject, GameObject) {
         Logic::get().style_layout_glow(this);
     }
 };
+
+#ifndef GEODE_IS_WINDOWS
+// gd lists the keys every step even when its empty (inlined on windows)
+class $modify(EchoActionManager, GJActionManager) {
+    void updateInternalActions(float dt, bool remove) {
+        if (m_internalActions && m_internalActions->count() == 0)
+            return;
+        GJActionManager::updateInternalActions(dt, remove);
+    }
+};
+#endif
 
 class $modify(EchoEffectObject, EffectGameObject) {
     // the orbs own pulse. ringJump plays it no matter what m_playEffects says
