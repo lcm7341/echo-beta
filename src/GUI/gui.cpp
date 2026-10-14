@@ -915,6 +915,20 @@ void GUI::open_popup() {
     GUI::get().begin_close();
 }
 
+bool GUI::menu_shown() {
+    auto& imgui = ImGuiCocos::get();
+    return imgui.isInitialized() && imgui.isVisible() && !GUI::get().bar_only;
+}
+
+int GUI::menu_frames() {
+    return ImGuiCocos::get().isInitialized() ? ImGui::GetFrameCount() : 0;
+}
+
+void GUI::draw_menu_now() {
+    if (ImGuiCocos::get().isInitialized())
+        ImGuiCocos::get().drawFrame();
+}
+
 void GUI::reveal_menu() {
     auto& imgui = ImGuiCocos::get();
     if (!imgui.isInitialized())

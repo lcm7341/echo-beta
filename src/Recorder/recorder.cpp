@@ -324,7 +324,6 @@ public:
     CCSprite* bar_fill = nullptr;
     CCLabelBMFont* bar_text = nullptr;
     std::string bar_shown;
-    double text_clock = 0.0;
 
     chrono::steady_clock::time_point last_tick{};
     bool ticked = false;
@@ -332,7 +331,11 @@ public:
     double busy_seconds = 0.0;
     // how fast the last few seconds went, for the time left. the average of the whole render is way off whenever
     // the level gets heavier or lighter part way
-    double pace_video = 0.0, pace_wall = 0.0, pace = 0.0;
+    double pace = 0.0;
+    // (busy seconds, video seconds) every half second, the pace is worked out over all of them
+    std::deque<std::pair<double, double>> pace_marks;
+    chrono::steady_clock::time_point text_at{};
+    CCSize real_frame();
     float start_fraction = -1.f;
     int last_input_frame = 0;
 
@@ -1525,14 +1528,19 @@ void Recorder::hold_view() {
         Recorder::get().resize_shader_layer(size);
 }
 
+// the windows own frame size, even if it got resized mid render
+CCSize Recorder::real_frame() {
+    auto pixels = window_pixels().value_or(saved_pixels);
+    return CCSize(
+        saved_frame.width * pixels.width / std::max(saved_pixels.width, 1.f),
+        saved_frame.height * pixels.height / std::max(saved_pixels.height, 1.f));
+}
+
 void Recorder::release_view() {
     if (!holding)
         return;
     holding = false;
-    auto pixels = window_pixels().value_or(saved_pixels);
-    CCSize restore(
-        saved_frame.width * pixels.width / std::max(saved_pixels.width, 1.f),
-        saved_frame.height * pixels.height / std::max(saved_pixels.height, 1.f));
+    auto restore = real_frame();
     Recorder::get().silent_change_size(restore);
     Recorder::get().resize_shader_layer(restore);
     // only the level that got moved, a new one was built at the videos shape already
@@ -1912,7 +1920,7 @@ bool Recorder::open_target() {
     if (bar_text)
         bar_text->retain();
     bar_shown.clear();
-    text_clock = 0.0;
+    text_at = {};
     return complete;
 }
 
@@ -2056,11 +2064,14 @@ void Recorder::drawFrame() {
 void Recorder::show_overlay() {
     if (!active)
         return;
+    // the window, menus & clicks get the real size back til the next frame starts
+    if (holding) {
 #ifdef GEODE_IS_MOBILE
-    // touches use the real screen size NOT the video size
-    if (holding)
         silent_change_size(saved_frame);
+#else
+        silent_change_size(real_frame());
 #endif
+    }
     auto pixels = window_pixels().value_or(saved_pixels);
     if (pixels.width < 1.f || pixels.height < 1.f)
         pixels = CCSize(1.f, 1.f);
@@ -2100,6 +2111,8 @@ void Recorder::show_overlay() {
     glClearColor(clear[0], clear[1], clear[2], clear[3]);
     if (scissor)
         glEnable(GL_SCISSOR_TEST);
+    // the menu is drawn after ts & needs the whole window
+    glViewport(0, 0, static_cast<GLsizei>(pixels.width), static_cast<GLsizei>(pixels.height));
 }
 
 #ifdef GEODE_IS_IOS
@@ -2234,9 +2247,10 @@ void Recorder::draw_progress() {
         bar_back->setScale(1.3f * scale);
         bar_back->setPosition(middle);
     }
-    text_clock += wall_delta;
-    if (bar_shown.empty() || text_clock >= 0.2) {
-        text_clock = 0.0;
+    // by the real clock
+    auto now = chrono::steady_clock::now();
+    if (bar_shown.empty() || now - text_at >= chrono::milliseconds(200)) {
+        text_at = now;
         if (status.text != bar_shown) {
             bar_shown = status.text;
             bar_text->setString(bar_shown.c_str());
@@ -2862,14 +2876,18 @@ RenderStatus Logic::render_status() {
     double video = (double)(film.frames) * (double)(Logic::get().render_step());
     if (film.busy_seconds > 0.05)
         status.speed = (float)(video / film.busy_seconds);
-    // the pace of the last second or so, smoothed. the time left uses ts, NOT the average since the start
-    if (film.busy_seconds < film.pace_wall || video < film.pace_video)
-        film.pace_wall = film.pace_video = film.pace = 0.0;
-    if (film.busy_seconds - film.pace_wall >= 1.0) {
-        double fresh = (video - film.pace_video) / (film.busy_seconds - film.pace_wall);
-        film.pace = film.pace > 0.0 ? film.pace * 0.7 + fresh * 0.3 : fresh;
-        film.pace_wall = film.busy_seconds;
-        film.pace_video = video;
+    // pace over the last 10 seconds, not since the start
+    auto& marks = film.pace_marks;
+    if (!marks.empty() && (film.busy_seconds < marks.back().first || video < marks.back().second)) {
+        marks.clear();
+        film.pace = 0.0;
+    }
+    if (marks.empty() || film.busy_seconds - marks.back().first >= 0.5) {
+        marks.emplace_back(film.busy_seconds, video);
+        while (marks.size() > 2 && film.busy_seconds - marks[1].first >= 10.0)
+            marks.pop_front();
+        if (double wall = film.busy_seconds - marks.front().first; wall >= 1.0)
+            film.pace = (video - marks.front().second) / wall;
     }
     double pace = film.pace > 0.0 ? film.pace : (double)(status.speed);
     std::string speed = pace > 0.0 ? fmt::format("{:.2f}x", pace) : std::string("measuring speed");
@@ -3027,7 +3045,8 @@ bool Logic::begin_render_frame() {
     film.hold_view();
     bool capture = !Logic::get().render_should_skip();
     if (capture) {
-        film.busy_seconds += film.wall_delta;
+        // the whole gap, capping it at 0.25 made elapsed run slow
+        film.busy_seconds += std::clamp(gap, 0.0, 30.0);
         AudioTap::get().hold_effects();
     }
     return capture;
@@ -3100,7 +3119,9 @@ bool Logic::render_batch_more(chrono::steady_clock::time_point started) {
 #ifdef GEODE_IS_WINDOWS
     return false;
 #else
-    return Recorder::get().active && !Logic::get().render_should_skip() && chrono::steady_clock::now() - started < chrono::milliseconds(40);
+    // showing the window costs 10-20ms so batches are long, short w/ the menu open
+    auto longest = chrono::milliseconds(GUI::get().menu_shown() ? 25 : 200);
+    return Recorder::get().active && !Logic::get().render_should_skip() && chrono::steady_clock::now() - started < longest;
 #endif
 }
 
@@ -3258,7 +3279,8 @@ void Logic::start_render() {
         film.frames = 0;
         g_timing.reset();
         g_render_notes.clear();
-        film.pace_video = film.pace_wall = film.pace = 0.0;
+        film.pace = 0.0;
+        film.pace_marks.clear();
         {
             auto& logic = Logic::get();
             logic.render_game_seconds = 0.0;

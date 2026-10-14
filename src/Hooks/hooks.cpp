@@ -2630,9 +2630,14 @@ class $modify(EchoDirector, CCDirector) {
         if (auto* play = PlayLayer::get(); play && (logic.show_hitboxes || logic.show_traj)) {
             logic.sync_overlay_seats(play);
         }
+        // on mac & android the menu draws from a drawScene hook under mine, which a render skips
+        static bool menu_under_me = false;
         if (!logic.render_capturing()) {
             auto started = chrono::steady_clock::now();
+            int menu_frames = GUI::get().menu_frames();
             CCDirector::drawScene();
+            if (GUI::get().menu_frames() != menu_frames)
+                menu_under_me = true;
             logic.note_frame_work(chrono::duration<double>(chrono::steady_clock::now() - started).count());
             return;
         }
@@ -2654,7 +2659,14 @@ class $modify(EchoDirector, CCDirector) {
         };
         while (advance() && logic.render_batch_more(started)) {
         }
+        // a render never sets the frame time so the menu crawled
+        static auto last_shown = chrono::steady_clock::now();
+        auto shown = chrono::steady_clock::now();
+        m_fDeltaTime = std::clamp(chrono::duration<float>(shown - last_shown).count(), 0.f, 0.25f);
+        last_shown = shown;
         logic.show_render_overlay();
+        if (menu_under_me)
+            GUI::get().draw_menu_now();
         m_pobOpenGLView->swapBuffers();
     }
 };

@@ -123,6 +123,9 @@ public:
 	ImVec4 bar_area{}, bar_back{}, bar_step{}, bar_resume{}, bar_best{};
 	void open_popup();
 	void reveal_menu();
+	bool menu_shown();
+	int menu_frames();
+	void draw_menu_now();
 	void open_macro_picker(bool sequence, int amount);
 	void open_merge_picker();
 	void draw_macro_picker();
