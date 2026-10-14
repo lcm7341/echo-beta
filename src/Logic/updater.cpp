@@ -314,8 +314,6 @@ int Logic::count_unlocked_steps(GJBaseGameLayer* play, double dt) {
     return steps;
 }
 
-void echo_flush_camera(GJBaseGameLayer* layer);
-
 void Logic::run_frame(GJBaseGameLayer* play, float dt, std::function<void(float)> const& tick) {
     if (Logic::get().render_paused())
         return;
@@ -513,7 +511,6 @@ void Logic::run_frame(GJBaseGameLayer* play, float dt, std::function<void(float)
         logic.frame_steps = 0;
         logic.steps_left = 0;
         logic.steps_this_tick = 0;
-        echo_flush_camera(play);
         logic.present = true;
         Trajectory::get().refresh(PlayLayer::get());
         return;
@@ -611,7 +608,6 @@ void Logic::run_frame(GJBaseGameLayer* play, float dt, std::function<void(float)
         logic.frame_steps = 0;
         logic.steps_left = 0;
         logic.steps_this_tick = 0;
-        echo_flush_camera(play);
         logic.present = true;
         Trajectory::get().refresh(PlayLayer::get());
         return;
@@ -650,7 +646,6 @@ void Logic::run_frame(GJBaseGameLayer* play, float dt, std::function<void(float)
         Logic::get().finish_backstep(Logic::as_play(play));
         Logic::get().click_best_frame(Logic::as_play(play));
     }
-    echo_flush_camera(play);
     logic.present = true;
 
     Trajectory::get().refresh(PlayLayer::get());

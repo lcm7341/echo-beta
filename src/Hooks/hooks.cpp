@@ -126,6 +126,11 @@ void Logic::sync_predict_hooks() {
 }
 
 namespace {
+    // update calls, so the camera can tell batches apart
+    uint64_t g_updatesRun = 0;
+}
+
+namespace {
     constexpr int DASH_SPIN_TAG = 12;
     echo::effects::Frame g_effectFrame;
     int g_stackedWaves = 0;
@@ -1278,6 +1283,7 @@ class $modify(EchoGameLayer, GJBaseGameLayer) {
         // death HAS to reach the original or auto retry freezes
         if (auto* play = Logic::as_play(this); play && play->m_playerDied) {
             logic.steps_this_tick = static_cast<uint32_t>(vanilla_physics_steps(dt, m_gameState.m_timeWarp));
+            ++g_updatesRun;
             GJBaseGameLayer::update(dt);
             return;
         }
@@ -1289,6 +1295,7 @@ class $modify(EchoGameLayer, GJBaseGameLayer) {
         bool locked = Logic::get().lock_delta_active();
         if (logic.refresh_only || !layer || Logic::get().defer_physics()) {
             logic.steps_this_tick = static_cast<uint32_t>(vanilla_physics_steps(dt, m_gameState.m_timeWarp));
+            ++g_updatesRun;
             GJBaseGameLayer::update(dt);
             return;
         }
@@ -1306,7 +1313,7 @@ class $modify(EchoGameLayer, GJBaseGameLayer) {
             // was 1 no matter the batch, so lock tps ran 1 step where it owed 4+ (the insanely slow lock tps)
             logic.steps_this_tick = static_cast<uint32_t>(std::max(logic.steps_left, 0));
         }
-        ++logic.updates_run;
+        ++g_updatesRun;
         GJBaseGameLayer::update(dt);
     }
 
@@ -3228,85 +3235,463 @@ class $modify(EchoEGLView, CCEGLView) {
 #endif
 
 // gds camera follow moves the same amt every call no matter the step length, so at a high tps it snapped.
-// above 240 it runs ~240 times a second, & the icons last position is where it was last run
+// physics keeps gds camera every step (lvls read it, desideration died w/o that). the picture gets its own camera,
+// run ~240 times a second on the real steps, & physics gets its values, tweens & layers back right after.
+// frames are drawn w/ the pictures
 namespace {
+    // the bits of camera state updateCamera writes, learned from what its calls change
+    struct CameraState {
+        std::vector<std::pair<uint32_t, uint32_t>> regions; // offset in the layer, 4 byte words
+        std::vector<uint32_t> mask; // 1 per word, updateCamera wrote it at some point
+        std::vector<uint32_t> before, shown, physics;
+        std::size_t words = 0;
+
+        void build(GJBaseGameLayer* layer) {
+            auto base = reinterpret_cast<uintptr_t>(layer);
+            auto& gs = layer->m_gameState;
+            auto add = [&](void const* from, void const* to) {
+                auto start = reinterpret_cast<uintptr_t>(from) - base, end = reinterpret_cast<uintptr_t>(to) - base;
+                regions.push_back({ static_cast<uint32_t>(start / 4), static_cast<uint32_t>((end - start) / 4) });
+            };
+            // every plain value around the camera, never the maps & vectors between them
+            add(&gs, &gs.m_spawnChannelRelated0);
+            add(&gs.m_cameraPosition, &gs.m_tweenActions);
+            add(&gs.m_cameraEdgeValue0, &gs.m_gameObjectPhysics);
+            add(&gs.m_unkUint10, &gs.m_activatedObjectIDs);
+            add(&gs.m_unkUint13, &gs.m_stateObjects);
+            add(&layer->m_cameraFlip, &layer->m_updateGroundShadows);
+            add(&layer->m_cameraUnzoomedHeightOffset, &layer->m_targetCameraHeightOffset + 1);
+            words = 0;
+            for (auto const& region : regions)
+                words += region.second;
+            mask.assign(words, 0);
+            before.assign(words, 0);
+            shown.assign(words, 0);
+            physics.assign(words, 0);
+        }
+
+        template <class F>
+        void each(GJBaseGameLayer* layer, F&& visit) {
+            auto* raw = reinterpret_cast<uint32_t*>(layer);
+            std::size_t at = 0;
+            for (auto const& [start, count] : regions)
+                for (uint32_t word = 0; word < count; ++word, ++at)
+                    visit(raw[start + word], at);
+        }
+
+        std::size_t index_of(void const* field, GJBaseGameLayer* layer) const {
+            auto off = static_cast<uint32_t>((reinterpret_cast<uintptr_t>(field) - reinterpret_cast<uintptr_t>(layer)) / 4);
+            std::size_t at = 0;
+            for (auto const& [start, count] : regions) {
+                if (off >= start && off < start + count)
+                    return at + off - start;
+                at += count;
+            }
+            return 0;
+        }
+
+        void save(GJBaseGameLayer* layer, std::vector<uint32_t>& into) {
+            each(layer, [&](uint32_t& word, std::size_t at) { into[at] = word; });
+        }
+
+        void load(GJBaseGameLayer* layer, std::vector<uint32_t> const& from) {
+            each(layer, [&](uint32_t& word, std::size_t at) { word = from[at]; });
+        }
+
+        // only the words updateCamera owns, the rest stay what physics has rn
+        void load_shown(GJBaseGameLayer* layer) {
+            each(layer, [&](uint32_t& word, std::size_t at) {
+                if (mask[at])
+                    word = shown[at];
+            });
+        }
+
+        void learn(GJBaseGameLayer* layer) {
+            each(layer, [&](uint32_t& word, std::size_t at) { mask[at] |= word != before[at]; });
+        }
+    };
+
+    // layer positions, so the picture can borrow them
+    struct NodeSpot {
+        Ref<CCNode> node;
+        CCPoint position;
+        float scale_x, scale_y, rotation_x, rotation_y, skew_x, skew_y;
+    };
+
+    void keep_nodes(GJBaseGameLayer* layer, std::vector<NodeSpot>& spots) {
+        spots.clear();
+        auto keep = [&](CCNode* node) {
+            if (node)
+                spots.push_back({ node, node->getPosition(), node->getScaleX(), node->getScaleY(), node->getRotationX(), node->getRotationY(),
+                    node->getSkewX(), node->getSkewY() });
+        };
+        auto with_children = [&](CCNode* node) {
+            keep(node);
+            if (!node || !node->getChildren())
+                return;
+            for (auto* child : CCArrayExt<CCNode*>(node->getChildren()))
+                keep(child);
+        };
+        keep(layer->m_objectLayer);
+        keep(layer->m_inShaderObjectLayer);
+        keep(layer->m_aboveShaderObjectLayer);
+        keep(layer->m_background);
+        with_children(layer->m_groundLayer);
+        with_children(layer->m_groundLayer2);
+        with_children(layer->m_middleground);
+    }
+
+    void put_back(std::vector<NodeSpot> const& spots) {
+        for (auto const& spot : spots) {
+            spot.node->setPosition(spot.position);
+            spot.node->setScaleX(spot.scale_x);
+            spot.node->setScaleY(spot.scale_y);
+            spot.node->setRotationX(spot.rotation_x);
+            spot.node->setRotationY(spot.rotation_y);
+            spot.node->setSkewX(spot.skew_x);
+            spot.node->setSkewY(spot.skew_y);
+        }
+    }
+
     struct CameraPace {
         GJBaseGameLayer* layer = nullptr;
+        CameraState state;
         uint64_t update = 0;
-        int at = 0, calls = 0;
+        int at = 0, since = 0;
+        bool have_shown = false, shadow = false;
         CCPoint last1, last2;
-        bool flushing = false;
+        // where the pictures camera put the layers
+        std::vector<NodeSpot> shown_nodes, physics_nodes;
+        // gd snapped its camera (a teleport), the picture snaps too
+        bool snap = false, have_cam = false;
+        CCPoint cam_after;
+        // gd moves the camera w/ tweens (cameraMoveX/Y are keys 1 & 2) from where it is rn. the picture keeps its own
+        // copy of every key its calls touched, sharing gds made it jump onto gds camera
+        std::unordered_map<int, GJValueTween> tweens;
+        std::unordered_set<int> owned{ 1, 2 };
+        int mirror_depth = 0;
+        // where m_cameraPosition sits in the saved words
+        std::size_t camera_word = 0;
     };
     CameraPace g_cameraPace;
+
+    using TweenMap = std::unordered_map<int, GJValueTween>;
+
+    bool same_tween(GJValueTween const& a, GJValueTween const& b) {
+        return a.m_fromValue == b.m_fromValue && a.m_toValue == b.m_toValue && a.m_duration == b.m_duration && a.m_deltaTime == b.m_deltaTime &&
+               a.m_currentValue == b.m_currentValue && a.m_easingType == b.m_easingType && a.m_easingRate == b.m_easingRate &&
+               a.m_finished == b.m_finished && a.m_disabled == b.m_disabled && a.m_uniqueID == b.m_uniqueID && a.m_controlID == b.m_controlID;
+    }
+
+    TweenMap copy_tweens(GJBaseGameLayer* layer) {
+        TweenMap out;
+        for (auto const& [key, tween] : layer->m_gameState.m_tweenActions)
+            out.emplace(key, tween);
+        return out;
+    }
+
+    void set_tween(GJBaseGameLayer* layer, int key, GJValueTween const* tween) {
+        auto& map = layer->m_gameState.m_tweenActions;
+        auto it = map.find(key);
+        if (!tween) {
+            if (it != map.end())
+                map.erase(it);
+        }
+        else if (it != map.end())
+            it->second = *tween;
+        else
+            map.emplace(key, *tween);
+    }
+
+    // gds map back, untouched keys stay where they are
+    void restore_tweens(GJBaseGameLayer* layer, TweenMap const& from) {
+        std::vector<int> extra;
+        for (auto const& [key, tween] : layer->m_gameState.m_tweenActions)
+            if (!from.contains(key))
+                extra.push_back(key);
+        for (int key : extra)
+            set_tween(layer, key, nullptr);
+        for (auto const& [key, tween] : from)
+            set_tween(layer, key, &tween);
+    }
+
+    // physics' map w/ the pictures own keys swapped in
+    void install_tweens(GJBaseGameLayer* layer) {
+        auto& pace = g_cameraPace;
+        for (int key : pace.owned) {
+            auto it = pace.tweens.find(key);
+            set_tween(layer, key, it == pace.tweens.end() ? nullptr : &it->second);
+        }
+    }
+
+    // anything a picture call started, changed or stopped is the pictures from now on
+    void keep_tweens(GJBaseGameLayer* layer, TweenMap const& before) {
+        auto& pace = g_cameraPace;
+        auto const& map = layer->m_gameState.m_tweenActions;
+        for (auto const& [key, tween] : map) {
+            auto it = before.find(key);
+            if (it == before.end() || !same_tween(it->second, tween))
+                pace.owned.insert(key);
+        }
+        for (auto const& [key, tween] : before)
+            if (map.find(key) == map.end())
+                pace.owned.insert(key);
+        for (int key : pace.owned) {
+            if (auto it = map.find(key); it != map.end())
+                pace.tweens[key] = it->second;
+            else
+                pace.tweens.erase(key);
+        }
+    }
+
+    int camera_every() {
+        return std::max(static_cast<int>(std::lround(Logic::get().sample_rate() / VANILLA_TPS)), 1);
+    }
+
+    // 1 run of the pictures camera on what the steps since its last run owe
+    void run_shown_camera(GJBaseGameLayer* layer) {
+        auto& pace = g_cameraPace;
+        auto& state = pace.state;
+        auto* p1 = layer->m_player1;
+        auto* p2 = layer->m_player2;
+        state.save(layer, state.physics);
+        keep_nodes(layer, pace.physics_nodes);
+        TweenMap physics_tweens = copy_tweens(layer);
+        if (!pace.have_shown || pace.snap) {
+            // start over from gds camera
+            state.shown = state.physics;
+            pace.shown_nodes = pace.physics_nodes;
+            pace.tweens.clear();
+            for (int key : pace.owned)
+                if (auto it = physics_tweens.find(key); it != physics_tweens.end())
+                    pace.tweens.emplace(key, it->second);
+            pace.have_shown = true;
+            pace.snap = false;
+            pace.since = 0;
+            pace.last1 = p1->getPosition();
+            pace.last2 = p2 ? p2->getPosition() : CCPoint{};
+            return;
+        }
+        state.load_shown(layer);
+        install_tweens(layer);
+        // what gd does every step: its own tweens stepped by the time since it last ran, gds put on as they are
+        float elapsed = static_cast<float>(pace.since) * Logic::get().physics_step();
+        std::vector<int> finished;
+        for (auto& [key, tween] : layer->m_gameState.m_tweenActions) {
+            bool own = pace.owned.contains(key);
+            if (own && !tween.m_finished && !tween.m_disabled)
+                tween.step(elapsed);
+            layer->m_gameState.updateTweenAction(tween.m_currentValue, key);
+            if (own && tween.m_finished)
+                finished.push_back(key);
+        }
+        for (int key : finished)
+            set_tween(layer, key, nullptr);
+        TweenMap installed = copy_tweens(layer);
+        state.save(layer, state.before);
+        auto real1 = p1->m_lastPosition;
+        CCPoint real2 = p2 ? p2->m_lastPosition : CCPoint{};
+        p1->m_lastPosition = pace.last1;
+        if (p2)
+            p2->m_lastPosition = pace.last2;
+        // counted in calls, the dt that arrives in updateCamera isnt usable
+        float owed = static_cast<float>(60.0 / Logic::get().sample_rate() * std::max(pace.since, 1));
+        pace.shadow = true;
+        layer->updateCamera(owed);
+        pace.shadow = false;
+        state.learn(layer);
+        keep_tweens(layer, installed);
+        for (int key : finished)
+            pace.tweens.erase(key);
+        p1->m_lastPosition = real1;
+        if (p2)
+            p2->m_lastPosition = real2;
+        pace.last1 = p1->getPosition();
+        pace.last2 = p2 ? p2->getPosition() : CCPoint{};
+        pace.since = 0;
+        state.save(layer, state.shown);
+        keep_nodes(layer, pace.shown_nodes);
+        // physics gets everything back
+        state.load(layer, state.physics);
+        restore_tweens(layer, physics_tweens);
+        put_back(pace.physics_nodes);
+    }
+
+    // a camera function physics called (portal, static camera, offset, zoom) runs again for the picture, so what it
+    // starts from the camera starts from the pictures. no events or dual ground on that 2nd call
+    template <class F>
+    void mirror_camera(GJBaseGameLayer* layer, F&& call) {
+        auto& pace = g_cameraPace;
+        if (pace.shadow || pace.mirror_depth > 0 || pace.layer != layer || !pace.have_shown || camera_every() <= 1) {
+            call();
+            return;
+        }
+        auto& state = pace.state;
+        ++pace.mirror_depth;
+        call();
+        state.save(layer, state.physics);
+        TweenMap physics_tweens = copy_tweens(layer);
+        std::vector<NodeSpot> nodes;
+        keep_nodes(layer, nodes);
+        state.load_shown(layer);
+        install_tweens(layer);
+        TweenMap installed = copy_tweens(layer);
+        state.save(layer, state.before);
+        pace.shadow = true;
+        call();
+        pace.shadow = false;
+        keep_tweens(layer, installed);
+        // only what came out different is the pictures, the rest keeps following physics
+        std::size_t at = 0;
+        for (auto const& [start, count] : state.regions)
+            for (uint32_t w = 0; w < count; ++w, ++at)
+                if (reinterpret_cast<uint32_t*>(layer)[start + w] != state.physics[at])
+                    state.mask[at] = 1;
+        state.save(layer, state.shown);
+        state.load(layer, state.physics);
+        restore_tweens(layer, physics_tweens);
+        put_back(nodes);
+        --pace.mirror_depth;
+    }
 }
 
 class $modify(EchoCameraPace, GJBaseGameLayer) {
     void updateCamera(float dt) {
         auto& pace = g_cameraPace;
         auto& logic = Logic::get();
-        // counted in calls, the dt that arrives here isnt usable
-        int every = static_cast<int>(std::lround(logic.sample_rate() / VANILLA_TPS));
-        if (dt == 0.f || every <= 1 || !m_player1) {
+        int every = camera_every();
+        if (pace.shadow || dt == 0.f || !m_player1 || every <= 1 || !Logic::as_play(this)) {
             GJBaseGameLayer::updateCamera(dt);
             return;
         }
-        // level setup & resets place the ground and bg here, never skip those
-        if (pace.layer != this || logic.resetting || logic.refresh_only) {
-            GJBaseGameLayer::updateCamera(dt);
-            pace = { this, logic.updates_run, 0, 0, m_player1->getPosition(), m_player2 ? m_player2->getPosition() : CCPoint{} };
-            return;
+        if (pace.layer != this) {
+            pace = {};
+            pace.layer = this;
+            pace.state.build(this);
+            pace.camera_word = pace.state.index_of(&m_gameState.m_cameraPosition, this);
         }
-        if (pace.flushing) {
-            if (pace.calls <= 0)
-                return;
+        // level setup & resets start the picture over from gds camera
+        if (logic.resetting || logic.refresh_only)
+            pace.have_shown = false;
+        if (pace.update != g_updatesRun) {
+            pace.update = g_updatesRun;
+            pace.at = 0;
         }
-        else {
-            if (pace.update != logic.updates_run) {
-                pace.update = logic.updates_run;
-                pace.at = 0;
-            }
-            ++pace.at;
-            ++pace.calls;
-            // spread over the batch w/ the last 1 on its last step, or the shown frame lags behind
-            int batch = static_cast<int>(logic.steps_this_tick);
-            if (batch > 1) {
-                int runs = std::clamp(static_cast<int>(std::lround(static_cast<double>(batch) / every)), 1, batch);
-                if ((pace.at * runs) / batch == ((pace.at - 1) * runs) / batch)
-                    return;
-            }
-            // the rest is owed at the end of the shown frame (echo_flush_camera)
-            else if (pace.calls < every)
-                return;
+        ++pace.at;
+        ++pace.since;
+        // spread over the batch w/ the last 1 on its last step, or the shown frame lags behind
+        int batch = static_cast<int>(logic.steps_this_tick);
+        bool runs_now;
+        if (batch > 1) {
+            int runs = std::clamp(static_cast<int>(std::lround(static_cast<double>(batch) / every)), 1, batch);
+            runs_now = (pace.at * runs) / batch != ((pace.at - 1) * runs) / batch;
         }
-        float owed = static_cast<float>(60.0 / logic.sample_rate()) * static_cast<float>(pace.calls);
-        pace.calls = 0;
-        auto real1 = m_player1->m_lastPosition;
-        m_player1->m_lastPosition = pace.last1;
-        CCPoint real2;
-        if (m_player2) {
-            real2 = m_player2->m_lastPosition;
-            m_player2->m_lastPosition = pace.last2;
-        }
-        GJBaseGameLayer::updateCamera(owed);
-        m_player1->m_lastPosition = real1;
-        pace.last1 = m_player1->getPosition();
-        if (m_player2) {
-            m_player2->m_lastPosition = real2;
-            pace.last2 = m_player2->getPosition();
-        }
+        else
+            runs_now = pace.since >= every;
+        pace.state.save(this, pace.state.before);
+        // following moves it a few units a call at most. way more = gd put it there on purpose
+        constexpr float SNAP = 60.f;
+        auto cam_before = m_gameState.m_cameraPosition;
+        if (pace.have_cam && ccpDistance(cam_before, pace.cam_after) > SNAP)
+            pace.snap = true;
+        GJBaseGameLayer::updateCamera(dt);
+        if (ccpDistance(m_gameState.m_cameraPosition, cam_before) > SNAP)
+            pace.snap = true;
+        pace.cam_after = m_gameState.m_cameraPosition;
+        pace.have_cam = true;
+        pace.state.learn(this);
+        if (runs_now)
+            run_shown_camera(this);
     }
 };
 
-// a shown frame w/ less steps than the camera waits for (2000 tps at 0.01x) never moved it until the 8th step,
-// so the icon walked ahead & the camera jumped after it, back & forth. ts pays whats owed before the frame is drawn
-void echo_flush_camera(GJBaseGameLayer* layer) {
-    auto& pace = g_cameraPace;
-    if (!layer || pace.layer != layer || pace.calls <= 0 || Logic::get().resetting || Logic::get().refresh_only)
-        return;
-    pace.flushing = true;
-    layer->updateCamera(1.f);
-    pace.flushing = false;
-}
+class $modify(EchoCameraShow, GJBaseGameLayer) {
+    void visit() {
+        auto& pace = g_cameraPace;
+        auto& logic = Logic::get();
+        if (pace.layer != this || !pace.have_shown || !m_player1 || camera_every() <= 1 || logic.resetting || logic.refresh_only) {
+            GJBaseGameLayer::visit();
+            return;
+        }
+        // steps the last run didnt cover get paid now
+        if (pace.since > 0)
+            run_shown_camera(this);
+        std::vector<NodeSpot> now;
+        keep_nodes(this, now);
+        auto& state = pace.state;
+        state.save(this, state.physics);
+        state.load_shown(this);
+        put_back(pace.shown_nodes);
+        // enter effects come from the camera in updateVisibility, so the picture gets a pass w/ its camera & physics
+        // gets its own back after drawing. dt 0 so nothing animates twice
+        auto* play = Logic::as_play(this);
+        bool visibility = play && ccpDistance(m_gameState.m_cameraPosition,
+                                      CCPoint{ std::bit_cast<float>(state.physics[pace.camera_word]), std::bit_cast<float>(state.physics[pace.camera_word + 1]) }) > 0.5f;
+        if (visibility) {
+            pace.shadow = true;
+            play->updateVisibility(0.f);
+            pace.shadow = false;
+        }
+        GJBaseGameLayer::visit();
+        state.load(this, state.physics);
+        put_back(now);
+        if (visibility)
+            play->updateVisibility(0.f);
+    }
+};
+
+class $modify(EchoCameraMirror, GJBaseGameLayer) {
+#ifndef GEODE_IS_WINDOWS
+    // inlined on windows
+    void updateCameraMode(EffectGameObject* obj, bool updateDual) {
+        mirror_camera(this, [&] { GJBaseGameLayer::updateCameraMode(obj, updateDual); });
+    }
+#endif
+
+    void updateStaticCameraPos(CCPoint pos, bool staticX, bool staticY, bool followOrSmoothEase, float time, int easingType, float easingRate) {
+        mirror_camera(this, [&] { GJBaseGameLayer::updateStaticCameraPos(pos, staticX, staticY, followOrSmoothEase, time, easingType, easingRate); });
+    }
+
+    void updateStaticCameraPosToGroup(int centerID, bool updateX, bool updateY, bool followObject, float followEase, float duration, int easingType,
+        float easingRate, bool smoothVelocity, float velocityMod) {
+        mirror_camera(this, [&] {
+            GJBaseGameLayer::updateStaticCameraPosToGroup(centerID, updateX, updateY, followObject, followEase, duration, easingType, easingRate, smoothVelocity, velocityMod);
+        });
+    }
+
+    void exitStaticCamera(bool exitX, bool exitY, float time, int easingType, float easingRate, bool smoothVelocity, float smoothVelocityMod, bool exitInstant) {
+        mirror_camera(this, [&] { GJBaseGameLayer::exitStaticCamera(exitX, exitY, time, easingType, easingRate, smoothVelocity, smoothVelocityMod, exitInstant); });
+    }
+
+    void resetStaticCamera(bool resetX, bool resetY) {
+        mirror_camera(this, [&] { GJBaseGameLayer::resetStaticCamera(resetX, resetY); });
+    }
+
+    void updateCameraOffsetX(float offsetX, float duration, int easingType, float easingRate, int uniqueID, int controlID) {
+        mirror_camera(this, [&] { GJBaseGameLayer::updateCameraOffsetX(offsetX, duration, easingType, easingRate, uniqueID, controlID); });
+    }
+
+    void updateCameraOffsetY(float offsetY, float duration, int easingType, float easingRate, int uniqueID, int controlID) {
+        mirror_camera(this, [&] { GJBaseGameLayer::updateCameraOffsetY(offsetY, duration, easingType, easingRate, uniqueID, controlID); });
+    }
+
+    void updateZoom(float zoom, float duration, int easing, float rate, int uniqueID, int controlID) {
+        mirror_camera(this, [&] { GJBaseGameLayer::updateZoom(zoom, duration, easing, rate, uniqueID, controlID); });
+    }
+
+    // the pictures 2nd call cant fire anything
+    void gameEventTriggered(GJGameEvent event, int material, int playerID) {
+        if (g_cameraPace.shadow)
+            return;
+        GJBaseGameLayer::gameEventTriggered(event, material, playerID);
+    }
+
+    void updateDualGround(PlayerObject* object, int mode, bool instant, float duration) {
+        if (g_cameraPace.shadow)
+            return;
+        GJBaseGameLayer::updateDualGround(object, mode, instant, duration);
+    }
+};
 
 class $modify(EchoAudioEngine, FMODAudioEngine) {
     void update(float dt) {
