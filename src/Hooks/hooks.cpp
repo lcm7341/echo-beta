@@ -1437,6 +1437,23 @@ class $modify(EchoGameLayer, GJBaseGameLayer) {
         // so a macro always holds the REAL player & records / plays the same with the option on or off
         bool flips = value.flip_controls() && !m_isPlatformer && !m_useReplay; // same checks gd does (handleButton, ios 0x1fabbc)
         bool mine = !value.applying_playback && !value.routing_input && !value.restoring_holds && !value.maintaining_gravity && !value.injecting && !value.follow_injecting && !orb_swift;
+        // the trajectory autoclickers own click for THAT player: no click both, swap or auto swift on it
+        struct AssistScope {
+            bool before = Logic::get().assist_input;
+            ~AssistScope() { Logic::get().assist_input = before; }
+        } assist_scope;
+        if (mine && (button == 0 || button == static_cast<int>(PlayerButton::Jump))) {
+            // the respawn hold restore is already worked out per player too (inverse included)
+            for (auto* counts : { &value.assist_clicks, &value.restored_clicks }) {
+                int& left = (*counts)[player1 ? 0 : 1][down ? 1 : 0];
+                if (left > 0) {
+                    --left;
+                    value.assist_input = true;
+                    mine = false;
+                    break;
+                }
+            }
+        }
         if (flips && mine && m_levelSettings && m_levelSettings->m_twoPlayerMode)
             player1 = !player1;
         // auto swift: every press lets go by itself on the same step, so my own release has nothing left to do
@@ -1448,8 +1465,12 @@ class $modify(EchoGameLayer, GJBaseGameLayer) {
                 value.step_frame + 1, down, player1, button, value.applying_playback, orb_swift, value.injecting, value.routing_input, value.restoring_holds, value.maintaining_gravity,
                 m_player1 && Logic::button_held(m_player1, static_cast<int>(PlayerButton::Jump)), m_player2 && Logic::button_held(m_player2, static_cast<int>(PlayerButton::Jump))));
         auto* live = Logic::as_play(this);
-        if (!down && ((live && live->m_isPaused) || Logic::get().pause_menu_open()) && (value.is_playing() || value.is_recording()))
+        if (!down && ((live && live->m_isPaused) || Logic::get().pause_menu_open()) && (value.is_playing() || value.is_recording())) {
+            if (echo::step::tracing())
+                echo::step::trace_event(fmt::format("DROP frame={} release p1={} paused={} pause_menu={} pause_known={}\n",
+                    value.step_frame + 1, player1, live && live->m_isPaused, Logic::get().pause_menu_open(), value.pause_known));
             return;
+        }
         int jump_early = static_cast<int>(PlayerButton::Jump);
         bool jump_button_early = button == 0 || button == jump_early;
         if (value.suppress_auto_hold && jump_button_early && !value.applying_playback && !value.restoring_holds && !value.maintaining_gravity) {
@@ -1498,7 +1519,7 @@ class $modify(EchoGameLayer, GJBaseGameLayer) {
         if (!value.applying_playback && !value.routing_input && !value.restoring_holds && !value.maintaining_gravity) {
             steered = Logic::get().steer_player(player1);
             bool other_played = value.plays_player(player1);
-            if (!steered && value.click_both && !other_played && !value.plays_player(!player1) && (button == 0 || button == static_cast<int>(PlayerButton::Jump) || button == static_cast<int>(PlayerButton::Left) || button == static_cast<int>(PlayerButton::Right))) {
+            if (!steered && value.click_both && !value.assist_input && !other_played && !value.plays_player(!player1) && (button == 0 || button == static_cast<int>(PlayerButton::Jump) || button == static_cast<int>(PlayerButton::Left) || button == static_cast<int>(PlayerButton::Right))) {
                 value.routing_input = true;
                 handleButton(down, button, !player1);
                 value.routing_input = false;
@@ -1507,6 +1528,14 @@ class $modify(EchoGameLayer, GJBaseGameLayer) {
         int jump = static_cast<int>(PlayerButton::Jump);
         int left = static_cast<int>(PlayerButton::Left), right = static_cast<int>(PlayerButton::Right);
         bool jump_button = button == 0 || button == jump;
+        // inverse inputs: MY click does the opposite on the player it ended up going to (after click both & co)
+        bool my_click = !value.applying_playback && !value.restoring_holds && !value.maintaining_gravity && !value.injecting &&
+                        !value.follow_injecting && !orb_swift && !value.assist_input;
+        if (my_click && jump_button) {
+            bool two = m_levelSettings && m_levelSettings->m_twoPlayerMode;
+            if (!player1 && two ? value.inverse_p2 : value.inverse_p1)
+                down = !down;
+        }
         int swifts = 0;
         if (down && jump_button && !orb_swift && !value.applying_playback && !value.injecting && !value.restoring_holds && !value.maintaining_gravity) {
             PlayerObject* body = player1 ? m_player1 : m_player2;
@@ -2005,10 +2034,20 @@ class $modify(EchoPlayerObject, PlayerObject) {
     void releaseButton(PlayerButton button) {
         auto* play = PlayLayer::get();
         auto& logic = Logic::get();
-        if (play && !Trajectory::get().isFake(this) && (logic.is_playing() || logic.is_recording()) && (play->m_isPaused || Logic::get().pause_menu_open()))
+        if (play && !Trajectory::get().isFake(this) && (logic.is_playing() || logic.is_recording()) && (play->m_isPaused || Logic::get().pause_menu_open())) {
+            if (echo::step::tracing())
+                echo::step::trace_event(fmt::format("DROP frame={} releaseButton p2={} paused={} pause_menu={}\n",
+                    logic.step_frame + 1, this == play->m_player2, play->m_isPaused, Logic::get().pause_menu_open()));
             return;
+        }
         if (!Trajectory::get().isFake(this))
-            echo::step::trace_button('R', false, static_cast<int>(button));
+            if (echo::step::tracing()) {
+                auto* layer = GJBaseGameLayer::get();
+                auto const& value = Logic::get();
+                echo::step::trace_event(fmt::format("R frame={} p2={} button={} upside_down={} buffered={} maintaining={} playback={} restoring={} injecting={} physical={}\n",
+                    value.step_frame + 1, layer && this == layer->m_player2, static_cast<int>(button), m_isUpsideDown, m_jumpBuffered, value.maintaining_gravity,
+                    value.applying_playback, value.restoring_holds, value.injecting, layer ? Logic::get().physical_hold(layer, layer && this == layer->m_player2) : false));
+            }
         note_partner();
         PlayerObject::releaseButton(button);
     }
@@ -2016,7 +2055,13 @@ class $modify(EchoPlayerObject, PlayerObject) {
     bool pushButton(PlayerButton button) {
         auto& logic = Logic::get();
         if (!Trajectory::get().isFake(this))
-            echo::step::trace_button('P', true, static_cast<int>(button));
+            if (echo::step::tracing()) {
+                auto* layer = GJBaseGameLayer::get();
+                auto const& value = Logic::get();
+                echo::step::trace_event(fmt::format("P frame={} p2={} button={} upside_down={} buffered={} maintaining={} playback={} restoring={} injecting={} physical={}\n",
+                    value.step_frame + 1, layer && this == layer->m_player2, static_cast<int>(button), m_isUpsideDown, m_jumpBuffered, value.maintaining_gravity,
+                    value.applying_playback, value.restoring_holds, value.injecting, layer ? Logic::get().physical_hold(layer, layer && this == layer->m_player2) : false));
+            }
         if (logic.suppress_auto_hold && button == PlayerButton::Jump && !Trajectory::get().isFake(this) && !logic.maintaining_gravity && !logic.applying_playback && !logic.injecting) {
             return false;
         }
@@ -2789,6 +2834,7 @@ class $modify(EchoHardStreak, HardStreak) {
 
 class $modify(EchoDirector, CCDirector) {
     void drawScene() {
+        GUI::get().sync_cursor();
         if (Logic::bot_disabled()) {
 #ifdef GEODE_IS_WINDOWS
             echo_guard_step_site();
@@ -2898,15 +2944,20 @@ class $modify(EchoEGLView, CCEGLView) {
 
 // gds camera follow moves the same amt every call no matter the step length, so at a high tps it snapped.
 // above 240 it runs ~240 times a second, & the icons last position is where it was last run
+namespace {
+    struct CameraPace {
+        GJBaseGameLayer* layer = nullptr;
+        uint64_t update = 0;
+        int at = 0, calls = 0;
+        CCPoint last1, last2;
+        bool flushing = false;
+    };
+    CameraPace g_cameraPace;
+}
+
 class $modify(EchoCameraPace, GJBaseGameLayer) {
     void updateCamera(float dt) {
-        struct Pace {
-            GJBaseGameLayer* layer = nullptr;
-            uint64_t update = 0;
-            int at = 0, calls = 0;
-            CCPoint last1, last2;
-        };
-        static Pace pace;
+        auto& pace = g_cameraPace;
         auto& logic = Logic::get();
         // counted in calls, the dt that arrives here isnt usable
         int every = static_cast<int>(std::lround(logic.sample_rate() / VANILLA_TPS));
@@ -2914,23 +2965,34 @@ class $modify(EchoCameraPace, GJBaseGameLayer) {
             GJBaseGameLayer::updateCamera(dt);
             return;
         }
-        if (pace.layer != this)
-            pace = { this, 0, 0, 0, m_player1->getPosition(), m_player2 ? m_player2->getPosition() : CCPoint{} };
-        if (pace.update != logic.updates_run) {
-            pace.update = logic.updates_run;
-            pace.at = 0;
+        // level setup & resets place the ground and bg here, never skip those
+        if (pace.layer != this || logic.resetting || logic.refresh_only) {
+            GJBaseGameLayer::updateCamera(dt);
+            pace = { this, logic.updates_run, 0, 0, m_player1->getPosition(), m_player2 ? m_player2->getPosition() : CCPoint{} };
+            return;
         }
-        ++pace.at;
-        ++pace.calls;
-        // spread over the batch w/ the last 1 on its last step, or the shown frame lags behind
-        int batch = static_cast<int>(logic.steps_this_tick);
-        if (batch > 1) {
-            int runs = std::clamp(static_cast<int>(std::lround(static_cast<double>(batch) / every)), 1, batch);
-            if ((pace.at * runs) / batch == ((pace.at - 1) * runs) / batch)
+        if (pace.flushing) {
+            if (pace.calls <= 0)
                 return;
         }
-        else if (pace.calls < every)
-            return;
+        else {
+            if (pace.update != logic.updates_run) {
+                pace.update = logic.updates_run;
+                pace.at = 0;
+            }
+            ++pace.at;
+            ++pace.calls;
+            // spread over the batch w/ the last 1 on its last step, or the shown frame lags behind
+            int batch = static_cast<int>(logic.steps_this_tick);
+            if (batch > 1) {
+                int runs = std::clamp(static_cast<int>(std::lround(static_cast<double>(batch) / every)), 1, batch);
+                if ((pace.at * runs) / batch == ((pace.at - 1) * runs) / batch)
+                    return;
+            }
+            // the rest is owed at the end of the shown frame (echo_flush_camera)
+            else if (pace.calls < every)
+                return;
+        }
         float owed = static_cast<float>(60.0 / logic.sample_rate()) * static_cast<float>(pace.calls);
         pace.calls = 0;
         auto real1 = m_player1->m_lastPosition;
@@ -2949,6 +3011,17 @@ class $modify(EchoCameraPace, GJBaseGameLayer) {
         }
     }
 };
+
+// a shown frame w/ less steps than the camera waits for (2000 tps at 0.01x) never moved it until the 8th step,
+// so the icon walked ahead & the camera jumped after it, back & forth. ts pays whats owed before the frame is drawn
+void echo_flush_camera(GJBaseGameLayer* layer) {
+    auto& pace = g_cameraPace;
+    if (!layer || pace.layer != layer || pace.calls <= 0 || Logic::get().resetting || Logic::get().refresh_only)
+        return;
+    pace.flushing = true;
+    layer->updateCamera(1.f);
+    pace.flushing = false;
+}
 
 class $modify(EchoAudioEngine, FMODAudioEngine) {
     void update(float dt) {

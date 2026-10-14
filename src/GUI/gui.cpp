@@ -2,6 +2,9 @@
 // docked = 1 window w/ a sidebar of pages. undocked = every section is its own tile that packs across the screen & can be pinned or hidden
 #include "GUI/gui.hpp"
 #include <imgui-cocos.hpp>
+#include <Geode/binding/PlatformToolbox.hpp>
+#include <Geode/binding/GameManager.hpp>
+#include <Geode/binding/PlayLayer.hpp>
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <misc/cpp/imgui_stdlib.h>
@@ -918,6 +921,24 @@ void GUI::open_popup() {
 bool GUI::menu_shown() {
     auto& imgui = ImGuiCocos::get();
     return imgui.isInitialized() && imgui.isVisible() && !GUI::get().bar_only;
+}
+
+// show cursor in game being off fix
+void GUI::sync_cursor() {
+#ifdef GEODE_IS_DESKTOP
+    static bool forced = false;
+    auto* play = PlayLayer::get();
+    bool hidden_in_game = play && !GameManager::get()->getGameVariable("0024");
+    if (hidden_in_game && GUI::get().menu_shown()) {
+        PlatformToolbox::showCursor();
+        forced = true;
+    }
+    else if (forced) {
+        forced = false;
+        if (hidden_in_game && !play->m_isPaused && !play->m_hasCompletedLevel)
+            PlatformToolbox::hideCursor();
+    }
+#endif
 }
 
 int GUI::menu_frames() {

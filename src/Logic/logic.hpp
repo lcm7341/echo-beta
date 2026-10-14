@@ -483,7 +483,15 @@ struct Session {
 	float traj_release_alive_p2 = 0.f;
 	bool pause_before_kill = false;
 	bool traj_autoclicker = false;
+	int traj_click_lookahead = 1; // steps ahead a death has to be for the trajectory autoclicker to click
 	bool traj_flip_p1 = false, traj_flip_p2 = false; // trajectory autoclicker "holding" for me (maintain gravity)
+	bool traj_flip_raw_p1 = false, traj_flip_raw_p2 = false; // what i was really holding when it flipped
+	bool held_raw_p1 = false, held_raw_p2 = false; // what i was really holding the last time physical_hold looked
+	// trajectory autoclicker clicks queued ts step, [player2][down]. click both, swap & co are for MY clicks only
+	int assist_clicks[2][2] = {};
+	// holds restore_holds queued after a respawn, already worked out per player (inverse included)
+	int restored_clicks[2][2] = {};
+	bool assist_input = false;
 	bool find_best_queued = false;
 	int best_frame_range = 120;
 	bool best_frame_click = true;

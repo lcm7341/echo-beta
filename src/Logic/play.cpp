@@ -1,3 +1,4 @@
+#include <cstring>
 // playback & everything around an attempt
 //
 // play_macro runs at the start of every physics step: the inputs stored for that step go into gds button queue,
@@ -173,23 +174,36 @@ bool Logic::physical_hold(GJBaseGameLayer* play, bool icon2) {
     if (restart_hold_captured && ((death_jump_p1 && (ui->m_p1Jumping || ui->m_p1TouchId != -1)) || (death_jump_p2 && (ui->m_p2Jumping || ui->m_p2TouchId != -1)))) {
         restart_hold_captured = false;
     }
-    // maintain gravity reads what im holding so the trajectory autoclicker flips THAT, not the button
-    if (traj_autoclicker && maintain_gravity) {
-        p1 = p1 != traj_flip_p1;
-        p2 = p2 != traj_flip_p2;
-    }
+    // maintain gravity reads what im holding so the trajectory autoclicker flips THAT, not the button.
+    // the moment i press or let go myself its mine again, or every click after its 1st flip comes out backwards
+    held_raw_p1 = p1;
+    held_raw_p2 = p2;
+    if (traj_flip_p1 && p1 != traj_flip_raw_p1)
+        traj_flip_p1 = false;
+    if (traj_flip_p2 && p2 != traj_flip_raw_p2)
+        traj_flip_p2 = false;
     bool record1 = records_player(false), record2 = records_player(true);
     bool one_player_dual = play->m_gameState.m_isDualMode && !(play->m_levelSettings && play->m_levelSettings->m_twoPlayerMode);
-    if (record1 != record2 && !one_player_dual) {
-        if (icon2 != record2)
-            return icon2 ? p2 : p1;
-        return p1 || p2;
-    }
-    if (flip_controls())
-        std::swap(p1, p2);
-    if (one_player_dual || click_both)
-        return p1 || p2;
-    return icon2 ? p2 : p1;
+    auto mine = [&] {
+        if (record1 != record2 && !one_player_dual) {
+            if (icon2 != record2)
+                return icon2 ? p2 : p1;
+            return p1 || p2;
+        }
+        if (flip_controls())
+            std::swap(p1, p2);
+        if (one_player_dual || click_both)
+            return p1 || p2;
+        return icon2 ? p2 : p1;
+    };
+    bool held = mine();
+    // inverse inputs: the player my click goes to does the opposite
+    if (icon2 && !one_player_dual ? inverse_p2 : inverse_p1)
+        held = !held;
+    // the autoclickers flip goes on after click both & swap, those are for my clicks only. its flip is for THAT icon
+    if (traj_autoclicker && maintain_gravity)
+        held = held != (icon2 && !one_player_dual ? traj_flip_p2 : traj_flip_p1);
+    return held;
 }
 
 bool Logic::steer_key(GJBaseGameLayer* play, enumKeyCodes key, bool down, double timestamp) {
@@ -326,6 +340,7 @@ void Logic::reinforce_routed_hold(PlayerObject* body) {
 void Logic::capture_restart_holds(PlayLayer* play) {
     restart_hold_captured = false;
     traj_flip_p1 = traj_flip_p2 = false;
+    traj_flip_raw_p1 = traj_flip_raw_p2 = false;
     if (!play)
         return;
     std::ranges::for_each(play->m_queuedButtons, [](PlayerButtonCommand const& cmd) {
@@ -451,8 +466,9 @@ void Logic::apply_maintain_gravity(GJBaseGameLayer* play) {
     };
     auto correct = [&](PlayerObject* body, bool icon2) {
         maintaining_gravity = true;
-        // 1 is enough. a loop of clicks just toggles gravity forever
-        int limit = same_gravity ? 1 : 8;
+        // same gravity used to cap ts at 1 bc its flipGravity made the clicks toggle forever. it dont flip waves anymore,
+        // & the trajectory always does all 8 so a cap here makes the autoclicker plan clicks that never happen
+        int limit = 8;
         for (int step = 0; step < limit; ++step) {
             bool push = false;
             if (!mismatch(body, icon2, push))
@@ -474,7 +490,7 @@ void Logic::apply_maintain_gravity(GJBaseGameLayer* play) {
     bool one_dual = play->m_gameState.m_isDualMode && !two;
     if (one_dual) {
         maintaining_gravity = true;
-        int limit = same_gravity ? 1 : 8;
+        int limit = 8;
         for (int step = 0; step < limit; ++step) {
             bool push = false;
             if (!mismatch(play->m_player1, false, push))
@@ -496,7 +512,7 @@ void Logic::apply_maintain_gravity(GJBaseGameLayer* play) {
         return;
     }
     maintaining_gravity = true;
-    int limit = same_gravity ? 1 : 8;
+    int limit = 8;
     for (int step = 0; step < limit; ++step) {
         bool push1 = false, push2 = false;
         bool need1 = mismatch(play->m_player1, false, push1), need2 = mismatch(play->m_player2, true, push2);
@@ -566,7 +582,8 @@ void Logic::sync_same_gravity(GJBaseGameLayer* play) {
             maintaining_gravity = false;
             return;
         }
-        body->flipGravity(target, true);
+        // everything else only changes what gets recorded, never the physics. a wave already moves the same way
+        // on both gravities thru maintain gravity, & a flipGravity here is not an input so playback never had it
     };
     match(first, false);
     match(second, true);
@@ -1444,6 +1461,7 @@ void Logic::restore_holds(PlayLayer* play) {
     for (auto const& cmd : play->m_queuedButtons)
         Logic::get().remember_move(cmd);
     play->m_queuedButtons.clear();
+    std::memset(logic.restored_clicks, 0, sizeof(logic.restored_clicks));
 
     bool playing = (logic).is_playing();
     bool recording = (logic).is_recording();
@@ -1573,8 +1591,11 @@ void Logic::restore_holds(PlayLayer* play) {
             }
             if (logic.plays_player(icon2))
                 return;
-            bool jump_held = live_jump(icon2);
+            bool physical_jump_held = live_jump(icon2);
+            bool jump_held = physical_jump_held;
             auto* body = Logic::get().icon_body(play, icon2);
+            if (icon2 && !one_dual ? logic.inverse_p2 : logic.inverse_p1)
+                jump_held = !jump_held;
             if (logic.maintain_gravity && body && body->m_isDart)
                 jump_held = jump_held != body->m_isUpsideDown;
             bool left_held = live_side(
@@ -1605,7 +1626,7 @@ void Logic::restore_holds(PlayLayer* play) {
                 deferred.push_back(cmd);
             };
             note(jump, jump_held);
-            if (!jump_held && play->m_uiLayer) {
+            if (!physical_jump_held && play->m_uiLayer) {
                 if (icon2) {
                     play->m_uiLayer->m_p2Jumping = false;
                     play->m_uiLayer->m_p2TouchId = -1;
@@ -1653,7 +1674,9 @@ void Logic::restore_holds(PlayLayer* play) {
     // NOT while a step back is loading
     if ((playing || recording) && !logic.backstepping)
         Logic::get().play_macro(play, play, 0.f, true);
-    std::ranges::for_each(deferred, [play](PlayerButtonCommand const& cmd) {
+    std::ranges::for_each(deferred, [play, &logic](PlayerButtonCommand const& cmd) {
+        if (cmd.m_button == PlayerButton::Jump)
+            ++logic.restored_clicks[cmd.m_isPlayer2 ? 1 : 0][cmd.m_isPush ? 1 : 0];
         play->m_queuedButtons.push_back(cmd);
     });
     if (recording && checkpoint)
@@ -2125,10 +2148,13 @@ void Logic::play_macro(GJBaseGameLayer* play, GJBaseGameLayer* layer, float dt, 
     replay::SmallSnapshot<PlayerButtonCommand, 8> queued(play->m_queuedButtons);
     if (logic.is_recording() && logic.maintain_gravity && !logic.restoring_holds) {
         int jump = static_cast<int>(PlayerButton::Jump);
+        // only a wave gets its button from maintain gravity. deleting every jump ate all my clicks on a ball or cube
+        // (only w/ physics locked to steps, so only w/ the trajectory autoclicker or prevent death on)
         queued.removeIf([&](PlayerButtonCommand const& cmd) {
             int button = static_cast<int>(cmd.m_button);
             bool jump_button = button == 0 || button == jump;
-            return jump_button && logic.records_player(cmd.m_isPlayer2) && !logic.plays_player(cmd.m_isPlayer2);
+            auto* body = Logic::get().icon_body(play, cmd.m_isPlayer2);
+            return jump_button && body && body->m_isDart && logic.records_player(cmd.m_isPlayer2) && !logic.plays_player(cmd.m_isPlayer2);
         });
     }
     int user_count = std::max(0, static_cast<int>(queued.size()) - replay);

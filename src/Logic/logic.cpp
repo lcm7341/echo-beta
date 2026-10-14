@@ -617,6 +617,8 @@ void Logic::pull_settings() {
                 logic.pause_before_kill = flag.unwrap();
             if (auto flag = json["trajectory_autoclicker"].asBool())
                 logic.traj_autoclicker = flag.unwrap();
+            if (auto number = json["trajectory_click_lookahead"].asInt())
+                logic.traj_click_lookahead = std::max(static_cast<int>(number.unwrap()), 1);
             if (auto flag = json["trajectory_moving_objects"].asBool())
                 logic.traj_moving_objects = flag.unwrap();
             if (auto flag = json["backstep"].asBool())
@@ -1052,6 +1054,7 @@ void Logic::save_settings_file() {
     json["frame_advance_speed"] = logic.advance_speed;
     json["pause_before_kill"] = logic.pause_before_kill;
     json["trajectory_autoclicker"] = logic.traj_autoclicker;
+    json["trajectory_click_lookahead"] = logic.traj_click_lookahead;
     json["trajectory_moving_objects"] = logic.traj_moving_objects;
     json["backstep"] = logic.backstep;
     json["velocity_unrounding"] = logic.velocity_unrounding;

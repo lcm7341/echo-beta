@@ -124,6 +124,7 @@ public:
 	void open_popup();
 	void reveal_menu();
 	bool menu_shown();
+	void sync_cursor();
 	int menu_frames();
 	void draw_menu_now();
 	void open_macro_picker(bool sequence, int amount);

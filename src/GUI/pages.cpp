@@ -595,9 +595,9 @@ void GUI::main() {
             input_fps = std::clamp(input_fps, 1.f, FLT_MAX);
             GUI::get().set_playback_fps(input_fps);
         }
-        if (toggle("Lock TPS", logic.lock_delta))
+        if (toggle("Lock FPS", logic.lock_delta))
             GUI::get().drop_carry();
-        tip("Forces your TPS value to this. Turn this on for maximum accuracy, but it shouldn't be necessary.");
+        tip("Moves the level exactly one frame for every frame drawn, essentially smooth fix.");
         eui::RowHalf();
         if (toggle("Real Time", logic.real_time_mode))
             GUI::get().drop_carry();
@@ -794,6 +794,12 @@ void GUI::tools() {
         if (toggle("Trajectory Autoclicker", logic.traj_autoclicker))
             Logic::get().reset_traj();
         tip("Automatically clicks or releases when the next frame would kill you. Works without Show Trajectory.");
+        if (logic.traj_autoclicker) {
+            eui::Row("Lookahead", "Clicks when you would die within this many frames.");
+            if (eui::InputInt("##traj-lookahead", &logic.traj_click_lookahead))
+                logic.traj_click_lookahead = std::clamp(logic.traj_click_lookahead, 1, 240);
+            persist_on_release();
+        }
         if (quad_row("Auto Straight Fly", "##straight-fly", logic.straight_fly_p1, logic.straight_fly_p2, "Holds and lets go for you to keep the ship level. It can drift."))
             GUI::get().persist();
         if (quad_row("Auto Straight UFO", "##straight-ufo", logic.straight_ufo_p1, logic.straight_ufo_p2, "Clicks for you to keep the UFO at one height."))

@@ -172,6 +172,27 @@ namespace {
     }
 }
 
+namespace {
+    // the 1 step at a time path (autoclicker, prevent death): what a step really costs there, autoclicker included
+    bool g_single_path = false;
+    double g_single_cost = 0.0;
+
+    int single_affordable(bool real_time) {
+        if (!(g_single_cost > 0.0))
+            return std::numeric_limits<int>::max();
+        auto* director = CCDirector::sharedDirector();
+        double interval = director ? director->getAnimationInterval() : 1.0 / 60.0;
+        if (!std::isfinite(interval) || interval <= 0.0)
+            interval = 1.0 / 60.0;
+        double budget = real_time ? 0.1 : std::clamp(interval * 1.5, 0.004, 0.05);
+        double room = std::max(budget - step_cost().other_work, budget * 0.5);
+        double steps = std::floor(room / g_single_cost);
+        if (!std::isfinite(steps) || steps >= static_cast<double>(std::numeric_limits<int>::max()))
+            return std::numeric_limits<int>::max();
+        return std::max(static_cast<int>(steps), 1);
+    }
+}
+
 void Logic::note_step() {
     auto& clock = step_clock();
     if (!clock.active)
@@ -267,7 +288,7 @@ int Logic::count_unlocked_steps(GJBaseGameLayer* play, double dt) {
         steps = 0;
     bool capped = false;
     if (!Logic::get().render_capturing()) {
-        int affordable = Logic::get().affordable_steps();
+        int affordable = g_single_path ? single_affordable(logic.real_time_mode) : Logic::get().affordable_steps();
         int cap = std::max(std::min(Logic::get().unlocked_step_cap(), affordable) - logic.frame_steps, 0);
         capped = steps > cap;
         steps = std::min(steps, cap);
@@ -281,6 +302,8 @@ int Logic::count_unlocked_steps(GJBaseGameLayer* play, double dt) {
     }
     return steps;
 }
+
+void echo_flush_camera(GJBaseGameLayer* layer);
 
 void Logic::run_frame(GJBaseGameLayer* play, float dt, std::function<void(float)> const& tick) {
     if (Logic::get().render_paused())
@@ -365,6 +388,14 @@ void Logic::run_frame(GJBaseGameLayer* play, float dt, std::function<void(float)
 #endif
     if (!rendering && !logic.real_time_mode && frame_dt > 0.25f)
         frame_dt = 0.25f;
+    // lock tps: every drawn frame moves the lvl exactly 1 frame at my fps, no matter how long it really took.
+    // the real frame time wobbles, so the steps a frame ran did too & it looked choppy
+    if (!rendering && logic.lock_delta) {
+        auto* director = CCDirector::sharedDirector();
+        double interval = director ? director->getAnimationInterval() : 0.0;
+        if (std::isfinite(interval) && interval > 0.0)
+            frame_dt = static_cast<float>(interval);
+    }
     frame_dt *= speed;
     // a time warp over 1x: gd speeds the whole scheduler up for it (steps stay the same length, more of them run).
     // i pin the schedulers speed to 1 in a lvl, so a warp over 1 did nothing at all
@@ -417,6 +448,7 @@ void Logic::run_frame(GJBaseGameLayer* play, float dt, std::function<void(float)
         if (traj_click)
             Trajectory::get().autoclick(PlayLayer::get());
     };
+    auto frame_began = Clock::now();
     if (!force_step)
         autoclick();
     if (!force_step && pause_kill) {
@@ -470,14 +502,18 @@ void Logic::run_frame(GJBaseGameLayer* play, float dt, std::function<void(float)
         logic.frame_steps = 0;
         logic.steps_left = 0;
         logic.steps_this_tick = 0;
+        echo_flush_camera(play);
         logic.present = true;
         Trajectory::get().refresh(PlayLayer::get());
         return;
     }
 
     if (!force_step) {
+        // ts path pays a whole update per step (+ the autoclicker), the batch cost doesnt fit it. cap by what it really costs
+        g_single_path = true;
         int steps = Logic::get().count_unlocked_steps(play, frame_dt);
         steps = std::min(steps, pause_kill_safe_steps());
+        int ran = 0;
         if (steps <= 0) {
             Logic::get().check_advance_pause(PlayLayer::get());
             logic.present = true;
@@ -505,17 +541,27 @@ void Logic::run_frame(GJBaseGameLayer* play, float dt, std::function<void(float)
                     finished = true;
                     break;
                 }
+                // the autoclicker only needs a whole update per step near a click. the steps it can leave alone go
+                // in 1 update, a full gd update for every step on a big lvl was the lag
+                int chunk = 1;
+                if (traj_click && !pause_kill && can_batch)
+                    chunk = std::clamp(Trajectory::get().batchable_steps(), 1, batch - i);
                 float step_dt = logic.physics_step();
-                logic.steps_left = 1;
-                logic.steps_this_tick = 1;
-                ++logic.frame_steps;
+                logic.steps_left = chunk;
+                logic.steps_this_tick = static_cast<uint32_t>(chunk);
+                logic.frame_steps += chunk;
+                logic.defer_player_art = chunk > 1 && phys::fast_prediction_pos();
                 time_update([&] {
-                    play->update(step_dt);
+                    play->update(step_dt * static_cast<float>(chunk));
                 });
+                logic.defer_player_art = false;
+                place_deferred_player_art(play);
                 logic.steps_left = 0;
                 logic.skip_physics = true;
-                tick(step_dt);
+                tick(step_dt * static_cast<float>(chunk));
                 logic.skip_physics = false;
+                ran += chunk;
+                i += chunk - 1;
                 if (died()) {
                     finished = true;
                     break;
@@ -544,10 +590,17 @@ void Logic::run_frame(GJBaseGameLayer* play, float dt, std::function<void(float)
             steps = Logic::get().count_unlocked_steps(play, left + carry);
             steps = std::min(steps, pause_kill_safe_steps());
         }
+        g_single_path = false;
+        if (ran > 0) {
+            double each = seconds_since(frame_began, Clock::now()) / ran;
+            if (std::isfinite(each) && each > 0.0)
+                g_single_cost = g_single_cost > 0.0 ? g_single_cost + (each - g_single_cost) * 0.3 : each;
+        }
         settle_cost();
         logic.frame_steps = 0;
         logic.steps_left = 0;
         logic.steps_this_tick = 0;
+        echo_flush_camera(play);
         logic.present = true;
         Trajectory::get().refresh(PlayLayer::get());
         return;
@@ -586,6 +639,7 @@ void Logic::run_frame(GJBaseGameLayer* play, float dt, std::function<void(float)
         Logic::get().finish_backstep(Logic::as_play(play));
         Logic::get().click_best_frame(Logic::as_play(play));
     }
+    echo_flush_camera(play);
     logic.present = true;
 
     Trajectory::get().refresh(PlayLayer::get());

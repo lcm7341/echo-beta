@@ -777,7 +777,7 @@ void Logic::record_input(GJBaseGameLayer* play, bool down, bool player1, int but
         PlayerObject* body = player1 ? play->m_player1 : play->m_player2;
         logic.set_pose_at(at, Logic::get().capture_pose(body));
     }
-    if (!logic.click_both || logic.routing_input || logic.maintaining_gravity || !logic.records_player(!player2))
+    if (!logic.click_both || logic.routing_input || logic.maintaining_gravity || logic.assist_input || !logic.records_player(!player2))
         return;
     logic.routing_input = true;
     Logic::get().record_input(play, down, !player1, button, force);
