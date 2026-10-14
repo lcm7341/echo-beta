@@ -2405,7 +2405,8 @@ void Logic::note_click(PlayLayer* play, bool down, bool player1, int button) {
     size_t before = clicks.size();
     while (clicks.size() > 1 && now_t - logic.seconds_at(clicks.front()) > 2.0)
         clicks.pop_front();
-    while (clicks.size() > 4096)
+    // was capped at 4096, which capped cps
+    while (clicks.size() > (1u << 20))
         clicks.pop_front();
     if (clicks.size() != before)
         ++logic.clicks_revision;
