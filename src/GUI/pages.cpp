@@ -807,20 +807,20 @@ void GUI::tools() {
         if (toggle("Trajectory Autoclicker", logic.traj_autoclicker))
             Logic::get().reset_traj();
         tip("Automatically clicks or releases when the next frame would kill you. Works without Show Trajectory.");
-        if (logic.traj_autoclicker) {
-            eui::Row("Lookahead", "Clicks when you would die within this many frames.");
-            if (eui::InputInt("##traj-lookahead", &logic.traj_click_lookahead))
-                logic.traj_click_lookahead = std::clamp(logic.traj_click_lookahead, 1, 240);
-            persist_on_release();
-        }
+        ImGui::BeginDisabled(!logic.traj_autoclicker);
+        eui::Row("Lookahead", "Clicks when you would die within this many frames.");
+        if (eui::InputInt("##traj-lookahead", &logic.traj_click_lookahead))
+            logic.traj_click_lookahead = std::clamp(logic.traj_click_lookahead, 1, 240);
+        persist_on_release();
+        ImGui::EndDisabled();
         if (quad_row("Auto Straight Fly", "##straight-fly", logic.straight_fly_p1, logic.straight_fly_p2, "Holds and lets go for you to keep the ship level. It can drift."))
             GUI::get().persist();
         if (quad_row("Auto Straight UFO", "##straight-ufo", logic.straight_ufo_p1, logic.straight_ufo_p2, "Clicks for you to keep the UFO at one height."))
             GUI::get().persist();
-        if (logic.straight_fly() || logic.straight_ufo()) {
-            if (eui::Button("Straight Fly Settings...", ImVec2(-FLT_MIN, 0.f)))
-                open_straight = true;
-        }
+        ImGui::BeginDisabled(!logic.straight_fly() && !logic.straight_ufo());
+        if (eui::Button("Straight Fly Settings...", ImVec2(-FLT_MIN, 0.f)))
+            open_straight = true;
+        ImGui::EndDisabled();
     }
     eui::EndCard();
     if (eui::BeginCard("Two Players", card_width())) {
@@ -834,7 +834,8 @@ void GUI::tools() {
         eui::Row("Follow", "For two player levels, the following player will copy the followed player after that many frames or milliseconds.");
         if (eui::Combo("##follow", &logic.follow_mode, follow, 3))
             GUI::get().persist();
-        if (logic.follow_mode != 0) {
+        ImGui::BeginDisabled(logic.follow_mode == 0);
+        {
             eui::RowWith("Delay", 5.f);
             if (eui::DragFloat("##follow-delay", &logic.follow_delay, logic.follow_delay_ms ? 1.f : 0.25f, 0.f, 100000.f, logic.follow_delay_ms ? "%.1f" : "%.0f"))
                 logic.follow_delay = std::max(logic.follow_delay, 0.f);
@@ -849,6 +850,7 @@ void GUI::tools() {
                 GUI::get().persist();
             }
         }
+        ImGui::EndDisabled();
     }
     eui::EndCard();
     eui::EndCardRow();
@@ -893,21 +895,21 @@ void GUI::tools() {
         }
         toggle("Maintain Gravity", logic.maintain_gravity);
         tip("Makes the wave control as if gravity was always normal while recording.");
-        if (logic.maintain_gravity && GUI::get().two_player_dual()) {
-            toggle("Same Gravity", logic.same_gravity);
-            tip("Ensures that Maintain Gravity keeps both players on the same gravity.");
-        }
+        ImGui::BeginDisabled(!logic.maintain_gravity);
+        toggle("Same Gravity", logic.same_gravity);
+        ImGui::EndDisabled();
+        tip("Ensures that Maintain Gravity keeps both players on the same gravity.");
         toggle("Auto Swift", logic.auto_swift);
         tip("Every click lets go on the same frame it was pressed.");
         eui::RowHalf();
         toggle("Extra Clicks", logic.extra_clicks);
         tip("Adds extra clicks on the same frame for each click.");
-        if (logic.extra_clicks) {
-            eui::Row("Extra click amount");
-            if (eui::DragInt("##extra-clicks", &logic.extra_click_count, .1f, 1, 16, "%d extra"))
-                logic.extra_click_count = std::clamp(logic.extra_click_count, 1, 16);
-            persist_on_release();
-        }
+        ImGui::BeginDisabled(!logic.extra_clicks);
+        eui::Row("Extra click amount");
+        if (eui::DragInt("##extra-clicks", &logic.extra_click_count, .1f, 1, 16, "%d extra"))
+            logic.extra_click_count = std::clamp(logic.extra_click_count, 1, 16);
+        persist_on_release();
+        ImGui::EndDisabled();
     }
     eui::EndCard();
     eui::EndCardRow();
@@ -1036,6 +1038,8 @@ void GUI::draw_visuals() {
         if (toggle("No Mirror Portals", logic.no_mirror_portals))
             GUI::get().apply_no_mirror();
         tip("Stops mirror portals from flipping the level.");
+        toggle("Stacked Orb Optimization", echo::opt::effects);
+        tip("Clicking many orbs on the same frame only shows one effect.");
     }
     eui::EndCard();
     eui::EndCardRow();
@@ -1541,8 +1545,6 @@ void GUI::draw_theme() {
         toggle("Inline Getters", echo::opt::getters);
         tip("Inlines the rect getters in the collision check.");
 #endif
-        toggle("Stacked Orb Optimization", echo::opt::effects);
-        tip("Clicking many orbs on the same frame only shows one effect.");
         if (eui::Checkbox("Button Effects", &eui::button_effects()))
             gui.export_theme(gui.theme_path("current"));
         tip("Enables button animations for the animated themes.");
