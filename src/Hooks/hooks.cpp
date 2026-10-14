@@ -1064,6 +1064,7 @@ class $modify(EchoGameLayer, GJBaseGameLayer) {
             // was 1 no matter the batch, so lock tps ran 1 step where it owed 4+ (the insanely slow lock tps)
             logic.steps_this_tick = static_cast<uint32_t>(std::max(logic.steps_left, 0));
         }
+        ++logic.updates_run;
         GJBaseGameLayer::update(dt);
     }
 
@@ -2894,6 +2895,60 @@ class $modify(EchoEGLView, CCEGLView) {
     }
 };
 #endif
+
+// gds camera follow moves the same amt every call no matter the step length, so at a high tps it snapped.
+// above 240 it runs ~240 times a second, & the icons last position is where it was last run
+class $modify(EchoCameraPace, GJBaseGameLayer) {
+    void updateCamera(float dt) {
+        struct Pace {
+            GJBaseGameLayer* layer = nullptr;
+            uint64_t update = 0;
+            int at = 0, calls = 0;
+            CCPoint last1, last2;
+        };
+        static Pace pace;
+        auto& logic = Logic::get();
+        // counted in calls, the dt that arrives here isnt usable
+        int every = static_cast<int>(std::lround(logic.sample_rate() / VANILLA_TPS));
+        if (dt == 0.f || every <= 1 || !m_player1) {
+            GJBaseGameLayer::updateCamera(dt);
+            return;
+        }
+        if (pace.layer != this)
+            pace = { this, 0, 0, 0, m_player1->getPosition(), m_player2 ? m_player2->getPosition() : CCPoint{} };
+        if (pace.update != logic.updates_run) {
+            pace.update = logic.updates_run;
+            pace.at = 0;
+        }
+        ++pace.at;
+        ++pace.calls;
+        // spread over the batch w/ the last 1 on its last step, or the shown frame lags behind
+        int batch = static_cast<int>(logic.steps_this_tick);
+        if (batch > 1) {
+            int runs = std::clamp(static_cast<int>(std::lround(static_cast<double>(batch) / every)), 1, batch);
+            if ((pace.at * runs) / batch == ((pace.at - 1) * runs) / batch)
+                return;
+        }
+        else if (pace.calls < every)
+            return;
+        float owed = static_cast<float>(60.0 / logic.sample_rate()) * static_cast<float>(pace.calls);
+        pace.calls = 0;
+        auto real1 = m_player1->m_lastPosition;
+        m_player1->m_lastPosition = pace.last1;
+        CCPoint real2;
+        if (m_player2) {
+            real2 = m_player2->m_lastPosition;
+            m_player2->m_lastPosition = pace.last2;
+        }
+        GJBaseGameLayer::updateCamera(owed);
+        m_player1->m_lastPosition = real1;
+        pace.last1 = m_player1->getPosition();
+        if (m_player2) {
+            m_player2->m_lastPosition = real2;
+            pace.last2 = m_player2->getPosition();
+        }
+    }
+};
 
 class $modify(EchoAudioEngine, FMODAudioEngine) {
     void update(float dt) {
