@@ -1885,6 +1885,22 @@ void Logic::prepare_buttons(GJBaseGameLayer* play) {
     int frame = Logic::get().step_frame + 1;
     std::array<char, 6> queued{};
     bool two_player = play->m_levelSettings && play->m_levelSettings->m_twoPlayerMode;
+    // gd ignores p2 in a 2 player lvl til the dual starts, so p2 only follows the macros holds after an input inside it
+    // -1 = didnt see the dual start, trust the macro
+    static struct {
+        int frame = -1, began = -1;
+        bool dual = false;
+        std::array<bool, 3> acted{};
+    } p2;
+    bool dual_now = play->m_gameState.m_isDualMode;
+    if (frame != p2.frame + 1 || !dual_now)
+        p2.began = -1;
+    else if (!p2.dual) {
+        p2.began = frame;
+        p2.acted = {};
+    }
+    p2.frame = frame;
+    p2.dual = dual_now;
     auto queue = [&](bool holding, int button, bool player2) {
         int jump = static_cast<int>(PlayerButton::Jump);
         int left = static_cast<int>(PlayerButton::Left), right = static_cast<int>(PlayerButton::Right);
@@ -1892,6 +1908,8 @@ void Logic::prepare_buttons(GJBaseGameLayer* play) {
                                                    : button == right  ? 2
                                                                       : -1;
         if (slot >= 0) {
+            if (player2)
+                p2.acted[static_cast<size_t>(slot)] = true;
             queued[static_cast<size_t>((player2 ? 3 : 0) + slot)] = 1;
             // outside a 2 player lvl gd gives a p2 input to BOTH icons, so it counts for p1 too.
             // w/o ts ensure() queued a 2nd p1 press on the same step, & a 2nd pushButton re-arms the orb buffer
@@ -1960,6 +1978,8 @@ void Logic::prepare_buttons(GJBaseGameLayer* play) {
         if (!body || !logic.plays_player(stored2))
             return;
         if (slot > 0 && body->m_controlsDisabled)
+            return;
+        if (stored2 && two_player && p2.began >= 0 && slot >= 0 && !p2.acted[static_cast<size_t>(slot)])
             return;
         bool want = Logic::get().held_at(logic, stored2, frame, button);
         if (Logic::button_held(body, button) == want)
