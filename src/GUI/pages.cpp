@@ -666,11 +666,6 @@ void GUI::main() {
             persist();
         ImGui::EndDisabled();
         tip("Keeps finding the next best frame after each click until none survive.");
-        ImGui::BeginDisabled(!logic.best_frame_click);
-        if (toggle("Smart Release", logic.best_frame_release))
-            persist();
-        ImGui::EndDisabled();
-        tip("Works out how long each click should be held and lets go by itself.");
 #endif
         ImGui::EndDisabled();
         eui::Row("Search range", "How many steps ahead to search. Limited by how far Backstep can go back.");

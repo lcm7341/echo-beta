@@ -490,9 +490,7 @@ struct Session {
 	// (after a step back the buttons are matched to what im really holding) & the next best frame pressed AGAIN instead of
 	// releasing. while ts is owned, "what im holding" is what best frame last did, until i touch the button myself
 	bool best_hold_owned = false, best_hold = false, best_hold_raw = false;
-	bool best_frame_release = true; // lets go by itself as soon as letting go is safe (a tap stays a tap)
-	int best_release_checked = -1;
-	int best_flip_back_at = -1; // the frame a tap best frame planned ends on, -1 = none
+
 	bool best_frame_click_p1 = true, best_frame_auto = false, best_frame_running = false;
 	bool best_frame_step_first = false;
 	bool traj_moving_objects = true;
@@ -786,7 +784,6 @@ public:
 	void stop_best_frame(char const* why = nullptr);
 	void find_best_frame(PlayLayer* play, std::function<void(float)> const& tick);
 	void click_best_frame(PlayLayer* play);
-	void best_auto_release(PlayLayer* play);
 	bool raw_jump(GJBaseGameLayer* play, bool icon2) const;
 	void poll_back_hold();
 	Checkpoint capture_checkpoint(PlayLayer* play, CheckpointObject* object, int frame);

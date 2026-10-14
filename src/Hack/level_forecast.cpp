@@ -26,8 +26,6 @@
 #include <array>
 #include <cstddef>
 #include <cstring>
-#include <deque>
-#include <fstream>
 #include <map>
 #include <unordered_map>
 #include <unordered_set>
@@ -1164,34 +1162,8 @@ namespace forecast {
         }
     }
 
-    namespace {
-        std::string* g_dump = nullptr;
-    }
-
-    void dump_to(std::string* text) {
-        g_dump = text;
-    }
-
-    void dump_line(std::string const& line) {
-        if (g_dump)
-            *g_dump += line;
-    }
-
-    // what the forecast knows about an object
-    std::string describe(GameObject* object) {
-        auto& f = state();
-        auto it = f.index.find(object);
-        if (it == f.index.end())
-            return "forecast: not a moving object";
-        auto i = it->second;
-        return fmt::format("forecast: index={} recorded={} quiet={} lock_y={} groups={}", i, f.latest[i] != UINT32_MAX, f.has_quiet[i] != 0, f.lock_y[i], object->m_groupCount);
-    }
-
     void apply(PlayLayer* play, int step, CCRect const& area, float player_y) {
         auto& f = state();
-        if (g_dump && step == 1)
-            *g_dump += fmt::format("  FORECAST valid={} horizon={} follow_frames={} follows_now={} dt={} player_y={}\n", f.valid, f.horizon, f.follow_frames.size(),
-                f.follow_frames.empty() ? 0 : f.follow_frames.front().size(), f.dt, player_y);
         if (!play || play != f.play || !f.valid || step < 1)
             return;
         auto begin = [&] {
@@ -1249,9 +1221,6 @@ namespace forecast {
                 if (icon == 0.f)
                     continue;
                 float target = icon + static_cast<float>(follow.offset);
-                if (g_dump && (step == 1 || step % 20 == 0))
-                    *g_dump += fmt::format("  FOLLOW step={} group={} speed={} max={} delay={} offset={} members={} icon={:.3f} target={:.3f} pull={} most={}\n", step,
-                        follow.group, follow.speed, follow.max, follow.delay, follow.offset, members->second.size(), icon, target, pull, most);
                 begin();
                 for (auto i : members->second) {
                     keep_base(f, i);
@@ -1271,8 +1240,6 @@ namespace forecast {
                         f.applied.push_back(i);
                     }
                     auto* obj = f.objects[i];
-                    if (g_dump && (step == 1 || step % 20 == 0))
-                        *g_dump += fmt::format("    F uid={} id={} x={:.2f} was_y={:.3f} now_y={:.3f}\n", obj->m_uniqueID, obj->m_objectID, obj->m_positionX, obj->m_positionY, f.line_y[i]);
                     if (obj->m_positionY != f.line_y[i]) {
                         obj->m_positionY = f.line_y[i];
                         obj->m_isObjectRectDirty = true;
@@ -1355,30 +1322,6 @@ namespace forecast {
     }
 }
 
-// TEMP (the updateCollisionBlocks crash): the last 300 times a collision block was taken out of / put into a section.
-// kept in memory, echo_block_flush writes them (called right before gds function when the icon is way out there)
-namespace {
-    std::deque<std::string> g_block_notes;
-}
-
-void echo_block_note(char const* what, GJBaseGameLayer* layer, GameObject* object) {
-    if (!object || object->m_objectType != GameObjectType::CollisionObject)
-        return;
-    g_block_notes.push_back(fmt::format("{} frame={} uid={} id={} x={:.1f} y={:.1f} outer={} middle={} inner={} other={} off={} predicting={} sections={} block_sections={}\n", what,
-        Logic::get().step_frame, object->m_uniqueID, object->m_objectID, object->m_positionX, object->m_positionY, object->m_outerSectionIndex,
-        object->m_middleSectionIndex, object->m_innerSectionIndex, object->m_someOtherIndex, object->m_isGroupDisabled, Logic::get().predicting, layer->m_sections.size(),
-        layer->m_collisionBlockSections.size()));
-    if (g_block_notes.size() > 300)
-        g_block_notes.pop_front();
-}
-
-void echo_block_flush(std::string const& head) {
-    std::ofstream file(Logic::get().save_root() / "logs" / "blocks.txt", std::ios::trunc);
-    file << head;
-    for (auto const& line : g_block_notes)
-        file << line;
-}
-
 namespace {
     Hook* g_section_hook = nullptr;
     bool g_section_hook_on = true;
@@ -1403,7 +1346,6 @@ class $modify(ForecastSections, GJBaseGameLayer) {
     }
 
     void removeObjectFromSection(GameObject* object) {
-        echo_block_note("remove", this, object);
         auto& f = state();
         if (f.sections.active && object && f.sections.layer == this) {
             f.sections.keep_indexes(object);
@@ -1421,7 +1363,6 @@ class $modify(ForecastSections, GJBaseGameLayer) {
         if (f.sections.layer == this)
             f.sections.keep_indexes(object);
         GJBaseGameLayer::addToSection(object);
-        echo_block_note("added", this, object);
         if (f.sections.active && object && f.sections.layer == this)
             f.sections.note_appended(object);
     }

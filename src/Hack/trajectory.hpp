@@ -44,10 +44,7 @@ public:
 	void refresh(PlayLayer* play);
 	void lookahead(PlayLayer* play);
 	void autoclick(PlayLayer* play);
-	// how many steps the icon lives if the jump button is flipped right now (keep = true: if its left the way it is)
-	// back_after: flip it BACK again that many steps later (a tap that long), -1 = stays flipped
-	int flip_survival(PlayLayer* play, bool player1, int& full, std::vector<CCPoint>* path = nullptr, int limit = 0, bool keep = false, int back_after = -1);
-	int flip_back_step = -1;
+	int flip_survival(PlayLayer* play, bool player1, int& full, std::vector<CCPoint>* path = nullptr, int limit = 0);
 
 	bool held_next(PlayLayer* play, bool player1) const {
 		return next_click(play, player1) == Click::Hold;
@@ -127,6 +124,8 @@ private:
 	PlayerObject* spawn_fake(PlayLayer* play, char const* id);
 	Key make_key(PlayLayer* play) const;
 	void seed(PlayerObject* fake, PlayerObject* real);
+	// how many steps the icon lives w/ ts click made right now
+	int click_survival(PlayLayer* play, bool player1, Click click, int& full);
 	void press(PlayLayer* play, PlayerObject* fake, Click click);
 	Click next_click(PlayLayer* play, bool player1) const;
 	template <class F>

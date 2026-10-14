@@ -631,8 +631,6 @@ void Logic::pull_settings() {
                 logic.best_frame_click = flag.unwrap();
             if (auto flag = json["best_frame_auto"].asBool())
                 logic.best_frame_auto = flag.unwrap();
-            if (auto flag = json["best_frame_release"].asBool())
-                logic.best_frame_release = flag.unwrap();
             else if (auto amt = json["backstep_saves"].asInt())
                 logic.backstep_percent = std::clamp(static_cast<int>(std::lround(amt.unwrap() * 100.0 / 240.0)), 1, 200);
             if (auto flag = json["pause_at_trajectory_length"].asBool())
@@ -1061,7 +1059,6 @@ void Logic::save_settings_file() {
     json["best_frame_range"] = logic.best_frame_range;
     json["best_frame_click"] = logic.best_frame_click;
     json["best_frame_auto"] = logic.best_frame_auto;
-    json["best_frame_release"] = logic.best_frame_release;
     json["pause_at_trajectory_length"] = logic.pause_at_traj_length;
     json["pause_trajectory_ms"] = logic.pause_traj_ms;
     json["percent_accuracy"] = logic.percent_accuracy;

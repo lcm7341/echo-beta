@@ -509,11 +509,9 @@ bool Logic::step_to(PlayLayer* play, int target, int keep_up_to) {
             logic.message = "Turn on Backstep first";
         return false;
     }
-    // stepped back to before best frames last click: that click is gone, so is its finger & the rest of its tap
-    if (target <= logic.best_frame_clicked_at) {
+    // stepped back to before best frames last click: that click is gone & so is its finger
+    if (target <= logic.best_frame_clicked_at)
         logic.best_hold_owned = false;
-        logic.best_flip_back_at = -1;
-    }
     int keep = std::min(target, keep_up_to);
     while (!logic.backsteps.empty() && logic.backsteps.back().echo.frame > keep)
         Logic::get().pop_backstep();

@@ -4,7 +4,6 @@
 // each path is drawn as lines w/ a marker where it dies
 // predicting must NEVER touch the real attempt: triggers dont fire for real, deaths stay on the fake, the random state is put back after
 // the same thing answers "does the next step kill me" (pause before kill, the autoclicker) & "how long do i live if i flip now" (find best frame)
-#include <fstream>
 #include "Hack/trajectory.hpp"
 #include "Hack/level_forecast.hpp"
 #include "Hack/trajectory_path.hpp"
@@ -169,22 +168,7 @@ bool Trajectory::realActivated(PlayerObject* player, EnhancedGameObject* object)
     return phys::hasBeenActivatedByPlayer(real, object);
 }
 
-// TEMP: logs/traj.txt, what every line of the trajectory did on its last run. only written in frame advance
-// (step to the spot that looks wrong, the file is that exact picture)
-namespace {
-    std::string g_dump;
-    bool g_dumping = false;
-    int g_dump_step = 0;
-
-    char const* mode_of(PlayerObject* p) {
-        return p->m_isShip ? "ship" : p->m_isBall ? "ball" : p->m_isBird ? "ufo" : p->m_isDart ? "wave" : p->m_isRobot ? "robot" : p->m_isSpider ? "spider" : p->m_isSwing ? "swing" : "cube";
-    }
-}
-
 void Trajectory::rememberActivation(EnhancedGameObject* object, PlayerObject* player) {
-    if (g_dumping && object)
-        g_dump += fmt::format("  ACT step={} fake2={} uid={} id={} type={} x={:.2f} y={:.2f} off={}\n", g_dump_step, player == fake2, object->m_uniqueID, object->m_objectID,
-            static_cast<int>(object->m_objectType), object->m_positionX, object->m_positionY, object->m_isGroupDisabled);
     if (player == fake1)
         used_p1.insert(object);
     else if (player == fake2)
@@ -488,10 +472,6 @@ void Trajectory::simulate(PlayLayer* play, bool player1, Click click, bool both,
     bool watch = measure != 0;
     PlayerObject* fake = player1 ? fake1 : fake2;
     PlayerObject* real = player1 ? play->m_player1 : play->m_player2;
-    if (g_dumping && draw && real)
-        g_dump += fmt::format("LINE {} p1={} frame={} from x={:.3f} y={:.3f} yvel={:.4f} {} real_held={}\n",
-            click == Click::Hold ? "hold" : click == Click::Release ? "release" : click == Click::Swift ? "swift" : "replay", player1, logic.step_frame,
-            real->getPositionX(), real->getPositionY(), real->m_yVelocity, mode_of(real), Logic::button_held(real, static_cast<int>(PlayerButton::Jump)));
     PlayerObject* partner = otherFake(fake);
     PlayerObject* partner_real = player1 ? play->m_player2 : play->m_player1;
     if (!fake || !real)
@@ -759,15 +739,6 @@ void Trajectory::simulate(PlayLayer* play, bool player1, Click click, bool both,
         player_path.push_back(fake->getPosition());
     }
     for (int i = 0; i < steps && !(done1 && done2); ++i) {
-        // best frames tap: the button goes back the other way ts many steps in
-        if (flip_back_step > 0 && i == flip_back_step && !clicker && !played) {
-            click = click == Click::Hold ? Click::Release : Click::Hold;
-            each_body([&](PlayerObject* body) {
-                if (click != Click::Release)
-                    body->m_jumpBuffered = false;
-                press(play, body, click);
-            });
-        }
         if (varying) {
             step_len = 1.f / std::max(logic.rate_at(frame + i), 1.f);
             step_delta = step_len * 60.f * std::min(warp, 1.f);
@@ -930,12 +901,8 @@ void Trajectory::simulate(PlayLayer* play, bool player1, Click click, bool both,
         if (!done2 && partner)
             partner->resetTouchedRings(false);
         bool was1 = done1, was2 = done2;
-        g_dump_step = i;
         if (!done1)
             done1 = advance(play, fake, step_delta, draw, click);
-        if (g_dumping && draw && !was1)
-            g_dump += fmt::format(" {} x={:.3f} y={:.3f} yvel={:.4f} {} flipped={} speed={:.3f} held={} ground={}{}\n", i, fake->getPositionX(), fake->getPositionY(), fake->m_yVelocity,
-                mode_of(fake), fake->m_isUpsideDown, fake->m_playerSpeed, Logic::button_held(fake, static_cast<int>(PlayerButton::Jump)), fake->m_isOnGround, done1 ? " DONE" : "");
         if (note_path && !done1)
             player_path.push_back(fake->getPosition());
         if (path_sink && !done1)
@@ -1228,10 +1195,6 @@ void Trajectory::refresh(PlayLayer* play) {
     };
     bool hide1 = Logic::get().traj_player_hidden(false), hide2 = Logic::get().traj_player_hidden(true);
     bool linked = dual && !twoPlayer && !hide1 && !hide2;
-    g_dumping = logic.frame_advance && draw && !rendering;
-    g_dump.clear();
-    if (g_dumping)
-        forecast::dump_to(&g_dump);
     if (!hide1) {
         if (!rendering && !play->m_playerDied && logic.plays_player(false))
             run(true, Click::Replay, linked, draw, MEASURE_LIVE);
@@ -1248,15 +1211,6 @@ void Trajectory::refresh(PlayLayer* play) {
     restore();
     Logic::get().sync_death_label(play);
     Logic::get().check_advance_pause(play);
-    if (g_dumping) {
-        g_dumping = false;
-        forecast::dump_to(nullptr);
-        // the frame before stays around as traj-prev.txt (a death copies it, see echo_death_note)
-        std::error_code ec;
-        std::filesystem::rename(logic.save_root() / "logs" / "traj.txt", logic.save_root() / "logs" / "traj-prev.txt", ec);
-        std::ofstream file(logic.save_root() / "logs" / "traj.txt", std::ios::trunc);
-        file << g_dump;
-    }
 
     busy = false;
     logic.predicting = false;
@@ -1317,7 +1271,7 @@ void Trajectory::predicting(PlayLayer* play, F&& predict) {
     Logic::get().sync_predict_hooks();
 }
 
-int Trajectory::flip_survival(PlayLayer* play, bool player1, int& full, std::vector<CCPoint>* path, int limit, bool keep, int back_after) {
+int Trajectory::flip_survival(PlayLayer* play, bool player1, int& full, std::vector<CCPoint>* path, int limit) {
     full = 0;
     if (!play || !play->m_started || play->m_playerDied || !node || !fake1 || !fake2)
         return 0;
@@ -1326,21 +1280,33 @@ int Trajectory::flip_survival(PlayLayer* play, bool player1, int& full, std::vec
     bool twoPlayer = play->m_levelSettings && play->m_levelSettings->m_twoPlayerMode;
     bool linked = player1 && play->m_gameState.m_isDualMode && play->m_player2 && !twoPlayer;
     Click flip = next_click(play, player1) == Click::Hold ? Click::Release : Click::Hold;
-    if (keep)
-        flip = flip == Click::Hold ? Click::Release : Click::Hold;
     float kept[4] = { logic.traj_hold_alive_p1, logic.traj_hold_alive_p2, logic.traj_release_alive_p1, logic.traj_release_alive_p2 };
     measured[0] = measured[1] = measured_full = 0;
     path_sink = path;
-    flip_back_step = keep ? -1 : back_after;
     predicting(play, [&] {
         simulate(play, player1, flip, linked, false, limit, flip == Click::Hold ? MEASURE_HOLD : MEASURE_RELEASE);
     });
-    flip_back_step = -1;
     path_sink = nullptr;
     logic.traj_hold_alive_p1 = kept[0];
     logic.traj_hold_alive_p2 = kept[1];
     logic.traj_release_alive_p1 = kept[2];
     logic.traj_release_alive_p2 = kept[3];
+    cached = false;
+    full = measured_full;
+    return std::min(measured[0], measured[1]);
+}
+
+int Trajectory::click_survival(PlayLayer* play, bool player1, Click click, int& full) {
+    full = 0;
+    if (!play || !play->m_started || play->m_playerDied || !node || !fake1 || !fake2)
+        return 0;
+    bool twoPlayer = play->m_levelSettings && play->m_levelSettings->m_twoPlayerMode;
+    bool linked = player1 && play->m_gameState.m_isDualMode && play->m_player2 && !twoPlayer;
+    measured[0] = measured[1] = measured_full = 0;
+    predicting(play, [&] {
+        // 8 = counted, but none of the live / hold / release numbers the labels use are touched
+        simulate(play, player1, click, linked, false, 0, 8);
+    });
     cached = false;
     full = measured_full;
     return std::min(measured[0], measured[1]);
@@ -1380,8 +1346,15 @@ void Trajectory::autoclick(PlayLayer* play) {
             (player1 ? logic.traj_flip_p1 : logic.traj_flip_p2) ^= true;
             return;
         }
-        // flipping dies too? try a swift (tap & let go on the same frame) if the swift line is on
-        if (logic.traj_swift && dies(player1, held ? Click::Release : Click::Hold) && !dies(player1, Click::Swift)) {
+        // 2 things it can do here: flip the button (press & hold, or let go), or a swift (tap & let go on the same frame).
+        // both are looked ahead the whole trajectory & the 1 that lives longer is what it does, a tie is the plain flip.
+        // (it used to only think of a swift w/ the swift line turned on, & only when the flip died on the very next step.
+        // an orb sitting on a wave needs the swift, the clicks after a 1 time orb is used need the hold, & auto swift
+        // could only give it 1 of those for every click)
+        int flip_full = 0, swift_full = 0;
+        int flip_lives = click_survival(play, player1, held ? Click::Release : Click::Hold, flip_full);
+        int swift_lives = click_survival(play, player1, Click::Swift, swift_full);
+        if (swift_lives > flip_lives) {
             if (held)
                 play->queueButton(jump, false, !player1, Logic::get().click_stamp());
             play->queueButton(jump, true, !player1, Logic::get().click_stamp());
