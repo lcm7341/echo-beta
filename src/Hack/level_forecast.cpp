@@ -1470,8 +1470,14 @@ class $modify(ForecastAreas, GJBaseGameLayer) {
         }
         auto& grid = *reinterpret_cast<Grid*>(&m_sections);
         auto& counts = *reinterpret_cast<Counts*>(&m_sectionSizes);
-        for (int x = std::max(outerMin, 0); x <= outerMax; ++x) {
-            for (int y = std::max(middleMin, 0); y <= middleMax; ++y) {
+        // an area trigger can hand over a range WAY past the grid (ufofu hung forever walking empty sections), so only
+        // walk the sections that exist
+        int last_x = std::min(outerMax, static_cast<int>(grid.size()) - 1);
+        for (int x = std::max(outerMin, 0); x <= last_x; ++x) {
+            if (!grid[x])
+                continue;
+            int last_y = std::min(middleMax, static_cast<int>(grid[x]->size()) - 1);
+            for (int y = std::max(middleMin, 0); y <= last_y; ++y) {
                 auto* bucket = bucket_at(grid, x, y);
                 auto* amt = count_at(counts, x, y);
                 if (!bucket || !amt)

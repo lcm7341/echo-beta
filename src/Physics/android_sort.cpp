@@ -1,69 +1,70 @@
 #include <Geode/Geode.hpp>
-#ifdef GEODE_IS_ANDROID64
 #include "Physics/apple_qsort.hpp"
 #include "Logic/logic.hpp"
 #include <cstdlib>
+#include <cstring>
 #include <sys/mman.h>
 #include <unistd.h>
-#include <cstring>
-#include <vector>
+
+// makes gd on android sort w/ apple's qsort instead of android's, see apple_qsort.hpp for why.
+//
+// gd calls qsort in spiderTestJumpX/Y, sortAllGroupsX, sortGroups & createObjectsFromSetupFinished. it doesnt
+// call it directly tho, it goes thru a slot in a table of addresses that gets filled in when the game loads.
+// so if i put my_qsort's address in that slot every qsort the game does comes to me, & nothing else on the
+// phone changes since only gd uses its own slot. its not a geode patch so disable bot doesnt undo it, my_qsort
+// just hands it back to the real qsort while the bot is off.
+//
+// 0x1228de8 is from the arm64 lib off my phone so its only right for that gd version. it only writes there if
+// the slot really holds qsort rn, if it doesnt i'm probably on another version & it does nothing. tries thru
+// geode 1st, if that doesnt stick it opens the page & writes it by hand. not sure the by hand part ever
+// actually runs but its there. status & calls go in the step trace so i can see if it turned on
 
 using namespace geode::prelude;
 
-// gd sorts w/ the systems qsort in spiderTestJumpX/Y, sortAllGroupsX, sortGroups & createObjectsFromSetupFinished
-// equal things come out in whatever order that qsort feels like, & androids is NOT apples
-// DARK SHEEP: p2s spider landed 1 block lower than on mac & ios (frame 58683) bc 3 objects sit on the same spot
-// so the games qsort slot (0x1228de8 in the arm64 lib off my phone) gets apples sort, only the game uses that slot
 namespace echo::sort {
-    // for the log
     char const* status = "not tried";
     unsigned long calls = 0;
 }
 
-namespace {
-    void echo_qsort(void* base, size_t count, size_t size, int (*compare)(void const*, void const*)) {
-        ++echo::sort::calls;
-        if (!base || !compare || count < 2 || !size)
-            return;
-        // the slot is plain memory NOT a geode patch, so disable bot is honoured in here
-        if (Logic::bot_disabled()) {
-            qsort(base, count, size, compare);
-            return;
-        }
-        echo::sort::apple_qsort(base, count, size, compare);
-    }
+static void my_qsort(void* array, size_t count, size_t item_size, int (*compare)(void const*, void const*)) {
+    echo::sort::calls++;
+    if (array == nullptr || compare == nullptr || count < 2 || item_size == 0)
+        return;
+    if (Logic::bot_disabled())
+        qsort(array, count, item_size, compare);
+    else
+        echo::sort::apple_qsort(array, count, item_size, compare);
+}
+
+static void* read_slot(void** slot) {
+    void* value;
+    std::memcpy(&value, slot, sizeof(value));
+    return value;
 }
 
 $execute {
-    auto* slot = reinterpret_cast<void**>(geode::base::get() + 0x1228de8);
-    // only if the slot really is qsort rn, another lib version would have something else there
-    void* current = nullptr;
-    std::memcpy(&current, slot, sizeof(current));
-    if (current != reinterpret_cast<void*>(&qsort)) {
+    void** slot = (void**)(geode::base::get() + 0x1228de8);
+    void* mine = (void*)&my_qsort;
+
+    if (read_slot(slot) != (void*)&qsort) {
         echo::sort::status = "slot is not qsort";
         return;
     }
-    void* mine = reinterpret_cast<void*>(&echo_qsort);
-    std::vector<uint8_t> bytes(sizeof(mine));
+
+    geode::ByteVector bytes(sizeof(mine));
     std::memcpy(bytes.data(), &mine, sizeof(mine));
-    // thru geode first so other mods can see it
-    if (Mod::get()->patch(slot, bytes)) {
-        std::memcpy(&current, slot, sizeof(current));
-        if (current == mine) {
-            echo::sort::status = "on";
-            return;
-        }
+    if (Mod::get()->patch(slot, bytes) && read_slot(slot) == mine) {
+        echo::sort::status = "on";
+        return;
     }
-    // its a table of addresses not code. if geode didnt take it open the page & write it myself
-    long page = sysconf(_SC_PAGESIZE);
-    auto start = reinterpret_cast<uintptr_t>(slot) & ~static_cast<uintptr_t>(page - 1);
-    auto end = (reinterpret_cast<uintptr_t>(slot) + sizeof(mine) + page - 1) & ~static_cast<uintptr_t>(page - 1);
-    if (page <= 0 || mprotect(reinterpret_cast<void*>(start), end - start, PROT_READ | PROT_WRITE) != 0) {
+
+    long page_size = sysconf(_SC_PAGESIZE);
+    uintptr_t page_start = (uintptr_t)slot & ~(uintptr_t)(page_size - 1);
+    uintptr_t page_end = ((uintptr_t)slot + sizeof(mine) + page_size - 1) & ~(uintptr_t)(page_size - 1);
+    if (page_size <= 0 || mprotect((void*)page_start, page_end - page_start, PROT_READ | PROT_WRITE) != 0) {
         echo::sort::status = "could not open the page";
         return;
     }
-    std::memcpy(slot, bytes.data(), bytes.size());
-    std::memcpy(&current, slot, sizeof(current));
-    echo::sort::status = current == mine ? "on" : "wrote but slot unchanged";
+    std::memcpy(slot, &mine, sizeof(mine));
+    echo::sort::status = read_slot(slot) == mine ? "on" : "wrote but slot unchanged";
 }
-#endif

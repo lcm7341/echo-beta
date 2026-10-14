@@ -31,6 +31,9 @@
 #ifdef GEODE_IS_MACOS
 #include "Logic/mac_refresh_clock.hpp"
 #endif
+#ifdef GEODE_IS_WINDOWS
+#include "Logic/win_refresh_clock.hpp"
+#endif
 
 namespace chrono = std::chrono;
 
@@ -394,6 +397,9 @@ void Logic::run_frame(GJBaseGameLayer* play, float dt, std::function<void(float)
     echo::mac::suggest_sdl_pacing();
     if (!rendering)
         frame_dt = static_cast<float>(echo::mac::refresh_frame_time(frame_dt));
+#elif defined(GEODE_IS_WINDOWS)
+    if (!rendering)
+        frame_dt = static_cast<float>(echo::win::refresh_frame_time(frame_dt));
 #endif
     if (!rendering && !logic.real_time_mode && frame_dt > 0.25f)
         frame_dt = 0.25f;

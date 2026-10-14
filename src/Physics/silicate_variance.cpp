@@ -11,6 +11,7 @@
 using namespace geode::prelude;
 
 namespace {
+    // nat GROW TF UP BRO
     short variance_index(std::uint64_t seed, GameObject* object, int group, int index) {
         auto rotation = static_cast<std::int32_t>(static_cast<std::uint32_t>(static_cast<int>(std::fabs(object->m_startRotationX) * 6.7 + 1.0)) *
                                                   static_cast<std::uint32_t>(index + 67));

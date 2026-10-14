@@ -234,7 +234,9 @@ namespace echo::step {
         bool full = (g_trace.size() - g_saved >= 4000 && ms >= g_textMs + 250) || ms >= g_textMs + 2000;
         if (full)
             g_textMs = ms;
-        if (!self->m_playerDied && !full && !finished)
+        // ts runs every step thru the whole death animation too. w/ m_playerDied here instead a recording rewrote
+        // the whole text log every dead step, thousands of times a death at high tps
+        if (!note_death && !full && !finished)
             return;
         if (self->m_playerDied && !g_record)
             g_written = true;

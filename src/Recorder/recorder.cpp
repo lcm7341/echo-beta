@@ -80,15 +80,38 @@ namespace {
     struct AVCodecContext;
     struct AVCodec;
     struct AVDictionary;
+    struct SwsContext;
+    struct SwsFilter;
     using OpenCodec = int (*)(AVCodecContext*, AVCodec const*, AVDictionary**);
     using SetDictionary = int (*)(AVDictionary**, char const*, char const*, int);
     using FreeDictionary = void (*)(AVDictionary**);
+    using GetSws = SwsContext* (*)(int, int, int, int, int, int, int, SwsFilter*, SwsFilter*, double const*);
+    using SetSwsColors = int (*)(SwsContext*, int const*, int, int const*, int, int, int, int);
+    using GetSwsCoefficients = int const* (*)(int);
     OpenCodec s_openCodec = nullptr;
     SetDictionary s_setDictionary = nullptr;
     FreeDictionary s_freeDictionary = nullptr;
     thread_local char const* s_echoPreset = nullptr;
     // api forgets a flag mp4 needs :/
     thread_local bool s_echoGlobalHeader = false;
+    // color fix on android. the api's colorspace filter cant take nv12 (what mediacodec gets) so it never worked,
+    // instead the rgba -> yuv conversion itself uses bt709 & the video gets tagged bt709, same as mac ends up w/
+    thread_local bool s_echoColorFix = false;
+    GetSws s_getSws = nullptr;
+    SetSwsColors s_setSwsColors = nullptr;
+    GetSwsCoefficients s_getSwsCoefficients = nullptr;
+
+    SwsContext* echo_get_sws(int srcW, int srcH, int srcFormat, int dstW, int dstH, int dstFormat, int flags, SwsFilter* srcFilter,
+        SwsFilter* dstFilter, double const* param) {
+        auto* context = s_getSws(srcW, srcH, srcFormat, dstW, dstH, dstFormat, flags, srcFilter, dstFilter, param);
+        if (context && s_echoColorFix && s_setSwsColors && s_getSwsCoefficients) {
+            constexpr int ITU709 = 1;
+            auto const* bt709 = s_getSwsCoefficients(ITU709);
+            // rgba in is full range, the video out is tv range
+            s_setSwsColors(context, bt709, 1, bt709, 0, 0, 1 << 16, 1 << 16);
+        }
+        return context;
+    }
 
     int echo_open_codec(AVCodecContext* context, AVCodec const* codec, AVDictionary** options) {
         AVDictionary* local = nullptr;
@@ -97,6 +120,12 @@ namespace {
             s_setDictionary(chosen, "preset", s_echoPreset, 0);
         if (s_echoGlobalHeader)
             s_setDictionary(chosen, "flags", "+global_header", 0);
+        if (s_echoColorFix) {
+            s_setDictionary(chosen, "colorspace", "bt709", 0);
+            s_setDictionary(chosen, "color_primaries", "bt709", 0);
+            s_setDictionary(chosen, "color_trc", "bt709", 0);
+            s_setDictionary(chosen, "color_range", "tv", 0);
+        }
         int res = s_openCodec(context, codec, chosen);
         if (local)
             s_freeDictionary(&local);
@@ -120,6 +149,12 @@ namespace {
             auto hook = Mod::get()->hook(reinterpret_cast<void*>(s_openCodec), &echo_open_codec, "Echo encoder preset");
             installed = hook.isOk();
         }
+        s_getSws = reinterpret_cast<GetSws>(dlsym(binary, "sws_getContext"));
+        s_setSwsColors = reinterpret_cast<SetSwsColors>(dlsym(binary, "sws_setColorspaceDetails"));
+        s_getSwsCoefficients = reinterpret_cast<GetSwsCoefficients>(dlsym(binary, "sws_getCoefficients"));
+        static bool colors_hooked = false;
+        if (!colors_hooked && s_getSws && s_setSwsColors && s_getSwsCoefficients)
+            colors_hooked = Mod::get()->hook(reinterpret_cast<void*>(s_getSws), &echo_get_sws, "Echo color fix").isOk();
         dlclose(binary);
     }
 }
@@ -2521,7 +2556,12 @@ std::string Recorder::open_api(int fps) {
     std::ranges::copy_if(wanted, std::back_inserter(picks), [&](std::string const& name) {
         return !name.empty() && offered(name) && std::ranges::find(picks, name) == picks.end();
     });
+#ifdef GEODE_IS_ANDROID
+    // color fix happens in the conversion on android (echo_get_sws), never thru the api's filter
+    auto color_modes = std::vector<bool>{ false };
+#else
     auto color_modes = logic.render_color_fix ? std::vector<bool>{ true, false } : std::vector<bool>{ false };
+#endif
     std::vector<std::pair<std::string, bool>> attempts;
     std::ranges::for_each(picks, [&](std::string const& codec) {
         std::ranges::transform(color_modes, std::back_inserter(attempts), [&](bool color_fix) {
@@ -2549,9 +2589,11 @@ std::string Recorder::open_api(int fps) {
         settings.m_colorspaceFilters = color_fix ? "all=bt709:iall=bt470bg:fast=1" : "";
 #ifdef GEODE_IS_ANDROID
         s_echoPreset = codec == "libx264" ? logic.render_preset.c_str() : nullptr;
+        s_echoColorFix = logic.render_color_fix;
         struct PresetScope {
             ~PresetScope() {
                 s_echoPreset = nullptr;
+                s_echoColorFix = false;
             }
         } reset_preset;
 #endif
