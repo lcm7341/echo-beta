@@ -513,7 +513,7 @@ namespace {
 void GUI::main() {
     auto& logic = Logic::get();
     bool busy = logic.is_recording() || logic.is_playing();
-    bool want_reset = false, open_overwrite = false, open_sync_audio = false;
+    bool want_reset = false, open_overwrite = false, open_sync_audio = false, open_real_time = false;
 
     eui::BeginCardRow("replay-0");
     if (eui::BeginCard("Session", card_width())) {
@@ -599,9 +599,14 @@ void GUI::main() {
             GUI::get().drop_carry();
         tip("Moves the level exactly one frame for every frame drawn, essentially smooth fix.");
         eui::RowHalf();
+        // lock fps never has time left over for real time to catch up on
+        ImGui::BeginDisabled(logic.lock_delta);
         if (toggle("Real Time", logic.real_time_mode))
             GUI::get().drop_carry();
         tip("Keeps the game at full speed when it lags instead of slowing it down.");
+        if (eui::Gear("##real-time-settings"))
+            open_real_time = true;
+        ImGui::EndDisabled();
         toggle("Audio Speedhack", logic.audio_speedhack);
         tip("Makes the audio follow your speedhack.");
         eui::RowHalf();
@@ -735,6 +740,14 @@ void GUI::main() {
     eui::EndCard();
     eui::EndCardRow();
 
+    if (open_real_time)
+        ImGui::OpenPopup("Real Time Settings");
+    if (eui::BeginModal("Real Time Settings", 20.f)) {
+        if (toggle("True Real Time", logic.true_real_time))
+            GUI::get().drop_carry();
+        tip("Runs every step as close to real time as the game allows. Accuracy is untested.");
+        eui::EndModal();
+    }
     if (open_sync_audio)
         ImGui::OpenPopup("Sync Audio Settings");
     if (eui::BeginModal("Sync Audio Settings", 20.f)) {
@@ -1346,6 +1359,8 @@ void GUI::renderer() {
         GUI::get().drag_float_setting("##render-after-end", logic.render_after_end, 0.05f, 0.f, 5.f, "%.2f s");
         toggle("SSB Fix", logic.render_ssb_fix);
         tip("Fixes audio sync because of the game's scroll speed bug when rendering.");
+        toggle("Real Time Rendering", logic.render_real_time);
+        tip("May cause visual bugs. Stacked Orb Optimization may not be recommended.");
     }
     eui::EndCard();
     eui::EndCardRow();

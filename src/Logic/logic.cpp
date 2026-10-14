@@ -166,6 +166,8 @@ void Logic::pull_settings() {
                 logic.speedhack_memory = logic.speedhack;
             if (auto flag = json["real_time_mode"].asBool())
                 logic.real_time_mode = flag.unwrap();
+            if (auto flag = json["true_real_time"].asBool())
+                logic.true_real_time = flag.unwrap();
             if (auto flag = json["lock_delta"].asBool())
                 logic.lock_delta = flag.unwrap();
             if (auto flag = json["fix_tps_rotation"].asBool())
@@ -416,6 +418,8 @@ void Logic::pull_settings() {
                 if (auto text = json["seed_override_value"].asString())
                     logic.seed_override_value = std::strtoull(text.unwrap().c_str(), nullptr, 10);
             }
+            if (auto flag = json["render_real_time"].asBool())
+                logic.render_real_time = flag.unwrap();
             if (auto flag = json["render_ssb"].asBool())
                 logic.render_ssb_fix = flag.unwrap();
             if (auto flag = json["render_speedhack"].asBool())
@@ -833,6 +837,7 @@ void Logic::save_settings_file() {
     json["speedhack"] = logic.speedhack;
     json["speedhack_memory"] = logic.speedhack_memory;
     json["real_time_mode"] = logic.real_time_mode;
+    json["true_real_time"] = logic.true_real_time;
     json["lock_delta"] = logic.lock_delta;
     json["fix_tps_rotation"] = logic.fix_tps_rotation;
     json["save_debug"] = logic.save_debug;
@@ -959,6 +964,7 @@ void Logic::save_settings_file() {
     json["seed_override"] = logic.seed_override;
     json["seed_override_value"] = std::to_string(logic.seed_override_value);
     json["render_ssb"] = logic.render_ssb_fix;
+    json["render_real_time"] = logic.render_real_time;
     json["render_speedhack"] = logic.render_speedhack;
     json["render_color_fix"] = logic.render_color_fix;
     json["render_hide_labels"] = logic.render_hide_labels;

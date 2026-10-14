@@ -60,6 +60,10 @@ bool Logic::advance_paused(GJBaseGameLayer* play) {
     return play && Logic::get().frame_advance && !Logic::get().render_capturing();
 }
 
+bool Logic::real_time_now() const {
+    return real_time_mode && (!Logic::get().render_capturing() || render_real_time);
+}
+
 bool Logic::lock_delta_active() const {
     if (frame_advance && !Logic::get().render_capturing())
         return true;
@@ -76,7 +80,7 @@ int Logic::unlocked_step_cap() const {
     double interval = director ? director->getAnimationInterval() : 1.0 / 60.0;
     if (!std::isfinite(interval) || interval <= 0.0)
         interval = 1.0 / 60.0;
-    if (real_time_mode)
+    if (real_time_now())
         interval = std::max(interval, 0.1);
     // 10 frames worth of steps is the most 1 frame may run. that is counted at the CURRENT speed:
     // w/out the speed in here a 99x speedhack topped out at 10-20x no matter how fast the pc is
@@ -97,6 +101,7 @@ namespace {
         int steps = 0;
         int sampled_step = 0;
         bool active = false;
+        double untimed = 0.0;
     };
 
     struct FrameSample {
@@ -142,7 +147,8 @@ namespace {
         sample.steps += clock.steps;
         if (clock.sampled_step < 2)
             return;
-        sample.spans += seconds_since(clock.first, clock.last);
+        // a backstep save isnt a per step cost, counted in it made the cap let 28 of 276 steps run
+        sample.spans += std::max(0.0, seconds_since(clock.first, clock.last) - clock.untimed);
         sample.gaps += clock.sampled_step - 1;
     }
 
@@ -177,20 +183,26 @@ namespace {
     bool g_single_path = false;
     double g_single_cost = 0.0;
 
-    int single_affordable(bool real_time) {
+    int single_affordable() {
         if (!(g_single_cost > 0.0))
             return std::numeric_limits<int>::max();
         auto* director = CCDirector::sharedDirector();
         double interval = director ? director->getAnimationInterval() : 1.0 / 60.0;
         if (!std::isfinite(interval) || interval <= 0.0)
             interval = 1.0 / 60.0;
-        double budget = real_time ? 0.1 : std::clamp(interval * 1.5, 0.004, 0.05);
+        double budget = std::clamp(interval * 1.5, 0.004, 0.05);
         double room = std::max(budget - step_cost().other_work, budget * 0.5);
         double steps = std::floor(room / g_single_cost);
         if (!std::isfinite(steps) || steps >= static_cast<double>(std::numeric_limits<int>::max()))
             return std::numeric_limits<int>::max();
         return std::max(static_cast<int>(steps), 1);
     }
+}
+
+void Logic::note_untimed(double seconds) {
+    auto& clock = step_clock();
+    if (clock.active && std::isfinite(seconds) && seconds > 0.0)
+        clock.untimed += seconds;
 }
 
 void Logic::note_step() {
@@ -237,15 +249,7 @@ int Logic::affordable_steps() const {
     double interval = director ? director->getAnimationInterval() : 1.0 / 60.0;
     if (!std::isfinite(interval) || interval <= 0.0)
         interval = 1.0 / 60.0;
-    if (real_time_mode) {
-        constexpr double REAL_TIME_FRAME = 0.1;
-        double fixed = cost.per_update + cost.other_work;
-        double room = std::max({ REAL_TIME_FRAME - fixed, REAL_TIME_FRAME * 0.5, std::min(fixed, 1.0) });
-        double steps = std::floor(room / cost.per_step);
-        if (!std::isfinite(steps) || steps >= static_cast<double>(std::numeric_limits<int>::max()))
-            return std::numeric_limits<int>::max();
-        return std::max(static_cast<int>(steps), 8);
-    }
+    // real time gets the same budget now & keeps what didnt fit in carry
     double budget = std::clamp(interval * 1.5, 0.004, 0.05);
     double fixed = cost.per_update + cost.other_work;
     double floor = std::max(cost.per_update, std::min(fixed * 4.0, 0.05 - fixed));
@@ -287,13 +291,20 @@ int Logic::count_unlocked_steps(GJBaseGameLayer* play, double dt) {
     if (steps < 0)
         steps = 0;
     bool capped = false;
-    if (!Logic::get().render_capturing()) {
-        int affordable = g_single_path ? single_affordable(logic.real_time_mode) : Logic::get().affordable_steps();
+    // lock fps runs EXACTLY 1 frame of steps a frame, true real time runs every step it owes
+    bool real_time = logic.real_time_now();
+    bool uncapped = real_time && logic.true_real_time;
+    if ((!Logic::get().render_capturing() || logic.render_real_time) && !logic.lock_delta && !uncapped) {
+        int affordable = g_single_path ? single_affordable() : Logic::get().affordable_steps();
         int cap = std::max(std::min(Logic::get().unlocked_step_cap(), affordable) - logic.frame_steps, 0);
         capped = steps > cap;
         steps = std::min(steps, cap);
     }
-    logic.carry = capped && !logic.real_time_mode ? 0.f : pending - static_cast<double>(steps) * wanted;
+    // real time catches up on what didnt fit, but only 100ms of it
+    constexpr double REAL_TIME_BACKLOG = 0.1;
+    logic.carry = capped && !real_time ? 0.f : pending - static_cast<double>(steps) * wanted;
+    if (capped && real_time)
+        logic.carry = std::min(static_cast<double>(logic.carry), REAL_TIME_BACKLOG);
     if (!std::isfinite(logic.carry) || logic.carry < 0.f)
         logic.carry = 0.f;
     if (logic.respawn_frames > 0) {

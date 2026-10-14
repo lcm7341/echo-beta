@@ -368,6 +368,7 @@ struct Session {
 	float speedhack_memory = 0.f;
 	bool real_time_mode = true;
 	bool lock_delta = false;
+	bool true_real_time = false; // real time w/ no step cap at all, every step owed runs
 	bool fix_tps_rotation = false;
 	bool lock_display_fps = false;
 	float playback_fps = 0.f;
@@ -613,6 +614,7 @@ struct Session {
 	float render_sfx = 1.f;
 	bool render_queued = false, render_record_pause = false, render_show_lvl = true;
 	bool render_screen_shape = true, render_ssb_fix = true, render_speedhack = false;
+	bool render_real_time = false; // a render gets the same lag cap as playing does
 	float render_speed_locked = 0.f;
 	bool render_hide_labels = false, render_hide_pause = false, render_color_fix = true;
 	bool merge_busy = false;
@@ -906,6 +908,8 @@ public:
 	void play_click(PlayLayer* play, bool down, bool player1);
 	void flush_clicks();
 	void note_step();
+	// time inside a step that isnt the step (a backstep save), kept out of the step cost
+	void note_untimed(double seconds);
 	void release_replay_index();
 	int affordable_steps() const;
 	void note_frame_work(double seconds);
@@ -973,6 +977,8 @@ public:
 	void sync_predict_hooks();
 	bool advance_paused(GJBaseGameLayer* play);
 	bool lock_delta_active() const;
+	// real time & true real time only count while playing, or in a render w/ real time rendering on
+	bool real_time_now() const;
 	int count_unlocked_steps(GJBaseGameLayer* play, double dt);
 	void run_frame(GJBaseGameLayer* play, float dt, std::function<void(float)> const& tick);
 	void cancel_steps();

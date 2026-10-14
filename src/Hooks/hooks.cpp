@@ -962,7 +962,9 @@ namespace echo::step {
             self->m_resumeTimer = 0;
         if (play && !self->m_playerDied && self->m_resumeTimer <= 0) {
             Logic::get().step_object_states(play);
+            auto saving = std::chrono::steady_clock::now();
             Logic::get().save_backstep(play);
+            Logic::get().note_untimed(std::chrono::duration<double>(std::chrono::steady_clock::now() - saving).count());
         }
         if (layer && !self->m_playerDied && self->m_resumeTimer <= 0)
             Logic::get().run_follow(layer);
