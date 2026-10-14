@@ -21,8 +21,6 @@ public:
     static constexpr uint8_t footer = 0xCC;
     static constexpr uint64_t size_mask = 0x00FFFFFFFFFFFFFFull; // low 56 bits
     static constexpr size_t max_section = size_t(1) << 15;
-    // a bad file can repeat 2^31 times = trillions of inputs xd
-    static constexpr uint64_t max_produced = uint64_t{ 1 } << 24;
 
     enum class Special : uint8_t {
         Restart = 0,
@@ -66,7 +64,7 @@ public:
         }
     }
 
-    bool section(ByteCursor& in, size_t end) {
+    bool section(ByteCursor& in, size_t end, uint64_t target) {
         if (end - in.at < 2)
             return false;
         auto header = static_cast<uint16_t>(in.uint(2));
@@ -81,9 +79,12 @@ public:
             std::vector<uint64_t> cluster(len);
             for (auto& value : cluster)
                 value = in.uint(width);
+            uint64_t count = 0;
+            for (auto value : cluster)
+                count += ((value >> 2) & 3) == 0 ? 2 : 1;
+            if (count > (target - produced) / repeats)
+                return false;
             for (size_t r = 0; r < repeats && !in.failed; ++r) {
-                if (produced > max_produced)
-                    return false;
                 for (auto value : cluster)
                     state(value);
             }
@@ -138,9 +139,11 @@ public:
         if (end - in.at < 8)
             return false;
         uint64_t amt = in.uint(8);
+        if (amt > ReplayIO::max_inputs - produced)
+            return false;
         uint64_t target = produced + amt;
         while (produced < target) {
-            if (in.at >= end || !section(in, end))
+            if (in.at >= end || !section(in, end, target))
                 return false;
         }
         return true;

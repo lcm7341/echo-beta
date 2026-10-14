@@ -259,9 +259,12 @@ Trajectory::Key Trajectory::make_key(PlayLayer* play) const {
 
 // w silly cat skid
 void Trajectory::seed(PlayerObject* fake, PlayerObject* real) {
+    // mod 0 crashes on windows
+    auto own_fire = fake->m_shipStreakType;
     fake->copyAttributes(real);
     SavedPlayerCheckpoint checkpoint = SavedPlayerCheckpoint::create(real);
     checkpoint.apply(fake);
+    fake->m_shipStreakType = own_fire;
     fake->m_pendingCheckpoint = nullptr;
     fake->m_maybeReducedEffects = real->m_maybeReducedEffects;
     fake->m_isHidden = true;
@@ -392,6 +395,9 @@ bool Trajectory::advance(PlayLayer* play, PlayerObject* fake, float step_delta, 
     clear_log(fake->m_collisionLogRight);
     fake->m_playEffects = false;
     bool live_was_dead = play->m_playerDied || (play->m_player1 && play->m_player1->m_isDead) || (play->m_player2 && play->m_player2->m_isDead);
+    // a fire sprite w a type that has no frames must never reach update()
+    if (int fire = (int)(fake->m_shipStreakType); fake->m_shipStreak && (fire < 2 || fire > 6))
+        fake->m_shipStreakType = static_cast<ShipStreak>(2);
     fake->update(step_delta);
     fake->m_unkUnused3 = fake->getRotation();
     fake->updateRotation(step_delta);
@@ -748,8 +754,9 @@ void Trajectory::simulate(PlayLayer* play, bool player1, Click click, bool both,
                 bottom = std::min(bottom, other.y);
                 top = std::max(top, other.y);
             }
+            // the forecasts path is p1s, so only a line led by p1 can say how far off that path it is
             if (logic.traj_moving_objects)
-                forecast::apply(play, i + 1, { left - REACH, bottom - REACH, right - left + 2.f * REACH, top - bottom + 2.f * REACH });
+                forecast::apply(play, i + 1, { left - REACH, bottom - REACH, right - left + 2.f * REACH, top - bottom + 2.f * REACH }, fake == fake1 ? at.y : NAN);
         }
         std::array<bool, 2> orb_press{};
         if (played || (pair && logic.is_playing())) {
@@ -1289,21 +1296,78 @@ int Trajectory::flip_survival(PlayLayer* play, bool player1, int& full, std::vec
     return std::min(measured[0], measured[1]);
 }
 
+int Trajectory::click_survival(PlayLayer* play, bool player1, Click click, int& full, int limit) {
+    full = 0;
+    if (!play || !play->m_started || play->m_playerDied || !node || !fake1 || !fake2)
+        return 0;
+    bool twoPlayer = play->m_levelSettings && play->m_levelSettings->m_twoPlayerMode;
+    bool linked = player1 && play->m_gameState.m_isDualMode && play->m_player2 && !twoPlayer;
+    measured[0] = measured[1] = measured_full = 0;
+    predicting(play, [&] {
+        // 8 = counted, but none of the live / hold / release numbers the labels use are touched
+        simulate(play, player1, click, linked, false, limit, 8);
+    });
+    cached = false;
+    full = measured_full;
+    return std::min(measured[0], measured[1]);
+}
+
 void Trajectory::autoclick(PlayLayer* play) {
     auto& logic = Logic::get();
+    safe_steps = 1;
     if (!logic.traj_autoclicker || !play || play->m_isPaused || play->m_playerDied)
         return;
     if (logic.step_frame < clicked_frame)
         clicked_frame = -1;
     if (logic.step_frame == clicked_frame)
         return;
+    // whatever it queued last step got handled (or thrown out) by now
+    std::memset(logic.assist_clicks, 0, sizeof(logic.assist_clicks));
     lookahead(play);
     bool twoPlayer = play->m_levelSettings && play->m_levelSettings->m_twoPlayerMode;
     bool dual = play->m_gameState.m_isDualMode && play->m_player2;
     bool flip1 = logic.death_next_p1 || (dual && !twoPlayer && logic.death_next_p2);
     bool flip2 = dual && twoPlayer && logic.death_next_p2;
-    if (!flip1 && !flip2)
+    int ahead = std::max(logic.traj_click_lookahead, 1);
+    // how long i live if i keep doing what im doing, 0 = past the lookahead
+    int keep_lives[2] = { 0, 0 };
+    // 2 lookaheads: the 1st says click or not, & a death in the 2nd cant need a click yet, so those steps can be batched
+    int soonest = std::numeric_limits<int>::max();
+    auto watched = [&](bool player2) {
+        return logic.is_recording() ? logic.records_player(player2) : !logic.plays_player(player2);
+    };
+    // true = dies inside the lookahead
+    auto measure = [&](bool player1) {
+        int full = 0;
+        int lives = click_survival(play, player1, next_click(play, player1), full, ahead * 2);
+        if (full <= 0) {
+            soonest = 0;
+            return false;
+        }
+        soonest = std::min(soonest, std::min(lives, full));
+        if (lives >= full || lives >= ahead)
+            return false;
+        keep_lives[player1 ? 0 : 1] = lives;
+        return true;
+    };
+    if (!flip1 && watched(false) && !logic.plays_player(false)) {
+        bool soon = measure(true);
+        if (ahead > 1)
+            flip1 = soon;
+    }
+    if (!flip2 && dual && twoPlayer && watched(true) && !logic.plays_player(true)) {
+        bool soon = measure(false);
+        if (ahead > 1)
+            flip2 = soon;
+    }
+    if (!flip1 && !flip2) {
+        // nothing can come into the lookahead until soonest - ahead steps from now
+        if (soonest != std::numeric_limits<int>::max())
+            safe_steps = std::max(1, soonest - ahead + 1);
+        else
+            safe_steps = std::numeric_limits<int>::max();
         return;
+    }
     int jump = static_cast<int>(PlayerButton::Jump);
     bool linked = dual && !twoPlayer;
     // would ts click kill me on the next step
@@ -1318,20 +1382,42 @@ void Trajectory::autoclick(PlayLayer* play) {
     auto flip = [&](bool player1) {
         bool held = next_click(play, player1) == Click::Hold;
         auto* body = player1 ? play->m_player1 : play->m_player2;
+        // 2 things it can do here: flip the button (press & hold, or let go), or a swift (tap & let go on the same frame).
+        // both are looked ahead the whole trajectory & the 1 that lives longer is what it does, a tie is the plain flip.
+        // (it used to only think of a swift w/ the swift line turned on, & only when the flip died on the very next step.
+        // an orb sitting on a wave needs the swift, the clicks after a 1 time orb is used need the hold, & auto swift
+        // could only give it 1 of those for every click)
+        // a death further out than the next step only gets a click if the click actually lives longer.
+        // that can run every step for a while so it only looks a few lookaheads out, not the whole trajectory
+        int keep = keep_lives[player1 ? 0 : 1];
+        int horizon = keep > 0 ? ahead * 2 : 0;
+        int flip_full = 0, swift_full = 0;
+        int flip_lives = click_survival(play, player1, held ? Click::Release : Click::Hold, flip_full, horizon);
+        int swift_lives = click_survival(play, player1, Click::Swift, swift_full, horizon);
+        if (keep > 0 && std::max(flip_lives, swift_lives) <= keep)
+            return;
         // maintain gravity decides the button from what im "holding" so flip that instead
         if (logic.maintain_gravity && body && body->m_isDart && logic.records_player(!player1)) {
-            (player1 ? logic.traj_flip_p1 : logic.traj_flip_p2) ^= true;
+            bool& flipped = player1 ? logic.traj_flip_p1 : logic.traj_flip_p2;
+            if (!flipped) {
+                Logic::get().physical_hold(play, !player1);
+                (player1 ? logic.traj_flip_raw_p1 : logic.traj_flip_raw_p2) = player1 ? logic.held_raw_p1 : logic.held_raw_p2;
+            }
+            flipped ^= true;
             return;
         }
-        // flipping dies too? try a swift (tap & let go on the same frame) if the swift line is on
-        if (logic.traj_swift && dies(player1, held ? Click::Release : Click::Hold) && !dies(player1, Click::Swift)) {
+        auto queue = [&](bool down) {
+            ++logic.assist_clicks[player1 ? 0 : 1][down ? 1 : 0];
+            play->queueButton(jump, down, !player1, Logic::get().click_stamp());
+        };
+        if (swift_lives > flip_lives) {
             if (held)
-                play->queueButton(jump, false, !player1, Logic::get().click_stamp());
-            play->queueButton(jump, true, !player1, Logic::get().click_stamp());
-            play->queueButton(jump, false, !player1, Logic::get().click_stamp());
+                queue(false);
+            queue(true);
+            queue(false);
             return;
         }
-        play->queueButton(jump, !held, !player1, Logic::get().click_stamp());
+        queue(!held);
     };
     if (flip1)
         flip(true);

@@ -1,3 +1,4 @@
+#include <cstring>
 // playback & everything around an attempt
 //
 // play_macro runs at the start of every physics step: the inputs stored for that step go into gds button queue,
@@ -146,6 +147,14 @@ bool Logic::play_input(GJBaseGameLayer* play, bool icon2, bool down, int button)
     return true;
 }
 
+// the button itself: a finger / key / mouse really down for that icon
+bool Logic::raw_jump(GJBaseGameLayer* play, bool icon2) const {
+    if (!play || !play->m_uiLayer)
+        return false;
+    auto* ui = play->m_uiLayer;
+    return icon2 ? ui->m_p2Jumping || ui->m_p2TouchId != -1 || key_jump_p2 : ui->m_p1Jumping || ui->m_p1TouchId != -1 || key_jump_p1;
+}
+
 bool Logic::physical_hold(GJBaseGameLayer* play, bool icon2) {
     if (!play || !play->m_uiLayer)
         return false;
@@ -154,26 +163,47 @@ bool Logic::physical_hold(GJBaseGameLayer* play, bool icon2) {
     auto* ui = play->m_uiLayer;
     bool p1 = ui->m_p1Jumping || ui->m_p1TouchId != -1 || key_jump_p1 || (restart_hold_captured && death_jump_p1);
     bool p2 = ui->m_p2Jumping || ui->m_p2TouchId != -1 || key_jump_p2 || (restart_hold_captured && death_jump_p2);
+    if (best_hold_owned) {
+        bool icon = !best_frame_click_p1;
+        // i touched the button myself = its mine again
+        if (Logic::raw_jump(play, icon) != best_hold_raw)
+            best_hold_owned = false;
+        else
+            (icon ? p2 : p1) = best_hold;
+    }
     if (restart_hold_captured && ((death_jump_p1 && (ui->m_p1Jumping || ui->m_p1TouchId != -1)) || (death_jump_p2 && (ui->m_p2Jumping || ui->m_p2TouchId != -1)))) {
         restart_hold_captured = false;
     }
-    // maintain gravity reads what im holding so the trajectory autoclicker flips THAT, not the button
-    if (traj_autoclicker && maintain_gravity) {
-        p1 = p1 != traj_flip_p1;
-        p2 = p2 != traj_flip_p2;
-    }
+    // maintain gravity reads what im holding so the trajectory autoclicker flips THAT, not the button.
+    // the moment i press or let go myself its mine again, or every click after its 1st flip comes out backwards
+    held_raw_p1 = p1;
+    held_raw_p2 = p2;
+    if (traj_flip_p1 && p1 != traj_flip_raw_p1)
+        traj_flip_p1 = false;
+    if (traj_flip_p2 && p2 != traj_flip_raw_p2)
+        traj_flip_p2 = false;
     bool record1 = records_player(false), record2 = records_player(true);
     bool one_player_dual = play->m_gameState.m_isDualMode && !(play->m_levelSettings && play->m_levelSettings->m_twoPlayerMode);
-    if (record1 != record2 && !one_player_dual) {
-        if (icon2 != record2)
-            return icon2 ? p2 : p1;
-        return p1 || p2;
-    }
-    if (flip_controls())
-        std::swap(p1, p2);
-    if (one_player_dual || click_both)
-        return p1 || p2;
-    return icon2 ? p2 : p1;
+    auto mine = [&] {
+        if (record1 != record2 && !one_player_dual) {
+            if (icon2 != record2)
+                return icon2 ? p2 : p1;
+            return p1 || p2;
+        }
+        if (flip_controls())
+            std::swap(p1, p2);
+        if (one_player_dual || click_both)
+            return p1 || p2;
+        return icon2 ? p2 : p1;
+    };
+    bool held = mine();
+    // inverse inputs: the player my click goes to does the opposite
+    if (icon2 && !one_player_dual ? inverse_p2 : inverse_p1)
+        held = !held;
+    // the autoclickers flip goes on after click both & swap, those are for my clicks only. its flip is for THAT icon
+    if (traj_autoclicker && maintain_gravity)
+        held = held != (icon2 && !one_player_dual ? traj_flip_p2 : traj_flip_p1);
+    return held;
 }
 
 bool Logic::steer_key(GJBaseGameLayer* play, enumKeyCodes key, bool down, double timestamp) {
@@ -310,6 +340,7 @@ void Logic::reinforce_routed_hold(PlayerObject* body) {
 void Logic::capture_restart_holds(PlayLayer* play) {
     restart_hold_captured = false;
     traj_flip_p1 = traj_flip_p2 = false;
+    traj_flip_raw_p1 = traj_flip_raw_p2 = false;
     if (!play)
         return;
     std::ranges::for_each(play->m_queuedButtons, [](PlayerButtonCommand const& cmd) {
@@ -435,8 +466,9 @@ void Logic::apply_maintain_gravity(GJBaseGameLayer* play) {
     };
     auto correct = [&](PlayerObject* body, bool icon2) {
         maintaining_gravity = true;
-        // 1 is enough. a loop of clicks just toggles gravity forever
-        int limit = same_gravity ? 1 : 8;
+        // same gravity used to cap ts at 1 bc its flipGravity made the clicks toggle forever. it dont flip waves anymore,
+        // & the trajectory always does all 8 so a cap here makes the autoclicker plan clicks that never happen
+        int limit = 8;
         for (int step = 0; step < limit; ++step) {
             bool push = false;
             if (!mismatch(body, icon2, push))
@@ -458,7 +490,7 @@ void Logic::apply_maintain_gravity(GJBaseGameLayer* play) {
     bool one_dual = play->m_gameState.m_isDualMode && !two;
     if (one_dual) {
         maintaining_gravity = true;
-        int limit = same_gravity ? 1 : 8;
+        int limit = 8;
         for (int step = 0; step < limit; ++step) {
             bool push = false;
             if (!mismatch(play->m_player1, false, push))
@@ -480,7 +512,7 @@ void Logic::apply_maintain_gravity(GJBaseGameLayer* play) {
         return;
     }
     maintaining_gravity = true;
-    int limit = same_gravity ? 1 : 8;
+    int limit = 8;
     for (int step = 0; step < limit; ++step) {
         bool push1 = false, push2 = false;
         bool need1 = mismatch(play->m_player1, false, push1), need2 = mismatch(play->m_player2, true, push2);
@@ -550,7 +582,8 @@ void Logic::sync_same_gravity(GJBaseGameLayer* play) {
             maintaining_gravity = false;
             return;
         }
-        body->flipGravity(target, true);
+        // everything else only changes what gets recorded, never the physics. a wave already moves the same way
+        // on both gravities thru maintain gravity, & a flipGravity here is not an input so playback never had it
     };
     match(first, false);
     match(second, true);
@@ -604,20 +637,28 @@ void Logic::poll_advance_hold() {
     }
     auto now = chrono::steady_clock::now();
     auto start = logic.advance_hold_start + chrono::milliseconds(logic.advance_hold_ms);
-    if (now < start)
+    if (now < start) {
+        logic.advance_owed = 0.0;
         return;
-    auto from = std::max(start, logic.last_advance_step);
+    }
     double rate = logic.sample_rate() * std::clamp(logic.advance_speed, 1.f, 200.f) / 100.0 * logic.speedhack;
     if (!std::isfinite(rate) || !(rate > 0.0))
         return;
-    double elapsed = chrono::duration<double>(now - from).count();
-    int cap = std::min(logic.unlocked_step_cap(), logic.affordable_steps());
-    double wanted = std::floor(elapsed * rate);
+    // the last batch hasnt run yet, dont pile more on
+    if (logic.advance_queued)
+        return;
+    // counted in drawn frames not real time, or a slow frame owed more steps & made the next slower still
+    double interval = CCDirector::sharedDirector() ? CCDirector::sharedDirector()->getAnimationInterval() : 1.0 / 60.0;
+    if (!std::isfinite(interval) || interval <= 0.0)
+        interval = 1.0 / 60.0;
+    logic.advance_owed += rate * interval;
+    double wanted = std::floor(logic.advance_owed);
     if (wanted < 1.0)
         return;
-    int steps = static_cast<int>(std::min(wanted, static_cast<double>(cap)));
-    logic.last_advance_step = wanted > cap ? now : from + chrono::duration_cast<decltype(now - from)>(chrono::duration<double>(steps / rate));
-    logic.advance_steps = logic.advance_queued ? std::min(cap, logic.advance_steps + steps) : steps;
+    int steps = static_cast<int>(std::min(wanted, static_cast<double>(logic.unlocked_step_cap())));
+    logic.advance_owed = std::min(logic.advance_owed - steps, 1.0);
+    logic.last_advance_step = now;
+    logic.advance_steps = steps;
     logic.advance_queued = true;
 }
 
@@ -1239,6 +1280,9 @@ void reshuffle_sequence(Session& value) {
 
 void Logic::onReset(PlayLayer* play) {
     auto& logic = Logic::get();
+    // a new attempt (not a step back) starts w/ nothing held by best frame
+    if (!logic.backstepping)
+        logic.best_hold_owned = false;
     Logic::get().clear_click_hitbox();
     logic.trail_p1.clear();
     logic.trail_p2.clear();
@@ -1425,6 +1469,7 @@ void Logic::restore_holds(PlayLayer* play) {
     for (auto const& cmd : play->m_queuedButtons)
         Logic::get().remember_move(cmd);
     play->m_queuedButtons.clear();
+    std::memset(logic.restored_clicks, 0, sizeof(logic.restored_clicks));
 
     bool playing = (logic).is_playing();
     bool recording = (logic).is_recording();
@@ -1554,8 +1599,11 @@ void Logic::restore_holds(PlayLayer* play) {
             }
             if (logic.plays_player(icon2))
                 return;
-            bool jump_held = live_jump(icon2);
+            bool physical_jump_held = live_jump(icon2);
+            bool jump_held = physical_jump_held;
             auto* body = Logic::get().icon_body(play, icon2);
+            if (icon2 && !one_dual ? logic.inverse_p2 : logic.inverse_p1)
+                jump_held = !jump_held;
             if (logic.maintain_gravity && body && body->m_isDart)
                 jump_held = jump_held != body->m_isUpsideDown;
             bool left_held = live_side(
@@ -1586,7 +1634,7 @@ void Logic::restore_holds(PlayLayer* play) {
                 deferred.push_back(cmd);
             };
             note(jump, jump_held);
-            if (!jump_held && play->m_uiLayer) {
+            if (!physical_jump_held && play->m_uiLayer) {
                 if (icon2) {
                     play->m_uiLayer->m_p2Jumping = false;
                     play->m_uiLayer->m_p2TouchId = -1;
@@ -1634,7 +1682,9 @@ void Logic::restore_holds(PlayLayer* play) {
     // NOT while a step back is loading
     if ((playing || recording) && !logic.backstepping)
         Logic::get().play_macro(play, play, 0.f, true);
-    std::ranges::for_each(deferred, [play](PlayerButtonCommand const& cmd) {
+    std::ranges::for_each(deferred, [play, &logic](PlayerButtonCommand const& cmd) {
+        if (cmd.m_button == PlayerButton::Jump)
+            ++logic.restored_clicks[cmd.m_isPlayer2 ? 1 : 0][cmd.m_isPush ? 1 : 0];
         play->m_queuedButtons.push_back(cmd);
     });
     if (recording && checkpoint)
@@ -1725,6 +1775,7 @@ void Logic::on_complete(PlayLayer* play) {
 
 void Logic::onQuit(PlayLayer*) {
     auto& logic = Logic::get();
+    logic.best_hold_owned = false;
     Logic::get().finish_backstep(nullptr);
     Logic::get().stop_best_frame();
     Logic::get().clear_backsteps();
@@ -1865,6 +1916,22 @@ void Logic::prepare_buttons(GJBaseGameLayer* play) {
     int frame = Logic::get().step_frame + 1;
     std::array<char, 6> queued{};
     bool two_player = play->m_levelSettings && play->m_levelSettings->m_twoPlayerMode;
+    // gd ignores p2 in a 2 player lvl til the dual starts, so p2 only follows the macros holds after an input inside it
+    // -1 = didnt see the dual start, trust the macro
+    static struct {
+        int frame = -1, began = -1;
+        bool dual = false;
+        std::array<bool, 3> acted{};
+    } p2;
+    bool dual_now = play->m_gameState.m_isDualMode;
+    if (frame != p2.frame + 1 || !dual_now)
+        p2.began = -1;
+    else if (!p2.dual) {
+        p2.began = frame;
+        p2.acted = {};
+    }
+    p2.frame = frame;
+    p2.dual = dual_now;
     auto queue = [&](bool holding, int button, bool player2) {
         int jump = static_cast<int>(PlayerButton::Jump);
         int left = static_cast<int>(PlayerButton::Left), right = static_cast<int>(PlayerButton::Right);
@@ -1872,6 +1939,8 @@ void Logic::prepare_buttons(GJBaseGameLayer* play) {
                                                    : button == right  ? 2
                                                                       : -1;
         if (slot >= 0) {
+            if (player2)
+                p2.acted[static_cast<size_t>(slot)] = true;
             queued[static_cast<size_t>((player2 ? 3 : 0) + slot)] = 1;
             // outside a 2 player lvl gd gives a p2 input to BOTH icons, so it counts for p1 too.
             // w/o ts ensure() queued a 2nd p1 press on the same step, & a 2nd pushButton re-arms the orb buffer
@@ -1940,6 +2009,8 @@ void Logic::prepare_buttons(GJBaseGameLayer* play) {
         if (!body || !logic.plays_player(stored2))
             return;
         if (slot > 0 && body->m_controlsDisabled)
+            return;
+        if (stored2 && two_player && p2.began >= 0 && slot >= 0 && !p2.acted[static_cast<size_t>(slot)])
             return;
         bool want = Logic::get().held_at(logic, stored2, frame, button);
         if (Logic::button_held(body, button) == want)
@@ -2085,10 +2156,13 @@ void Logic::play_macro(GJBaseGameLayer* play, GJBaseGameLayer* layer, float dt, 
     replay::SmallSnapshot<PlayerButtonCommand, 8> queued(play->m_queuedButtons);
     if (logic.is_recording() && logic.maintain_gravity && !logic.restoring_holds) {
         int jump = static_cast<int>(PlayerButton::Jump);
+        // only a wave gets its button from maintain gravity. deleting every jump ate all my clicks on a ball or cube
+        // (only w/ physics locked to steps, so only w/ the trajectory autoclicker or prevent death on)
         queued.removeIf([&](PlayerButtonCommand const& cmd) {
             int button = static_cast<int>(cmd.m_button);
             bool jump_button = button == 0 || button == jump;
-            return jump_button && logic.records_player(cmd.m_isPlayer2) && !logic.plays_player(cmd.m_isPlayer2);
+            auto* body = Logic::get().icon_body(play, cmd.m_isPlayer2);
+            return jump_button && body && body->m_isDart && logic.records_player(cmd.m_isPlayer2) && !logic.plays_player(cmd.m_isPlayer2);
         });
     }
     int user_count = std::max(0, static_cast<int>(queued.size()) - replay);
@@ -2365,7 +2439,8 @@ void Logic::note_click(PlayLayer* play, bool down, bool player1, int button) {
     size_t before = clicks.size();
     while (clicks.size() > 1 && now_t - logic.seconds_at(clicks.front()) > 2.0)
         clicks.pop_front();
-    while (clicks.size() > 4096)
+    // was capped at 4096, which capped cps
+    while (clicks.size() > (1u << 20))
         clicks.pop_front();
     if (clicks.size() != before)
         ++logic.clicks_revision;

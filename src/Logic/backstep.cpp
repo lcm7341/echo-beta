@@ -30,6 +30,10 @@
 #include <utility>
 #include <unordered_map>
 
+namespace echo::step {
+    void trace_note(std::string const& line);
+}
+
 namespace chrono = std::chrono;
 
 using namespace geode::prelude;
@@ -367,7 +371,12 @@ int Logic::backstep_interval() const {
     double rate = sample_rate();
     if (!std::isfinite(rate) || rate <= 60.0)
         return 1;
-    return std::max(1, static_cast<int>(std::lround(rate / 60.0)));
+    // 60 saves a REAL second, not a game second. sped up it was 60 a game second: at 99x thats 5940 full saves a second
+    // & the lvl ran at 3x instead (desideration, 170us a step, all of it saving)
+    double speed = frame_advance ? 1.0 : std::clamp(static_cast<double>(speedhack), 1.0, 1000.0);
+    // & sped up nobody needs 60 a second: 10. a save of a big lvl is ~5ms, 60 of them was a third of every second
+    double per_second = speed > 1.0 ? 10.0 : 60.0;
+    return std::max(1, static_cast<int>(std::lround(rate / per_second * speed)));
 }
 
 void Logic::release_backstep(BackstepSave& save, char const* why) {
@@ -422,8 +431,16 @@ void Logic::save_backstep(PlayLayer* play) {
     compare(play, frame, resim);
     bool shown = logic.save_shown_step;
     logic.save_shown_step = false;
-    bool dense = resim || shown;
-    if (!dense && !logic.backsteps.empty() && frame - logic.backsteps.back().echo.frame < Logic::get().backstep_interval())
+    // the replay up to the frame a step back wants used to save EVERY step. that was fine when saves were 28 steps apart.
+    // sped up they are thousands apart now, so 1 back took thousands of saves (the hang at 99x). only the last bit
+    // before the target is saved every step, the way there gets 1 a game second
+    int close_by = std::max(1, static_cast<int>(std::lround(logic.sample_rate() / 60.0)));
+    bool close = resim && logic.backstep_target - frame <= close_by;
+    bool dense = close || shown;
+    int gap = Logic::get().backstep_interval();
+    if (resim && !close)
+        gap = std::max(close_by, static_cast<int>(std::lround(logic.sample_rate())));
+    if (!dense && !logic.backsteps.empty() && frame - logic.backsteps.back().echo.frame < gap)
         return;
     if (!logic.backsteps.empty() && logic.backsteps.back().echo.frame >= frame)
         return;
@@ -492,6 +509,9 @@ bool Logic::step_to(PlayLayer* play, int target, int keep_up_to) {
             logic.message = "Turn on Backstep first";
         return false;
     }
+    // stepped back to before best frames last click: that click is gone & so is its finger
+    if (target <= logic.best_frame_clicked_at)
+        logic.best_hold_owned = false;
     int keep = std::min(target, keep_up_to);
     while (!logic.backsteps.empty() && logic.backsteps.back().echo.frame > keep)
         Logic::get().pop_backstep();
@@ -510,6 +530,8 @@ bool Logic::step_to(PlayLayer* play, int target, int keep_up_to) {
     }
     auto save = logic.backsteps.back();
     bool resim = save.echo.frame < target;
+    echo::step::trace_note(fmt::format("BACK from={} target={} save={} resim={} state={} inputs={} queued={}\n", logic.step_frame, target, save.echo.frame, resim,
+        static_cast<int>(logic.state), logic.inputs.size(), play->m_queuedButtons.size()));
     if (logic.state == RunState::Idle && !logic.backstep_swapped) {
         replay::compact(logic.backstep_inputs, logic.backstep_poses, logic.backstep_ids, [target](Frame const& input) {
             return input.number <= target;
@@ -580,6 +602,10 @@ bool Logic::step_to(PlayLayer* play, int target, int keep_up_to) {
         play->m_calcNonEffectObjects = extra->calc_non_effect;
         play->m_calcNonEffectObjectsSize = extra->calc_non_effect_size;
         for (auto const& mark : extra->used) {
+            // an object the save says is unused but is used right now = something the take being thrown away set off
+            if (logic.trace_logging && (mark.object->m_activatedByPlayer1 != mark.p1 || mark.object->m_activatedByPlayer2 != mark.p2))
+                echo::step::trace_note(fmt::format("UNUSE save={} uid={} id={} now={}{} saved={}{}\n", save.echo.frame, mark.object->m_uniqueID, mark.object->m_objectID,
+                    mark.object->m_activatedByPlayer1 ? 1 : 0, mark.object->m_activatedByPlayer2 ? 1 : 0, mark.p1 ? 1 : 0, mark.p2 ? 1 : 0));
             mark.object->m_activatedByPlayer1 = mark.p1;
             mark.object->m_activatedByPlayer2 = mark.p2;
         }
@@ -614,6 +640,9 @@ bool Logic::step_to(PlayLayer* play, int target, int keep_up_to) {
     else {
         logic.advance_queued = false;
         Logic::get().match_live_holds(play);
+        // the labels are only redrawn after a step runs, & landing right on a saved frame runs none. so the frame label
+        // (& every other label) kept showing the frame i stepped back FROM until the next step forward
+        Logic::get().draw_overlay(play);
     }
     return true;
 }
@@ -631,6 +660,7 @@ void Logic::finish_backstep(PlayLayer* play) {
     logic.advance_queued = false;
     logic.advance_steps = 1;
     int frame = logic.step_frame;
+    echo::step::trace_note(fmt::format("BACKDONE frame={} state={} inputs={} dead={}\n", frame, static_cast<int>(logic.state), logic.inputs.size(), play && play->m_playerDied));
     if (logic.backstep_swapped) {
         std::erase_if(logic.inputs, [frame](Frame const& input) {
             return input.number > frame;
@@ -672,17 +702,24 @@ void Logic::poll_back_hold() {
         return;
     auto now = chrono::steady_clock::now();
     auto start = logic.back_hold_start + chrono::milliseconds(logic.advance_hold_ms);
-    if (now < start)
+    if (now < start) {
+        logic.back_owed = 0.0;
         return;
-    auto from = std::max(start, logic.last_back_step);
+    }
     double rate = logic.sample_rate() * std::clamp(logic.advance_speed, 1.f, 200.f) / 100.0 * logic.speedhack;
     if (!std::isfinite(rate) || !(rate > 0.0))
         return;
-    double wanted = std::floor(chrono::duration<double>(now - from).count() * rate);
+    // same as holding frame advance, steps every drawn frame not every second
+    double interval = CCDirector::sharedDirector() ? CCDirector::sharedDirector()->getAnimationInterval() : 1.0 / 60.0;
+    if (!std::isfinite(interval) || interval <= 0.0)
+        interval = 1.0 / 60.0;
+    logic.back_owed += rate * interval;
+    double wanted = std::floor(logic.back_owed);
     if (wanted < 1.0)
         return;
     int steps = static_cast<int>(std::min(wanted, 1e6));
-    logic.last_back_step = from + chrono::duration_cast<chrono::steady_clock::duration>(chrono::duration<double>(steps / rate));
+    logic.back_owed = std::min(logic.back_owed - steps, 1.0);
+    logic.last_back_step = now;
     if (!Logic::get().step_back(play, steps))
         logic.holding_back = false;
 }

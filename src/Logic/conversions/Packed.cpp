@@ -527,7 +527,6 @@ void code_rates(Coder& coder, std::vector<RateChange>& rates, size_t count) {
 
 constexpr int MIN_MATCH = 4;
 constexpr uint64_t VERIFY = 64;
-constexpr uint64_t MAX_INPUTS = uint64_t{ 1 } << 24;
 // random big numbers to scramble the hash. MIX is the golden ratio one
 constexpr uint64_t HASH_SEED = 0x2545F4914F6CDD1Dull, HASH_MIX = 0x9E3779B97F4A7C15ull;
 constexpr uint64_t HASH_ADDEND = 0x632BE59BD9B4E019ull;
@@ -820,7 +819,7 @@ bool load_version1(std::istream& file, uint8_t flags, PackedBody& out) {
     if (!ReplayIO::read_pod(file, attempts) || !ReplayIO::read_pod(file, amt))
         return false;
     out.attempts = attempts;
-    if (amt > MAX_INPUTS)
+    if (amt > ReplayIO::max_inputs)
         return false;
     auto packed = read_rest(file);
     BitReader stream;
@@ -861,6 +860,8 @@ bool load_version2(std::istream& file, uint8_t flags, PackedBody& out) {
     uint64_t amt = 0;
     if (!read_varint(file, out.attempts) || !read_varint(file, amt))
         return false;
+    if (amt > ReplayIO::max_inputs)
+        return false;
     auto packed = read_rest(file);
     RangeReader body = open_range(packed);
     out.inputs.reserve(static_cast<size_t>(std::min<uint64_t>(amt, 1u << 20)));
@@ -877,7 +878,7 @@ bool load_version3(std::istream& file, uint8_t flags, int version, PackedBody& o
     out.seconds = std::bit_cast<double>(code_bits(body, 0, 64));
     out.attempts = code_count(body, 0);
     uint64_t amt = code_count(body, 0);
-    if (body.failed || amt > MAX_INPUTS || out.attempts > INT32_MAX)
+    if (body.failed || amt > ReplayIO::max_inputs || out.attempts > INT32_MAX)
         return false;
     out.inputs.reserve(static_cast<size_t>(std::min<uint64_t>(amt, 1u << 20)));
     code_events(body, *odds, out.inputs, static_cast<size_t>(amt));

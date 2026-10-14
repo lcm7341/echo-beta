@@ -1,6 +1,7 @@
-// the oriented box math for obb_fast.cpp
-// addss / subss / mulss / divss each do exactly 1 float op ON PURPOSE. the compiler must not merge or reorder them
-//   bc the result has to match gds own function bit for bit
+// the box math for obb_fast.cpp (the rotated hitbox of an object: its 4 corners & its 2 sides)
+// add / sub / mul / div each do exactly 1 float op ON PURPOSE. the compiler must NOT merge or reorder them,
+//   the result has to match gds own function bit for bit or macros stop syncing
+// so dont "clean up" the order of anything in here, a + b & b + a are not the same thing to ts file
 #pragma once
 #include <cstdint>
 #include <cstring>
@@ -12,72 +13,80 @@ namespace echo::obb {
 		float x, y;
 	};
 
-	inline void store(std::uint8_t* object, std::size_t offset, Point p) {
-		std::memcpy(object + offset, &p, sizeof(p));
+	// write straight into gds OBB2D, at the offset it keeps that value
+	inline void put(std::uint8_t* box, std::size_t offset, Point p) {
+		std::memcpy(box + offset, &p, sizeof(p));
 	}
 
-	inline void store_double(std::uint8_t* object, std::size_t offset, double value) {
-		std::memcpy(object + offset, &value, sizeof(value));
+	inline void put_double(std::uint8_t* box, std::size_t offset, double value) {
+		std::memcpy(box + offset, &value, sizeof(value));
 	}
 
-	inline float addss(float destination, float source) {
-		asm("addss %1, %0" : "+x"(destination) : "x"(source));
-		return destination;
+	// a = a (op) b, 1 instruction each
+	inline float add(float a, float b) {
+		asm("addss %1, %0" : "+x"(a) : "x"(b));
+		return a;
 	}
 
-	inline float subss(float destination, float source) {
-		asm("subss %1, %0" : "+x"(destination) : "x"(source));
-		return destination;
+	inline float sub(float a, float b) {
+		asm("subss %1, %0" : "+x"(a) : "x"(b));
+		return a;
 	}
 
-	inline float mulss(float destination, float source) {
-		asm("mulss %1, %0" : "+x"(destination) : "x"(source));
-		return destination;
+	inline float mul(float a, float b) {
+		asm("mulss %1, %0" : "+x"(a) : "x"(b));
+		return a;
 	}
 
-	inline float divss(float destination, float source) {
-		asm("divss %1, %0" : "+x"(destination) : "x"(source));
-		return destination;
+	inline float div(float a, float b) {
+		asm("divss %1, %0" : "+x"(a) : "x"(b));
+		return a;
 	}
 
 	inline Point sub(Point a, Point b) {
-		return { subss(a.x, b.x), subss(a.y, b.y) };
+		return { sub(a.x, b.x), sub(a.y, b.y) };
 	}
 
+	// b + a, NOT a + b. thats the order gd does it in
 	inline Point add(Point a, Point b) {
-		return { addss(b.x, a.x), addss(b.y, a.y) };
+		return { add(b.x, a.x), add(b.y, a.y) };
 	}
 
 	inline Point scale(Point a, float s) {
-		return { mulss(s, a.x), mulss(s, a.y) };
+		return { mul(s, a.x), mul(s, a.y) };
 	}
 
 	inline float length_squared(Point a) {
-		return addss(mulss(a.x, a.x), mulss(a.y, a.y));
+		return add(mul(a.x, a.x), mul(a.y, a.y));
 	}
 
-	inline float project(Point c, Point e) {
-		return addss(mulss(c.y, e.y), mulss(c.x, e.x));
+	// how far along a side a corner is (y first, gd does y first)
+	inline float along(Point corner, Point side) {
+		return add(mul(corner.y, side.y), mul(corner.x, side.x));
 	}
 
-	inline void calculate(std::uint8_t* obb, Point center, float width, float height, float angle,
+	// gds OBB2D::calculateWithCenter. half & one are gds own 0.5 & 1.0, cosine & sine are gds own too
+	inline void calculate(std::uint8_t* box, Point center, float width, float height, float angle,
 		Trig cosine, Trig sine, float half, float one) {
-		store(obb, 0x1b0, center);
+		put(box, 0x1b0, center);
+		// half the box along its own x & y
 		Point x{ cosine(angle), sine(angle) }, y{ -sine(angle), cosine(angle) };
-		x = scale(x, mulss(width, half));
-		y = scale(y, mulss(height, half));
+		x = scale(x, mul(width, half));
+		y = scale(y, mul(height, half));
+		// the 4 corners
 		Point c0 = sub(sub(center, x), y), c1 = sub(add(center, x), y), c2 = add(add(center, x), y);
 		Point c3 = add(sub(center, x), y);
-		store(obb, 0x140, c0);
-		store(obb, 0x148, c1);
-		store(obb, 0x150, c2);
-		store(obb, 0x158, c3);
-		Point e0 = sub(c1, c0), e1 = sub(c3, c0);
-		e0 = scale(e0, divss(one, length_squared(e0)));
-		store(obb, 0x180, e0);
-		store_double(obb, 0x1a0, static_cast<double>(project(c0, e0)));
-		e1 = scale(e1, divss(one, length_squared(e1)));
-		store(obb, 0x188, e1);
-		store_double(obb, 0x1a8, static_cast<double>(project(c0, e1)));
+		put(box, 0x140, c0);
+		put(box, 0x148, c1);
+		put(box, 0x150, c2);
+		put(box, 0x158, c3);
+		// the 2 sides coming out of corner 0, & where corner 0 sits along each
+		Point side0 = sub(c1, c0), side1 = sub(c3, c0);
+		side0 = scale(side0, div(one, length_squared(side0)));
+		put(box, 0x180, side0);
+		put_double(box, 0x1a0, static_cast<double>(along(c0, side0)));
+		side1 = scale(side1, div(one, length_squared(side1)));
+		put(box, 0x188, side1);
+		put_double(box, 0x1a8, static_cast<double>(along(c0, side1)));
 	}
 }

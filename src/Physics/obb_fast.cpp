@@ -7,28 +7,28 @@
 
 using namespace geode::prelude;
 
-// moved objects redo their oriented box every step & gds one is ~22 calls into cocos's CCPoint operators
-// obb_math.hpp does the same float ops in the same order w/ gds own sinf/cosf & constants
-// so every bit comes out the same
+// every object that moved redoes its rotated hitbox every step, & gds function for it is ~22 calls into
+// cocos's CCPoint operators. mine (obb_math.hpp) does the same math in the same order w/ gds own sin, cos, 0.5 & 1.0
+// so it comes out EXACTLY the same, just w/out all the calls
 namespace {
     bool ready = false;
-    echo::obb::Trig native_cos = nullptr, native_sin = nullptr;
+    echo::obb::Trig gd_cos = nullptr, gd_sin = nullptr;
     float half = 0.f, one = 0.f;
     using Helper = void (*)(void*);
-    Helper native_order_corners = nullptr;
+    Helper gd_order_corners = nullptr;
 }
 
-// goes in at the entry w/ the same calling convention so theres no hook in the way
+// gds function jumps straight here. same arguments in the same places so nothing sits in between
 // (this in rcx, center by ref in rdx, width/height in xmm2/xmm3, angle on the stack)
-void fast_calculate_with_center(OBB2D* self, CCPoint const* center, float width, float height, float rotationAngle) {
+void my_calculate(OBB2D* self, CCPoint const* center, float width, float height, float rotationAngle) {
     echo::obb::calculate(reinterpret_cast<std::uint8_t*>(self), { center->x, center->y }, width, height, rotationAngle,
-        native_cos, native_sin, half, one);
-    native_order_corners(self);
+        gd_cos, gd_sin, half, one);
+    gd_order_corners(self);
 }
 
 $execute {
     auto module = geode::base::get();
-    // hash starts after the prologue (a hook would rewrite that)
+    // is ts the gd i wrote it for? (checked from after the 1st few bytes, a hook would have changed those)
     if (echo::circles::fingerprint(reinterpret_cast<std::uint8_t const*>(module + 0x6da90), 0x30e) != 0xf20ffff8b9d467a8ull) {
         return;
     }
@@ -40,23 +40,23 @@ $execute {
                 return;
             }
     }
-    // gds own sinf/cosf imports (what its thunks at 0x4d1884/0x4d1860 jump thru)
-    native_sin = *reinterpret_cast<echo::obb::Trig*>(module + 0x515348);
-    native_cos = *reinterpret_cast<echo::obb::Trig*>(module + 0x5153d0);
+    // gds own sin & cos (what its thunks at 0x4d1884/0x4d1860 jump thru)
+    gd_sin = *reinterpret_cast<echo::obb::Trig*>(module + 0x515348);
+    gd_cos = *reinterpret_cast<echo::obb::Trig*>(module + 0x5153d0);
     half = *reinterpret_cast<float const*>(module + 0x622b08);         // 0.5f
     one = *reinterpret_cast<float const*>(module + 0x622c24);          // 1.0f
-    native_order_corners = reinterpret_cast<Helper>(module + 0x6dda0); // the corner ordering one
-    if (!native_sin || !native_cos || half != 0.5f || one != 1.f)
+    gd_order_corners = reinterpret_cast<Helper>(module + 0x6dda0); // puts the corners in order after
+    if (!gd_sin || !gd_cos || half != 0.5f || one != 1.f)
         return;
-    // entry still robs prologue = nobody hooked it
+    // the 1st bytes are still robs = nobody else hooked it
     static constexpr std::uint8_t prologue[16]{ 0x48, 0x8b, 0xc4, 0x48, 0x89, 0x58, 0x10, 0x48,
         0x89, 0x70, 0x18, 0x48, 0x89, 0x78, 0x20, 0x55 };
     if (std::memcmp(reinterpret_cast<void const*>(module + 0x6da80), prologue, sizeof(prologue)) != 0) {
         return;
     }
-    // mov rax, <fn>; jmp rax (12 bytes, fits inside the prologue)
+    // mov rax, <my function>; jmp rax. 12 bytes, fits in those 1st bytes
     std::vector<std::uint8_t> entry{ 0x48, 0xb8 };
-    auto target = reinterpret_cast<std::uint64_t>(&fast_calculate_with_center);
+    auto target = reinterpret_cast<std::uint64_t>(&my_calculate);
     for (int i = 0; i < 8; ++i)
         entry.push_back(static_cast<std::uint8_t>(target >> (8 * i)));
     entry.insert(entry.end(), { 0xff, 0xe0 });

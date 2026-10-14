@@ -166,6 +166,8 @@ void Logic::pull_settings() {
                 logic.speedhack_memory = logic.speedhack;
             if (auto flag = json["real_time_mode"].asBool())
                 logic.real_time_mode = flag.unwrap();
+            if (auto flag = json["true_real_time"].asBool())
+                logic.true_real_time = flag.unwrap();
             if (auto flag = json["lock_delta"].asBool())
                 logic.lock_delta = flag.unwrap();
             if (auto flag = json["fix_tps_rotation"].asBool())
@@ -186,8 +188,6 @@ void Logic::pull_settings() {
                 logic.playback_tps_changes = flag.unwrap();
             if (auto flag = json["trace_logging"].asBool())
                 logic.trace_logging = flag.unwrap();
-            if (auto flag = json["opt_prefetch"].asBool())
-                echo::opt::prefetch = flag.unwrap();
             if (auto flag = json["opt_getters"].asBool())
                 echo::opt::getters = flag.unwrap();
             if (auto flag = json["opt_effects"].asBool())
@@ -418,6 +418,8 @@ void Logic::pull_settings() {
                 if (auto text = json["seed_override_value"].asString())
                     logic.seed_override_value = std::strtoull(text.unwrap().c_str(), nullptr, 10);
             }
+            if (auto flag = json["render_real_time"].asBool())
+                logic.render_real_time = flag.unwrap();
             if (auto flag = json["render_ssb"].asBool())
                 logic.render_ssb_fix = flag.unwrap();
             if (auto flag = json["render_speedhack"].asBool())
@@ -528,6 +530,8 @@ void Logic::pull_settings() {
             if (!json.contains("menu_scale_phone"))
                 logic.menu_scale = std::min(logic.menu_scale, .96f);
 #endif
+            if (auto number = json["menu_inner_scale"].asDouble())
+                logic.menu_inner_scale = std::clamp(static_cast<float>(number.unwrap()), 1.f, 1.5f);
             if (auto number = json["menu_scale_undocked"].asDouble())
                 logic.menu_scale_undocked = std::clamp(static_cast<float>(number.unwrap()), 0.35f, 3.f);
             if (auto number = json["menu_anim_speed"].asDouble())
@@ -617,6 +621,8 @@ void Logic::pull_settings() {
                 logic.pause_before_kill = flag.unwrap();
             if (auto flag = json["trajectory_autoclicker"].asBool())
                 logic.traj_autoclicker = flag.unwrap();
+            if (auto number = json["trajectory_click_lookahead"].asInt())
+                logic.traj_click_lookahead = std::max(static_cast<int>(number.unwrap()), 1);
             if (auto flag = json["trajectory_moving_objects"].asBool())
                 logic.traj_moving_objects = flag.unwrap();
             if (auto flag = json["backstep"].asBool())
@@ -831,6 +837,7 @@ void Logic::save_settings_file() {
     json["speedhack"] = logic.speedhack;
     json["speedhack_memory"] = logic.speedhack_memory;
     json["real_time_mode"] = logic.real_time_mode;
+    json["true_real_time"] = logic.true_real_time;
     json["lock_delta"] = logic.lock_delta;
     json["fix_tps_rotation"] = logic.fix_tps_rotation;
     json["save_debug"] = logic.save_debug;
@@ -840,7 +847,6 @@ void Logic::save_settings_file() {
     json["no_overwrite"] = logic.no_overwrite;
     json["playback_tps_changes"] = logic.playback_tps_changes;
     json["trace_logging"] = logic.trace_logging;
-    json["opt_prefetch"] = echo::opt::prefetch;
     json["opt_getters"] = echo::opt::getters;
     json["opt_effects"] = echo::opt::effects;
     json["record_p1"] = logic.record_p1;
@@ -958,6 +964,7 @@ void Logic::save_settings_file() {
     json["seed_override"] = logic.seed_override;
     json["seed_override_value"] = std::to_string(logic.seed_override_value);
     json["render_ssb"] = logic.render_ssb_fix;
+    json["render_real_time"] = logic.render_real_time;
     json["render_speedhack"] = logic.render_speedhack;
     json["render_color_fix"] = logic.render_color_fix;
     json["render_hide_labels"] = logic.render_hide_labels;
@@ -1000,6 +1007,7 @@ void Logic::save_settings_file() {
     json["floating_size"] = logic.floating_size;
     json["menu_scale"] = logic.menu_scale;
     json["menu_scale_phone"] = true;
+    json["menu_inner_scale"] = logic.menu_inner_scale;
     json["menu_scale_undocked"] = logic.menu_scale_undocked;
     json["menu_anim_speed"] = logic.menu_anim_speed;
     json["theme_name"] = logic.theme_name;
@@ -1052,6 +1060,7 @@ void Logic::save_settings_file() {
     json["frame_advance_speed"] = logic.advance_speed;
     json["pause_before_kill"] = logic.pause_before_kill;
     json["trajectory_autoclicker"] = logic.traj_autoclicker;
+    json["trajectory_click_lookahead"] = logic.traj_click_lookahead;
     json["trajectory_moving_objects"] = logic.traj_moving_objects;
     json["backstep"] = logic.backstep;
     json["velocity_unrounding"] = logic.velocity_unrounding;

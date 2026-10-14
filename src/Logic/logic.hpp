@@ -328,6 +328,7 @@ struct Session {
 	RunState backstep_saved_state = RunState::Idle;
 	bool backstep_swapped = false;
 	chrono::steady_clock::time_point back_hold_start{}, last_back_step{};
+	double back_owed = 0.0; // held step back: steps owed, a bit every drawn frame
 	CheckpointObject* restored_checkpoint = nullptr;
 	std::vector<Replay> sequence;
 	std::vector<size_t> sequence_order;
@@ -337,6 +338,7 @@ struct Session {
 	int progress_base = 0;
 	bool progress_base_set = false;
 	bool in_step = false;
+	bool pause_known = false, pause_cached = false;
 	uint32_t partner_presses = 0;
 	float fps = 240.f, macro_fps = 240.f;
 	// silicate saves the LAST tps it used, so a macro with tps changes can start on the wrong one. ts lets me fix it by hand
@@ -364,6 +366,7 @@ struct Session {
 	float speedhack_memory = 0.f;
 	bool real_time_mode = true;
 	bool lock_delta = false;
+	bool true_real_time = false; // real time w/ no step cap at all, every step owed runs
 	bool fix_tps_rotation = false;
 	bool lock_display_fps = false;
 	float playback_fps = 0.f;
@@ -437,6 +440,7 @@ struct Session {
 	int ui_style = 0;
 	float floating_x = -1.f, floating_y = -1.f;
 	float frame_bar_x = -1.f, frame_bar_y = -1.f; // where the mobile frame advance bar sits, -1 = top middle
+	bool frame_bar_open = false;
 	bool floating_hide_in_lvl = true;
 	float floating_size = 38.f;
 #ifdef GEODE_IS_MOBILE
@@ -479,11 +483,25 @@ struct Session {
 	float traj_release_alive_p2 = 0.f;
 	bool pause_before_kill = false;
 	bool traj_autoclicker = false;
+	int traj_click_lookahead = 1; // steps ahead a death has to be for the trajectory autoclicker to click
 	bool traj_flip_p1 = false, traj_flip_p2 = false; // trajectory autoclicker "holding" for me (maintain gravity)
+	bool traj_flip_raw_p1 = false, traj_flip_raw_p2 = false; // what i was really holding when it flipped
+	bool held_raw_p1 = false, held_raw_p2 = false; // what i was really holding the last time physical_hold looked
+	// trajectory autoclicker clicks queued ts step, [player2][down]. click both, swap & co are for MY clicks only
+	int assist_clicks[2][2] = {};
+	// holds restore_holds queued after a respawn, already worked out per player (inverse included)
+	int restored_clicks[2][2] = {};
+	bool assist_input = false;
 	bool find_best_queued = false;
 	int best_frame_range = 120;
 	bool best_frame_click = true;
 	int best_frame_click_at = -1;
+	int best_frame_clicked_at = -1; // the frame best frame last put a click on
+	// best frames own finger. its click is a press nobody is physically holding, so the 1st step back let go of it again
+	// (after a step back the buttons are matched to what im really holding) & the next best frame pressed AGAIN instead of
+	// releasing. while ts is owned, "what im holding" is what best frame last did, until i touch the button myself
+	bool best_hold_owned = false, best_hold = false, best_hold_raw = false;
+
 	bool best_frame_click_p1 = true, best_frame_auto = false, best_frame_running = false;
 	bool best_frame_step_first = false;
 	bool traj_moving_objects = true;
@@ -528,6 +546,7 @@ struct Session {
 	unsigned advance_hold_ms = 300, advance_delay_ms = 50;
 	float advance_speed = 100.f;
 	chrono::steady_clock::time_point advance_hold_start{}, last_advance_step{};
+	double advance_owed = 0.0; // held frame advance: steps owed, a bit every drawn frame
 	bool injecting = false;
 	bool applying_playback = false;
 	bool hold_sync = false, keep_checkpoint_hold = true;
@@ -548,6 +567,10 @@ struct Session {
 	fs::path macro_path, autosaved_path;
 	std::string rename_format = "_#";
 	std::string message = "Ready";
+	bool ask_moving_objects = false; // best frame moving obj traj checker
+	chrono::steady_clock::time_point saved_at{}; // legit to wait 1 second . most certainly a better way to do this
+	// movil: how big everything INSIDE the menu is, not menu scale
+	float menu_inner_scale = 1.f;
 	int attempts = 1;
 	double recording_seconds = 0.0;
 	uint64_t lvl_seed = 0;
@@ -589,6 +612,7 @@ struct Session {
 	float render_sfx = 1.f;
 	bool render_queued = false, render_record_pause = false, render_show_lvl = true;
 	bool render_screen_shape = true, render_ssb_fix = true, render_speedhack = false;
+	bool render_real_time = false; // a render gets the same lag cap as playing does
 	float render_speed_locked = 0.f;
 	bool render_hide_labels = false, render_hide_pause = false, render_color_fix = true;
 	bool merge_busy = false;
@@ -773,6 +797,7 @@ public:
 	void stop_best_frame(char const* why = nullptr);
 	void find_best_frame(PlayLayer* play, std::function<void(float)> const& tick);
 	void click_best_frame(PlayLayer* play);
+	bool raw_jump(GJBaseGameLayer* play, bool icon2) const;
 	void poll_back_hold();
 	Checkpoint capture_checkpoint(PlayLayer* play, CheckpointObject* object, int frame);
 	void disarm_length_pause_if_holding();
@@ -881,6 +906,8 @@ public:
 	void play_click(PlayLayer* play, bool down, bool player1);
 	void flush_clicks();
 	void note_step();
+	// time inside a step that isnt the step (a backstep save), kept out of the step cost
+	void note_untimed(double seconds);
 	void release_replay_index();
 	int affordable_steps() const;
 	void note_frame_work(double seconds);
@@ -948,6 +975,8 @@ public:
 	void sync_predict_hooks();
 	bool advance_paused(GJBaseGameLayer* play);
 	bool lock_delta_active() const;
+	// real time & true real time only count while playing, or in a render w/ real time rendering on
+	bool real_time_now() const;
 	int count_unlocked_steps(GJBaseGameLayer* play, double dt);
 	void run_frame(GJBaseGameLayer* play, float dt, std::function<void(float)> const& tick);
 	void cancel_steps();

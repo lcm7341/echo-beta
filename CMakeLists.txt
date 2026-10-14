@@ -13,11 +13,6 @@ set(CMAKE_CXX_VISIBILITY_PRESET hidden)
 
 project(Echo VERSION 2.2.0)
 
-option(ECHO_MOBILE_BUILD "Allow building for Android and iOS" ON)
-if ((ANDROID OR IOS OR CMAKE_SYSTEM_NAME STREQUAL "Android" OR CMAKE_SYSTEM_NAME STREQUAL "iOS") AND NOT ECHO_MOBILE_BUILD)
-    message(FATAL_ERROR "Mobile builds are temporarily disabled for this release. Pass -DECHO_MOBILE_BUILD=ON for a local build.")
-endif()
-
 file(GLOB_RECURSE SOURCES CONFIGURE_DEPENDS src/*.cpp)
 
 add_library(${PROJECT_NAME} SHARED ${SOURCES})
@@ -69,6 +64,8 @@ if (IOS)
     enable_language(OBJCXX)
     target_sources(${PROJECT_NAME} PRIVATE src/Recorder/ios_encoder.mm)
     set_source_files_properties(src/Recorder/ios_encoder.mm PROPERTIES SKIP_PRECOMPILE_HEADERS ON COMPILE_FLAGS "-fobjc-arc")
+    target_sources(${PROJECT_NAME} PRIVATE src/Hack/ios_screen.mm)
+    set_source_files_properties(src/Hack/ios_screen.mm PROPERTIES SKIP_PRECOMPILE_HEADERS ON COMPILE_FLAGS "-fobjc-arc -Wno-deprecated-declarations")
     target_link_libraries(${PROJECT_NAME} "-framework AVFoundation" "-framework CoreMedia" "-framework CoreVideo" "-framework AudioToolbox" "-framework QuartzCore" "-framework UIKit")
 endif()
 

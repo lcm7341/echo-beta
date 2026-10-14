@@ -44,6 +44,7 @@ public:
 	void refresh(PlayLayer* play);
 	void lookahead(PlayLayer* play);
 	void autoclick(PlayLayer* play);
+	int batchable_steps() const { return safe_steps; }
 	int flip_survival(PlayLayer* play, bool player1, int& full, std::vector<CCPoint>* path = nullptr, int limit = 0);
 
 	bool held_next(PlayLayer* play, bool player1) const {
@@ -116,6 +117,8 @@ private:
 	bool parted = false;
 	bool held_p1 = false, held_p2 = false;
 	int clicked_frame = -1;
+	// steps from now the autoclicker has nothing to decide on, so they can run batched (the 1 it just checked counts)
+	int safe_steps = 1;
 	int measured[2] = {}, measured_full = 0;
 	std::vector<CCPoint>* path_sink = nullptr;
 	std::unordered_set<EnhancedGameObject*> used_p1, used_p2;
@@ -124,6 +127,8 @@ private:
 	PlayerObject* spawn_fake(PlayLayer* play, char const* id);
 	Key make_key(PlayLayer* play) const;
 	void seed(PlayerObject* fake, PlayerObject* real);
+	// how many steps the icon lives w/ ts click made right now
+	int click_survival(PlayLayer* play, bool player1, Click click, int& full, int limit = 0);
 	void press(PlayLayer* play, PlayerObject* fake, Click click);
 	Click next_click(PlayLayer* play, bool player1) const;
 	template <class F>

@@ -125,13 +125,6 @@ namespace {
 }
 #endif
 
-// the fast capture: the gpu turns the frame into nv12 itself & it is read back a few frames late through a ring of buffers,
-// so nothing waits on the gpu. windows had it first. mac had been reading every frame back as full bgra, on the spot
-// (133mb a frame at 8k) & leaving the colour conversion to ffmpeg on the cpu
-#if defined(GEODE_IS_WINDOWS) || defined(GEODE_IS_MACOS)
-#define ECHO_GPU_CAPTURE 1
-#endif
-
 namespace {
     struct RenderTiming {
         std::atomic<long long> read_ns{ 0 }, wait_ns{ 0 }, encode_ns{ 0 };
@@ -208,6 +201,11 @@ public:
         static Recorder value;
         return value;
     }
+    // quitting mid render destroyed a running thread & aborted
+    ~Recorder() {
+        if (worker.joinable())
+            worker.detach();
+    }
 #ifdef GEODE_IS_WINDOWS
     void close_handle(HANDLE& handle);
     bool connect_pipe(HANDLE pipe);
@@ -215,14 +213,11 @@ public:
     fs::path game_directory();
     std::string ffmpeg_path();
     std::string run_hidden(std::string command, fs::path const& log_path);
-    bool mux_audio();
-#endif
-#ifdef ECHO_GPU_CAPTURE
-    bool harvest(bool wait);
     bool setup_nv12();
     void close_nv12();
     void convert_nv12();
     void draw_full_quad();
+    bool mux_audio();
 #endif
 #ifdef GEODE_IS_MACOS
     static fs::path ffmpeg_path();
@@ -258,6 +253,12 @@ public:
     std::vector<uint8_t> acquire_frame();
     void encode_loop();
     void finish_video();
+#if defined(GEODE_IS_WINDOWS) || defined(GEODE_IS_MACOS)
+    bool harvest(bool wait);
+#endif
+#ifdef GEODE_IS_MACOS
+    bool capture_bgra_buffered();
+#endif
     size_t frame_bytes() const;
     void uncap_pace();
     void restore_pace();
@@ -310,10 +311,11 @@ public:
     GLuint y_color = 0, uv_color = 0;
     GLuint y_prog = 0, uv_prog = 0;
     bool nv12 = false;
+    bool buffered_capture = false;
     int saved_swap = 1;
     float saved_interval = 1.f / 60.f;
     bool pace_held = false;
-#ifdef ECHO_GPU_CAPTURE
+#if defined(GEODE_IS_WINDOWS) || defined(GEODE_IS_MACOS)
     std::array<GLuint, RING> pbo{};
     std::deque<int> in_flight;
     int next_slot = 0;
@@ -322,12 +324,11 @@ public:
     std::array<GLsync, RING> fences{};
 #endif
     CCLayerColor* shade = nullptr;
-    // gds own level progress bar (the groove sprite w/ the fill behind it), drawn in the middle of the window
+    // GD progress sprites used by the render diagnostics overlay.
     CCSprite* bar_back = nullptr;
     CCSprite* bar_fill = nullptr;
     CCLabelBMFont* bar_text = nullptr;
     std::string bar_shown;
-    double text_clock = 0.0;
 
     chrono::steady_clock::time_point last_tick{};
     bool ticked = false;
@@ -335,7 +336,11 @@ public:
     double busy_seconds = 0.0;
     // how fast the last few seconds went, for the time left. the average of the whole render is way off whenever
     // the level gets heavier or lighter part way
-    double pace_video = 0.0, pace_wall = 0.0, pace = 0.0;
+    double pace = 0.0;
+    // (busy seconds, video seconds) every half second, the pace is worked out over all of them
+    std::deque<std::pair<double, double>> pace_marks;
+    chrono::steady_clock::time_point text_at{};
+    CCSize real_frame();
     float start_fraction = -1.f;
     int last_input_frame = 0;
 
@@ -1528,14 +1533,19 @@ void Recorder::hold_view() {
         Recorder::get().resize_shader_layer(size);
 }
 
+// the windows own frame size, even if it got resized mid render
+CCSize Recorder::real_frame() {
+    auto pixels = window_pixels().value_or(saved_pixels);
+    return CCSize(
+        saved_frame.width * pixels.width / std::max(saved_pixels.width, 1.f),
+        saved_frame.height * pixels.height / std::max(saved_pixels.height, 1.f));
+}
+
 void Recorder::release_view() {
     if (!holding)
         return;
     holding = false;
-    auto pixels = window_pixels().value_or(saved_pixels);
-    CCSize restore(
-        saved_frame.width * pixels.width / std::max(saved_pixels.width, 1.f),
-        saved_frame.height * pixels.height / std::max(saved_pixels.height, 1.f));
+    auto restore = real_frame();
     Recorder::get().silent_change_size(restore);
     Recorder::get().resize_shader_layer(restore);
     // only the level that got moved, a new one was built at the videos shape already
@@ -1551,7 +1561,7 @@ size_t Recorder::frame_bytes() const {
     return nv12 ? pixels + pixels / 2 : pixels * 4;
 }
 
-#ifdef ECHO_GPU_CAPTURE
+#ifdef GEODE_IS_WINDOWS
 namespace {
     GLuint compileShader(GLenum kind, char const* source) {
         GLuint shader = glCreateShader(kind);
@@ -1614,11 +1624,7 @@ namespace {
         }
         return buf;
     }
-}
-#endif
 
-#ifdef GEODE_IS_WINDOWS
-namespace {
     std::string encoder_flags(std::string const& codec, std::string const& extra, bool with_rate) {
         auto has = [&](char const* key) {
             return extra.find(key) != std::string::npos;
@@ -1673,9 +1679,7 @@ namespace {
     using SwapIntervalFn = BOOL(WINAPI*)(int);
     using GetSwapIntervalFn = int(WINAPI*)();
 }
-#endif
 
-#ifdef ECHO_GPU_CAPTURE
 void Recorder::draw_full_quad() {
     glBegin(GL_QUADS);
     glTexCoord2f(0.f, 0.f);
@@ -1860,40 +1864,43 @@ bool Recorder::open_target() {
     glBindFramebuffer(GL_FRAMEBUFFER, old_fbo);
     glBindTexture(GL_TEXTURE_2D, old_texture);
 
-#ifdef ECHO_GPU_CAPTURE
-    bool want_nv12 = !use_api;
-#ifdef GEODE_IS_MACOS
-    {
-        // nv12 only has half the colour detail (4:2:0), so its just for renders that end up 4:2:0 anyway.
-        // bitrate 0 w/ a software codec = lossless 4:4:4, that keeps getting whole bgra frames like before.
-        // (lossless 4:2:0 is also a file apples decoder refuses, players open it & show nothing)
-        auto const& logic = Logic::get();
-        bool hardware = logic.render_codec.find("videotoolbox") != std::string::npos;
-        bool own_format = logic.render_args.find("-pix_fmt") != std::string::npos;
-        if ((logic.render_bitrate <= 0 && !hardware && !own_format) || logic.render_args.find("444") != std::string::npos)
-            want_nv12 = false;
-    }
-#endif
-    nv12 = want_nv12 && Recorder::get().setup_nv12();
+#ifdef GEODE_IS_WINDOWS
+    nv12 = !use_api && Recorder::get().setup_nv12();
     if (!nv12)
         Recorder::get().close_nv12();
-    bool ring = true;
-#ifdef GEODE_IS_MACOS
-    // mac only has the ring when the nv12 shaders worked. w/out them it reads frames the old way
-    ring = nv12;
+    auto bytes = static_cast<GLsizeiptr>(Recorder::get().frame_bytes());
+    glGenBuffers(RING, pbo.data());
+    for (auto buf : pbo) {
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, buf);
+        glBufferData(GL_PIXEL_PACK_BUFFER, bytes, nullptr, GL_STREAM_READ);
+    }
+    glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+    fences.fill(nullptr);
+    in_flight.clear();
+    next_slot = 0;
 #endif
-    if (ring) {
-        auto bytes = static_cast<GLsizeiptr>(Recorder::get().frame_bytes());
+
+#ifdef GEODE_IS_MACOS
+    // Keep BGRA and CPU color conversion, but read pixels back a few frames later.
+    buffered_capture = !use_api;
+    if (buffered_capture) {
         glGenBuffers(RING, pbo.data());
-        for (auto buf : pbo) {
-            glBindBuffer(GL_PIXEL_PACK_BUFFER, buf);
+        auto bytes = static_cast<GLsizeiptr>(frame_bytes());
+        bool allocated = true;
+        for (auto buffer : pbo) {
+            glBindBuffer(GL_PIXEL_PACK_BUFFER, buffer);
             glBufferData(GL_PIXEL_PACK_BUFFER, bytes, nullptr, GL_STREAM_READ);
+            GLint size = 0;
+            glGetBufferParameteriv(GL_PIXEL_PACK_BUFFER, GL_BUFFER_SIZE, &size);
+            allocated = allocated && buffer && size == bytes;
         }
         glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+        if (!allocated) {
+            glDeleteBuffers(RING, pbo.data());
+            pbo.fill(0);
+            buffered_capture = false;
+        }
     }
-#ifdef GEODE_IS_WINDOWS
-    fences.fill(nullptr);
-#endif
     in_flight.clear();
     next_slot = 0;
 #endif
@@ -1918,19 +1925,24 @@ bool Recorder::open_target() {
     if (bar_text)
         bar_text->retain();
     bar_shown.clear();
-    text_clock = 0.0;
+    text_at = {};
     return complete;
 }
 
 void Recorder::close_target() {
+#ifdef GEODE_IS_MACOS
+    in_flight.clear();
+    if (pbo[0])
+        glDeleteBuffers(RING, pbo.data());
+    pbo.fill(0);
+    buffered_capture = false;
+#endif
 #ifdef GEODE_IS_WINDOWS
     for (auto& fence : fences) {
         if (fence)
             glDeleteSync(fence);
         fence = nullptr;
     }
-#endif
-#ifdef ECHO_GPU_CAPTURE
     in_flight.clear();
     if (pbo[0])
         glDeleteBuffers(RING, pbo.data());
@@ -1963,6 +1975,24 @@ void Recorder::close_target() {
     bar_text = nullptr;
 }
 
+#ifdef GEODE_IS_MACOS
+bool Recorder::capture_bgra_buffered() {
+    if (!buffered_capture)
+        return false;
+    while (static_cast<int>(in_flight.size()) >= RING && harvest(true)) {
+    }
+    glBindBuffer(GL_PIXEL_PACK_BUFFER, pbo[next_slot]);
+    glPixelStorei(GL_PACK_ALIGNMENT, 1);
+    glReadPixels(0, 0, width, height, GL_BGRA, GL_UNSIGNED_INT_8_8_8_8_REV, nullptr);
+    glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+    in_flight.push_back(next_slot);
+    next_slot = (next_slot + 1) % RING;
+    while (harvest(false)) {
+    }
+    return true;
+}
+#endif
+
 void Recorder::drawFrame() {
     auto* director = CCDirector::sharedDirector();
     GLint window = 0;
@@ -1982,43 +2012,37 @@ void Recorder::drawFrame() {
     }
     kmGLPopMatrix();
 
-#ifdef ECHO_GPU_CAPTURE
-    bool ring = true;
 #ifdef GEODE_IS_MACOS
-    ring = nv12;
-#endif
-    if (ring) {
-        if (nv12)
-            Recorder::get().convert_nv12();
-        int slot = next_slot;
-        // the slot ts frame goes in has to be empty first
-        while (static_cast<int>(in_flight.size()) >= RING && Recorder::get().harvest(true)) {
-        }
-        glBindBuffer(GL_PIXEL_PACK_BUFFER, pbo[slot]);
-        glPixelStorei(GL_PACK_ALIGNMENT, 1);
-        if (nv12) {
-            glBindFramebuffer(GL_FRAMEBUFFER, y_fbo);
-            glReadPixels(0, 0, width, height, GL_RED, GL_UNSIGNED_BYTE, nullptr);
-            glBindFramebuffer(GL_FRAMEBUFFER, uv_fbo);
-            auto offset = static_cast<uintptr_t>(width) * static_cast<uintptr_t>(height);
-            glReadPixels(0, 0, width / 2, height / 2, GL_RG, GL_UNSIGNED_BYTE, reinterpret_cast<void*>(offset));
-        }
-        else {
-            glReadPixels(0, 0, width, height, GL_BGRA, GL_UNSIGNED_BYTE, nullptr);
-        }
-        glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
-#ifdef GEODE_IS_WINDOWS
-        fences[slot] = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
-#endif
-        in_flight.push_back(slot);
-        next_slot = (slot + 1) % RING;
-        while (Recorder::get().harvest(false)) {
-        }
+    if (capture_bgra_buffered()) {
         glBindFramebuffer(GL_FRAMEBUFFER, window);
         return;
     }
 #endif
-#ifndef GEODE_IS_WINDOWS
+#ifdef GEODE_IS_WINDOWS
+    if (nv12)
+        Recorder::get().convert_nv12();
+    int slot = next_slot;
+    while (fences[slot] && Recorder::get().harvest(true)) {
+    }
+    glBindBuffer(GL_PIXEL_PACK_BUFFER, pbo[slot]);
+    glPixelStorei(GL_PACK_ALIGNMENT, 1);
+    if (nv12) {
+        glBindFramebuffer(GL_FRAMEBUFFER, y_fbo);
+        glReadPixels(0, 0, width, height, GL_RED, GL_UNSIGNED_BYTE, nullptr);
+        glBindFramebuffer(GL_FRAMEBUFFER, uv_fbo);
+        auto offset = static_cast<uintptr_t>(width) * static_cast<uintptr_t>(height);
+        glReadPixels(0, 0, width / 2, height / 2, GL_RG, GL_UNSIGNED_BYTE, reinterpret_cast<void*>(offset));
+    }
+    else {
+        glReadPixels(0, 0, width, height, GL_BGRA, GL_UNSIGNED_BYTE, nullptr);
+    }
+    glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+    fences[slot] = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+    in_flight.push_back(slot);
+    next_slot = (slot + 1) % RING;
+    while (Recorder::get().harvest(false)) {
+    }
+#else
 #ifdef GEODE_IS_IOS
     if (Recorder::get().draw_direct()) {
         glBindFramebuffer(GL_FRAMEBUFFER, window);
@@ -2045,11 +2069,14 @@ void Recorder::drawFrame() {
 void Recorder::show_overlay() {
     if (!active)
         return;
+    // the window, menus & clicks get the real size back til the next frame starts
+    if (holding) {
 #ifdef GEODE_IS_MOBILE
-    // touches use the real screen size NOT the video size
-    if (holding)
         silent_change_size(saved_frame);
+#else
+        silent_change_size(real_frame());
 #endif
+    }
     auto pixels = window_pixels().value_or(saved_pixels);
     if (pixels.width < 1.f || pixels.height < 1.f)
         pixels = CCSize(1.f, 1.f);
@@ -2089,6 +2116,8 @@ void Recorder::show_overlay() {
     glClearColor(clear[0], clear[1], clear[2], clear[3]);
     if (scissor)
         glEnable(GL_SCISSOR_TEST);
+    // the menu is drawn after ts & needs the whole window
+    glViewport(0, 0, static_cast<GLsizei>(pixels.width), static_cast<GLsizei>(pixels.height));
 }
 
 #ifdef GEODE_IS_IOS
@@ -2223,9 +2252,10 @@ void Recorder::draw_progress() {
         bar_back->setScale(1.3f * scale);
         bar_back->setPosition(middle);
     }
-    text_clock += wall_delta;
-    if (bar_shown.empty() || text_clock >= 0.2) {
-        text_clock = 0.0;
+    // by the real clock
+    auto now = chrono::steady_clock::now();
+    if (bar_shown.empty() || now - text_at >= chrono::milliseconds(200)) {
+        text_at = now;
         if (status.text != bar_shown) {
             bar_shown = status.text;
             bar_text->setString(bar_shown.c_str());
@@ -2240,7 +2270,7 @@ void Recorder::draw_progress() {
     kmGLPopMatrix();
 }
 
-#ifdef ECHO_GPU_CAPTURE
+#if defined(GEODE_IS_WINDOWS) || defined(GEODE_IS_MACOS)
 bool Recorder::harvest(bool wait) {
     if (in_flight.empty())
         return false;
@@ -2252,8 +2282,7 @@ bool Recorder::harvest(bool wait) {
     glDeleteSync(fences[slot]);
     fences[slot] = nullptr;
 #else
-    // macs old gl has no fences to ask. a frame is only taken back once the ring is nearly full,
-    // which is frames after it was drawn, so the map below doesnt have to wait for the gpu
+    // Leave the oldest transfer several frames to finish before mapping it.
     if (!wait && static_cast<int>(in_flight.size()) < RING - 1)
         return false;
     Timed timed{ g_timing.read_ns };
@@ -2263,8 +2292,17 @@ bool Recorder::harvest(bool wait) {
     if (auto const* data = static_cast<uint8_t const*>(glMapBuffer(GL_PIXEL_PACK_BUFFER, GL_READ_ONLY))) {
         auto frame = Recorder::get().acquire_frame();
         std::memcpy(frame.data(), data, frame.size());
-        glUnmapBuffer(GL_PIXEL_PACK_BUFFER);
-        Recorder::get().queue_frame(std::move(frame));
+        if (glUnmapBuffer(GL_PIXEL_PACK_BUFFER)) {
+            Recorder::get().queue_frame(std::move(frame));
+        }
+        else {
+            failure = "The captured frame buffer was invalid";
+            broken = true;
+        }
+    }
+    else {
+        failure = "Could not read the captured frame buffer";
+        broken = true;
     }
     glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
     return true;
@@ -2325,7 +2363,7 @@ void Recorder::encode_loop() {
 }
 
 void Recorder::finish_video() {
-#ifdef ECHO_GPU_CAPTURE
+#if defined(GEODE_IS_WINDOWS) || defined(GEODE_IS_MACOS)
     while (Recorder::get().harvest(true)) {
     }
 #endif
@@ -2843,14 +2881,18 @@ RenderStatus Logic::render_status() {
     double video = (double)(film.frames) * (double)(Logic::get().render_step());
     if (film.busy_seconds > 0.05)
         status.speed = (float)(video / film.busy_seconds);
-    // the pace of the last second or so, smoothed. the time left uses ts, NOT the average since the start
-    if (film.busy_seconds < film.pace_wall || video < film.pace_video)
-        film.pace_wall = film.pace_video = film.pace = 0.0;
-    if (film.busy_seconds - film.pace_wall >= 1.0) {
-        double fresh = (video - film.pace_video) / (film.busy_seconds - film.pace_wall);
-        film.pace = film.pace > 0.0 ? film.pace * 0.7 + fresh * 0.3 : fresh;
-        film.pace_wall = film.busy_seconds;
-        film.pace_video = video;
+    // pace over the last 10 seconds, not since the start
+    auto& marks = film.pace_marks;
+    if (!marks.empty() && (film.busy_seconds < marks.back().first || video < marks.back().second)) {
+        marks.clear();
+        film.pace = 0.0;
+    }
+    if (marks.empty() || film.busy_seconds - marks.back().first >= 0.5) {
+        marks.emplace_back(film.busy_seconds, video);
+        while (marks.size() > 2 && film.busy_seconds - marks[1].first >= 10.0)
+            marks.pop_front();
+        if (double wall = film.busy_seconds - marks.front().first; wall >= 1.0)
+            film.pace = (video - marks.front().second) / wall;
     }
     double pace = film.pace > 0.0 ? film.pace : (double)(status.speed);
     std::string speed = pace > 0.0 ? fmt::format("{:.2f}x", pace) : std::string("measuring speed");
@@ -3008,7 +3050,8 @@ bool Logic::begin_render_frame() {
     film.hold_view();
     bool capture = !Logic::get().render_should_skip();
     if (capture) {
-        film.busy_seconds += film.wall_delta;
+        // the whole gap, capping it at 0.25 made elapsed run slow
+        film.busy_seconds += std::clamp(gap, 0.0, 30.0);
         AudioTap::get().hold_effects();
     }
     return capture;
@@ -3081,7 +3124,9 @@ bool Logic::render_batch_more(chrono::steady_clock::time_point started) {
 #ifdef GEODE_IS_WINDOWS
     return false;
 #else
-    return Recorder::get().active && !Logic::get().render_should_skip() && chrono::steady_clock::now() - started < chrono::milliseconds(40);
+    // showing the window costs 10-20ms so batches are long, short w/ the menu open
+    auto longest = chrono::milliseconds(GUI::get().menu_shown() ? 25 : 200);
+    return Recorder::get().active && !Logic::get().render_should_skip() && chrono::steady_clock::now() - started < longest;
 #endif
 }
 
@@ -3117,7 +3162,7 @@ void Logic::stop_render() {
         fs::create_directories(logic.save_root() / "logs", error);
         std::ofstream out(logic.save_root() / "logs" / "render.txt", std::ios::trunc);
         out << fmt::format("render {}x{} @{}fps codec={} platform={} capture={}\n", film.width, film.height, logic.render_fps, logic.render_codec,
-            GEODE_PLATFORM_NAME, film.use_api ? "api" : film.nv12 ? "nv12 ring" : "bgra direct");
+            GEODE_PLATFORM_NAME, film.use_api ? "api" : film.nv12 ? "nv12 ring" : film.buffered_capture ? "bgra ring" : "bgra direct");
         out << fmt::format("frames={} video={:.3f}s wall={:.3f}s speed={:.2f} fps ({:.2f}x real time)\n", film.frames, frames / std::max(logic.render_fps, 1), wall,
             frames / std::max(wall, 1e-6), frames / std::max(logic.render_fps, 1) / std::max(wall, 1e-6));
         out << fmt::format("per frame: total={:.2f}ms read_back={:.2f}ms waiting_on_encoder={:.2f}ms encoder_write={:.2f}ms (encoder is on its own thread)\n",
@@ -3239,7 +3284,8 @@ void Logic::start_render() {
         film.frames = 0;
         g_timing.reset();
         g_render_notes.clear();
-        film.pace_video = film.pace_wall = film.pace = 0.0;
+        film.pace = 0.0;
+        film.pace_marks.clear();
         {
             auto& logic = Logic::get();
             logic.render_game_seconds = 0.0;
@@ -3382,13 +3428,10 @@ void Logic::start_render() {
     if (logic.render_color_fix)
         filters += ",colorspace=all=bt709:iall=bt470bg:fast=1";
     std::vector<std::string> args{
-        ffmpeg.string(), "-y", "-loglevel", "error", "-f", "rawvideo", "-pix_fmt", film.nv12 ? "nv12" : "bgra",
-        "-s", fmt::format("{}x{}", width, height), "-r", std::to_string(fps), "-i", "pipe:0", "-an"
+        ffmpeg.string(), "-y", "-loglevel", "error", "-f", "rawvideo", "-pix_fmt", "bgra",
+        "-s", fmt::format("{}x{}", width, height), "-r", std::to_string(fps), "-i", "pipe:0", "-an",
+        "-vf", filters, "-c:v", codec
     };
-    // nv12 frames come out of the shader the right way up & already bt709, so ffmpeg gets no filter at all
-    if (!film.nv12)
-        args.insert(args.end(), { "-vf", filters });
-    args.insert(args.end(), { "-c:v", codec });
     auto rate = video_rate(codec, logic.render_bitrate, logic.render_args, static_cast<int64_t>(width) * height * fps);
     args.insert(args.end(), rate.begin(), rate.end());
     if (!has_arg("-pix_fmt"))

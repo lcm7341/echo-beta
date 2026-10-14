@@ -162,6 +162,10 @@ void Labels::sync_label(PlayLayer* play, int tag, bool visible, LabelPlacement c
         label->setColor(color);
 }
 
+#ifdef GEODE_IS_IOS
+float echo_ios_corner_ratio();
+#endif
+
 void Labels::layout(PlayLayer* play) {
     auto const& logic = Logic::get();
     if (!logic.labels_auto || !play)
@@ -173,6 +177,19 @@ void Labels::layout(PlayLayer* play) {
     auto order = ordered_labels(logic);
     if (bottom)
         std::ranges::reverse(order);
+    // fix ios labels being cut off
+    float radius = 0.f;
+#ifdef GEODE_IS_IOS
+    // 1.15: apples corners are not circles belief it or no
+    if (!Logic::get().render_active())
+        radius = echo_ios_corner_ratio() * std::min(win.width, win.height) * 1.15f;
+#endif
+    auto corner = [radius](float from_edge) {
+        if (from_edge >= radius)
+            return 0.f;
+        float up = radius - from_edge;
+        return radius - std::sqrt(std::max(0.f, radius * radius - up * up));
+    };
     float used = 0.f;
     for (auto* info : order) {
         auto* label = typeinfo_cast<CCLabelBMFont*>(play->getChildByTag(info->tag));
@@ -188,7 +205,8 @@ void Labels::layout(PlayLayer* play) {
             label->setAlignment(wanted);
         }
         float height = label->getScaledContentSize().height;
-        CCPoint position{ right ? win.width - MARGIN : MARGIN, bottom ? MARGIN + used : win.height - MARGIN - used };
+        float in = MARGIN + corner(MARGIN + used);
+        CCPoint position{ right ? win.width - in : in, bottom ? MARGIN + used : win.height - MARGIN - used };
         if (label->getPosition() != position)
             label->setPosition(position);
         used += height + GAP;

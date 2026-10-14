@@ -122,6 +122,7 @@ bool Logic::write_file() {
     logic.macro_name = ReplayIO::import_stem(logic.macro_path);
     logic.macro_name_typed = false;
     Logic::get().notify(fmt::format("Saved {}", logic.macro_path.filename().string()), true);
+    logic.saved_at = std::chrono::steady_clock::now();
     return true;
 }
 

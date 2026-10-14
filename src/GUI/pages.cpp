@@ -513,7 +513,7 @@ namespace {
 void GUI::main() {
     auto& logic = Logic::get();
     bool busy = logic.is_recording() || logic.is_playing();
-    bool want_reset = false, open_overwrite = false, open_sync_audio = false;
+    bool want_reset = false, open_overwrite = false, open_sync_audio = false, open_real_time = false;
 
     eui::BeginCardRow("replay-0");
     if (eui::BeginCard("Session", card_width())) {
@@ -595,13 +595,18 @@ void GUI::main() {
             input_fps = std::clamp(input_fps, 1.f, FLT_MAX);
             GUI::get().set_playback_fps(input_fps);
         }
-        if (toggle("Lock TPS", logic.lock_delta))
+        if (toggle("Lock FPS", logic.lock_delta))
             GUI::get().drop_carry();
-        tip("Forces your TPS value to this. Turn this on for maximum accuracy, but it shouldn't be necessary.");
+        tip("Moves the level exactly one frame for every frame drawn, essentially smooth fix.");
         eui::RowHalf();
+        // lock fps never has time left over for real time to catch up on
+        ImGui::BeginDisabled(logic.lock_delta);
         if (toggle("Real Time", logic.real_time_mode))
             GUI::get().drop_carry();
         tip("Keeps the game at full speed when it lags instead of slowing it down.");
+        if (eui::Gear("##real-time-settings"))
+            open_real_time = true;
+        ImGui::EndDisabled();
         toggle("Audio Speedhack", logic.audio_speedhack);
         tip("Makes the audio follow your speedhack.");
         eui::RowHalf();
@@ -621,8 +626,12 @@ void GUI::main() {
             logic.macro_path.clear();
         ImGui::TextDisabled("%i inputs   %s TPS%s", (int)(logic.inputs.size()), fmt::format("{:g}", logic.fps).c_str(), !logic.macro_ldm_known ? "" : logic.macro_ldm ? "   LDM on" : "   LDM off");
         float half = eui::RowButton(2);
-        if (eui::Button("Save", ImVec2(half, 0.f)))
+        // better saving info
+        bool just_saved = std::chrono::steady_clock::now() - logic.saved_at < std::chrono::seconds(1);
+        ImGui::BeginDisabled(just_saved);
+        if (eui::Button(just_saved ? "Saved###save-replay" : "Save###save-replay", ImVec2(half, 0.f)))
             Logic::get().write_file();
+        ImGui::EndDisabled();
         GUI::get().offer_rebind("key-save");
         ImGui::SameLine();
         if (eui::Button("Load", ImVec2(half, 0.f)))
@@ -657,8 +666,10 @@ void GUI::main() {
             persist();
         tip("Automatically clicks on the best frame instead of only stopping there.");
         eui::RowHalf();
+        ImGui::BeginDisabled(!logic.best_frame_click);
         if (toggle("Keep Going", logic.best_frame_auto))
             persist();
+        ImGui::EndDisabled();
         tip("Keeps finding the next best frame after each click until none survive.");
 #endif
         ImGui::EndDisabled();
@@ -670,12 +681,38 @@ void GUI::main() {
     eui::EndCard();
     if (eui::BeginCard("Frame Advance", card_width())) {
         bool advancing = logic.frame_advance;
-        if (eui::Checkbox("Frame Advance", &advancing))
+#ifdef GEODE_IS_MOBILE
+        // since resume/pause added, unticking fa takes the bar away
+        advancing = advancing || logic.frame_bar_open;
+#endif
+        if (eui::Checkbox("Frame Advance", &advancing)) {
             GUI::get().set_frame_advance(advancing);
+            logic.frame_bar_open = advancing;
+        }
         GUI::get().offer_rebind("toggle-advance");
+#ifdef GEODE_IS_MOBILE
+        // the fa bar is hidden while the menu is open
+        // same row as step so the card (& the whole menu) doesnt get taller
+        if (logic.frame_advance || logic.frame_bar_open) {
+            float both = eui::RowRight(9.6f);
+            float each = (both - ImGui::GetStyle().ItemSpacing.x) * .5f;
+            if (eui::Button(logic.frame_advance ? "Resume" : "Pause", ImVec2(each, 0.f)))
+                GUI::get().set_frame_advance(!logic.frame_advance);
+            tip("Keeps playing, or stops again. The bar stays on screen.");
+            ImGui::SameLine();
+            if (eui::Button("Step", ImVec2(each, 0.f)))
+                Logic::get().advance_one_frame();
+        }
+        else {
+            float step_w = eui::RowRight(4.6f);
+            if (eui::Button("Step", ImVec2(step_w, 0.f)))
+                Logic::get().advance_one_frame();
+        }
+#else
         float step_w = eui::RowRight(4.6f);
         if (eui::Button("Step", ImVec2(step_w, 0.f)))
             Logic::get().advance_one_frame();
+#endif
         GUI::get().offer_rebind("step-frame");
         eui::Row("Hold delay", "How long Step is held before it starts repeating.");
         int hold = (int)(logic.advance_hold_ms);
@@ -703,6 +740,14 @@ void GUI::main() {
     eui::EndCard();
     eui::EndCardRow();
 
+    if (open_real_time)
+        ImGui::OpenPopup("Real Time Settings");
+    if (eui::BeginModal("Real Time Settings", 20.f)) {
+        if (toggle("True Real Time", logic.true_real_time))
+            GUI::get().drop_carry();
+        tip("Runs every step as close to real time as the game allows. Accuracy is untested.");
+        eui::EndModal();
+    }
     if (open_sync_audio)
         ImGui::OpenPopup("Sync Audio Settings");
     if (eui::BeginModal("Sync Audio Settings", 20.f)) {
@@ -762,14 +807,20 @@ void GUI::tools() {
         if (toggle("Trajectory Autoclicker", logic.traj_autoclicker))
             Logic::get().reset_traj();
         tip("Automatically clicks or releases when the next frame would kill you. Works without Show Trajectory.");
+        ImGui::BeginDisabled(!logic.traj_autoclicker);
+        eui::Row("Lookahead", "Clicks when you would die within this many frames.");
+        if (eui::InputInt("##traj-lookahead", &logic.traj_click_lookahead))
+            logic.traj_click_lookahead = std::clamp(logic.traj_click_lookahead, 1, 240);
+        persist_on_release();
+        ImGui::EndDisabled();
         if (quad_row("Auto Straight Fly", "##straight-fly", logic.straight_fly_p1, logic.straight_fly_p2, "Holds and lets go for you to keep the ship level. It can drift."))
             GUI::get().persist();
         if (quad_row("Auto Straight UFO", "##straight-ufo", logic.straight_ufo_p1, logic.straight_ufo_p2, "Clicks for you to keep the UFO at one height."))
             GUI::get().persist();
-        if (logic.straight_fly() || logic.straight_ufo()) {
-            if (eui::Button("Straight Fly Settings...", ImVec2(-FLT_MIN, 0.f)))
-                open_straight = true;
-        }
+        ImGui::BeginDisabled(!logic.straight_fly() && !logic.straight_ufo());
+        if (eui::Button("Straight Fly Settings...", ImVec2(-FLT_MIN, 0.f)))
+            open_straight = true;
+        ImGui::EndDisabled();
     }
     eui::EndCard();
     if (eui::BeginCard("Two Players", card_width())) {
@@ -783,7 +834,8 @@ void GUI::tools() {
         eui::Row("Follow", "For two player levels, the following player will copy the followed player after that many frames or milliseconds.");
         if (eui::Combo("##follow", &logic.follow_mode, follow, 3))
             GUI::get().persist();
-        if (logic.follow_mode != 0) {
+        ImGui::BeginDisabled(logic.follow_mode == 0);
+        {
             eui::RowWith("Delay", 5.f);
             if (eui::DragFloat("##follow-delay", &logic.follow_delay, logic.follow_delay_ms ? 1.f : 0.25f, 0.f, 100000.f, logic.follow_delay_ms ? "%.1f" : "%.0f"))
                 logic.follow_delay = std::max(logic.follow_delay, 0.f);
@@ -798,6 +850,7 @@ void GUI::tools() {
                 GUI::get().persist();
             }
         }
+        ImGui::EndDisabled();
     }
     eui::EndCard();
     eui::EndCardRow();
@@ -842,21 +895,21 @@ void GUI::tools() {
         }
         toggle("Maintain Gravity", logic.maintain_gravity);
         tip("Makes the wave control as if gravity was always normal while recording.");
-        if (logic.maintain_gravity && GUI::get().two_player_dual()) {
-            toggle("Same Gravity", logic.same_gravity);
-            tip("Ensures that Maintain Gravity keeps both players on the same gravity.");
-        }
+        ImGui::BeginDisabled(!logic.maintain_gravity);
+        toggle("Same Gravity", logic.same_gravity);
+        ImGui::EndDisabled();
+        tip("Ensures that Maintain Gravity keeps both players on the same gravity.");
         toggle("Auto Swift", logic.auto_swift);
         tip("Every click lets go on the same frame it was pressed.");
         eui::RowHalf();
         toggle("Extra Clicks", logic.extra_clicks);
         tip("Adds extra clicks on the same frame for each click.");
-        if (logic.extra_clicks) {
-            eui::Row("Extra click amount");
-            if (eui::DragInt("##extra-clicks", &logic.extra_click_count, .1f, 1, 16, "%d extra"))
-                logic.extra_click_count = std::clamp(logic.extra_click_count, 1, 16);
-            persist_on_release();
-        }
+        ImGui::BeginDisabled(!logic.extra_clicks);
+        eui::Row("Extra click amount");
+        if (eui::DragInt("##extra-clicks", &logic.extra_click_count, .1f, 1, 16, "%d extra"))
+            logic.extra_click_count = std::clamp(logic.extra_click_count, 1, 16);
+        persist_on_release();
+        ImGui::EndDisabled();
     }
     eui::EndCard();
     eui::EndCardRow();
@@ -985,6 +1038,8 @@ void GUI::draw_visuals() {
         if (toggle("No Mirror Portals", logic.no_mirror_portals))
             GUI::get().apply_no_mirror();
         tip("Stops mirror portals from flipping the level.");
+        toggle("Stacked Orb Optimization", echo::opt::effects);
+        tip("Clicking many orbs on the same frame only shows one effect.");
     }
     eui::EndCard();
     eui::EndCardRow();
@@ -1308,6 +1363,8 @@ void GUI::renderer() {
         GUI::get().drag_float_setting("##render-after-end", logic.render_after_end, 0.05f, 0.f, 5.f, "%.2f s");
         toggle("SSB Fix", logic.render_ssb_fix);
         tip("Fixes audio sync because of the game's scroll speed bug when rendering.");
+        toggle("Real Time Rendering", logic.render_real_time);
+        tip("May cause visual bugs. Stacked Orb Optimization may not be recommended.");
     }
     eui::EndCard();
     eui::EndCardRow();
@@ -1429,6 +1486,24 @@ void GUI::draw_theme() {
             save();
             gui.export_theme(gui.theme_path("current"));
         }
+#if 0 // control size is off for now, it blanked every page on a real phone
+        {
+            // only applied when the finger lets go. not sure if i like this but eh
+            static float draft = 1.f;
+            static bool dragging = false;
+            if (!dragging)
+                draft = logic.menu_inner_scale;
+            eui::Row("Control size");
+            if (eui::DragFloat("##menu-inner", &draft, 0.005f, 1.f, 1.5f, "%.2fx"))
+                draft = std::clamp(draft, 1.f, 1.5f);
+            tip("Bigger controls in the same size menu. Pages scroll instead.");
+            dragging = ImGui::IsItemActive();
+            if (ImGui::IsItemDeactivatedAfterEdit()) {
+                logic.menu_inner_scale = draft;
+                save();
+            }
+        }
+#endif
         eui::Row("Animation speed");
         if (eui::DragFloat("##menu-anim", &logic.menu_anim_speed, 0.01f, 0.25f, 4.f, "%.2fx"))
             logic.menu_anim_speed = std::clamp(logic.menu_anim_speed, 0.25f, 4.f);
@@ -1467,14 +1542,9 @@ void GUI::draw_theme() {
             geode::utils::file::openFolder(logic.save_root() / "logs");
         tip("Opens the folder the logs are saved in.");
 #ifdef GEODE_IS_WINDOWS
-        toggle("Collision Prefetch", echo::opt::prefetch);
-        tip("Prefetches the next objects in the collision loops.");
-        eui::RowHalf();
         toggle("Inline Getters", echo::opt::getters);
         tip("Inlines the rect getters in the collision check.");
 #endif
-        toggle("Stacked Orb Optimization", echo::opt::effects);
-        tip("Clicking many orbs on the same frame only shows one effect.");
         if (eui::Checkbox("Button Effects", &eui::button_effects()))
             gui.export_theme(gui.theme_path("current"));
         tip("Enables button animations for the animated themes.");
