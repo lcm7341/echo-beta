@@ -49,6 +49,8 @@
 #include <Geode/modify/GameObject.hpp>
 #include <Geode/modify/EnhancedGameObject.hpp>
 #include <Geode/modify/RingObject.hpp>
+#include <Geode/modify/CCCircleWave.hpp>
+#include <Geode/modify/GJActionManager.hpp>
 #include <Geode/Geode.hpp>
 #include <Geode/binding/GJBaseGameLayer.hpp>
 #ifdef GEODE_IS_WINDOWS
@@ -118,11 +120,161 @@ void Logic::sync_predict_hooks() {
 namespace {
     constexpr int DASH_SPIN_TAG = 12;
     echo::effects::Frame g_effectFrame;
+    int g_stackedWaves = 0;
+    // the orb ur jumping off already played its effects
+    bool quiet_orb = false;
+    // waves gd made for a dud ahh orb!
+    std::vector<CCCircleWave*> g_dudWaves;
+}
 
+// stands in for a stack of the same wave from 1 shown frame & draws all of them, spread over their ages
+class $modify(EchoCircleWave, CCCircleWave) {
+    struct Fields {
+        int hits = 1;
+        int born = 0, last = 0;
+        float span = 0.f;
+        bool stacked = false, drawn = false;
+        float seen_radius = 0.f, seen_opacity = 0.f, was_radius = 0.f, was_opacity = 0.f;
+
+        ~Fields() {
+            if (stacked)
+                --g_stackedWaves;
+        }
+    };
+
+    bool init(float startRadius, float endRadius, float duration, bool fadeIn, bool easeOut) {
+        // gd sets ts up & adds it anyway, it just never gets its actions
+        if (quiet_orb && !g_effectFrame.open) {
+            this->retain();
+            g_dudWaves.push_back(this);
+            return true;
+        }
+        if (!CCCircleWave::init(startRadius, endRadius, duration, fadeIn, easeOut))
+            return false;
+        if (auto* seen = g_effectFrame.open; seen && seen->wave_amt < static_cast<int>(seen->waves.size())) {
+            this->retain();
+            seen->waves[seen->wave_amt++] = this;
+            m_fields->born = m_fields->last = Logic::get().step_frame;
+        }
+        return true;
+    }
+
+    void add_hit() {
+        auto* fields = m_fields.self();
+        fields->last = Logic::get().step_frame;
+        if (++fields->hits == 2) {
+            fields->stacked = true;
+            ++g_stackedWaves;
+        }
+    }
+
+    void end_frame(int steps) {
+        auto* fields = m_fields.self();
+        if (fields->hits > 1)
+            fields->span = std::clamp(static_cast<float>(fields->last - fields->born) / static_cast<float>(std::max(steps, 1)), 0.f, 1.f);
+    }
+
+    void draw() {
+        if (g_stackedWaves <= 0) {
+            CCCircleWave::draw();
+            return;
+        }
+        auto* fields = m_fields.self();
+        if (fields->hits <= 1) {
+            CCCircleWave::draw();
+            return;
+        }
+        // where it was a frame ago
+        if (!fields->drawn) {
+            fields->drawn = true;
+            fields->seen_radius = fields->was_radius = m_radius;
+            fields->seen_opacity = fields->was_opacity = m_opacity;
+        }
+        else if (m_radius != fields->seen_radius || m_opacity != fields->seen_opacity) {
+            fields->was_radius = fields->seen_radius;
+            fields->was_opacity = fields->seen_opacity;
+            fields->seen_radius = m_radius;
+            fields->seen_opacity = m_opacity;
+        }
+        float old_radius = m_radius, old_opacity = m_opacity;
+        float young_radius = old_radius + (fields->was_radius - old_radius) * fields->span;
+        float young_opacity = old_opacity + (fields->was_opacity - old_opacity) * fields->span;
+        // 1 circle every 0.15 units is already solid
+        int amt = std::clamp(1 + static_cast<int>(std::fabs(old_radius - young_radius) / 0.15f), 1, std::min(fields->hits, 48));
+        float each = static_cast<float>(fields->hits) / static_cast<float>(amt);
+        for (int at = 0; at < amt; ++at) {
+            float along = amt > 1 ? static_cast<float>(at) / static_cast<float>(amt - 1) : 0.f;
+            m_radius = old_radius + (young_radius - old_radius) * along;
+            m_opacity = std::min((old_opacity + (young_opacity - old_opacity) * along) * each, 255.f);
+            CCCircleWave::draw();
+        }
+        m_radius = old_radius;
+        m_opacity = old_opacity;
+    }
+};
+
+namespace {
+    // true = already played ts shown frame. the 1st time needs an EffectScope around the call
     bool repeated_effect(echo::effects::Key const& key) {
         auto const& logic = Logic::get();
-        return echo::opt::effects && !logic.predicting && !logic.refresh_only && !logic.backstepping && g_effectFrame.repeated(key);
+        if (!echo::opt::effects || logic.predicting || logic.refresh_only || logic.backstepping)
+            return false;
+        bool fresh = false;
+        auto* seen = g_effectFrame.find(key, fresh);
+        if (!seen)
+            return false;
+        if (fresh) {
+            g_effectFrame.open = seen;
+            return false;
+        }
+        for (int at = 0; at < seen->wave_amt; ++at)
+            static_cast<EchoCircleWave*>(static_cast<CCCircleWave*>(seen->waves[at]))->add_hit();
+        return true;
     }
+
+    void drop_dud_waves() {
+        for (auto* wave : g_dudWaves) {
+            wave->removeMeAndCleanup();
+            wave->release();
+        }
+        g_dudWaves.clear();
+    }
+
+    // closes whatever repeated_effect opened inside it
+    struct EffectScope {
+        echo::effects::Seen* before = g_effectFrame.open;
+        ~EffectScope() {
+            g_effectFrame.open = before;
+        }
+    };
+
+    // lets go of the waves & works out how much of the frame each stack was spread over
+    void forget_effects() {
+        int steps = Logic::get().step_frame - g_effectFrame.began;
+        for (std::size_t at = 0; at < g_effectFrame.amt; ++at) {
+            auto& seen = g_effectFrame.seen[at];
+            for (int wave = 0; wave < seen.wave_amt; ++wave) {
+                auto* it = static_cast<EchoCircleWave*>(static_cast<CCCircleWave*>(seen.waves[wave]));
+                it->end_frame(steps);
+                it->release();
+            }
+            seen.wave_amt = 0;
+        }
+        g_effectFrame.amt = 0;
+        g_effectFrame.open = nullptr;
+    }
+
+    void begin_effects() {
+        forget_effects();
+        g_effectFrame.began = Logic::get().step_frame;
+        g_effectFrame.on = true;
+    }
+
+    void end_effects() {
+        forget_effects();
+        g_effectFrame.on = false;
+    }
+
     bool in_orb_button = false;
     // the swifts own release & press. these must NOT start another one
     bool orb_swift = false;
@@ -518,7 +670,8 @@ class $modify(EchoPlayLayer, PlayLayer) {
     }
 
     void resetLevel() {
-        g_effectFrame.clear();
+        forget_effects();
+        g_effectFrame.began = Logic::get().step_frame;
         restore_tilt(m_player1);
         restore_tilt(m_player2);
         clear_tilt();
@@ -1732,14 +1885,19 @@ class $modify(EchoPlayerObject, PlayerObject) {
                     Logic::button_held(player, static_cast<int>(PlayerButton::Jump)), player->getPositionX(), player->getPositionY()));
             }
         } ring_note{ this, ring };
-        if (!Logic::get().player_hidden(this)) {
+        // spam on 1 orb: the 1st jump makes the circles & the rest are counted on them
+        // m_playEffects also picks how a gravity orb flips in a dual, so ts never touches it
+        bool hidden = Logic::get().player_hidden(this);
+        EffectScope scope;
+        bool repeat = ring && m_playEffects && !hidden && repeated_effect({ this, 3, ring->m_uniqueID });
+        if (!repeat && !hidden) {
             PlayerObject::ringJump(ring, skipCheck);
             return;
         }
-        bool effects = m_playEffects;
-        m_playEffects = false;
+        bool was_quiet = std::exchange(quiet_orb, true);
         PlayerObject::ringJump(ring, skipCheck);
-        m_playEffects = effects;
+        quiet_orb = was_quiet;
+        drop_dud_waves();
     }
 
     void bumpPlayer(float force, int objectType, bool playEffect, GameObject* object) {
@@ -1782,8 +1940,10 @@ class $modify(EchoPlayerObject, PlayerObject) {
         }
         bool loud = m_playEffects;
         // physics still runs; only repeated bursts within this shown frame are quiet
+        EffectScope scope;
         bool repeat = loud && ring && repeated_effect({ this, 0, ring->m_objectID });
-        if (Logic::get().no_effects || repeat)
+        // in here m_playEffects only does the boom sprite
+        if (Logic::get().no_effects || repeat || Logic::get().player_hidden(this))
             m_playEffects = false;
         PlayerObject::startDashing(ring);
         m_playEffects = loud;
@@ -1815,6 +1975,7 @@ class $modify(EchoPlayerObject, PlayerObject) {
             }
         } dash_note{ this, was_dashing, visual_spin, tick_spin, use_tick };
         bool reduced = m_maybeReducedEffects;
+        EffectScope scope;
         bool repeat = was_dashing && !reduced && repeated_effect({ this, 1, 0 });
         if (Logic::get().no_effects || repeat)
             m_maybeReducedEffects = true;
@@ -2057,11 +2218,11 @@ class $modify(EchoScheduler, CCScheduler) {
             bool outer;
             EffectsFrame() : outer(Logic::get().scheduler_depth <= 1 && !Logic::get().in_scheduler && !Logic::get().refresh_only) {
                 if (outer)
-                    g_effectFrame.begin();
+                    begin_effects();
             }
             ~EffectsFrame() {
                 if (outer)
-                    g_effectFrame.end();
+                    end_effects();
             }
         } effects_frame;
         Logic::get().sync_predict_hooks();
@@ -2191,6 +2352,13 @@ class $modify(EchoGameObject, GameObject) {
 };
 
 class $modify(EchoEffectObject, EffectGameObject) {
+    // the orbs own pulse. ringJump plays it no matter what m_playEffects says
+    void playTriggerEffect() {
+        if (quiet_orb)
+            return;
+        EffectGameObject::playTriggerEffect();
+    }
+
     void triggerObject(GJBaseGameLayer* layer, int uniqueID, gd::vector<int> const* remapKeys) {
         if (Logic::get().predicting && !forecast::firing())
             return;
@@ -2286,6 +2454,7 @@ class $modify(EchoRingObject, RingObject) {
                 return;
         }
         CCPoint spot = getPosition();
+        EffectScope scope;
         if (repeated_effect({ getParent(), 2, m_objectID, spot.x, spot.y }))
             return;
         RingObject::spawnCircle();
