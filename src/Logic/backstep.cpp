@@ -702,17 +702,24 @@ void Logic::poll_back_hold() {
         return;
     auto now = chrono::steady_clock::now();
     auto start = logic.back_hold_start + chrono::milliseconds(logic.advance_hold_ms);
-    if (now < start)
+    if (now < start) {
+        logic.back_owed = 0.0;
         return;
-    auto from = std::max(start, logic.last_back_step);
+    }
     double rate = logic.sample_rate() * std::clamp(logic.advance_speed, 1.f, 200.f) / 100.0 * logic.speedhack;
     if (!std::isfinite(rate) || !(rate > 0.0))
         return;
-    double wanted = std::floor(chrono::duration<double>(now - from).count() * rate);
+    // same as holding frame advance, steps every drawn frame not every second
+    double interval = CCDirector::sharedDirector() ? CCDirector::sharedDirector()->getAnimationInterval() : 1.0 / 60.0;
+    if (!std::isfinite(interval) || interval <= 0.0)
+        interval = 1.0 / 60.0;
+    logic.back_owed += rate * interval;
+    double wanted = std::floor(logic.back_owed);
     if (wanted < 1.0)
         return;
     int steps = static_cast<int>(std::min(wanted, 1e6));
-    logic.last_back_step = from + chrono::duration_cast<chrono::steady_clock::duration>(chrono::duration<double>(steps / rate));
+    logic.back_owed = std::min(logic.back_owed - steps, 1.0);
+    logic.last_back_step = now;
     if (!Logic::get().step_back(play, steps))
         logic.holding_back = false;
 }

@@ -637,20 +637,28 @@ void Logic::poll_advance_hold() {
     }
     auto now = chrono::steady_clock::now();
     auto start = logic.advance_hold_start + chrono::milliseconds(logic.advance_hold_ms);
-    if (now < start)
+    if (now < start) {
+        logic.advance_owed = 0.0;
         return;
-    auto from = std::max(start, logic.last_advance_step);
+    }
     double rate = logic.sample_rate() * std::clamp(logic.advance_speed, 1.f, 200.f) / 100.0 * logic.speedhack;
     if (!std::isfinite(rate) || !(rate > 0.0))
         return;
-    double elapsed = chrono::duration<double>(now - from).count();
-    int cap = std::min(logic.unlocked_step_cap(), logic.affordable_steps());
-    double wanted = std::floor(elapsed * rate);
+    // the last batch hasnt run yet, dont pile more on
+    if (logic.advance_queued)
+        return;
+    // counted in drawn frames not real time, or a slow frame owed more steps & made the next slower still
+    double interval = CCDirector::sharedDirector() ? CCDirector::sharedDirector()->getAnimationInterval() : 1.0 / 60.0;
+    if (!std::isfinite(interval) || interval <= 0.0)
+        interval = 1.0 / 60.0;
+    logic.advance_owed += rate * interval;
+    double wanted = std::floor(logic.advance_owed);
     if (wanted < 1.0)
         return;
-    int steps = static_cast<int>(std::min(wanted, static_cast<double>(cap)));
-    logic.last_advance_step = wanted > cap ? now : from + chrono::duration_cast<decltype(now - from)>(chrono::duration<double>(steps / rate));
-    logic.advance_steps = logic.advance_queued ? std::min(cap, logic.advance_steps + steps) : steps;
+    int steps = static_cast<int>(std::min(wanted, static_cast<double>(logic.unlocked_step_cap())));
+    logic.advance_owed = std::min(logic.advance_owed - steps, 1.0);
+    logic.last_advance_step = now;
+    logic.advance_steps = steps;
     logic.advance_queued = true;
 }
 

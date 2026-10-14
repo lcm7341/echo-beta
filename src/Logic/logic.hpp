@@ -328,6 +328,7 @@ struct Session {
 	RunState backstep_saved_state = RunState::Idle;
 	bool backstep_swapped = false;
 	chrono::steady_clock::time_point back_hold_start{}, last_back_step{};
+	double back_owed = 0.0; // held step back: steps owed, a bit every drawn frame
 	CheckpointObject* restored_checkpoint = nullptr;
 	std::vector<Replay> sequence;
 	std::vector<size_t> sequence_order;
@@ -546,6 +547,7 @@ struct Session {
 	unsigned advance_hold_ms = 300, advance_delay_ms = 50;
 	float advance_speed = 100.f;
 	chrono::steady_clock::time_point advance_hold_start{}, last_advance_step{};
+	double advance_owed = 0.0; // held frame advance: steps owed, a bit every drawn frame
 	bool injecting = false;
 	bool applying_playback = false;
 	bool hold_sync = false, keep_checkpoint_hold = true;
