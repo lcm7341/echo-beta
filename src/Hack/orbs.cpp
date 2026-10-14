@@ -148,10 +148,13 @@ namespace {
         return player->getObjectRect().intersectsRect(object->getObjectRect());
     }
 
+    // 1 steps worth, it was a whole 60fps frame at any tps so orbs got clicked early
+    // yw scarlet W bug reporting
     CCPoint step_delta(PlayerObject* player) {
-        float speed = player->m_playerSpeed * static_cast<float>(player->m_speedMultiplier) * 5.77f;
+        float scale = 60.f / static_cast<float>(std::max(Logic::get().sample_rate(), 1.0));
+        float speed = player->m_playerSpeed * static_cast<float>(player->m_speedMultiplier) * 5.77f * scale;
         float dx = player->m_isGoingLeft ? -speed : speed;
-        return { dx, static_cast<float>(player->m_yVelocity) };
+        return { dx, static_cast<float>(player->m_yVelocity) * scale };
     }
 
     bool overlaps_soon(PlayerObject* player, GameObject* object) {
