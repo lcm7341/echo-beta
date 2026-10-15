@@ -625,9 +625,34 @@ void Logic::run_frame(GJBaseGameLayer* play, float dt, std::function<void(float)
     logic.carry = 0.f;
     play->m_extraDelta = 0.0;
     logic.steps_left = 0;
+    // held w/ nothing to check between steps it goes in batches like playing. 1 whole update a step never got near the speedhack
+    bool batched = can_batch && !pause_kill && !traj_click && logic.backstep_target < 0 && limit > 1;
     for (int taken = 0; taken < limit; ++taken) {
         if (died())
             break;
+        if (batched) {
+            Logic::get().apply_rate(logic.step_frame);
+            float step_dt = logic.physics_step();
+            if (!std::isfinite(step_dt) || !(step_dt > 0.f) || step_dt > 1.f)
+                break;
+            int batch = std::clamp(logic.steps_until_rate_change(), 1, limit - taken);
+            logic.steps_left = batch;
+            logic.steps_this_tick = static_cast<uint32_t>(batch);
+            logic.frame_steps += batch;
+            logic.defer_player_art = batch > 1 && phys::fast_prediction_pos();
+            time_update([&] {
+                play->update(step_dt * static_cast<float>(batch));
+            });
+            logic.defer_player_art = false;
+            place_deferred_player_art(play);
+            logic.steps_left = 0;
+            logic.skip_physics = true;
+            tick(step_dt * static_cast<float>(batch));
+            logic.skip_physics = false;
+            logic.steps_this_tick = 0;
+            taken += batch - 1;
+            continue;
+        }
         // autoclicker must NOT add to a backstep replay
         if (logic.backstep_target < 0)
             autoclick();
@@ -648,6 +673,7 @@ void Logic::run_frame(GJBaseGameLayer* play, float dt, std::function<void(float)
         logic.steps_left = 0;
         logic.steps_this_tick = 0;
     }
+    logic.frame_steps = 0;
     if (logic.backstep_target >= 0) {
         Logic::get().finish_backstep(Logic::as_play(play));
         Logic::get().click_best_frame(Logic::as_play(play));

@@ -130,6 +130,8 @@ namespace {
     uint64_t g_updatesRun = 0;
 }
 
+void echo_forget_camera(GJBaseGameLayer* layer);
+
 namespace {
     constexpr int DASH_SPIN_TAG = 12;
     echo::effects::Frame g_effectFrame;
@@ -1096,6 +1098,7 @@ class $modify(EchoPlayLayer, PlayLayer) {
     }
 
     void onQuit() {
+        echo_forget_camera(this);
         restore_tilt(m_player1);
         restore_tilt(m_player2);
         clear_tilt();
@@ -3565,6 +3568,9 @@ class $modify(EchoCameraPace, GJBaseGameLayer) {
             return;
         }
         if (pace.layer != this) {
+            // a lvl that left w/o onQuit: its nodes are gone, releasing them crashed. let them leak
+            new std::vector<NodeSpot>(std::move(pace.shown_nodes));
+            new std::vector<NodeSpot>(std::move(pace.physics_nodes));
             pace = {};
             pace.layer = this;
             pace.state.build(this);
@@ -3604,6 +3610,12 @@ class $modify(EchoCameraPace, GJBaseGameLayer) {
             run_shown_camera(this);
     }
 };
+
+// let go of the lvls nodes while it still exists
+void echo_forget_camera(GJBaseGameLayer* layer) {
+    if (g_cameraPace.layer == layer)
+        g_cameraPace = {};
+}
 
 class $modify(EchoCameraShow, GJBaseGameLayer) {
     void visit() {
