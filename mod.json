@@ -140,6 +140,20 @@
 			"default": "None",
 			"category": "gameplay"
 		},
+		"key-traj-autoclick": {
+			"type": "keybind",
+			"platforms": ["win", "mac"],
+			"name": "Trajectory autoclicker",
+			"default": "None",
+			"category": "gameplay"
+		},
+		"key-noclip": {
+			"type": "keybind",
+			"platforms": ["win", "mac"],
+			"name": "Noclip",
+			"default": "None",
+			"category": "gameplay"
+		},
 		"key-no-overwrite": {
 			"type": "keybind",
 			"platforms": ["win", "mac"],
