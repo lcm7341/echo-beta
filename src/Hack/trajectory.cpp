@@ -1242,6 +1242,14 @@ void Trajectory::refresh_now(PlayLayer* play) {
     auto snap = [](PlayerObject* body) {
         return body ? std::pair{ body->m_jumpBuffered, body->m_holdingButtons } : std::pair{ false, gd::map<int, bool>{} };
     };
+    // copies into an existing pair, gd::map's move assign doesnt build on android
+    auto take = [](std::pair<bool, gd::map<int, bool>>& into, PlayerObject* body) {
+        into.first = body ? body->m_jumpBuffered : false;
+        if (body)
+            into.second = body->m_holdingButtons;
+        else
+            into.second.clear();
+    };
     auto p1_hold = snap(play->m_player1);
     auto p2_hold = snap(play->m_player2);
     bool ui1 = false, ui2 = false;
@@ -1274,8 +1282,8 @@ void Trajectory::refresh_now(PlayLayer* play) {
     int sim_touch1 = -1, sim_touch2 = -1;
     SliceHook holds{
         [&] {
-            sim_hold1 = snap(play->m_player1);
-            sim_hold2 = snap(play->m_player2);
+            take(sim_hold1, play->m_player1);
+            take(sim_hold2, play->m_player2);
             if (auto* ui = play->m_uiLayer) {
                 sim_ui1 = ui->m_p1Jumping;
                 sim_ui2 = ui->m_p2Jumping;
@@ -1291,8 +1299,8 @@ void Trajectory::refresh_now(PlayLayer* play) {
         },
         [&] {
             // input that came in while paused is real
-            p1_hold = snap(play->m_player1);
-            p2_hold = snap(play->m_player2);
+            take(p1_hold, play->m_player1);
+            take(p2_hold, play->m_player2);
             if (auto* ui = play->m_uiLayer) {
                 ui1 = ui->m_p1Jumping;
                 ui2 = ui->m_p2Jumping;
