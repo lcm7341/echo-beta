@@ -1,6 +1,6 @@
 // click sounds
 // a clickpack folder has sets for hard, normal, soft & micro clicks, picked by how long its been since the last click
-// decoded sounds are cached, only LIVE_CLICKS play at once & all the clicks of 1 frame are started together
+// decoded sounds are cached, every click plays & all the clicks of 1 frame are started together
 #include "Logic/logic.hpp"
 #include <Geode/fmod/fmod.hpp>
 #include <Geode/binding/FMODAudioEngine.hpp>
@@ -56,8 +56,8 @@ struct QueuedClick {
     bool player1 = true;
 };
 
-// TODO ehh maybe increase
-constexpr size_t LIVE_CLICKS = 24;
+// fmods lowest priority: when its out of voices it takes a click, never gds music or sfx
+constexpr int CLICK_PRIORITY = 256;
 
 class Clickbot {
 public:
@@ -194,14 +194,6 @@ void Clickbot::reap_clicks() {
             item.channel->isPlaying(&playing);
         return !playing;
     });
-    if (live.size() > LIVE_CLICKS) {
-        auto extra = live.size() - LIVE_CLICKS;
-        for (size_t i = 0; i < extra; ++i) {
-            if (live[i].channel)
-                live[i].channel->stop();
-        }
-        live.erase(live.begin(), live.begin() + static_cast<std::ptrdiff_t>(extra));
-    }
 }
 
 FMOD::Sound* Clickbot::sound_for(PackCache& cache, FMOD::System* system, fs::path const& file) {
@@ -264,6 +256,7 @@ void Clickbot::play_file(bool player1, fs::path const& file, float volume) {
     FMOD::Channel* channel = nullptr;
     if (engine->m_system->playSound(sound, group, true, &channel) != FMOD_OK || !channel)
         return;
+    channel->setPriority(CLICK_PRIORITY);
     channel->setVolume(Clickbot::get().click_gain(volume));
     channel->setPaused(false);
     Clickbot::get().live_clicks().push_back({ channel });
@@ -337,9 +330,7 @@ void Logic::flush_clicks() {
     if (queued.empty())
         return;
     static std::mt19937 rng{ std::random_device{}() };
-    size_t from = queued.size() > LIVE_CLICKS ? queued.size() - LIVE_CLICKS : 0;
-    for (size_t i = from; i < queued.size(); ++i) {
-        auto const& click = queued[i];
+    for (auto const& click : queued) {
         auto const& files = Clickbot::get().kind_folder(click.player1, click.slot).files;
         if (files.empty())
             continue;

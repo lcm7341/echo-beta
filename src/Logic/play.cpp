@@ -703,10 +703,11 @@ void Logic::check_advance_pause(PlayLayer* play) {
 }
 
 bool Logic::editor_holds_keys() {
-    if (!Logic::get().no_editor_keybinds || !LevelEditorLayer::get())
+    auto* editor = LevelEditorLayer::get();
+    if (!Logic::get().no_editor_keybinds || !editor)
         return false;
-    auto* scene = CCDirector::sharedDirector()->getRunningScene();
-    return !scene || !scene->getChildByType<EditorPauseLayer>(0);
+    // EditorUI adds its pause menu to the editor layer, not the scene
+    return !editor->getChildByType<EditorPauseLayer>(0);
 }
 
 void Logic::on_keybind(std::string_view key, bool down) {
@@ -1136,6 +1137,10 @@ void Logic::on_play_init(PlayLayer* play) {
         Logic::get().set_level_interval(1.f / std::max(logic.fps, 1.f));
         logic.display_fps_locked = true;
     }
+    // w/out lock fps the lvl still draws as often as it steps. set_tps used to set ts from the menu & it stuck, since
+    // the cap is lvl only nothing set it on entry & gd's own (60) took over
+    else if (logic.playback_fps < 1.f)
+        Logic::get().set_level_interval(1.f / std::max(logic.fps, 1.f));
     Logic::get().sync_time_scale();
     Logic::get().reset_opening_music_hold();
     if (logic.seed_override) {

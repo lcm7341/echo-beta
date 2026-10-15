@@ -9,6 +9,7 @@
 #include <cfloat>
 #include <cmath>
 #include <cstdio>
+#include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <random>
@@ -33,6 +34,20 @@ namespace eui {
             return value;
         }
 
+        // ImHashData is a crc, which is linear: hashing 0, 1, 2.. put every "random" star & petal on a few straight lines
+        std::uint32_t scramble(std::uint32_t x) {
+            x ^= x >> 16;
+            x *= 0x7feb352du;
+            x ^= x >> 15;
+            x *= 0x846ca68bu;
+            x ^= x >> 16;
+            return x;
+        }
+
+        float unit_random(std::uint32_t item, std::uint32_t seed) {
+            return (float)(scramble(item ^ scramble(seed)) & 0xffffff) / 16777215.f;
+        }
+
         void gloss(ImDrawList* draw, ImRect const& bb, float rounding) {
             if (!rainbow_rim())
                 return;
@@ -49,24 +64,52 @@ namespace eui {
             }
         }
 
-        void button_skin(ImDrawList* draw, ImRect const& body, float rounding, ImGuiID id, float hot, float down, float keep = 1.f, ImVec4 const* own = nullptr);
+        void button_skin(ImDrawList* draw, ImRect const& body, float rounding, ImGuiID id, float hot, float down, float keep = 1.f, ImVec4 const* own = nullptr, float own_amount = 1.f);
 
-        // how far custom color moved off the themes own colors (hue, 0-1)
-        float body_turn = 0.f, accent_turn = 0.f;
+        // how far custom color moved off the themes own colors: hue turned (0-1), saturation & brightness scaled.
+        // saturation 0 = greyscale
+        struct Grade {
+            float turn = 0.f;
+            float saturation = 1.f;
+            float brightness = 1.f;
 
-        ImVec4 turned(ImVec4 tint, float turn) {
-            if (std::abs(turn) < .002f)
+            bool plain() const {
+                return std::abs(turn) < .002f && std::abs(saturation - 1.f) < .002f && std::abs(brightness - 1.f) < .002f;
+            }
+        };
+
+        Grade body_turn, accent_turn;
+
+        // a light theme turned down doesnt get grey, it goes to its night look. night = how far the sky is (0-1),
+        // night_menu = how far the menu itself is: it fades to dark w/ light text from NIGHT_TOP down to NIGHT_LOW
+        constexpr float NIGHT_TOP = .88f, NIGHT_LOW = .72f;
+        float night = 0.f;
+        float night_menu = 0.f;
+
+        float night_fade(float depth) {
+            float t = std::clamp((NIGHT_TOP - depth) / (NIGHT_TOP - NIGHT_LOW), 0.f, 1.f);
+            return t * t * (3.f - 2.f * t);
+        }
+
+        ImVec4 turned(ImVec4 tint, Grade const& grade) {
+            if (grade.plain())
                 return tint;
             float h, sat, val;
             ImGui::ColorConvertRGBtoHSV(tint.x, tint.y, tint.z, h, sat, val);
-            h += turn;
+            h += grade.turn;
             h -= std::floor(h);
+            sat = std::clamp(sat * grade.saturation, 0.f, 1.f);
+            // darker crushes the dim parts first & leaves the bright ones (a dark space keeps its stars), brighter scales
+            if (grade.brightness < 1.f)
+                val = std::pow(val, 1.f / std::max(grade.brightness, .1f));
+            else
+                val = std::clamp(val * grade.brightness, 0.f, 1.f);
             ImGui::ColorConvertHSVtoRGB(h, sat, val, tint.x, tint.y, tint.z);
             return tint;
         }
 
-        void turn_verts(ImDrawList* draw, int from, float turn) {
-            if (std::abs(turn) < .002f)
+        void turn_verts(ImDrawList* draw, int from, Grade const& turn) {
+            if (turn.plain())
                 return;
             for (int v = from; v < draw->VtxBuffer.Size; ++v) {
                 auto& vert = draw->VtxBuffer[v];
@@ -389,8 +432,7 @@ namespace eui {
         };
 
         float chance(Backdrop const& back, int item, int use) {
-            ImGuiID mixed = ImHashData(&item, sizeof(item), back.id + static_cast<ImGuiID>(use) * 7919u);
-            return (float)(mixed & 0xffffff) / 16777215.f;
+            return unit_random(static_cast<std::uint32_t>(item), back.id + static_cast<std::uint32_t>(use) * 7919u);
         }
 
         int scatter(Backdrop const& back, float each, int least, int most) {
@@ -613,10 +655,23 @@ namespace eui {
 
         void heaven_scene(Backdrop const& back) {
             float dawn = .5f + .5f * std::sin(back.time * .3f);
-            backdrop_fill(back, ImGui::ColorConvertFloat4ToU32(mix(ImVec4(.70f, .85f, 1.f, 1.f), ImVec4(1.f, .82f, .9f, 1.f), dawn)), IM_COL32(255, 245, 220, 255));
+            // turned down it goes thru a sunset to night (a deep blue sky, a pale moon instead of the sun), never grey
+            auto by_night = [](ImVec4 day, ImVec4 dusk, ImVec4 dark) {
+                return night < .5f ? mix(day, dusk, night * 2.f) : mix(dusk, dark, night * 2.f - 1.f);
+            };
+            ImVec4 sky_top = by_night(mix(ImVec4(.70f, .85f, 1.f, 1.f), ImVec4(1.f, .82f, .9f, 1.f), dawn), ImVec4(.36f, .27f, .66f, 1.f), mix(ImVec4(.05f, .06f, .18f, 1.f), ImVec4(.1f, .06f, .2f, 1.f), dawn));
+            ImVec4 sky_low = by_night(ImVec4(1.f, .96f, .86f, 1.f), ImVec4(1.f, .6f, .42f, 1.f), ImVec4(.2f, .14f, .3f, 1.f));
+            // the light keeps the themes own colour at every brightness, it only gets softer
+            ImVec4 light_tint(1.f, .9f, .55f, 1.f);
+            ImVec4 beam_tint(1.f, .8f, .3f, 1.f);
+            ImVec4 ring_tint(1.f, .86f, .45f, 1.f);
+            ImVec4 cloud_shade = by_night(ImVec4(.52f, .64f, .88f, 1.f), ImVec4(.5f, .32f, .55f, 1.f), ImVec4(.12f, .12f, .26f, 1.f));
+            ImVec4 cloud = by_night(ImVec4(1.f, 1.f, 1.f, 1.f), ImVec4(1.f, .8f, .74f, 1.f), ImVec4(.42f, .44f, .62f, 1.f));
+            float glow = 1.f - .45f * night;
+            backdrop_fill(back, ImGui::ColorConvertFloat4ToU32(sky_top), ImGui::ColorConvertFloat4ToU32(sky_low));
             back.draw->PushClipRect(back.a, back.b, true);
             ImVec2 sun(back.screen.x * .5f, -back.screen.y * .12f);
-            soft_disc(back.draw, sun, back.screen.y * (.75f + .12f * std::sin(back.time * 1.1f)), ImVec4(1.f, .9f, .55f, .55f * back.alpha), 1.f, 32);
+            soft_disc(back.draw, sun, back.screen.y * (.75f + .12f * std::sin(back.time * 1.1f)), faded(light_tint, .55f * glow * back.alpha), 1.f, 32);
             float reach = back.screen.y * 1.8f;
             for (int k = 0; k < 9; ++k) {
                 float number = (float)(k);
@@ -624,12 +679,12 @@ namespace eui {
                 if (std::abs(lean) > 1.45f)
                     continue;
                 float wide = .08f + .04f * std::sin(back.time * .9f + number * 2.f);
-                beam(back.draw, sun, ImVec2(sun.x + std::sin(lean - wide) * reach, sun.y + std::cos(lean - wide) * reach), ImVec2(sun.x + std::sin(lean + wide) * reach, sun.y + std::cos(lean + wide) * reach), ImVec4(1.f, .8f, .3f, .6f * back.alpha));
+                beam(back.draw, sun, ImVec2(sun.x + std::sin(lean - wide) * reach, sun.y + std::cos(lean - wide) * reach), ImVec2(sun.x + std::sin(lean + wide) * reach, sun.y + std::cos(lean + wide) * reach), faded(beam_tint, .6f * glow * back.alpha));
             }
             for (int k = 0; k < 4; ++k) {
                 float spread = back.time * .16f + (float)(k) * .25f;
                 spread -= std::floor(spread);
-                back.draw->AddCircle(sun, back.screen.y * (.15f + 1.5f * spread), ImGui::ColorConvertFloat4ToU32(ImVec4(1.f, .86f, .45f, .55f * (1.f - spread) * std::min(1.f, spread * 6.f) * back.alpha)), 96, back.unit * (.12f + .5f * spread));
+                back.draw->AddCircle(sun, back.screen.y * (.15f + 1.5f * spread), ImGui::ColorConvertFloat4ToU32(faded(ring_tint, .55f * glow * (1.f - spread) * std::min(1.f, spread * 6.f) * back.alpha)), 96, back.unit * (.12f + .5f * spread));
             }
             constexpr float PUFFS[][3] = { { -1.3f, .15f, .8f }, { -.5f, -.25f, 1.f }, { .4f, -.1f, 1.15f }, { 1.2f, .2f, .75f } };
             for (int k = 0; k < 6; ++k) {
@@ -640,9 +695,9 @@ namespace eui {
                 if (outside(back, at, size * 2.8f))
                     continue;
                 for (auto const& puff : PUFFS)
-                    soft_disc(back.draw, ImVec2(at.x + puff[0] * size, at.y + (puff[1] + .28f) * size), size * puff[2], ImVec4(.52f, .64f, .88f, .45f * back.alpha), .6f);
+                    soft_disc(back.draw, ImVec2(at.x + puff[0] * size, at.y + (puff[1] + .28f) * size), size * puff[2], faded(cloud_shade, .45f * back.alpha), .6f);
                 for (auto const& puff : PUFFS)
-                    soft_disc(back.draw, ImVec2(at.x + puff[0] * size, at.y + puff[1] * size), size * puff[2], ImVec4(1.f, 1.f, 1.f, .95f * back.alpha), .62f);
+                    soft_disc(back.draw, ImVec2(at.x + puff[0] * size, at.y + puff[1] * size), size * puff[2], faded(cloud, .95f * back.alpha), .62f);
             }
             sparks(back, scatter(back, 45.f, 4, 30), ImVec4(1.f, .62f, .1f, 1.f), ImVec4(1.f, .8f, .3f, 1.f), 1.4f);
             int glints = scatter(back, 40.f, 4, 30);
@@ -658,97 +713,117 @@ namespace eui {
         }
 
         void space_scene(Backdrop const& back) {
-            backdrop_fill(back, IM_COL32(5, 5, 18, 255), IM_COL32(14, 8, 34, 255));
+            backdrop_fill(back, IM_COL32(4, 5, 15, 255), IM_COL32(4, 5, 15, 255));
             back.draw->PushClipRect(back.a, back.b, true);
-            constexpr float GAS[][3] = { { .55f, .14f, .62f }, { .1f, .42f, .7f }, { .22f, .2f, .75f }, { .6f, .2f, .35f } };
-            for (int k = 0; k < 4; ++k) {
-                float number = (float)(k);
-                float turn = back.time * (.05f + .02f * number) + number * 2.1f;
-                ImVec2 at(back.screen.x * (.5f + .36f * std::cos(turn)), back.screen.y * (.5f + .32f * std::sin(turn * 1.3f)));
-                soft_disc(back.draw, at, back.screen.y * .62f, ImVec4(GAS[k][0], GAS[k][1], GAS[k][2], .26f * back.alpha), .75f, 32);
-            }
-            int dust = scatter(back, 6.f, 10, 110);
-            for (int i = 0; i < dust; ++i) {
-                float r = chance(back, i, 33);
-                float across = chance(back, i, 31) + back.time * (.004f + .012f * r);
-                float down = chance(back, i, 32) + back.time * (.002f + .005f * r);
-                ImVec2 at(back.a.x + back.width * (across - std::floor(across)), back.a.y + back.tall * (down - std::floor(down)));
-                float glimmer = .25f + .75f * (.5f + .5f * std::sin(back.time * (.8f + 2.4f * r) + r * 50.f));
-                soft_disc(back.draw, at, back.unit * (.09f + .09f * r), ImVec4(.82f, .88f, 1.f, (.3f + .5f * r) * glimmer * back.alpha), 1.f, 6);
-            }
-            auto star = [&](ImVec2 at, float size, ImVec4 tint, float lit, bool rays, float spin) {
-                soft_disc(back.draw, at, size * 5.f, faded(tint, .4f * lit), 1.f, 8);
-                back.draw->AddCircleFilled(at, size, ImGui::ColorConvertFloat4ToU32(faded(tint, lit)), 6);
-                if (!rays)
-                    return;
-                float reach = size * (4.f + 7.f * lit);
-                float thin = size * .45f;
-                ImU32 ray = ImGui::ColorConvertFloat4ToU32(faded(tint, .75f * lit));
-                ImVec2 along(std::cos(spin), std::sin(spin));
-                ImVec2 across(-along.y, along.x);
-                auto off = [&](ImVec2 dir, float by) {
-                    return ImVec2(at.x + dir.x * by, at.y + dir.y * by);
-                };
-                back.draw->AddQuadFilled(off(along, -reach), off(across, -thin), off(along, reach), off(across, thin), ray);
-                back.draw->AddQuadFilled(off(across, -reach), off(along, thin), off(across, reach), off(along, -thin), ray);
+            float diagonal = std::sqrt(back.width * back.width + back.tall * back.tall);
+            // 3 layers drifting at their own speed: near stars pass faster than far ones
+            auto drifted = [&](ImVec2 at, float speed) {
+                float x = at.x - back.a.x - back.time * back.unit * speed;
+                x -= std::floor(x / back.width) * back.width;
+                return ImVec2(back.a.x + x, at.y);
             };
-            constexpr float TINTS[][3] = { { .75f, .86f, 1.f }, { 1.f, .93f, .8f }, { 1.f, .78f, .9f }, { .7f, 1.f, .96f } };
-            int stars = scatter(back, 14.f, 6, 70);
+            auto spikes = [&](ImVec2 at, float reach, float thin, ImVec4 tint) {
+                ImU32 bright = ImGui::ColorConvertFloat4ToU32(tint);
+                ImU32 gone = bright & ~IM_COL32_A_MASK;
+                ImVec2 uv = back.draw->_Data->TexUvWhitePixel;
+                for (ImVec2 dir : { ImVec2(1.f, 0.f), ImVec2(0.f, 1.f) }) {
+                    ImVec2 side(-dir.y * thin, dir.x * thin);
+                    back.draw->PrimReserve(12, 6);
+                    unsigned first = back.draw->_VtxCurrentIdx;
+                    back.draw->PrimWriteVtx(ImVec2(at.x - dir.x * reach, at.y - dir.y * reach), uv, gone);
+                    back.draw->PrimWriteVtx(ImVec2(at.x + side.x, at.y + side.y), uv, bright);
+                    back.draw->PrimWriteVtx(ImVec2(at.x + dir.x * reach, at.y + dir.y * reach), uv, gone);
+                    back.draw->PrimWriteVtx(ImVec2(at.x - side.x, at.y - side.y), uv, bright);
+                    back.draw->PrimWriteVtx(at, uv, bright);
+                    back.draw->PrimWriteVtx(at, uv, bright);
+                    for (unsigned offset : { 0u, 1u, 4u, 0u, 3u, 4u, 2u, 1u, 4u, 2u, 3u, 4u })
+                        back.draw->PrimWriteIdx(static_cast<ImDrawIdx>(first + offset));
+                }
+            };
+            // the milky way: a band of tiny far stars, no haze
+            float band_angle = -.35f - .3f * chance(back, 0, 90);
+            ImVec2 band_dir(std::cos(band_angle), std::sin(band_angle));
+            ImVec2 band_side(-band_dir.y, band_dir.x);
+            ImVec2 band_mid(back.a.x + back.width * (.35f + .3f * chance(back, 0, 91)), back.a.y + back.tall * (.4f + .2f * chance(back, 0, 92)));
+            float band_wide = diagonal * .08f;
+            int dust = scatter(back, 1.f, 80, 900);
+            for (int i = 0; i < dust; ++i) {
+                float along = (chance(back, i, 110) - .5f) * diagonal * 1.1f;
+                float across = (chance(back, i, 111) + chance(back, i, 112) + chance(back, i, 113) - 1.5f) * band_wide;
+                ImVec2 at = drifted(ImVec2(band_mid.x + band_dir.x * along + band_side.x * across, band_mid.y + band_dir.y * along + band_side.y * across), .1f);
+                float lit = (.15f + .35f * chance(back, i, 115)) * (.7f + .3f * std::sin(back.time * (1.f + 2.f * chance(back, i, 116)) + 30.f * chance(back, i, 117))) * back.alpha;
+                float size = std::max(.6f, back.unit * .035f);
+                back.draw->AddRectFilled(ImVec2(at.x - size * .5f, at.y - size * .5f), ImVec2(at.x + size * .5f, at.y + size * .5f), ImGui::ColorConvertFloat4ToU32(ImVec4(.85f, .86f, 1.f, lit)));
+            }
+            // the stars: mostly faint, a few bright, colour by temperature
+            constexpr float TEMPS[][4] = { { .66f, .78f, 1.f, .2f }, { .86f, .9f, 1.f, .75f }, { 1.f, .95f, .84f, .93f }, { 1.f, .8f, .62f, 1.f } };
+            constexpr float LAYER_SPEED[] = { .15f, .4f, .9f };
+            int stars = scatter(back, 3.5f, 30, 260);
             for (int i = 0; i < stars; ++i) {
                 float r = chance(back, i, 3);
-                float twinkle = .3f + .7f * (.5f + .5f * std::sin(back.time * (1.f + 3.f * r) + chance(back, i, 4) * 6.2831853f));
-                auto const& tint = TINTS[(int)(chance(back, i, 5) * 3.999f)];
-                float across = chance(back, i, 1) + back.time * (.01f + .03f * r);
-                float down = chance(back, i, 2) + back.time * (.004f + .012f * r);
-                ImVec2 at(back.a.x + back.width * (across - std::floor(across)), back.a.y + back.tall * (down - std::floor(down)));
-                float spin = back.time * (.25f + .5f * chance(back, i, 6)) * (chance(back, i, 7) < .5f ? -1.f : 1.f);
-                star(at, back.unit * (.04f + .06f * r), ImVec4(tint[0], tint[1], tint[2], 1.f), twinkle * back.alpha, r > .68f, spin);
+                float bright = r * r * r;
+                int layer = std::min(2, (int)(chance(back, i, 8) * 3.f + bright * 1.5f));
+                ImVec2 at = drifted(ImVec2(back.a.x + back.width * chance(back, i, 1), back.a.y + back.tall * chance(back, i, 2)), LAYER_SPEED[layer]);
+                float pick = chance(back, i, 5);
+                int temp = 0;
+                while (temp < 3 && pick > TEMPS[temp][3])
+                    ++temp;
+                ImVec4 tint(TEMPS[temp][0], TEMPS[temp][1], TEMPS[temp][2], 1.f);
+                float wave = .5f + .5f * std::sin(back.time * (1.5f + 4.f * chance(back, i, 4)) + 40.f * chance(back, i, 6));
+                float twinkle = 1.f - (.3f + .45f * (1.f - bright)) * wave * wave;
+                float lit = (.3f + .7f * bright) * twinkle * back.alpha;
+                float size = back.unit * (.035f + .08f * bright) * (.75f + .25f * (float)(layer));
+                back.draw->AddCircleFilled(at, std::max(size, .7f), ImGui::ColorConvertFloat4ToU32(faded(tint, lit)), 6);
+                if (bright > .75f)
+                    spikes(at, size * (5.f + 6.f * twinkle), std::max(.5f, size * .3f), faded(tint, .6f * lit));
             }
+            // a satellite crossing now & then, blinking
+            {
+                float every = 14.f + 8.f * chance(back, 0, 61);
+                float clock = back.time / every + chance(back, 0, 62);
+                int which = (int)(std::floor(clock));
+                float run = (clock - std::floor(clock)) / .7f;
+                if (run < 1.f) {
+                    float y0 = back.a.y + back.tall * (.1f + .8f * chance(back, which, 63));
+                    float y1 = back.a.y + back.tall * (.1f + .8f * chance(back, which, 64));
+                    bool rightward = chance(back, which, 65) < .5f;
+                    float x = rightward ? back.a.x + back.width * run : back.b.x - back.width * run;
+                    ImVec2 at(x, y0 + (y1 - y0) * run);
+                    float blink = std::fmod(back.time, 1.1f) < .12f ? 1.f : .45f;
+                    back.draw->AddCircleFilled(at, std::max(.8f, back.unit * .06f), ImGui::ColorConvertFloat4ToU32(ImVec4(1.f, .95f, .9f, blink * back.alpha)), 6);
+                }
+            }
+            // shooting stars
             for (int lane = 0; lane < 2; ++lane) {
-                float every = 2.2f + 1.6f * chance(back, lane, 71);
+                float every = 2.5f + 2.5f * chance(back, lane, 71);
                 float clock = back.time / every + chance(back, lane, 72);
                 int which = (int)(std::floor(clock));
-                float run = (clock - std::floor(clock)) / .45f;
+                float run = (clock - std::floor(clock)) / .22f;
                 if (run >= 1.f)
                     continue;
                 int seed = which * 2 + lane;
-                ImVec2 start(back.a.x + back.width * (.05f + .7f * chance(back, seed, 73)), back.a.y + back.tall * (.02f + .4f * chance(back, seed, 74)));
-                float angle = .35f + .4f * chance(back, seed, 75);
-                float travel = back.unit * (14.f + 10.f * chance(back, seed, 76));
+                ImVec2 start(back.a.x + back.width * (.05f + .7f * chance(back, seed, 73)), back.a.y + back.tall * (.02f + .45f * chance(back, seed, 74)));
+                float angle = .3f + .5f * chance(back, seed, 75);
+                float travel = back.unit * (14.f + 12.f * chance(back, seed, 76));
                 ImVec2 dir(std::cos(angle), std::sin(angle));
                 ImVec2 head(start.x + dir.x * travel * run, start.y + dir.y * travel * run);
                 float fade = std::sin(3.1415927f * run) * back.alpha;
-                float tail = back.unit * (3.f + 3.f * run);
+                float tail = back.unit * (2.f + 5.f * run);
                 ImVec2 end(head.x - dir.x * tail, head.y - dir.y * tail);
-                ImU32 bright = ImGui::ColorConvertFloat4ToU32(ImVec4(.9f, .95f, 1.f, .9f * fade));
-                ImU32 gone = ImGui::ColorConvertFloat4ToU32(ImVec4(.9f, .95f, 1.f, 0.f));
-                float thick = std::max(1.f, back.unit * .09f);
+                ImU32 bright = ImGui::ColorConvertFloat4ToU32(ImVec4(.92f, .95f, 1.f, .9f * fade));
+                ImU32 gone = bright & ~IM_COL32_A_MASK;
+                float thick = std::max(.8f, back.unit * .07f);
                 ImVec2 side(-dir.y * thick, dir.x * thick);
-                back.draw->PrimReserve(6, 4);
+                back.draw->PrimReserve(3, 3);
                 auto base = back.draw->_VtxCurrentIdx;
                 ImVec2 uv = back.draw->_Data->TexUvWhitePixel;
                 back.draw->PrimWriteVtx(ImVec2(head.x + side.x, head.y + side.y), uv, bright);
                 back.draw->PrimWriteVtx(ImVec2(head.x - side.x, head.y - side.y), uv, bright);
                 back.draw->PrimWriteVtx(end, uv, gone);
-                back.draw->PrimWriteVtx(end, uv, gone);
                 back.draw->PrimWriteIdx(static_cast<ImDrawIdx>(base));
                 back.draw->PrimWriteIdx(static_cast<ImDrawIdx>(base + 1));
                 back.draw->PrimWriteIdx(static_cast<ImDrawIdx>(base + 2));
-                back.draw->PrimWriteIdx(static_cast<ImDrawIdx>(base));
-                back.draw->PrimWriteIdx(static_cast<ImDrawIdx>(base + 2));
-                back.draw->PrimWriteIdx(static_cast<ImDrawIdx>(base + 3));
-                soft_disc(back.draw, head, back.unit * .35f, ImVec4(.85f, .92f, 1.f, .5f * fade), 1.f, 8);
-                back.draw->AddCircleFilled(head, thick * 1.1f, bright, 8);
-            }
-            float every = 3.5f + 3.f * chance(back, 0, 41);
-            float clock = back.time / every + chance(back, 0, 42);
-            int which = (int)(clock);
-            float flare = (clock - (float)(which)) / .3f;
-            if (flare < 1.f) {
-                float burst = std::sin(3.1415927f * flare);
-                float drift = clock - (float)(which);
-                ImVec2 at(back.a.x + back.width * (.08f + .84f * chance(back, which, 43)) + drift * back.unit * 2.f, back.a.y + back.tall * (.08f + .84f * chance(back, which, 44)) + drift * back.unit);
-                star(at, back.unit * .13f * burst, ImVec4(1.f, 1.f, 1.f, 1.f), burst * back.alpha, true, flare * 1.2f);
+                back.draw->AddCircleFilled(head, thick * 1.2f, bright, 6);
             }
             back.draw->PopClipRect();
         }
@@ -822,7 +897,33 @@ namespace eui {
             back.draw->PopClipRect();
         }
 
-        void button_skin(ImDrawList* draw, ImRect const& body, float rounding, ImGuiID id, float hot, float down, float keep, ImVec4 const* given) {
+        struct Splash {
+            float began = 0.f;
+            float at = 0.f;
+            std::uint32_t seed = 0;
+        };
+
+        // how a liquid in a button tank moves. heights & speeds are in button heights (per second)
+        struct Liquid {
+            float level;       // resting surface, from the top
+            float swing;       // the 1st sloshing mode, swings a second
+            float settle;      // seconds for the slosh to die down to a third
+            float height;      // how high the slosh throws the surface
+            float idle;        // speed of the surface ripple at rest
+            int drops;
+            float drop_size, throw_up, spread, gravity;
+            ImVec4 body, top, drop;
+        };
+
+        constexpr Liquid WATER{ .72f, 1.f, .7f, .9f, 1.f, 10, .065f, 4.5f, 6.f, 16.f, { .65f, 1.f, .95f, .4f }, { .65f, 1.f, .95f, .65f }, { .75f, .97f, 1.f, .85f } };
+        // lava: thick, so it swings slow, settles slow & only throws a few heavy blobs
+        constexpr Liquid LAVA{ .74f, .55f, 1.1f, .6f, .5f, 4, .11f, 2.6f, 2.5f, 7.f, { 1.f, .38f, .05f, .75f }, { 1.f, .78f, .25f, .95f }, { 1.f, .6f, .15f, .95f } };
+
+        std::unordered_map<ImGuiID, std::vector<Splash>>& splashes() {
+            static std::unordered_map<ImGuiID, std::vector<Splash>> all;
+            return all;
+        }
+        void button_skin(ImDrawList* draw, ImRect const& body, float rounding, ImGuiID id, float hot, float down, float keep, ImVec4 const* given, float given_amount) {
             Scene which = scene();
             if (which == Scene::None || keep <= .01f)
                 return;
@@ -843,23 +944,32 @@ namespace eui {
                 { { .64f, .3f, .48f, 1.f }, { .33f, .13f, .3f, 1.f }, { 1.f, .82f, .9f, 1.f }, { 1.f, .62f, .8f, 1.f } },
             };
             Look look = LOOKS[(int)(which)];
-            look.top = turned(look.top, accent_turn);
-            look.bottom = turned(look.bottom, accent_turn);
+            // the base also follows the bodys brightness, so a darker theme darkens its buttons too
+            Grade dim{ 0.f, 1.f, body_turn.brightness };
+            look.top = turned(turned(look.top, accent_turn), dim);
+            look.bottom = turned(turned(look.bottom, accent_turn), dim);
+            // a light theme at night: its buttons become the themes own dark buttons (the accent colour, like any dark
+            // theme), not some other colour
+            if (night_menu > 0.f) {
+                ImVec4 night_button = color(ImGuiCol_Button);
+                night_button.w = 1.f;
+                look.top = mix(look.top, mix(night_button, ImVec4(1.f, 1.f, 1.f, 1.f), .08f), night_menu);
+                look.bottom = mix(look.bottom, ImVec4(night_button.x * .7f, night_button.y * .7f, night_button.z * .7f, 1.f), night_menu);
+            }
             look.glow = turned(look.glow, accent_turn);
             look.edge = turned(look.edge, accent_turn);
             float lively = 1.f;
             if (given) {
-                look.top = mix(*given, ImVec4(1.f, 1.f, 1.f, 1.f), .14f);
-                look.bottom = ImVec4(given->x * .58f, given->y * .58f, given->z * .58f, 1.f);
-                lively = std::clamp(std::max({ given->x, given->y, given->z }) * 1.8f, .3f, 1.f);
+                look.top = mix(look.top, mix(*given, ImVec4(1.f, 1.f, 1.f, 1.f), .14f), given_amount);
+                look.bottom = mix(look.bottom, ImVec4(given->x * .58f, given->y * .58f, given->z * .58f, 1.f), given_amount);
+                lively = std::lerp(1.f, std::clamp(std::max({ given->x, given->y, given->z }) * 1.8f, .3f, 1.f), given_amount);
             }
             float alpha = ImGui::GetStyle().Alpha * keep;
             float time = (float)(ImGui::GetTime());
             float wide = body.GetWidth();
             float tall = std::max(body.GetHeight(), 1.f);
             auto own = [&](int item) {
-                ImGuiID mixed = ImHashData(&item, sizeof(item), id);
-                return (float)(mixed & 0xffff) / 65535.f;
+                return unit_random(static_cast<std::uint32_t>(item), id);
             };
             auto shaded = [&](ImVec4 tint) {
                 tint = mix(mix(tint, look.glow, hot * .22f), ImVec4(0.f, 0.f, 0.f, 1.f), down * .2f);
@@ -867,97 +977,240 @@ namespace eui {
                 return ImGui::ColorConvertFloat4ToU32(tint);
             };
             int from = draw->VtxBuffer.Size;
-            draw->AddRectFilled(body.Min, body.Max, IM_COL32_WHITE, rounding);
-            ImGui::ShadeVertsLinearColorGradientKeepAlpha(draw, from, draw->VtxBuffer.Size, body.Min, ImVec2(body.Min.x, body.Max.y), shaded(look.top), shaded(look.bottom));
+            // flat: the top lit gradient + white top line read as windows 7 glass. each theme adds its own life below
+            draw->AddRectFilled(body.Min, body.Max, shaded(mix(look.top, look.bottom, .6f)), rounding);
             fade_verts(draw, from, .94f * alpha);
             alpha *= lively;
 
             draw->PushClipRect(body.Min, body.Max, true);
-            auto underglow = [&](float strength) {
-                float flicker = .55f + .25f * std::sin(time * (3.f + 3.f * own(1)) + own(2) * 40.f) + .2f * std::sin(time * (9.f + 4.f * own(3)) + own(4) * 20.f);
-                float top = body.Min.y + tall * .25f;
-                int first = draw->VtxBuffer.Size;
-                draw->AddRectFilled(ImVec2(body.Min.x, top), body.Max, ImGui::ColorConvertFloat4ToU32(look.glow), rounding, ImDrawFlags_RoundCornersBottom);
-                for (int v = first; v < draw->VtxBuffer.Size; ++v) {
-                    auto& vert = draw->VtxBuffer[v];
-                    float low = std::clamp((vert.pos.y - top) / std::max(body.Max.y - top, 1.f), 0.f, 1.f);
-                    unsigned shown = static_cast<unsigned>((float)((vert.col >> IM_COL32_A_SHIFT) & 0xff) * low * low * strength * flicker * (1.f + hot * .7f) * alpha);
-                    vert.col = (vert.col & ~IM_COL32_A_MASK) | (std::min(shown, 255u) << IM_COL32_A_SHIFT);
-                }
+            auto sparkle = [&](ImVec2 at, float reach, ImVec4 tint) {
+                float thin = reach * .18f;
+                ImU32 col = ImGui::ColorConvertFloat4ToU32(tint);
+                draw->AddQuadFilled(ImVec2(at.x - reach, at.y), ImVec2(at.x, at.y - thin), ImVec2(at.x + reach, at.y), ImVec2(at.x, at.y + thin), col);
+                draw->AddQuadFilled(ImVec2(at.x, at.y - reach), ImVec2(at.x + thin, at.y), ImVec2(at.x, at.y + reach), ImVec2(at.x - thin, at.y), col);
             };
-            auto gleam = [&](float speed, float strength) {
-                float at = (std::fmod(time * speed, 1.8f) - .4f) * ImGui::GetIO().DisplaySize.x;
-                float half = tall * .9f;
-                float slant = tall * .5f;
-                if (at + half + slant < body.Min.x || at - half - slant > body.Max.x)
-                    return;
-                ImU32 bright = ImGui::ColorConvertFloat4ToU32(faded(look.glow, strength * alpha));
-                ImU32 gone = bright & ~IM_COL32_A_MASK;
-                ImVec2 uv = draw->_Data->TexUvWhitePixel;
-                draw->PrimReserve(12, 6);
-                unsigned first = draw->_VtxCurrentIdx;
-                draw->PrimWriteVtx(ImVec2(at - half + slant, body.Min.y), uv, gone);
-                draw->PrimWriteVtx(ImVec2(at + slant, body.Min.y), uv, bright);
-                draw->PrimWriteVtx(ImVec2(at + half + slant, body.Min.y), uv, gone);
-                draw->PrimWriteVtx(ImVec2(at - half - slant, body.Max.y), uv, gone);
-                draw->PrimWriteVtx(ImVec2(at - slant, body.Max.y), uv, bright);
-                draw->PrimWriteVtx(ImVec2(at + half - slant, body.Max.y), uv, gone);
-                for (unsigned offset : { 0u, 1u, 4u, 0u, 4u, 3u, 1u, 2u, 5u, 1u, 5u, 4u })
-                    draw->PrimWriteIdx(static_cast<ImDrawIdx>(first + offset));
+            auto line = [&](float y, float thick, ImVec4 tint, float inset) {
+                draw->AddLine(ImVec2(body.Min.x + inset, y), ImVec2(body.Max.x - inset, y), ImGui::ColorConvertFloat4ToU32(tint), thick);
+            };
+            // the button is a sealed tank: a press dips the liquid where you clicked & it sloshes off the walls
+            auto tank = [&](Liquid const& liquid) {
+                // every press adds its own waves on top of the ones still going, none replace each other
+                ImGuiContext& g = *GImGui;
+                auto& presses = splashes()[id];
+                if (g.ActiveId == id && g.ActiveIdIsJustActivated) {
+                    static std::uint32_t count = 0;
+                    presses.push_back({ time, std::clamp((ImGui::GetIO().MousePos.x - body.Min.x) / std::max(wide, 1.f), 0.f, 1.f), ++count });
+                }
+                // gone once its waves die down to under 1%
+                std::erase_if(presses, [&](Splash const& press) {
+                    return time - press.began > liquid.settle * 4.6f;
+                });
+                // a tanks own waves: standing modes cos(n pi x), deep liquid so each 1 swings at sqrt(n) times the 1st
+                constexpr int MODES = 8;
+                float modes[MODES] = {};
+                float total = 0.f;
+                for (int n = 1; n <= MODES; ++n)
+                    total += std::exp(-(float)(n * n) * .02f);
+                for (auto const& press : presses) {
+                    float since = time - press.began;
+                    float settle = std::exp(-since / liquid.settle);
+                    for (int n = 1; n <= MODES; ++n) {
+                        float share = std::exp(-(float)(n * n) * .02f) / total;
+                        modes[n - 1] += share * std::cos(3.1415927f * (float)(n) * press.at) * std::sin(6.2831853f * liquid.swing * std::sqrt((float)(n)) * since) * settle;
+                    }
+                }
+                int points = std::clamp((int)(wide / (tall * .2f)), 8, 64);
+                float level = liquid.level + .03f * std::sin(time * .7f * liquid.idle + own(6) * 6.2831853f);
+                auto surface = [&](float x) {
+                    float u = (x - body.Min.x) / std::max(wide, 1.f);
+                    float slosh = 0.f;
+                    for (int n = 1; n <= MODES; ++n)
+                        slosh += modes[n - 1] * std::cos(3.1415927f * (float)(n) * u);
+                    // the lid & floor hold it in, however many presses stack up
+                    return body.Min.y + tall * std::clamp(level + .07f * (noise(x / tall * .5f + time * .45f * liquid.idle, time * .4f * liquid.idle + own(1) * 9.f) - .5f) + liquid.height * slosh, .04f, .98f);
+                };
+                // the buttons real outline, rounded corners & all (the same points its frame is drawn w/), so the
+                // liquid stops where the button does & not at the rectangle
+                draw->PathRect(body.Min, body.Max, rounding);
+                std::vector<ImVec2> outline(draw->_Path.begin(), draw->_Path.end());
+                draw->PathClear();
+                auto inside = [&](float x, float& top, float& bottom) {
+                    top = body.Max.y;
+                    bottom = body.Min.y;
+                    for (std::size_t i = 0; i < outline.size(); ++i) {
+                        ImVec2 a = outline[i], b = outline[(i + 1) % outline.size()];
+                        if (std::abs(a.x - b.x) < 1e-3f) {
+                            if (std::abs(x - a.x) > 1e-3f)
+                                continue;
+                            top = std::min({ top, a.y, b.y });
+                            bottom = std::max({ bottom, a.y, b.y });
+                            continue;
+                        }
+                        if (x < std::min(a.x, b.x) || x > std::max(a.x, b.x))
+                            continue;
+                        float y = a.y + (b.y - a.y) * (x - a.x) / (b.x - a.x);
+                        top = std::min(top, y);
+                        bottom = std::max(bottom, y);
+                    }
+                };
+                std::vector<float> xs;
+                for (int i = 0; i <= points; ++i)
+                    xs.push_back(body.Min.x + wide * (float)(i) / (float)(points));
+                for (auto const& corner : outline)
+                    xs.push_back(std::clamp(corner.x, body.Min.x, body.Max.x));
+                std::sort(xs.begin(), xs.end());
+                std::vector<ImVec2> top_line, floor_line;
+                for (float x : xs) {
+                    float top = 0.f, bottom = 0.f;
+                    inside(x, top, bottom);
+                    if (bottom < top)
+                        continue;
+                    top_line.emplace_back(x, std::clamp(surface(x), top, bottom));
+                    floor_line.emplace_back(x, bottom);
+                }
+                for (auto const& at : top_line)
+                    draw->PathLineTo(at);
+                for (auto it = floor_line.rbegin(); it != floor_line.rend(); ++it)
+                    draw->PathLineTo(*it);
+                draw->PathFillConcave(ImGui::ColorConvertFloat4ToU32(faded(turned(liquid.body, accent_turn), alpha)));
+                for (auto const& at : top_line)
+                    draw->PathLineTo(at);
+                draw->PathStroke(ImGui::ColorConvertFloat4ToU32(faded(turned(liquid.top, accent_turn), alpha)), 0, std::max(1.f, tall * .045f));
+                // drops thrown up stay in the tank: they bounce off its walls & lid, then fall back in
+                float flight = 2.f * liquid.throw_up / liquid.gravity;
+                auto fold = [](float v, float lo, float hi) {
+                    float span = std::max(hi - lo, 1.f);
+                    float t = std::fmod(v - lo, span * 2.f);
+                    if (t < 0.f)
+                        t += span * 2.f;
+                    return lo + (t <= span ? t : span * 2.f - t);
+                };
+                for (auto const& press : presses) {
+                    float since = time - press.began;
+                    if (since > flight)
+                        continue;
+                    float start_x = body.Min.x + wide * press.at;
+                    float start_y = body.Min.y + tall * level;
+                    for (int i = 0; i < liquid.drops; ++i) {
+                        float r1 = unit_random(static_cast<std::uint32_t>(i), press.seed);
+                        float r2 = unit_random(static_cast<std::uint32_t>(i), press.seed + 7919u);
+                        float radius = std::max(1.f, tall * liquid.drop_size * (.6f + .8f * r2));
+                        float x = start_x + (r1 - .5f) * tall * liquid.spread * since;
+                        float y = start_y - tall * liquid.throw_up * (.6f + .4f * r2) * since + .5f * tall * liquid.gravity * since * since;
+                        ImVec2 at(fold(x, body.Min.x + radius, body.Max.x - radius), fold(y, body.Min.y + radius, body.Max.y));
+                        if (at.y > surface(at.x) && since > .08f)
+                            continue;
+                        float top = 0.f, bottom = 0.f;
+                        inside(at.x, top, bottom);
+                        if (at.y - radius < top || at.y + radius > bottom)
+                            continue;
+                        draw->AddCircleFilled(at, radius, ImGui::ColorConvertFloat4ToU32(faded(turned(liquid.drop, accent_turn), alpha)), 10);
+                    }
+                }
             };
             // off = same colors but nothing moves
             switch (button_effects() ? which : Scene::None) {
-            case Scene::Halloween:
-                underglow(.5f);
+            case Scene::Halloween: {
+                // a candle line along the bottom & a bat now & then
+                float flame = .55f + .25f * std::sin(time * (3.f + 3.f * own(1)) + own(2) * 40.f) + .2f * std::sin(time * (9.f + 4.f * own(3)) + own(4) * 20.f);
+                line(body.Max.y - 1.5f, std::max(1.5f, tall * .07f), faded(look.glow, flame * alpha), rounding * .5f);
+                float every = 4.f + 3.f * own(11);
+                float clock = time / every + own(12);
+                float run = (clock - std::floor(clock)) / .5f;
+                if (run < 1.f) {
+                    int which = (int)(std::floor(clock));
+                    float lift = unit_random(static_cast<std::uint32_t>(which), id + 17u);
+                    ImVec2 at(body.Min.x - tall * .4f + run * (wide + tall * .8f), body.Min.y + tall * (.35f + .3f * lift) + std::sin(run * 18.f) * tall * .08f);
+                    float span = tall * .22f;
+                    float flap = std::sin(time * 22.f) * span * .6f;
+                    ImU32 bat = ImGui::ColorConvertFloat4ToU32(ImVec4(.06f, .02f, .1f, .9f * alpha));
+                    draw->AddTriangleFilled(at, ImVec2(at.x - span, at.y - flap), ImVec2(at.x - span * .45f, at.y + span * .25f), bat);
+                    draw->AddTriangleFilled(at, ImVec2(at.x + span, at.y - flap), ImVec2(at.x + span * .45f, at.y + span * .25f), bat);
+                    draw->AddCircleFilled(at, span * .2f, bat, 8);
+                }
                 break;
+            }
             case Scene::Hell: {
-                underglow(.75f);
-                for (int i = 0; i < 3; ++i) {
+                tank(LAVA);
+                // embers rising off the lava
+                for (int i = 0; i < 4; ++i) {
                     float life = time * (.5f + .5f * own(10 + i)) + own(20 + i);
                     life -= std::floor(life);
-                    ImVec2 at(body.Min.x + wide * own(30 + i) + std::sin(time * 3.f + own(40 + i) * 9.f) * tall * .12f, body.Max.y - life * tall * 1.1f);
-                    soft_disc(draw, at, tall * .13f, ImVec4(1.f, .7f, .2f, .85f * (1.f - life) * alpha), 1.f, 6);
+                    ImVec2 at(body.Min.x + wide * own(30 + i) + std::sin(time * 3.f + own(40 + i) * 9.f) * tall * .12f, body.Min.y + tall * LAVA.level - life * tall * .9f);
+                    ImVec4 ember = mix(ImVec4(1.f, .85f, .3f, 1.f), ImVec4(1.f, .35f, .05f, 1.f), life);
+                    ember = turned(ember, accent_turn);
+                    ember.w = (1.f - life) * alpha;
+                    draw->AddCircleFilled(at, std::max(.8f, tall * .045f * (1.f - life * .5f)), ImGui::ColorConvertFloat4ToU32(ember), 6);
                 }
                 break;
             }
-            case Scene::Heaven:
-                gleam(.34f, .85f);
+            case Scene::Heaven: {
+                // a 2nd gold frame inside the edge, breathing slowly, & glints popping in & out
+                float breath = .55f + .25f * std::sin(time * 1.3f + own(6) * 6.2831853f) + .2f * hot;
+                float inset = std::max(2.f, tall * .12f);
+                draw->AddRect(ImVec2(body.Min.x + inset, body.Min.y + inset), ImVec2(body.Max.x - inset, body.Max.y - inset), ImGui::ColorConvertFloat4ToU32(faded(look.edge, breath * alpha)), std::max(0.f, rounding - inset), 0, 1.f);
+                int glints = std::clamp((int)(wide / (tall * 2.5f)), 1, 4);
+                for (int i = 0; i < glints; ++i) {
+                    float clock = time * (.35f + .25f * own(50 + i)) + own(60 + i);
+                    int which = (int)(std::floor(clock));
+                    float life = clock - std::floor(clock);
+                    float pop = std::max(0.f, std::sin(3.1415927f * life));
+                    std::uint32_t spot = static_cast<std::uint32_t>(which * 8 + i);
+                    ImVec2 at(body.Min.x + wide * (.06f + .88f * unit_random(spot, id + 3u)), body.Min.y + tall * (.2f + .6f * unit_random(spot, id + 4u)));
+                    sparkle(at, tall * .2f * pop, faded(look.edge, .9f * pop * alpha));
+                }
                 break;
-            case Scene::Sakura:
-                gleam(.26f, .4f);
+            }
+            case Scene::Sakura: {
+                for (int i = 0; i < 2; ++i) {
+                    float r = own(10 + i);
+                    float pass = time * (.05f + .04f * r) + own(20 + i);
+                    pass -= std::floor(pass);
+                    ImVec2 at(body.Min.x - tall * .3f + pass * (wide + tall * .6f), body.Min.y + tall * (.3f + .4f * own(30 + i)) + std::sin(time * (1.2f + r) + r * 20.f) * tall * .15f);
+                    float spin = time * (.8f + r) + r * 6.2831853f;
+                    float tumble = .35f + .65f * std::abs(std::sin(time * (1.4f + r) + r * 9.f));
+                    draw->AddEllipseFilled(at, ImVec2(tall * .18f, tall * .1f * tumble), ImGui::ColorConvertFloat4ToU32(ImVec4(1.f, .86f, .92f, .8f * alpha)), spin, 10);
+                }
                 break;
+            }
             case Scene::Space: {
-                int stars = std::clamp((int)(wide / (tall * 1.1f)), 2, 7);
+                int stars = std::clamp((int)(wide / (tall * .5f)), 4, 18);
                 for (int i = 0; i < stars; ++i) {
                     float r = own(10 + i);
-                    float twinkle = .5f + .5f * std::sin(time * (1.5f + 2.5f * r) + r * 30.f);
-                    float across = own(20 + i) + time * (.03f + .07f * r) * tall / std::max(wide, 1.f) * 3.f;
-                    across -= std::floor(across);
-                    soft_disc(draw, ImVec2(body.Min.x + wide * across, body.Min.y + tall * (.15f + .7f * own(30 + i))), tall * (.07f + .1f * twinkle), faded(look.glow, .85f * twinkle * alpha), 1.f, 6);
+                    float wave = .5f + .5f * std::sin(time * (1.5f + 3.f * r) + r * 40.f);
+                    float x = wide * own(20 + i) - time * tall * (.15f + .45f * r);
+                    x -= std::floor(x / wide) * wide;
+                    ImVec2 at(body.Min.x + x, body.Min.y + tall * (.12f + .76f * own(30 + i)));
+                    float size = std::max(.7f, tall * (.025f + .05f * r * r));
+                    draw->AddCircleFilled(at, size, ImGui::ColorConvertFloat4ToU32(ImVec4(.9f, .93f, 1.f, (.35f + .6f * r) * (.35f + .65f * wave) * alpha)), 6);
+                    if (r > .9f)
+                        sparkle(at, size * (1.5f + 1.f * wave), ImVec4(.9f, .93f, 1.f, .6f * wave * alpha));
+                }
+                float every = 3.f + 3.f * own(70);
+                float clock = time / every + own(71);
+                float run = (clock - std::floor(clock)) / .25f;
+                if (run < 1.f) {
+                    ImVec2 head(body.Min.x + wide * (.1f + run * .8f), body.Min.y + tall * (.2f + .5f * run));
+                    ImVec2 tail(head.x - tall * 1.2f, head.y - tall * .6f);
+                    float fade = std::sin(3.1415927f * run) * alpha;
+                    draw->AddLine(tail, head, ImGui::ColorConvertFloat4ToU32(ImVec4(.9f, .95f, 1.f, .25f * fade)), std::max(1.f, tall * .05f));
+                    draw->AddCircleFilled(head, std::max(.9f, tall * .045f), ImGui::ColorConvertFloat4ToU32(ImVec4(1.f, 1.f, 1.f, .9f * fade)), 6);
                 }
                 break;
             }
-            case Scene::Ocean: {
-                int points = std::clamp((int)(wide / (tall * .3f)), 4, 48);
-                for (int line = 0; line < 2; ++line) {
-                    float deep = (float)(line);
-                    for (int i = 0; i <= points; ++i) {
-                        float x = body.Min.x + wide * (float)(i) / (float)(points);
-                        draw->PathLineTo(ImVec2(x, body.Min.y + tall * (.12f + .4f * deep + .34f * noise(x / tall * .55f + time * (.5f - .9f * deep), time * .45f + own(1) * 9.f + deep * 5.f))));
-                    }
-                    draw->PathStroke(ImGui::ColorConvertFloat4ToU32(faded(look.glow, (.42f - .2f * deep) * alpha)), 0, std::max(1.f, tall * .07f));
-                }
+            case Scene::Ocean:
+                tank(WATER);
                 break;
-            }
             case Scene::None:
                 break;
             }
             draw->PopClipRect();
 
-            draw->AddLine(ImVec2(body.Min.x + rounding, body.Min.y + 1.f), ImVec2(body.Max.x - rounding, body.Min.y + 1.f), IM_COL32(255, 255, 255, (int)(60.f * alpha)));
             ImVec4 edge = look.edge;
-            if (which == Scene::Space && button_effects())
+            if (which == Scene::Space && button_effects()) {
                 ImGui::ColorConvertHSVtoRGB(.66f + .14f * std::sin(time * .8f + own(5) * 6.2831853f), .6f, 1.f, edge.x, edge.y, edge.z);
+                edge = turned(edge, accent_turn);
+            }
             draw->AddRect(body.Min, body.Max, ImGui::ColorConvertFloat4ToU32(faded(edge, (.45f + .45f * hot) * alpha)), rounding, 0, 1.f);
         }
 
@@ -1189,7 +1442,8 @@ namespace eui {
             if (lum > .55f) {
                 ImVec4 dark = color(ImGuiCol_WindowBg);
                 float body_lum = dark.x * .2126f + dark.y * .7152f + dark.z * .0722f;
-                if (body_lum > .5f)
+                // the body as ink only when its really dark, a mid body (a light theme fading to night) is mud on a fill
+                if (body_lum > .12f)
                     dark = ImVec4(.08f, .08f, .08f, 1.f);
                 dark.w = 1.f;
                 return dark;
@@ -1368,7 +1622,8 @@ namespace eui {
         ImVec4 fill = mix(idle, running, on);
         draw->AddRectFilled(body.Min, body.Max, ImGui::GetColorU32(fill), style.FrameRounding);
         gloss(draw, body, style.FrameRounding);
-        button_skin(draw, body, style.FrameRounding, id, hot, down, 1.f - on);
+        // running keeps the themes effects, in the running colour
+        button_skin(draw, body, style.FrameRounding, id, hot, down, 1.f, &running, on);
         draw->AddRect(body.Min, body.Max, ImGui::GetColorU32(faded(accent, std::max(hot * .55f, .35f * (1.f - on)))), style.FrameRounding, 0, 1.f);
         ImVec4 ink = mix(color(ImGuiCol_Text), ink_on(running), on);
         float glyph = ImGui::GetFontSize() * .78f;
@@ -2429,13 +2684,22 @@ namespace eui {
 
     // a loaded theme only brings colors back, the scene tint has to be worked out again
     void sync_scene_turn(Palette const& palette) {
-        body_turn = accent_turn = 0.f;
+        body_turn = accent_turn = Grade{};
+        night = 0.f;
+        auto ratio = [](float now, float own) {
+            return own > .001f ? std::max(now, 0.f) / own : 1.f;
+        };
         for (int i = 0; i < preset_count() && scene() != Scene::None; ++i) {
             auto const& own = preset(i).palette;
             if (own.scene != scene())
                 continue;
-            body_turn = palette.hue - own.hue;
-            accent_turn = palette.accent_hue - own.accent_hue;
+            body_turn = { palette.hue - own.hue, ratio(palette.richness, own.richness), ratio(palette.depth, own.depth) };
+            if (own.light) {
+                night = std::clamp((1.f - body_turn.brightness) / (1.f - .5f), 0.f, 1.f);
+                // the night look IS the darkening, under .5 the night itself gets darker
+                body_turn.brightness = std::min(1.f, palette.depth / .5f);
+            }
+            accent_turn = { palette.accent_hue - own.accent_hue, ratio(palette.accent_saturation, own.accent_saturation), ratio(palette.accent_value, own.accent_value) };
             break;
         }
     }
@@ -2454,34 +2718,53 @@ namespace eui {
         float d = palette.depth;
         float as = palette.accent_saturation;
         float av = palette.accent_value;
-        ImVec4 background, panel, raised, line, text, muted, accent, accent_hot, button, button_hot, buttonDown;
-        if (palette.light) {
-            background = hsv(h, .05f * s, .93f, .98f);
-            panel = hsv(h, .05f * s, .97f);
-            raised = hsv(h, .06f * s, .85f);
-            line = hsv(h, .08f * s, .68f, .8f);
-            text = hsv(h, .25f * s, .12f);
-            muted = hsv(h, .12f * s, .42f);
-            accent = hsv(ha, as, .24f);
-            accent_hot = hsv(ha, as, .38f);
-            button = hsv(ha, as * .4f, .80f);
-            button_hot = hsv(ha, as * .4f, .73f);
-            buttonDown = hsv(ha, as * .4f, .65f);
-        }
+        struct Set {
+            ImVec4 background, panel, raised, line, text, muted, accent, accent_hot, button, button_hot, button_down;
+        };
+        auto light_set = [&](float lift) {
+            return Set{ hsv(h, .05f * s, .93f * lift, .98f), hsv(h, .05f * s, .97f * lift), hsv(h, .06f * s, .85f * lift), hsv(h, .08f * s, .68f * lift, .8f),
+                hsv(h, .25f * s, .12f), hsv(h, .12f * s, .42f), hsv(ha, as, .24f), hsv(ha, as, .38f),
+                hsv(ha, as * .4f, .80f), hsv(ha, as * .4f, .73f), hsv(ha, as * .4f, .65f) };
+        };
+        auto dark_set = [&](float dd) {
+            dd = std::max(dd, 0.f);
+            // under .5 it heads to black, but each layer stops at its own floor so panels, lines & buttons stay apart
+            auto value = [dd](float base, float floor) {
+                return dd >= .5f ? base * dd : floor + (base * .5f - floor) * dd / .5f;
+            };
+            auto pressed = [dd](float base, float floor) {
+                return dd >= .5f ? base * std::sqrt(dd) : floor + (base * std::sqrt(.5f) - floor) * dd / .5f;
+            };
+            return Set{ hsv(h, .50f * s, value(.10f, 0.f), .98f), hsv(h, .50f * s, value(.145f, .025f)), hsv(h, .51f * s, value(.21f, .06f)), hsv(h, .50f * s, value(.33f, .14f), .8f),
+                hsv(h, .09f * s, 1.f), hsv(h, .27f * s, .68f), hsv(ha, as, av), hsv(ha, as * .7f, std::min(1.f, av * 1.08f)),
+                hsv(ha, std::min(1.f, as * 1.28f), pressed(.33f, .1f)), hsv(ha, std::min(1.f, as * 1.25f), pressed(.44f, .16f)), hsv(ha, std::min(1.f, as * 1.22f), pressed(.54f, .22f)) };
+        };
+        Set look;
+        night_menu = 0.f;
+        if (!palette.light)
+            look = dark_set(d);
         else {
-            background = hsv(h, .50f * s, .10f * d, .98f);
-            panel = hsv(h, .50f * s, .145f * d);
-            raised = hsv(h, .51f * s, .21f * d);
-            line = hsv(h, .50f * s, .33f * d, .8f);
-            text = hsv(h, .09f * s, 1.f);
-            muted = hsv(h, .27f * s, .68f);
-            accent = hsv(ha, as, av);
-            accent_hot = hsv(ha, as * .7f, std::min(1.f, av * 1.08f));
-            float deep = std::sqrt(d);
-            button = hsv(ha, std::min(1.f, as * 1.28f), .33f * deep);
-            button_hot = hsv(ha, std::min(1.f, as * 1.25f), .44f * deep);
-            buttonDown = hsv(ha, std::min(1.f, as * 1.22f), .54f * deep);
+            // a light theme turned down fades into its night look, not grey
+            float fade = night_fade(d);
+            Set day = light_set(std::min(1.f, .85f + .15f * (d - NIGHT_LOW) / (1.f - NIGHT_LOW)));
+            Set dark = dark_set(.8f + (std::min(d, NIGHT_TOP) - .5f) / (NIGHT_TOP - .5f) * .7f);
+            // the text is never faded between dark & light (thats grey on grey), it switches in 1 go at the panel
+            // luminance where both read the same (~.18), so its contrast never drops under what either gives there
+            ImVec4 under = mix(day.panel, dark.panel, fade);
+            auto linear = [](float c) {
+                return std::pow(c, 2.2f);
+            };
+            float luminance = .2126f * linear(under.x) + .7152f * linear(under.y) + .0722f * linear(under.z);
+            float flip = luminance < .18f ? 1.f : 0.f;
+            // the buttons go dark w/ the text, light text on a still light button is unreadable too
+            float buttons = std::max(fade, flip);
+            night_menu = buttons;
+            look = { mix(day.background, dark.background, fade), mix(day.panel, dark.panel, fade), mix(day.raised, dark.raised, fade), mix(day.line, dark.line, fade),
+                mix(day.text, dark.text, flip), mix(day.muted, dark.muted, flip), mix(day.accent, dark.accent, flip), mix(day.accent_hot, dark.accent_hot, flip),
+                mix(day.button, dark.button, buttons), mix(day.button_hot, dark.button_hot, buttons), mix(day.button_down, dark.button_down, buttons) };
         }
+        ImVec4 background = look.background, panel = look.panel, raised = look.raised, line = look.line, text = look.text, muted = look.muted;
+        ImVec4 accent = look.accent, accent_hot = look.accent_hot, button = look.button, button_hot = look.button_hot, buttonDown = look.button_down;
         rainbow_rim() = palette.rainbow;
         if (palette.rainbow) {
             background.w = 0.f;

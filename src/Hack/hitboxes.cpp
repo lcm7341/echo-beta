@@ -569,12 +569,11 @@ void Hitboxes::draw_object_hitbox(CCDrawNode* node, GJBaseGameLayer* play, GameO
         return;
     if (object == play->m_player1 || object == play->m_player2 || Logic::get().is_traj_player(object))
         return;
-    if (auto* live = Logic::as_play(play)) {
-        if (object == live->m_player1CollisionBlock || object == live->m_player2CollisionBlock)
-            return;
-        if (object == live->m_anticheatSpike)
-            return;
-    }
+    // gd's own player collision blocks, in the editor too
+    if (object == play->m_player1CollisionBlock || object == play->m_player2CollisionBlock)
+        return;
+    if (auto* live = Logic::as_play(play); live && object == live->m_anticheatSpike)
+        return;
     auto const& logic = Logic::get();
     HitboxStateGuard preserve(object);
     refresh_object_hitbox(object);

@@ -519,11 +519,11 @@ void GUI::main() {
     if (eui::BeginCard("Session", card_width())) {
         float half = eui::RowButton(2);
         ImVec2 big(half, eui::em(2.3f));
-        if (eui::ActionButton(logic.is_recording() ? "Stop Recording" : "Record", eui::Icon::Record, logic.is_recording(), big, RECORD_RED))
+        if (eui::ActionButton(logic.is_recording() ? "Stop Recording###record" : "Record###record", eui::Icon::Record, logic.is_recording(), big, RECORD_RED))
             Logic::get().toggle_recording();
         GUI::get().offer_rebind("toggle-record");
         ImGui::SameLine();
-        if (eui::ActionButton(logic.is_playing() ? "Stop Playing" : "Play", eui::Icon::Play, logic.is_playing(), big))
+        if (eui::ActionButton(logic.is_playing() ? "Stop Playing###play" : "Play###play", eui::Icon::Play, logic.is_playing(), big))
             Logic::get().toggle_playing();
         GUI::get().offer_rebind("toggle-play");
         ImGui::BeginDisabled(busy);
@@ -563,7 +563,9 @@ void GUI::main() {
             dragged = logic.speedhack;
         float stepped = std::clamp(std::round(dragged / .05f) * .05f, .01f, 5.f);
         auto shown = fmt::format("{:.2f}x", stepped);
-        if (eui::DragFloat("##speed", &dragged, 0.005f, 0.01f, 5.f, dragging ? shown.c_str() : "%.3fx", dragging ? ImGuiSliderFlags_NoRoundToFormat : ImGuiSliderFlags_None)) {
+        // above 1x it drags faster, in proportion to the speed
+        float drag_rate = 0.005f * std::max(dragged, 1.f);
+        if (eui::DragFloat("##speed", &dragged, drag_rate, 0.01f, 5.f, dragging ? shown.c_str() : "%.3fx", dragging ? ImGuiSliderFlags_NoRoundToFormat : ImGuiSliderFlags_None)) {
             GUI::get().setSpeed(typing ? dragged : std::clamp(std::round(dragged / .05f) * .05f, .01f, 5.f), false);
         }
         GUI::get().offer_rebind("key-speedhack");
@@ -1160,7 +1162,7 @@ void GUI::clickbot() {
         auto& pack = player == 0 ? logic.clickpack : logic.clickpack_p2;
         auto& volume = player == 0 ? logic.clickbot_volume : logic.clickbot_volume_p2;
         eui::Row("Volume");
-        GUI::get().drag_float_setting(player == 0 ? "##clickbot-volume-p1" : "##clickbot-volume-p2", volume, 0.25f, 0.f, 10.f, "%.2fx");
+        GUI::get().drag_float_setting(player == 0 ? "##clickbot-volume-p1" : "##clickbot-volume-p2", volume, 0.01f, 0.f, 10.f, "%.2fx");
 
         auto folders_root = Logic::get().save_root() / "clickpacks";
         std::vector<std::string> folders;
@@ -1243,20 +1245,20 @@ void GUI::renderer() {
         bool recording = Logic::get().render_active();
         ImVec2 big(-FLT_MIN, eui::em(2.3f));
         if (recording) {
-            if (eui::ActionButton("Stop Rendering", eui::Icon::Render, true, big, RECORD_RED))
+            if (eui::ActionButton("Stop Rendering###render", eui::Icon::Render, true, big, RECORD_RED))
                 Logic::get().stop_render();
         }
         else if (PlayLayer::get()) {
-            if (eui::ActionButton("Start Rendering Here", eui::Icon::Render, false, big))
+            if (eui::ActionButton("Start Rendering Here###render", eui::Icon::Render, false, big))
                 Logic::get().start_render();
             tip("Begins rendering from your current position.");
         }
         else if (logic.render_queued) {
-            if (eui::ActionButton("Cancel (waiting for a level)", eui::Icon::Render, true, big))
+            if (eui::ActionButton("Cancel (waiting for a level)###render", eui::Icon::Render, true, big))
                 logic.render_queued = false;
         }
         else {
-            if (eui::ActionButton("Start Rendering", eui::Icon::Render, false, big))
+            if (eui::ActionButton("Start Rendering###render", eui::Icon::Render, false, big))
                 Logic::get().start_render();
             tip("Starts when you enter a level.");
         }
@@ -1578,7 +1580,7 @@ void GUI::draw_theme() {
         slider("Body", "##palette-hue", &palette.hue, 0.f, 1.f, true, "The color the menu's dark body is tinted with.");
         slider("Accent", "##palette-accent", &palette.accent_hue, 0.f, 1.f, true, "The bright color of the rim, toggles and markers. The logo takes it too.");
         slider("Richness", "##palette-richness", &palette.richness, 0.f, 1.4f, false, "How strongly the body is tinted.");
-        slider("Brightness", "##palette-depth", &palette.depth, .5f, 1.5f, false, "How dark or light the body is.");
+        slider("Brightness", "##palette-depth", &palette.depth, 0.f, 1.5f, false, "How dark or light the body is.");
         slider("Accent strength", "##palette-accent-saturation", &palette.accent_saturation, 0.f, .8f, false, "From a white accent to a vivid one.");
         if (live) {
             gui.has_palette = true;
