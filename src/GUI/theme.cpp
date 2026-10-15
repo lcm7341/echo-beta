@@ -621,6 +621,8 @@ BindAction const LISTED[] = {
     { "key-hitboxes", "Show hitboxes" },
     { "key-trajectory", "Show trajectory" },
     { "key-autoclick", "Autoclicker" },
+    { "key-traj-autoclick", "Trajectory autoclicker" },
+    { "key-noclip", "Noclip" },
     { "key-no-overwrite", "No overwrite" },
     { "key-ignore", "Ignore actions" },
     { "key-show-recording", "Show recording label" },
@@ -861,6 +863,22 @@ bool Logic::dispatch_setting_key(std::string_view key, bool down) {
         GUI::get().flip_setting(logic.show_traj, "show-trajectory");
     else if (key == "key-autoclick")
         GUI::get().flip_setting(logic.autoclicker, "autoclicker");
+    else if (key == "key-traj-autoclick")
+        flip_utility(logic.traj_autoclicker);
+    else if (key == "key-noclip") {
+        if (logic.noclip_p1 || logic.noclip_p2) {
+            logic.noclip_memory_p1 = logic.noclip_p1;
+            logic.noclip_memory_p2 = logic.noclip_p2;
+            logic.noclip_p1 = logic.noclip_p2 = false;
+        }
+        else {
+            logic.noclip_p1 = logic.noclip_memory_p1;
+            logic.noclip_p2 = logic.noclip_memory_p2;
+            if (!logic.noclip_p1 && !logic.noclip_p2)
+                logic.noclip_p1 = logic.noclip_p2 = true;
+        }
+        Logic::get().save_settings_file();
+    }
     else if (key == "key-no-overwrite")
         GUI::get().flip_setting(logic.no_overwrite, "no-overwrite");
     else if (key == "key-ignore")

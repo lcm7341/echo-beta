@@ -274,7 +274,7 @@ namespace EchoUI {
                     logic.holding_back = true;
                     logic.back_hold_start = now;
                     logic.last_back_step = now;
-                    logic.step_back(PlayLayer::get(), 1);
+                    logic.back_tap_queued = true;
                 }
                 else if (within(gui.bar_step, at, slack)) {
                     gui.bar_pressed = 2;

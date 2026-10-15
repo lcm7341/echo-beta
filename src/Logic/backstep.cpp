@@ -10,6 +10,7 @@
 #include "Physics/checkpoint.hpp"
 #include "Logic/state_check.hpp"
 #include "Logic/replay_algorithms.hpp"
+#include "Hooks/shown_camera.hpp"
 #include <Geode/binding/GJEffectManager.hpp>
 #include <Geode/binding/CheckpointObject.hpp>
 #include <Geode/binding/PlayLayer.hpp>
@@ -208,6 +209,7 @@ struct BackstepExtra {
     gd::vector<GameObject*> calc_non_effect;
     int calc_non_effect_size = 0;
     CameraState camera;
+    std::shared_ptr<ShownCamera> shown_camera;
 };
 
 namespace {
@@ -435,7 +437,12 @@ void Logic::save_backstep(PlayLayer* play) {
     // sped up they are thousands apart now, so 1 back took thousands of saves (the hang at 99x). only the last bit
     // before the target is saved every step, the way there gets 1 a game second
     int close_by = std::max(1, static_cast<int>(std::lround(logic.sample_rate() / 60.0)));
-    bool close = resim && logic.backstep_target - frame <= close_by;
+    // held: no dense saves, it resims every frame anyway. pressed: the last 60 steps
+    if (resim) {
+        bool repeating = logic.holding_back && chrono::steady_clock::now() >= logic.back_hold_start + chrono::milliseconds(logic.advance_hold_ms);
+        close_by = repeating ? 0 : std::min(close_by, 60);
+    }
+    bool close = resim && close_by > 0 && logic.backstep_target - frame <= close_by;
     bool dense = close || shown;
     int gap = Logic::get().backstep_interval();
     if (resim && !close)
@@ -444,6 +451,11 @@ void Logic::save_backstep(PlayLayer* play) {
         return;
     if (!logic.backsteps.empty() && logic.backsteps.back().echo.frame >= frame)
         return;
+    auto saving = chrono::steady_clock::now();
+    struct Untimed {
+        chrono::steady_clock::time_point from;
+        ~Untimed() { Logic::get().note_untimed(chrono::duration<double>(chrono::steady_clock::now() - from).count()); }
+    } untimed{ saving };
     // createCheckpoint must NOT change the object counters
     auto* obj = play->createCheckpoint();
     if (!obj)
@@ -462,6 +474,7 @@ void Logic::save_backstep(PlayLayer* play) {
     extra->calc_non_effect_size = play->m_calcNonEffectObjectsSize;
     extra->used = used_marks(play);
     extra->camera = CameraState::of(play);
+    extra->shown_camera = echo_save_shown_camera(play);
     logic.backsteps.push_back({ obj, Logic::get().capture_checkpoint(play, obj, frame), std::move(extra), {} });
     Logic::get().note_backstep_objects(play);
     double rate = logic.sample_rate();
@@ -629,6 +642,8 @@ bool Logic::step_to(PlayLayer* play, int target, int keep_up_to) {
         if (!resim)
             pin_camera(play);
     }
+    // the picture camera goes back too
+    echo_load_shown_camera(play, save.extra ? save.extra->shown_camera.get() : nullptr);
     logic.backstepping = false;
     logic.frame_advance = true;
     logic.holding_advance = false;
@@ -692,6 +707,16 @@ void Logic::finish_backstep(PlayLayer* play) {
 void Logic::poll_back_hold() {
     auto& logic = Logic::get();
     auto* play = PlayLayer::get();
+    // taps step back here, inside the scheduler like holds
+    if (logic.back_tap_queued) {
+        if (!play)
+            logic.back_tap_queued = false;
+        else if (logic.backstep_target < 0) {
+            logic.back_tap_queued = false;
+            Logic::get().step_back(play, 1);
+            return;
+        }
+    }
     if (!logic.holding_back || !play)
         return;
     if (GUI::get().typing()) {

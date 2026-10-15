@@ -240,6 +240,10 @@ void Logic::pull_settings() {
                 logic.inverse_p2 = flag.unwrap();
             if (auto flag = json["noclip_p1"].asBool())
                 logic.noclip_p1 = flag.unwrap();
+            if (auto flag = json["noclip_memory_p1"].asBool())
+                logic.noclip_memory_p1 = flag.unwrap();
+            if (auto flag = json["noclip_memory_p2"].asBool())
+                logic.noclip_memory_p2 = flag.unwrap();
             if (auto flag = json["noclip_p2"].asBool())
                 logic.noclip_p2 = flag.unwrap();
             if (auto flag = json["show_hitboxes"].asBool())
@@ -873,6 +877,8 @@ void Logic::save_settings_file() {
     json["inverse_p1"] = logic.inverse_p1;
     json["inverse_p2"] = logic.inverse_p2;
     json["noclip_p1"] = logic.noclip_p1;
+    json["noclip_memory_p1"] = logic.noclip_memory_p1;
+    json["noclip_memory_p2"] = logic.noclip_memory_p2;
     json["noclip_p2"] = logic.noclip_p2;
     json["show_hitboxes"] = logic.show_hitboxes;
     json["layout_mode"] = logic.layout_mode;

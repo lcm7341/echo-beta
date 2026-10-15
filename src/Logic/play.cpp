@@ -728,7 +728,7 @@ void Logic::on_keybind(std::string_view key, bool down) {
         Logic::get().holding_back = true;
         Logic::get().back_hold_start = now;
         Logic::get().last_back_step = now;
-        Logic::get().step_back(PlayLayer::get(), 1);
+        Logic::get().back_tap_queued = true;
         return;
     }
     if (key == "step-frame") {
@@ -758,10 +758,26 @@ void Logic::sync_time_scale() {
         scheduler->setTimeScale(speed);
         return;
     }
-    if (PlayLayer::get() || logic.editor_testing)
-        scheduler->setTimeScale(1.f);
-    else
-        scheduler->setTimeScale(speed);
+    // speedhack is for levels only
+    scheduler->setTimeScale(1.f);
+}
+
+void Logic::set_level_interval(float interval) {
+    auto* director = CCDirector::sharedDirector();
+    if (!director || !std::isfinite(interval) || !(interval > 0.f))
+        return;
+    auto& logic = Logic::get();
+    if (!(logic.level_interval_held > 0.f))
+        logic.level_interval_held = static_cast<float>(director->getAnimationInterval());
+    director->setAnimationInterval(interval);
+}
+
+void Logic::release_level_interval() {
+    auto& logic = Logic::get();
+    float held = std::exchange(logic.level_interval_held, 0.f);
+    auto* director = CCDirector::sharedDirector();
+    if (director && held > 0.f)
+        director->setAnimationInterval(held);
 }
 
 void Logic::sync_playback_fps() {
@@ -771,7 +787,7 @@ void Logic::sync_playback_fps() {
         return;
     if (logic.playback_fps >= 1.f) {
         if (!logic.playback_fps_held)
-            logic.held_interval = director->getAnimationInterval();
+            logic.held_interval = logic.level_interval_held > 0.f ? logic.level_interval_held : director->getAnimationInterval();
         logic.playback_fps_held = true;
         // speedhack does NOT scale the fps anymore, 240 stays 240 at 0.5x
         director->setAnimationInterval(1.f / logic.playback_fps);
@@ -1106,7 +1122,7 @@ void Logic::on_play_init(PlayLayer* play) {
         logic.macro_name_typed = false;
     }
     if (logic.lock_display_fps) {
-        CCDirector::sharedDirector()->setAnimationInterval(1.f / std::max(logic.fps, 1.f));
+        Logic::get().set_level_interval(1.f / std::max(logic.fps, 1.f));
         logic.display_fps_locked = true;
     }
     Logic::get().sync_time_scale();
@@ -1780,6 +1796,7 @@ void Logic::onQuit(PlayLayer*) {
     Logic::get().stop_best_frame();
     Logic::get().clear_backsteps();
     logic.holding_back = false;
+    logic.back_tap_queued = false;
     logic.frame_advance = false;
     logic.advance_queued = false;
     logic.holding_advance = false;
@@ -1790,10 +1807,8 @@ void Logic::onQuit(PlayLayer*) {
     logic.hidden_decorations.clear();
     Logic::get().clear_physical_holds();
     Input::clear_keys();
-    if (logic.display_fps_locked) {
-        CCDirector::sharedDirector()->setAnimationInterval(1.f / 60.f);
-        logic.display_fps_locked = false;
-    }
+    logic.display_fps_locked = false;
+    Logic::get().release_level_interval();
     if (auto* scheduler = CCDirector::sharedDirector()->getScheduler())
         scheduler->setTimeScale(1.f);
     Logic::get().stop_render();
@@ -1858,6 +1873,14 @@ bool Logic::defer_physics() const {
     if (Logic::get().render_capturing())
         return false;
     return Logic::get().vanilla_click_physics();
+}
+
+// gd holds a click til its input clock passes its timestamp, at high tps that lost clicks. due now, like mine
+void Logic::flatten_click_times(GJBaseGameLayer* play) {
+    if (!play || Logic::get().predicting || Logic::get().cbf_enabled())
+        return;
+    for (auto& cmd : play->m_queuedButtons)
+        cmd.m_timestamp = 0.0;
 }
 
 double Logic::click_stamp() const {
@@ -2574,10 +2597,9 @@ void Logic::set_tps(float rate) {
         Trajectory::get().invalidate();
         logic.message = fmt::format("Starting TPS {:.2f}", logic.macro_fps);
     }
-    if (logic.playback_fps < 1.f) {
-        if (auto* director = CCDirector::sharedDirector())
-            director->setAnimationInterval(1.f / rate);
-    }
+    // only in a lvl
+    if (logic.playback_fps < 1.f && PlayLayer::get())
+        Logic::get().set_level_interval(1.f / rate);
 }
 
 void Logic::place_rate(int frame, float rate) {
@@ -2622,10 +2644,8 @@ void Logic::apply_rate(int frame) {
     if (next == logic.fps)
         return;
     logic.fps = next;
-    if (logic.display_fps_locked && logic.playback_fps < 1.f && !Logic::get().render_capturing()) {
-        if (auto* director = CCDirector::sharedDirector())
-            director->setAnimationInterval(1.f / next);
-    }
+    if (logic.display_fps_locked && logic.playback_fps < 1.f && !Logic::get().render_capturing())
+        Logic::get().set_level_interval(1.f / next);
 }
 
 void Logic::normalize_rates() {

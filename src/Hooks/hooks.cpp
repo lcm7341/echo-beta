@@ -8,6 +8,7 @@
 #include "Hooks/rotation.hpp"
 #include "Hooks/step.hpp"
 #include "Hooks/opt.hpp"
+#include "Hooks/shown_camera.hpp"
 #include <bit>
 #include <map>
 #include <optional>
@@ -66,6 +67,7 @@
 #include <Geode/modify/ShaderLayer.hpp>
 #include <Geode/modify/GJEffectManager.hpp>
 #include <Geode/modify/HardStreak.hpp>
+#include <Geode/modify/CCDrawNode.hpp>
 #include <fstream>
 #include <Geode/binding/PointNode.hpp>
 #include <Geode/modify/CCEGLView.hpp>
@@ -114,7 +116,9 @@ void Logic::sync_predict_hooks() {
     // death next frame is a recording aid. while a macro just plays it must not cost anything
     bool watching = logic.is_playing() && !logic.is_recording();
     bool want = logic.show_traj || logic.pause_before_kill || logic.traj_autoclicker || (logic.show_death_next && !watching) || logic.predicting;
-    echo_forecast_section_hook(want && logic.traj_moving_objects);
+    // only for what uses the moving object forecast
+    bool forecast_users = logic.show_traj || logic.pause_before_kill || logic.traj_autoclicker || logic.best_frame_running;
+    echo_forecast_section_hook(forecast_users && logic.traj_moving_objects);
     // ts hook was 12% of the physics in one fell swoop
     echo_touch_hook((logic.backstep && !Logic::get().render_capturing()) || logic.is_recording());
     if (want == predict_hooks_on)
@@ -918,6 +922,7 @@ class $modify(EchoPlayLayer, PlayLayer) {
     }
 
     void resetLevel() {
+        Trajectory::get().cancel_job();
         forget_effects();
         g_effectFrame.began = Logic::get().step_frame;
         restore_tilt(m_player1);
@@ -1210,9 +1215,8 @@ namespace echo::step {
             self->m_resumeTimer = 0;
         if (play && !self->m_playerDied && self->m_resumeTimer <= 0) {
             Logic::get().step_object_states(play);
-            auto saving = std::chrono::steady_clock::now();
+            // times itself, only when it saves (clock reads are slow under proton)
             Logic::get().save_backstep(play);
-            Logic::get().note_untimed(std::chrono::duration<double>(std::chrono::steady_clock::now() - saving).count());
         }
         if (layer && !self->m_playerDied && self->m_resumeTimer <= 0)
             Logic::get().run_follow(layer);
@@ -1670,6 +1674,7 @@ class $modify(EchoGameLayer, GJBaseGameLayer) {
     void processQueuedButtons(float dt, bool clearInputQueue) {
         if (Logic::get().predicting)
             return;
+        Logic::get().flatten_click_times(this);
         if (auto* play = Logic::as_play(this)) {
             Logic::get().play_macro(play, this, dt, clearInputQueue);
             return;
@@ -2553,9 +2558,13 @@ class $modify(EchoSchedulerDepth, CCScheduler) {
 
     void update(float dt) {
         auto& logic = Logic::get();
+        bool outer = logic.scheduler_depth == 0;
+        auto began = outer ? chrono::steady_clock::now() : chrono::steady_clock::time_point{};
         ++logic.scheduler_depth;
         CCScheduler::update(dt);
         --logic.scheduler_depth;
+        if (outer)
+            logic.scheduler_time = chrono::duration<double>(chrono::steady_clock::now() - began).count();
     }
 };
 
@@ -3127,6 +3136,17 @@ class $modify(EchoHardStreak, HardStreak) {
     }
 };
 
+// cocos uploads the whole buffer every redraw & it never shrinks. a long wave trail left 21mb per frame after a restart
+class $modify(EchoDrawNode, CCDrawNode) {
+    void draw() {
+        unsigned capacity = m_uBufferCapacity;
+        if (m_bDirty && m_nBufferCount >= 0)
+            m_uBufferCapacity = std::min(capacity, static_cast<unsigned>(m_nBufferCount));
+        CCDrawNode::draw();
+        m_uBufferCapacity = capacity;
+    }
+};
+
 class $modify(EchoDirector, CCDirector) {
     void drawScene() {
         GUI::get().sync_cursor();
@@ -3172,8 +3192,11 @@ class $modify(EchoDirector, CCDirector) {
         static bool menu_under_me = false;
         if (!logic.render_capturing()) {
             auto started = chrono::steady_clock::now();
+            logic.frame_start = started;
+            logic.scheduler_time = 0.0;
             int menu_frames = GUI::get().menu_frames();
             CCDirector::drawScene();
+            logic.draw_time = std::max(0.0, chrono::duration<double>(chrono::steady_clock::now() - started).count() - logic.scheduler_time);
             if (GUI::get().menu_frames() != menu_frames)
                 menu_under_me = true;
             logic.note_frame_work(chrono::duration<double>(chrono::steady_clock::now() - started).count());
@@ -3328,12 +3351,18 @@ namespace {
                 spots.push_back({ node, node->getPosition(), node->getScaleX(), node->getScaleY(), node->getRotationX(), node->getRotationY(),
                     node->getSkewX(), node->getSkewY() });
         };
+        // 2 levels down, the ground sprites sit in a batch node
         auto with_children = [&](CCNode* node) {
             keep(node);
             if (!node || !node->getChildren())
                 return;
-            for (auto* child : CCArrayExt<CCNode*>(node->getChildren()))
+            for (auto* child : CCArrayExt<CCNode*>(node->getChildren())) {
                 keep(child);
+                if (!child || !child->getChildren())
+                    continue;
+                for (auto* grandchild : CCArrayExt<CCNode*>(child->getChildren()))
+                    keep(grandchild);
+            }
         };
         keep(layer->m_objectLayer);
         keep(layer->m_inShaderObjectLayer);
@@ -3615,6 +3644,97 @@ class $modify(EchoCameraPace, GJBaseGameLayer) {
 void echo_forget_camera(GJBaseGameLayer* layer) {
     if (g_cameraPace.layer == layer)
         g_cameraPace = {};
+}
+
+// no Refs, a save can outlive the lvl
+using NodeShot = std::array<float, 8>;
+
+static std::vector<NodeShot> shoot_nodes(std::vector<NodeSpot> const& spots) {
+    std::vector<NodeShot> out;
+    out.reserve(spots.size());
+    for (auto const& spot : spots)
+        out.push_back({ spot.position.x, spot.position.y, spot.scale_x, spot.scale_y, spot.rotation_x, spot.rotation_y, spot.skew_x, spot.skew_y });
+    return out;
+}
+
+static void unshoot_nodes(std::vector<NodeShot> const& shots, std::vector<NodeSpot>& spots) {
+    for (std::size_t i = 0; i < shots.size() && i < spots.size(); ++i) {
+        auto const& from = shots[i];
+        auto& spot = spots[i];
+        spot.position = CCPoint{ from[0], from[1] };
+        spot.scale_x = from[2];
+        spot.scale_y = from[3];
+        spot.rotation_x = from[4];
+        spot.rotation_y = from[5];
+        spot.skew_x = from[6];
+        spot.skew_y = from[7];
+    }
+}
+
+struct ShownCamera {
+    // gd moves bg & ground by camera delta & checkpoints dont keep them
+    std::vector<NodeShot> physics;
+    // the pictures own camera, only at high tps
+    bool picture = false;
+    std::vector<uint32_t> shown;
+    std::vector<NodeShot> nodes;
+    std::unordered_map<int, GJValueTween> tweens;
+    std::unordered_set<int> owned;
+    int since = 0;
+    CCPoint last1, last2;
+};
+
+std::shared_ptr<ShownCamera> echo_save_shown_camera(GJBaseGameLayer* layer) {
+    if (!layer)
+        return nullptr;
+    auto out = std::make_shared<ShownCamera>();
+    std::vector<NodeSpot> spots;
+    keep_nodes(layer, spots);
+    out->physics = shoot_nodes(spots);
+    auto const& pace = g_cameraPace;
+    if (pace.layer != layer || !pace.have_shown || pace.snap)
+        return out;
+    out->picture = true;
+    out->shown = pace.state.shown;
+    out->nodes = shoot_nodes(pace.shown_nodes);
+    out->tweens = pace.tweens;
+    out->owned = pace.owned;
+    out->since = pace.since;
+    out->last1 = pace.last1;
+    out->last2 = pace.last2;
+    return out;
+}
+
+void echo_load_shown_camera(GJBaseGameLayer* layer, ShownCamera const* saved) {
+    if (!layer)
+        return;
+    if (saved) {
+        std::vector<NodeSpot> spots;
+        keep_nodes(layer, spots);
+        if (saved->physics.size() == spots.size()) {
+            unshoot_nodes(saved->physics, spots);
+            put_back(spots);
+        }
+    }
+    auto& pace = g_cameraPace;
+    if (pace.layer != layer)
+        return;
+    // not a teleport, dont snap
+    pace.snap = false;
+    pace.have_cam = true;
+    pace.cam_after = layer->m_gameState.m_cameraPosition;
+    if (!saved || !saved->picture || saved->shown.size() != pace.state.shown.size() || saved->nodes.size() != pace.shown_nodes.size()) {
+        pace.have_shown = false;
+        return;
+    }
+    pace.state.shown = saved->shown;
+    unshoot_nodes(saved->nodes, pace.shown_nodes);
+    pace.tweens = saved->tweens;
+    pace.owned = saved->owned;
+    pace.since = saved->since;
+    pace.last1 = saved->last1;
+    pace.last2 = saved->last2;
+    pace.have_shown = true;
 }
 
 class $modify(EchoCameraShow, GJBaseGameLayer) {

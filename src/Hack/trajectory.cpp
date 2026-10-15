@@ -25,8 +25,12 @@
 #include <array>
 #include <cmath>
 #include <unordered_set>
+#include <memory>
 #include <utility>
 #include <vector>
+#ifdef GEODE_IS_WINDOWS
+#include <Windows.h>
+#endif
 
 using namespace geode::prelude;
 
@@ -72,12 +76,18 @@ void Trajectory::attach(PlayLayer* play) {
     detach();
     if (!play || !play->m_objectLayer)
         return;
-    node = CCDrawNode::create();
-    node->retain();
-    node->m_bUseArea = false;
-    node->setID("trajectory"_spr);
-    node->setBlendFunc({ GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA });
-    Logic::get().seat_overlay(node, play);
+    auto make_node = [&](char const* id) {
+        auto* made = CCDrawNode::create();
+        made->retain();
+        made->m_bUseArea = false;
+        made->setID(id);
+        made->setBlendFunc({ GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA });
+        Logic::get().seat_overlay(made, play);
+        return made;
+    };
+    node = make_node("trajectory"_spr);
+    back_node = make_node("trajectory-next"_spr);
+    back_node->setVisible(false);
     fake1 = spawn_fake(play, "trajectory-player-1"_spr);
     fake2 = spawn_fake(play, "trajectory-player-2"_spr);
 }
@@ -86,9 +96,17 @@ void Trajectory::sync_seat(PlayLayer* play) {
     if (!node || !play)
         return;
     Logic::get().seat_overlay(node, play);
+    if (back_node)
+        Logic::get().seat_overlay(back_node, play);
+}
+
+void Trajectory::invalidate() {
+    cached = false;
+    cancel_job();
 }
 
 void Trajectory::detach() {
+    cancel_job();
     auto drop = [](auto*& object) {
         if (!object)
             return;
@@ -101,6 +119,7 @@ void Trajectory::detach() {
     drop(fake1);
     drop(fake2);
     drop(node);
+    drop(back_node);
     used_p1.clear();
     used_p2.clear();
     busy = false;
@@ -476,6 +495,9 @@ void Trajectory::simulate(PlayLayer* play, bool player1, Click click, bool both,
     PlayerObject* partner_real = player1 ? play->m_player2 : play->m_player1;
     if (!fake || !real)
         return;
+    // restoring the real players puts them back on their physics pos, that froze the end animation every step
+    if (play->m_hasCompletedLevel || play->m_levelEndAnimationStarted)
+        return;
     auto random_state = GameToolbox::getfast_srand();
     auto teleport_roll = logic.teleport_random;
     auto shake_roll = logic.shake_random;
@@ -617,7 +639,8 @@ void Trajectory::simulate(PlayLayer* play, bool player1, Click click, bool both,
     int steps = echo::trajectory::prediction_steps(logic.traj_seconds, logic.sample_rate(), warp);
     if (limit > 0)
         steps = std::min(steps, limit);
-    if (logic.traj_moving_objects)
+    bool moving_objects = logic.traj_moving_objects && !label_only;
+    if (moving_objects)
         forecast::prepare(play, steps, step_delta / 60.f);
     else
         forecast::invalidate();
@@ -732,6 +755,116 @@ void Trajectory::simulate(PlayLayer* play, bool player1, Click click, bool both,
         put_rings(play->m_player2, rings2);
     };
 
+    // a slice pauses here: the real lvl goes back, the prediction comes back after
+    std::unique_ptr<echo::SavedGameState> sim_state;
+    decltype(random_state) sim_random{};
+    decltype(teleport_roll) sim_teleport{};
+    decltype(shake_roll) sim_shake{};
+    std::vector<SavedFlag> sim_flags;
+    std::vector<CCObject*> sim_rings1, sim_rings2;
+    SavedPlayerCheckpoint sim_first, sim_second;
+    auto sim_queued = queued;
+    auto sim_recorded = recorded;
+    int sim_recorded_size = recorded_size;
+    CCPoint sim_layer_pos = layer_pos;
+    float sim_scale_x = layer_scale_x, sim_scale_y = layer_scale_y, sim_rotation = layer_rotation;
+    SliceHook world{
+        [&] {
+            sim_state = std::make_unique<echo::SavedGameState>(play->m_gameState);
+            sim_random = GameToolbox::getfast_srand();
+            sim_teleport = logic.teleport_random;
+            sim_shake = logic.shake_random;
+            sim_flags.clear();
+            for (auto const& flag : flags) {
+                if (flag.object)
+                    sim_flags.push_back({ flag.object, flag.object->m_activatedByPlayer1, flag.object->m_activatedByPlayer2 });
+            }
+            sim_rings1 = snap_rings(play->m_player1);
+            sim_rings2 = snap_rings(play->m_player2);
+            sim_first = SavedPlayerCheckpoint::create(play->m_player1);
+            if (has_second)
+                sim_second = SavedPlayerCheckpoint::create(play->m_player2);
+            sim_queued = play->m_queuedButtons;
+            sim_recorded = play->m_queuedRecordedButtons;
+            sim_recorded_size = play->m_queuedRecordedButtonsSize;
+            if (layer) {
+                sim_layer_pos = layer->getPosition();
+                sim_scale_x = layer->getScaleX();
+                sim_scale_y = layer->getScaleY();
+                sim_rotation = layer->getRotation();
+            }
+        },
+        [&] {
+            forecast::suspend(play);
+            restore_live();
+            saved_state.restore(play->m_gameState);
+            restore_players();
+            GameToolbox::fast_srand(random_state);
+            logic.teleport_random = teleport_roll;
+            logic.shake_random = shake_roll;
+            if (manager)
+                manager->m_performanceMode = performance;
+        },
+        [&] {
+            // input that came in while paused is real
+            queued = play->m_queuedButtons;
+            recorded = play->m_queuedRecordedButtons;
+            recorded_size = play->m_queuedRecordedButtonsSize;
+            random_state = GameToolbox::getfast_srand();
+            teleport_roll = logic.teleport_random;
+            shake_roll = logic.shake_random;
+            if (manager)
+                performance = manager->m_performanceMode;
+            if (manager)
+                manager->m_performanceMode = true;
+            if (sim_state) {
+                sim_state->restore(play->m_gameState);
+                sim_state.reset();
+            }
+            GameToolbox::fast_srand(sim_random);
+            logic.teleport_random = sim_teleport;
+            logic.shake_random = sim_shake;
+            for (auto const& flag : sim_flags) {
+                flag.object->m_activatedByPlayer1 = flag.p1;
+                flag.object->m_activatedByPlayer2 = flag.p2;
+            }
+            put_rings(play->m_player1, sim_rings1);
+            put_rings(play->m_player2, sim_rings2);
+            auto put_sim = [](PlayerObject* body, SavedPlayerCheckpoint& shot, std::array<CCDictionary*, 4> const& logs, Trails const& trails) {
+                if (!body)
+                    return;
+                shot.apply(body);
+                body->m_collisionLogTop = logs[0];
+                body->m_collisionLogBottom = logs[1];
+                body->m_collisionLogLeft = logs[2];
+                body->m_collisionLogRight = logs[3];
+                body->m_waveTrail = trails.wave;
+                body->m_regularTrail = trails.regular;
+                body->m_ghostTrail = trails.ghost;
+            };
+            put_sim(play->m_player1, sim_first, logs1, trails1);
+            if (has_second)
+                put_sim(play->m_player2, sim_second, logs2, trails2);
+            play->m_playerDied = false;
+            play->m_queuedButtons = sim_queued;
+            play->m_queuedRecordedButtons = sim_recorded;
+            play->m_queuedRecordedButtonsSize = sim_recorded_size;
+            if (layer) {
+                layer->setPosition(sim_layer_pos);
+                layer->setScaleX(sim_scale_x);
+                layer->setScaleY(sim_scale_y);
+                layer->setRotation(sim_rotation);
+            }
+        }
+    };
+    slice_hooks.push_back(&world);
+    struct PopHook {
+        std::vector<SliceHook*>& hooks;
+        ~PopHook() {
+            hooks.pop_back();
+        }
+    } pop_world{ slice_hooks };
+
     std::vector<CCPoint> player_path;
     bool note_path = (measure & MEASURE_LIVE) && fake == fake1 && steps >= 30 && !died;
     if (note_path) {
@@ -739,6 +872,9 @@ void Trajectory::simulate(PlayLayer* play, bool player1, Click click, bool both,
         player_path.push_back(fake->getPosition());
     }
     for (int i = 0; i < steps && !(done1 && done2); ++i) {
+        slice_point();
+        if (job_cancel)
+            break;
         if (varying) {
             step_len = 1.f / std::max(logic.rate_at(frame + i), 1.f);
             step_delta = step_len * 60.f * std::min(warp, 1.f);
@@ -755,7 +891,7 @@ void Trajectory::simulate(PlayLayer* play, bool player1, Click click, bool both,
                 top = std::max(top, other.y);
             }
             // the forecasts path is p1s, so only a line led by p1 can say how far off that path it is
-            if (logic.traj_moving_objects)
+            if (moving_objects)
                 forecast::apply(play, i + 1, { left - REACH, bottom - REACH, right - left + 2.f * REACH, top - bottom + 2.f * REACH }, fake == fake1 ? at.y : NAN);
         }
         std::array<bool, 2> orb_press{};
@@ -1000,7 +1136,7 @@ void Trajectory::simulate(PlayLayer* play, bool player1, Click click, bool both,
     logic.shake_random = shake_roll;
 }
 
-void Trajectory::refresh(PlayLayer* play) {
+void Trajectory::refresh_now(PlayLayer* play) {
     if (!play || !play->m_started || !play->m_player1 || !node || !fake1 || !fake2)
         return;
     auto& logic = Logic::get();
@@ -1026,7 +1162,10 @@ void Trajectory::refresh(PlayLayer* play) {
             node->setVisible(false);
         bool pause_kill = logic.pause_before_kill && logic.is_recording();
         if (!rendering && ((logic.show_death_next && !(logic.is_playing() && !logic.is_recording())) || pause_kill)) {
+            // the death label alone doesnt need the moving object forecast
+            label_only = !pause_kill;
             lookahead(play);
+            label_only = false;
             Logic::get().check_advance_pause(play);
             Logic::get().sync_death_label(play);
             return;
@@ -1093,6 +1232,12 @@ void Trajectory::refresh(PlayLayer* play) {
     phys::prepare_prediction_art();
     logic.predicting = true;
     Logic::get().sync_predict_hooks();
+    // sliced: draw into the hidden node til done
+    if (in_job && !job_swapped && back_node) {
+        std::swap(node, back_node);
+        job_swapped = true;
+        node->setVisible(false);
+    }
     node->clear();
     auto snap = [](PlayerObject* body) {
         return body ? std::pair{ body->m_jumpBuffered, body->m_holdingButtons } : std::pair{ false, gd::map<int, bool>{} };
@@ -1123,6 +1268,63 @@ void Trajectory::refresh(PlayLayer* play) {
             ui->m_p2TouchId = touch2;
         }
     };
+
+    std::pair<bool, gd::map<int, bool>> sim_hold1, sim_hold2;
+    bool sim_ui1 = false, sim_ui2 = false;
+    int sim_touch1 = -1, sim_touch2 = -1;
+    SliceHook holds{
+        [&] {
+            sim_hold1 = snap(play->m_player1);
+            sim_hold2 = snap(play->m_player2);
+            if (auto* ui = play->m_uiLayer) {
+                sim_ui1 = ui->m_p1Jumping;
+                sim_ui2 = ui->m_p2Jumping;
+                sim_touch1 = ui->m_p1TouchId;
+                sim_touch2 = ui->m_p2TouchId;
+            }
+        },
+        [&] {
+            restore();
+            busy = false;
+            logic.predicting = false;
+            Logic::get().sync_predict_hooks();
+        },
+        [&] {
+            // input that came in while paused is real
+            p1_hold = snap(play->m_player1);
+            p2_hold = snap(play->m_player2);
+            if (auto* ui = play->m_uiLayer) {
+                ui1 = ui->m_p1Jumping;
+                ui2 = ui->m_p2Jumping;
+                touch1 = ui->m_p1TouchId;
+                touch2 = ui->m_p2TouchId;
+            }
+            busy = true;
+            logic.predicting = true;
+            Logic::get().sync_predict_hooks();
+            auto put = [](PlayerObject* body, std::pair<bool, gd::map<int, bool>> const& hold) {
+                if (!body)
+                    return;
+                body->m_jumpBuffered = hold.first;
+                body->m_holdingButtons = hold.second;
+            };
+            put(play->m_player1, sim_hold1);
+            put(play->m_player2, sim_hold2);
+            if (auto* ui = play->m_uiLayer) {
+                ui->m_p1Jumping = sim_ui1;
+                ui->m_p2Jumping = sim_ui2;
+                ui->m_p1TouchId = sim_touch1;
+                ui->m_p2TouchId = sim_touch2;
+            }
+        }
+    };
+    slice_hooks.push_back(&holds);
+    struct PopHook {
+        std::vector<SliceHook*>& hooks;
+        ~PopHook() {
+            hooks.pop_back();
+        }
+    } pop_holds{ slice_hooks };
 
     bool twoPlayer = play->m_levelSettings && play->m_levelSettings->m_twoPlayerMode;
     bool dual = play->m_gameState.m_isDualMode && play->m_player2;
@@ -1159,6 +1361,8 @@ void Trajectory::refresh(PlayLayer* play) {
     };
     constexpr int MEASURE_LIVE = 1, MEASURE_HOLD = 2, MEASURE_RELEASE = 4;
     auto run = [&](bool player1, Click click, bool both, bool show, int measure) {
+        if (job_cancel)
+            return;
         simulate(play, player1, click, both, show, step_limit, measure);
     };
     auto modes = [&](bool player1, bool both) {
@@ -1215,9 +1419,186 @@ void Trajectory::refresh(PlayLayer* play) {
     busy = false;
     logic.predicting = false;
     Logic::get().sync_predict_hooks();
-    cached = true;
+    cached = !job_cancel;
     last_key = key;
     logic.traj_seconds = saved_seconds;
+}
+
+void Trajectory::refresh(PlayLayer* play) {
+#ifdef GEODE_IS_WINDOWS
+    if (in_job)
+        return;
+    if (back_node && play)
+        Logic::get().seat_overlay(back_node, play);
+    if (job_running) {
+        if (play == job_play && want_slicing(play)) {
+            run_slice();
+            return;
+        }
+        cancel_job();
+    }
+    if (want_slicing(play)) {
+        if (!main_fiber)
+            main_fiber = IsThreadAFiber() ? GetCurrentFiber() : ConvertThreadToFiber(nullptr);
+        // 1 fiber, reused for every trajectory
+        if (main_fiber && !job_fiber)
+            job_fiber = CreateFiber(4u << 20, reinterpret_cast<LPFIBER_START_ROUTINE>(&Trajectory::job_entry), this);
+        if (job_fiber) {
+            job_running = true;
+            job_done = job_cancel = job_swapped = false;
+            job_play = play;
+            job_frame = Logic::get().step_frame;
+            job_drawn = 0;
+            run_slice();
+            return;
+        }
+    }
+#endif
+    refresh_now(play);
+}
+
+bool Trajectory::want_slicing(PlayLayer* play) const {
+#ifdef GEODE_IS_WINDOWS
+    auto const& logic = Logic::get();
+    // those step 1 at a time & need the whole trajectory
+    if (!(play && node && back_node && logic.lock_delta && logic.show_traj && !Logic::get().render_capturing() && !logic.frame_advance &&
+            !logic.traj_autoclicker && !(logic.pause_before_kill && logic.is_recording()) && !play->m_playerDied && !path_sink))
+        return false;
+    return true;
+#else
+    (void)play;
+    return false;
+#endif
+}
+
+void Trajectory::job_entry(void* self) {
+#ifdef GEODE_IS_WINDOWS
+    auto* trajectory = static_cast<Trajectory*>(self);
+    for (;;) {
+        trajectory->in_job = true;
+        trajectory->refresh_now(trajectory->job_play);
+        trajectory->in_job = false;
+        trajectory->job_done = true;
+        SwitchToFiber(trajectory->main_fiber);
+    }
+#else
+    (void)self;
+#endif
+}
+
+void Trajectory::slice_point() {
+#ifdef GEODE_IS_WINDOWS
+    if (!in_job || job_cancel)
+        return;
+    // clock reads are slow under proton
+    if ((++slice_counter & 15) != 0)
+        return;
+    if (std::chrono::duration<double>(std::chrono::steady_clock::now() - slice_began).count() < slice_budget)
+        return;
+    for (auto* hook : slice_hooks)
+        hook->save();
+    for (auto it = slice_hooks.rbegin(); it != slice_hooks.rend(); ++it)
+        (*it)->pause();
+    in_job = false;
+    SwitchToFiber(main_fiber);
+    in_job = true;
+    for (auto* hook : slice_hooks)
+        hook->resume();
+#endif
+}
+
+void Trajectory::run_slice() {
+#ifdef GEODE_IS_WINDOWS
+    if (!job_running)
+        return;
+    auto* director = CCDirector::sharedDirector();
+    unsigned drawn = director ? director->getTotalFrames() : 0;
+    // 1 slice a drawn frame
+    if (drawn != 0 && drawn == job_drawn)
+        return;
+    // the lvl moved under it, its saved state is stale
+    if (job_play != PlayLayer::get() || job_frame != Logic::get().step_frame) {
+        abandon_job();
+        return;
+    }
+    job_drawn = drawn;
+    // whats left of 1 / fps after ts frames work & last frames drawing
+    auto& logic = Logic::get();
+    double interval = director ? director->getAnimationInterval() : 1.0 / 60.0;
+    slice_began = std::chrono::steady_clock::now();
+    double used = std::chrono::duration<double>(slice_began - logic.frame_start).count();
+    slice_budget = interval - used - logic.draw_time;
+    slice_counter = 0;
+    SwitchToFiber(job_fiber);
+    if (job_done) {
+        finish_job();
+        return;
+    }
+    if (job_swapped) {
+        node->setVisible(false);
+        back_node->setVisible(Logic::get().show_traj);
+    }
+#endif
+}
+
+void Trajectory::finish_job() {
+#ifdef GEODE_IS_WINDOWS
+    job_running = false;
+    if (job_swapped) {
+        // cancelled: keep the old 1
+        if (job_cancel)
+            std::swap(node, back_node);
+        back_node->clear();
+        back_node->setVisible(false);
+        node->setVisible(Logic::get().show_traj);
+    }
+    job_swapped = job_cancel = job_done = false;
+    job_play = nullptr;
+#endif
+}
+
+void Trajectory::cancel_job() {
+#ifdef GEODE_IS_WINDOWS
+    if (!job_running || in_job)
+        return;
+    if (job_play != PlayLayer::get() || job_frame != Logic::get().step_frame) {
+        abandon_job();
+        return;
+    }
+    job_cancel = true;
+    while (!job_done) {
+        slice_began = std::chrono::steady_clock::now();
+        slice_budget = 1e9;
+        SwitchToFiber(job_fiber);
+    }
+    finish_job();
+#endif
+}
+
+// the lvl moved while paused: drop the fiber as is (its stack leaks)
+void Trajectory::abandon_job() {
+#ifdef GEODE_IS_WINDOWS
+    if (job_fiber)
+        DeleteFiber(job_fiber);
+    job_fiber = nullptr;
+    job_running = job_done = job_cancel = in_job = false;
+    slice_hooks.clear();
+    busy = false;
+    Logic::get().predicting = false;
+    Logic::get().sync_predict_hooks();
+    used_p1.clear();
+    used_p2.clear();
+    paths[0].clear();
+    paths[1].clear();
+    cached = false;
+    if (job_swapped) {
+        std::swap(node, back_node);
+        back_node->clear();
+        back_node->setVisible(false);
+        job_swapped = false;
+    }
+    job_play = nullptr;
+#endif
 }
 
 Trajectory::Click Trajectory::next_click(PlayLayer* play, bool player1) const {
@@ -1239,6 +1620,7 @@ Trajectory::Click Trajectory::next_click(PlayLayer* play, bool player1) const {
 
 template <class F>
 void Trajectory::predicting(PlayLayer* play, F&& predict) {
+    cancel_job();
     auto& logic = Logic::get();
     if (play->m_objectLayer) {
         if (!fake1->getParent())
@@ -1316,6 +1698,8 @@ void Trajectory::autoclick(PlayLayer* play) {
     auto& logic = Logic::get();
     safe_steps = 1;
     if (!logic.traj_autoclicker || !play || play->m_isPaused || play->m_playerDied)
+        return;
+    if (play->m_hasCompletedLevel || play->m_levelEndAnimationStarted)
         return;
     if (logic.step_frame < clicked_frame)
         clicked_frame = -1;

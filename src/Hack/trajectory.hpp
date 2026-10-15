@@ -2,6 +2,7 @@
 
 #include <array>
 #include <chrono>
+#include <functional>
 
 #include <Geode/Geode.hpp>
 
@@ -51,9 +52,14 @@ public:
 		return next_click(play, player1) == Click::Hold;
 	}
 
-	void invalidate() {
-		cached = false;
+	void invalidate();
+
+	// lock fps: the trajectory is worked on across frames & the lvl waits for it
+	bool job_pending() const {
+		return job_running;
 	}
+	// only safe while the lvl hasnt moved since it began
+	void cancel_job();
 
 	bool survives(PlayLayer* play, bool player1, bool press, int delay);
 
@@ -104,6 +110,8 @@ private:
 	};
 
 	CCDrawNode* node = nullptr;
+	// a sliced trajectory draws here, swapped in when done
+	CCDrawNode* back_node = nullptr;
 	bool busy = false;
 	bool cached = false;
 	Key last_key;
@@ -121,7 +129,33 @@ private:
 	int safe_steps = 1;
 	int measured[2] = {}, measured_full = 0;
 	std::vector<CCPoint>* path_sink = nullptr;
+	// death next label only, no moving object forecast
+	bool label_only = false;
 	std::unordered_set<EnhancedGameObject*> used_p1, used_p2;
+
+	// sliced trajectory, on its own fiber (windows)
+	struct SliceHook {
+		// every save runs before any pause
+		std::function<void()> save, pause, resume;
+	};
+	std::vector<SliceHook*> slice_hooks;
+	void* job_fiber = nullptr;
+	void* main_fiber = nullptr;
+	bool job_running = false, job_done = false, job_cancel = false, in_job = false, job_swapped = false;
+	PlayLayer* job_play = nullptr;
+	int job_frame = -1;
+	unsigned job_drawn = 0;
+	std::chrono::steady_clock::time_point slice_began{};
+	double slice_budget = 0.0;
+	unsigned slice_counter = 0;
+
+	static void job_entry(void* self);
+	bool want_slicing(PlayLayer* play) const;
+	void run_slice();
+	void finish_job();
+	void abandon_job();
+	void slice_point();
+	void refresh_now(PlayLayer* play);
 
 	void park(PlayerObject* player);
 	PlayerObject* spawn_fake(PlayLayer* play, char const* id);

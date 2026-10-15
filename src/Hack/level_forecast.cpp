@@ -1309,6 +1309,11 @@ namespace forecast {
         // the next line starts its followers over
         ++f.line_epoch;
         f.ring_ready = false;
+        suspend(play);
+    }
+
+    void suspend(PlayLayer* play) {
+        auto& f = state();
         if (!f.applying)
             return;
         f.applying = false;

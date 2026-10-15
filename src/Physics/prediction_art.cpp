@@ -2,17 +2,24 @@
 #include "prediction_art.hpp"
 #include <Geode/loader/Loader.hpp>
 #include <Geode/loader/Hook.hpp>
+#include <algorithm>
 #include <cstdint>
+#include <string_view>
 
 using namespace geode::prelude;
 
 namespace phys {
     namespace {
-        bool fast_pos = false;
+        // the real player still needs other mods setPosition hooks (misc bugfixes fixes the wave trail there)
+        bool fast_pos = false, fast_live = false;
     }
 
     bool fast_prediction_pos() {
         return fast_pos;
+    }
+
+    bool fast_live_pos() {
+        return fast_live;
     }
 
     void prepare_prediction_art() {
@@ -24,26 +31,29 @@ namespace phys {
                 hash = (hash ^ code[i]) * 1099511628211ull; // fnv-1a prime
             return hash == 0x4382ee25ecaa5ff1ull;           // gd code hash
         }();
-        fast_pos = supported;
+        fast_pos = fast_live = supported;
         static bool reported = false;
         if (!fast_pos) {
             reported = true;
             return;
         }
+        // visual only setPosition hooks, fake players can skip them
+        constexpr std::string_view VISUAL_ONLY[] = { "cvolton.misc_bugfixes" };
         for (auto* mod : Loader::get()->getAllMods()) {
             if (mod == Mod::get())
                 continue;
+            bool visual = std::ranges::find(VISUAL_ONLY, mod->getID()) != std::end(VISUAL_ONLY);
             for (auto* hook : mod->getHooks()) {
                 if (hook->isEnabled() && hook->getAddress() == geode::base::get() + 0x39c640) {
-                    fast_pos = false;
-                    reported = true;
-                    return;
+                    fast_live = false;
+                    if (!visual)
+                        fast_pos = false;
                 }
             }
         }
         reported = true;
 #else
-        fast_pos = false;
+        fast_pos = fast_live = false;
 #endif
     }
 }

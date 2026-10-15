@@ -146,7 +146,10 @@ namespace {
         auto const& clock = step_clock();
         auto& sample = frame_sample();
         sample.updates += 1.0;
-        sample.update_time += seconds_since(started, Clock::now());
+        double took = seconds_since(started, Clock::now());
+        sample.update_time += took;
+        if (Logic::get().render_capturing())
+            Logic::get().render_physics += took;
         sample.steps += clock.steps;
         if (clock.sampled_step < 2)
             return;
@@ -297,7 +300,13 @@ int Logic::count_unlocked_steps(GJBaseGameLayer* play, double dt) {
     // lock fps runs EXACTLY 1 frame of steps a frame, true real time runs every step it owes
     bool real_time = logic.real_time_now();
     bool uncapped = real_time && logic.true_real_time;
-    if ((!Logic::get().render_capturing() || logic.render_real_time) && !logic.lock_delta && !uncapped) {
+    // renders run every step, real time rendering only caps once the lvl is beaten
+    bool render_cap = false;
+    if (Logic::get().render_capturing() && logic.render_real_time) {
+        auto* live = Logic::as_play(play);
+        render_cap = live && (live->m_hasCompletedLevel || live->m_levelEndAnimationStarted);
+    }
+    if ((!Logic::get().render_capturing() || render_cap) && !logic.lock_delta && !uncapped) {
         int affordable = g_single_path ? single_affordable() : Logic::get().affordable_steps();
         int cap = std::max(std::min(Logic::get().unlocked_step_cap(), affordable) - logic.frame_steps, 0);
         capped = steps > cap;
@@ -327,6 +336,7 @@ void Logic::run_frame(GJBaseGameLayer* play, float dt, std::function<void(float)
         tick(dt);
         return;
     }
+    Logic::get().flatten_click_times(play);
     echo::movement::prepare();
 #ifdef GEODE_IS_WINDOWS
     echo::collision_bounds::prepare();
@@ -463,6 +473,16 @@ void Logic::run_frame(GJBaseGameLayer* play, float dt, std::function<void(float)
         if (traj_click)
             Trajectory::get().autoclick(PlayLayer::get());
     };
+    // a sliced trajectory part way done: wait for it, or drop it before anything else steps
+    if (auto& traj = Trajectory::get(); traj.job_pending()) {
+        bool plain = !force_step && !(logic.frame_advance && !rendering) && !pause_kill && !traj_click;
+        if (plain) {
+            traj.refresh(Logic::as_play(play));
+            logic.present = true;
+            return;
+        }
+        traj.cancel_job();
+    }
     auto frame_began = Clock::now();
     if (!force_step)
         autoclick();
@@ -496,7 +516,7 @@ void Logic::run_frame(GJBaseGameLayer* play, float dt, std::function<void(float)
             logic.steps_left = batch;
             logic.steps_this_tick = static_cast<uint32_t>(batch);
             logic.frame_steps += batch;
-            logic.defer_player_art = batch > 1 && phys::fast_prediction_pos();
+            logic.defer_player_art = batch > 1 && phys::fast_live_pos();
             time_update([&] {
                 play->update(step_dt * static_cast<float>(batch));
             });
@@ -564,7 +584,7 @@ void Logic::run_frame(GJBaseGameLayer* play, float dt, std::function<void(float)
                 logic.steps_left = chunk;
                 logic.steps_this_tick = static_cast<uint32_t>(chunk);
                 logic.frame_steps += chunk;
-                logic.defer_player_art = chunk > 1 && phys::fast_prediction_pos();
+                logic.defer_player_art = chunk > 1 && phys::fast_live_pos();
                 time_update([&] {
                     play->update(step_dt * static_cast<float>(chunk));
                 });
@@ -626,7 +646,7 @@ void Logic::run_frame(GJBaseGameLayer* play, float dt, std::function<void(float)
     play->m_extraDelta = 0.0;
     logic.steps_left = 0;
     // held w/ nothing to check between steps it goes in batches like playing. 1 whole update a step never got near the speedhack
-    bool batched = can_batch && !pause_kill && !traj_click && logic.backstep_target < 0 && limit > 1;
+    bool batched = can_batch && !pause_kill && !traj_click && limit > 1;
     for (int taken = 0; taken < limit; ++taken) {
         if (died())
             break;
@@ -639,7 +659,7 @@ void Logic::run_frame(GJBaseGameLayer* play, float dt, std::function<void(float)
             logic.steps_left = batch;
             logic.steps_this_tick = static_cast<uint32_t>(batch);
             logic.frame_steps += batch;
-            logic.defer_player_art = batch > 1 && phys::fast_prediction_pos();
+            logic.defer_player_art = batch > 1 && phys::fast_live_pos();
             time_update([&] {
                 play->update(step_dt * static_cast<float>(batch));
             });

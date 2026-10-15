@@ -321,6 +321,7 @@ struct Session {
 	RunState backstep_state = RunState::Idle;
 	bool backstep_play_p1 = false, backstep_play_p2 = false;
 	bool holding_back = false;
+	bool back_tap_queued = false;
 	std::vector<Frame> backstep_inputs;
 	std::vector<FramePose> backstep_poses;
 	std::vector<uint64_t> backstep_ids;
@@ -404,6 +405,11 @@ struct Session {
 	bool safeMode = false;
 	bool swap_players = false;
 	bool inverse_p1 = false, inverse_p2 = false, noclip_p1 = false, noclip_p2 = false;
+	// for slicing the trajectory under lock fps
+	chrono::steady_clock::time_point frame_start{};
+	double scheduler_time = 0.0, draw_time = 0.0;
+	// what the noclip keybind turns back on
+	bool noclip_memory_p1 = true, noclip_memory_p2 = true;
 	bool show_hitboxes = false, fill_hitboxes = false;
 	bool hitbox_outline_only = false, hitbox_trail = false, hitbox_trail_visual = false, hitbox_dedup = false;
 	int visual_frame = 0;
@@ -604,6 +610,8 @@ struct Session {
 	uint64_t shake_random = 0, teleport_random = 0;
 	float end_x = 0.f;
 	bool display_fps_locked = false;
+	// gds frame cap from before tps changed it, 0 = none
+	float level_interval_held = 0.f;
 	float backgroundColor[3] = { 0.28235295f, 0.49019608f, 1.f };
 	float blocks_color[3] = { 0.28235295f, 0.49019608f, 1.f };
 	std::vector<RenderPreset> render_presets;
@@ -613,6 +621,7 @@ struct Session {
 	bool render_queued = false, render_record_pause = false, render_show_lvl = true;
 	bool render_screen_shape = true, render_ssb_fix = true, render_speedhack = false;
 	bool render_real_time = false; // a render gets the same lag cap as playing does
+	double render_physics = 0.0; // seconds of physics this render, for logs/render.txt
 	float render_speed_locked = 0.f;
 	bool render_hide_labels = false, render_hide_pause = false, render_color_fix = true;
 	bool merge_busy = false;
@@ -898,6 +907,9 @@ public:
 	void normalize_rates();
 	void trim_rates(int frame);
 	void sync_time_scale();
+	void flatten_click_times(GJBaseGameLayer* play);
+	void set_level_interval(float interval);
+	void release_level_interval();
 	void sync_playback_fps();
 	int unlocked_step_cap() const;
 	void on_focus_change();

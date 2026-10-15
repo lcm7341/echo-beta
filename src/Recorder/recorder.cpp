@@ -169,6 +169,7 @@ namespace {
             read_ns = 0;
             wait_ns = 0;
             encode_ns = 0;
+            Logic::get().render_physics = 0.0;
             began = chrono::steady_clock::now();
         }
     };
@@ -212,6 +213,8 @@ public:
 private:
     FMOD::DSP* dsp = nullptr;
     FMOD::ChannelGroup* master = nullptr;
+    // where gds groups hung before bind_bus moved them under the master
+    std::vector<std::pair<FMOD::ChannelGroup*, FMOD::ChannelGroup*>> moved_groups;
     std::mutex lock;
     std::vector<float> pending;
     std::ofstream out;
@@ -337,6 +340,14 @@ public:
     float audio_speed = 1.f;
     CCSize saved_frame{}, saved_pixels{};
     float saved_win_width = 0.f, ui_shift = 0.f;
+    // the shader layers texture & sizes from before the render, put back as they were (not rebuilt from the window)
+    struct ShaderSave {
+        ShaderLayer* layer = nullptr;
+        CCRenderTexture* texture = nullptr;
+        CCRect rect;
+        float scale = 1.f, aspect = 1.f, texture_scale_x = 1.f, texture_scale_y = 1.f;
+        CCSize screen, content, target, extra;
+    } shader_saved;
     PlayLayer* ui_owner = nullptr;
     void shift_ui(PlayLayer* play, float by);
 
@@ -530,6 +541,12 @@ bool AudioTap::attach(float music, float sfx, fs::path const& file) {
         engine->m_backgroundMusicChannel->setPaused(false);
     old_music = engine->getBackgroundMusicVolume();
     old_sfx = engine->getEffectsVolume();
+    moved_groups.clear();
+    for (auto* group : { engine->m_backgroundMusicChannel, engine->m_globalChannel, engine->m_reverbChannel }) {
+        FMOD::ChannelGroup* parent = nullptr;
+        if (group && group->getParentGroup(&parent) == FMOD_OK && parent)
+            moved_groups.push_back({ group, parent });
+    }
     effects = std::clamp(sfx, 0.f, 1.f);
     engine->setBackgroundMusicVolume(std::clamp(music, 0.f, 1.f));
     bind_bus();
@@ -568,6 +585,9 @@ void AudioTap::detach() {
     master = nullptr;
     engine->setBackgroundMusicVolume(old_music);
     engine->setEffectsVolume(old_sfx);
+    for (auto const& [group, parent] : moved_groups)
+        parent->addGroup(group, true, nullptr);
+    moved_groups.clear();
     engine->m_system->setOutput(FMOD_OUTPUTTYPE_AUTODETECT);
 }
 
@@ -1564,8 +1584,23 @@ void Recorder::hold_view() {
     }
     auto* layer = GJBaseGameLayer::get();
     auto* shader = layer ? layer->m_shaderLayer : nullptr;
-    if (shader && (!shader->m_screenSize.equals(size) || !shader->m_targetTextureSize.equals(size)))
+    if (shader && (!shader->m_screenSize.equals(size) || !shader->m_targetTextureSize.equals(size))) {
+        if (!shader_saved.layer && shader->m_renderTexture && shader->m_sprite) {
+            shader_saved.layer = shader;
+            shader_saved.texture = shader->m_renderTexture;
+            shader_saved.texture->retain();
+            shader_saved.rect = shader->m_sprite->getTextureRect();
+            shader_saved.scale = shader->m_scaleFactor;
+            shader_saved.aspect = shader->m_aspectRatio;
+            shader_saved.screen = shader->m_screenSize;
+            shader_saved.content = shader->m_textureContentSize;
+            shader_saved.target = shader->m_targetTextureSize;
+            shader_saved.extra = shader->m_targetTextureSizeExtra;
+            shader_saved.texture_scale_x = shader->m_state.m_textureScaleX;
+            shader_saved.texture_scale_y = shader->m_state.m_textureScaleY;
+        }
         Recorder::get().resize_shader_layer(size);
+    }
 }
 
 // the windows own frame size, even if it got resized mid render
@@ -1582,7 +1617,29 @@ void Recorder::release_view() {
     holding = false;
     auto restore = real_frame();
     Recorder::get().silent_change_size(restore);
-    Recorder::get().resize_shader_layer(restore);
+    auto* layer = GJBaseGameLayer::get();
+    auto* shader = layer ? layer->m_shaderLayer : nullptr;
+    if (shader && shader == shader_saved.layer && shader_saved.texture && shader->m_sprite) {
+        if (shader->m_renderTexture && shader->m_renderTexture != shader_saved.texture)
+            shader->m_renderTexture->release();
+        shader->m_renderTexture = shader_saved.texture;
+        shader->m_sprite->setTexture(shader_saved.texture->getSprite()->getTexture());
+        shader->m_sprite->setTextureRect(shader_saved.rect);
+        shader->m_scaleFactor = shader_saved.scale;
+        shader->m_aspectRatio = shader_saved.aspect;
+        shader->m_screenSize = shader_saved.screen;
+        shader->m_textureContentSize = shader_saved.content;
+        shader->m_targetTextureSize = shader_saved.target;
+        shader->m_targetTextureSizeExtra = shader_saved.extra;
+        shader->m_state.m_textureScaleX = shader_saved.texture_scale_x;
+        shader->m_state.m_textureScaleY = shader_saved.texture_scale_y;
+    }
+    else {
+        if (shader_saved.texture)
+            shader_saved.texture->release();
+        Recorder::get().resize_shader_layer(restore);
+    }
+    shader_saved = {};
     // only the level that got moved, a new one was built at the videos shape already
     if (ui_owner && ui_owner == PlayLayer::get())
         shift_ui(ui_owner, -ui_shift);
@@ -3209,6 +3266,8 @@ void Logic::stop_render() {
             frames / std::max(wall, 1e-6), frames / std::max(logic.render_fps, 1) / std::max(wall, 1e-6));
         out << fmt::format("per frame: total={:.2f}ms read_back={:.2f}ms waiting_on_encoder={:.2f}ms encoder_write={:.2f}ms (encoder is on its own thread)\n",
             wall * 1000.0 / frames, each(g_timing.read_ns), each(g_timing.wait_ns), each(g_timing.encode_ns));
+        out << fmt::format("physics={:.2f}ms per frame ({:.0f}% of the frame) steps_per_frame={:.0f}\n", logic.render_physics * 1000.0 / frames,
+            logic.render_physics / std::max(wall, 1e-6) * 100.0, logic.sample_rate() / std::max(logic.render_fps, 1));
         out << fmt::format("ssb_fix={} factor low={:.6f} high={:.6f} mean={:.6f} samples={} tps={:g} render_speed={:g}\n", logic.render_ssb_fix, logic.render_factor_low,
             logic.render_factor_high, logic.render_factor_count > 0 ? logic.render_factor_sum / logic.render_factor_count : 1.0, logic.render_factor_count,
             logic.sample_rate(), film.audio_speed);

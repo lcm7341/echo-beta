@@ -730,7 +730,7 @@ void GUI::main() {
         tip("Allows you to step backwards while recording. Higher TPS saves less often and replays your inputs from the last save.");
         float back_w = eui::RowRight(4.6f);
         if (eui::Button("Back", ImVec2(back_w, 0.f)))
-            Logic::get().step_back(PlayLayer::get(), 1);
+            Logic::get().back_tap_queued = true;
         GUI::get().offer_rebind("step-back");
         eui::Row("Saved states", "How many states to keep as a percent of your TPS. 100% at 240 TPS keeps 240.");
         if (eui::DragInt("##backstep-saves", &logic.backstep_percent, 1.f, 1, 200, "%d%%"))
@@ -794,6 +794,7 @@ void GUI::tools() {
     if (eui::BeginCard("Safety and Auto Input", card_width())) {
         if (quad_row("Noclip", "##noclip", logic.noclip_p1, logic.noclip_p2))
             GUI::get().persist();
+        GUI::get().offer_rebind("key-noclip", "The keybind turns noclip off, and back on for the same players.");
         toggle("Safe Mode", logic.safeMode);
         tip("Removes the ability to make progress when using hacks. You can still make progress if no hacks are on, though.");
         if (toggle("Prevent Death", logic.pause_before_kill))
@@ -806,7 +807,7 @@ void GUI::tools() {
             open_autoclicker = true;
         if (toggle("Trajectory Autoclicker", logic.traj_autoclicker))
             Logic::get().reset_traj();
-        tip("Automatically clicks or releases when the next frame would kill you. Works without Show Trajectory.");
+        GUI::get().offer_rebind("key-traj-autoclick", "Automatically clicks or releases when the next frame would kill you. Works without Show Trajectory.");
         ImGui::BeginDisabled(!logic.traj_autoclicker);
         eui::Row("Lookahead", "Clicks when you would die within this many frames.");
         if (eui::InputInt("##traj-lookahead", &logic.traj_click_lookahead))
@@ -1364,7 +1365,7 @@ void GUI::renderer() {
         toggle("SSB Fix", logic.render_ssb_fix);
         tip("Fixes audio sync because of the game's scroll speed bug when rendering.");
         toggle("Real Time Rendering", logic.render_real_time);
-        tip("May cause visual bugs. Stacked Orb Optimization may not be recommended.");
+        tip("Renders the end of the level faster by letting its animation skip steps. Gameplay still renders every step.");
     }
     eui::EndCard();
     eui::EndCardRow();
