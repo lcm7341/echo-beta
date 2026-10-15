@@ -1,6 +1,5 @@
 #include "collision_bounds.hpp"
 #include "Logic/logic.hpp"
-#include "Hooks/opt.hpp"
 #ifdef GEODE_IS_WINDOWS
 #include <Geode/Geode.hpp>
 #include "Rendering/circle_signatures.hpp"
@@ -47,9 +46,9 @@ namespace echo::collision_bounds {
             }
             return;
         }
-        // the switch. while the bot is disabled its patches are not mine to touch
-        if (!Logic::bot_disabled() && bounds_patch->isEnabled() != echo::opt::getters)
-            (void)(echo::opt::getters ? bounds_patch->enable() : bounds_patch->disable());
+        // while the bot is disabled its patches are not mine to touch
+        if (!Logic::bot_disabled() && !bounds_patch->isEnabled())
+            (void)bounds_patch->enable();
     }
 }
 

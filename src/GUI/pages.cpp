@@ -1542,10 +1542,6 @@ void GUI::draw_theme() {
         if (eui::Button("Open Logs Folder"))
             geode::utils::file::openFolder(logic.save_root() / "logs");
         tip("Opens the folder the logs are saved in.");
-#ifdef GEODE_IS_WINDOWS
-        toggle("Inline Getters", echo::opt::getters);
-        tip("Inlines the rect getters in the collision check.");
-#endif
         if (eui::Checkbox("Button Effects", &eui::button_effects()))
             gui.export_theme(gui.theme_path("current"));
         tip("Enables button animations for the animated themes.");
