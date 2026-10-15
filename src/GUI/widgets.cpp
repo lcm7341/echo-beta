@@ -1214,6 +1214,108 @@ namespace eui {
             draw->AddRect(body.Min, body.Max, ImGui::ColorConvertFloat4ToU32(faded(edge, (.45f + .45f * hot) * alpha)), rounding, 0, 1.f);
         }
 
+        // the backdrop is clipped to the windows rectangle, but the window has round corners: anything big crossing a
+        // corner (a heaven ray) showed past the rounding. this cuts every triangle drawn since (vtx, idx, cmd) along the
+        // windows real outline (the same points its frame uses). the outline is convex, so each triangle is clipped
+        // edge by edge & what stays is a convex polygon, drawn as a fan
+        void round_off(ImDrawList* draw, int idx_from, int cmd_from, ImRect const& box, float rounding) {
+            if (rounding < .5f || draw->CmdBuffer.Size == 0)
+                return;
+            draw->PathRect(box.Min, box.Max, rounding);
+            std::vector<ImVec2> outline(draw->_Path.begin(), draw->_Path.end());
+            draw->PathClear();
+            if (outline.size() < 3)
+                return;
+            float turn = 0.f;
+            for (std::size_t i = 0; i < outline.size(); ++i) {
+                ImVec2 a = outline[i], b = outline[(i + 1) % outline.size()];
+                turn += (b.x - a.x) * (b.y + a.y);
+            }
+            float side = turn < 0.f ? 1.f : -1.f;
+            // only the corners can be outside: a triangle all in the middle band either way is fine as it is
+            auto plain = [&](ImVec2 p) {
+                return (p.x >= box.Min.x + rounding && p.x <= box.Max.x - rounding) ? 1 : (p.y >= box.Min.y + rounding && p.y <= box.Max.y - rounding) ? 2 : 0;
+            };
+            auto lerp_vert = [](ImDrawVert const& a, ImDrawVert const& b, float t) {
+                ImDrawVert out;
+                out.pos = ImVec2(a.pos.x + (b.pos.x - a.pos.x) * t, a.pos.y + (b.pos.y - a.pos.y) * t);
+                out.uv = ImVec2(a.uv.x + (b.uv.x - a.uv.x) * t, a.uv.y + (b.uv.y - a.uv.y) * t);
+                ImU32 mixed = 0;
+                for (int shift = 0; shift < 32; shift += 8) {
+                    float ca = (float)((a.col >> shift) & 0xff), cb = (float)((b.col >> shift) & 0xff);
+                    mixed |= (static_cast<ImU32>(std::lround(ca + (cb - ca) * t)) & 0xff) << shift;
+                }
+                out.col = mixed;
+                return out;
+            };
+            ImVector<ImDrawIdx> indices;
+            indices.reserve(draw->IdxBuffer.Size);
+            for (int i = 0; i < idx_from; ++i)
+                indices.push_back(draw->IdxBuffer[i]);
+            std::vector<ImDrawVert> poly, next;
+            for (int c = std::max(cmd_from, 0); c < draw->CmdBuffer.Size; ++c) {
+                ImDrawCmd& cmd = draw->CmdBuffer[c];
+                unsigned begin = cmd.IdxOffset, end = cmd.IdxOffset + cmd.ElemCount;
+                unsigned start = std::max(begin, static_cast<unsigned>(idx_from));
+                unsigned new_offset = begin < static_cast<unsigned>(idx_from) ? begin : static_cast<unsigned>(indices.Size);
+                for (unsigned i = start; i + 3 <= end; i += 3) {
+                    ImDrawIdx tri[3] = { draw->IdxBuffer[i], draw->IdxBuffer[i + 1], draw->IdxBuffer[i + 2] };
+                    ImDrawVert const* at[3] = { &draw->VtxBuffer[cmd.VtxOffset + tri[0]], &draw->VtxBuffer[cmd.VtxOffset + tri[1]], &draw->VtxBuffer[cmd.VtxOffset + tri[2]] };
+                    int band = plain(at[0]->pos);
+                    if (band != 0 && plain(at[1]->pos) == band && plain(at[2]->pos) == band) {
+                        indices.push_back(tri[0]);
+                        indices.push_back(tri[1]);
+                        indices.push_back(tri[2]);
+                        continue;
+                    }
+                    poly = { *at[0], *at[1], *at[2] };
+                    for (std::size_t e = 0; e < outline.size() && !poly.empty(); ++e) {
+                        ImVec2 a = outline[e], b = outline[(e + 1) % outline.size()];
+                        auto inside = [&](ImVec2 p) {
+                            return side * ((b.x - a.x) * (p.y - a.y) - (b.y - a.y) * (p.x - a.x)) >= 0.f;
+                        };
+                        next.clear();
+                        for (std::size_t k = 0; k < poly.size(); ++k) {
+                            ImDrawVert const& p = poly[k];
+                            ImDrawVert const& q = poly[(k + 1) % poly.size()];
+                            bool p_in = inside(p.pos), q_in = inside(q.pos);
+                            if (p_in)
+                                next.push_back(p);
+                            if (p_in != q_in) {
+                                float dp = (b.x - a.x) * (p.pos.y - a.y) - (b.y - a.y) * (p.pos.x - a.x);
+                                float dq = (b.x - a.x) * (q.pos.y - a.y) - (b.y - a.y) * (q.pos.x - a.x);
+                                next.push_back(lerp_vert(p, q, dp / (dp - dq)));
+                            }
+                        }
+                        poly.swap(next);
+                    }
+                    if (poly.size() < 3)
+                        continue;
+                    // the new points need indices that still fit after this cmds vertex offset
+                    if (sizeof(ImDrawIdx) == 2 && draw->VtxBuffer.Size - static_cast<int>(cmd.VtxOffset) + static_cast<int>(poly.size()) >= (1 << 16)) {
+                        indices.push_back(tri[0]);
+                        indices.push_back(tri[1]);
+                        indices.push_back(tri[2]);
+                        continue;
+                    }
+                    auto first = static_cast<ImDrawIdx>(draw->VtxBuffer.Size - static_cast<int>(cmd.VtxOffset));
+                    for (auto const& vert : poly)
+                        draw->VtxBuffer.push_back(vert);
+                    for (std::size_t k = 1; k + 1 < poly.size(); ++k) {
+                        indices.push_back(first);
+                        indices.push_back(static_cast<ImDrawIdx>(first + k));
+                        indices.push_back(static_cast<ImDrawIdx>(first + k + 1));
+                    }
+                }
+                cmd.IdxOffset = new_offset;
+                cmd.ElemCount = static_cast<unsigned>(indices.Size) - new_offset;
+            }
+            draw->IdxBuffer.swap(indices);
+            draw->_VtxWritePtr = draw->VtxBuffer.Data + draw->VtxBuffer.Size;
+            draw->_IdxWritePtr = draw->IdxBuffer.Data + draw->IdxBuffer.Size;
+            draw->_VtxCurrentIdx = static_cast<unsigned>(draw->VtxBuffer.Size) - draw->CmdBuffer.back().VtxOffset;
+        }
+
         void drawScene(ImGuiWindow* window, float alpha) {
             Backdrop back;
             back.draw = ImGui::GetBackgroundDrawList();
@@ -1228,6 +1330,8 @@ namespace eui {
             back.alpha = alpha;
             back.id = window->ID;
             int from = back.draw->VtxBuffer.Size;
+            int idx_from = back.draw->IdxBuffer.Size;
+            int cmd_from = back.draw->CmdBuffer.Size - 1;
             switch (scene()) {
             case Scene::Halloween:
                 halloween_scene(back);
@@ -1251,6 +1355,7 @@ namespace eui {
                 break;
             }
             turn_verts(back.draw, from, body_turn);
+            round_off(back.draw, idx_from, cmd_from, ImRect(back.a, back.b), back.rounding);
         }
     }
 
