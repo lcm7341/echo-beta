@@ -345,6 +345,7 @@ struct Session {
 	// silicate saves the LAST tps it used, so a macro with tps changes can start on the wrong one. ts lets me fix it by hand
 	bool playback_tps_changes = false;
 	bool trace_logging = false;
+	bool no_editor_keybinds = false;
 	std::vector<RateChange> rates;
 	int accuracy = 1;
 	bool present = true;
@@ -812,6 +813,7 @@ public:
 	void disarm_length_pause_if_holding();
 	void check_advance_pause(PlayLayer* play);
 	void on_keybind(std::string_view key, bool down);
+	static bool editor_holds_keys();
 	void tick_autoclicker(PlayLayer* play);
 	void tick_straight(PlayLayer* play);
 	void after_frame(PlayLayer* play, float dt);

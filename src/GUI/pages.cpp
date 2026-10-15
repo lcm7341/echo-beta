@@ -1592,6 +1592,8 @@ void GUI::draw_theme() {
     eui::EndCard();
 #ifndef GEODE_IS_MOBILE
     if (eui::BeginCard("Keybinds", card_width())) {
+        toggle("No Keybinds In Editor", logic.no_editor_keybinds);
+        tip("Turns off every keybind in the editor, except on its pause menu.");
         ImGui::TextDisabled("Click a key to change it.");
         ImGui::BeginChild("##keybind-list", ImVec2(-FLT_MIN, eui::CardFill(8.f)), ImGuiChildFlags_Borders);
         float key_w = eui::em(6.5f);

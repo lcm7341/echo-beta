@@ -188,6 +188,8 @@ void Logic::pull_settings() {
                 logic.playback_tps_changes = flag.unwrap();
             if (auto flag = json["trace_logging"].asBool())
                 logic.trace_logging = flag.unwrap();
+            if (auto flag = json["no_editor_keybinds"].asBool())
+                logic.no_editor_keybinds = flag.unwrap();
             if (auto flag = json["opt_effects"].asBool())
                 echo::opt::effects = flag.unwrap();
             if (auto flag = json["record_p1"].asBool())
@@ -729,6 +731,7 @@ void Logic::pull_settings() {
     logic.no_overwrite = Logic::read_bool("no-overwrite", logic.no_overwrite);
     logic.playback_tps_changes = Logic::read_bool("playback-tps-changes", logic.playback_tps_changes);
     logic.trace_logging = Logic::read_bool("trace-logging", logic.trace_logging);
+    logic.no_editor_keybinds = Logic::read_bool("no-editor-keybinds", logic.no_editor_keybinds);
     logic.record_p1 = Logic::read_bool("record-p1", logic.record_p1);
     logic.record_p2 = Logic::read_bool("record-p2", logic.record_p2);
     logic.play_p1 = Logic::read_bool("play-p1", logic.play_p1);
@@ -796,6 +799,7 @@ void Logic::push_runtime_settings() {
     Logic::write_bool("no-overwrite", logic.no_overwrite);
     Logic::write_bool("playback-tps-changes", logic.playback_tps_changes);
     Logic::write_bool("trace-logging", logic.trace_logging);
+    Logic::write_bool("no-editor-keybinds", logic.no_editor_keybinds);
     Logic::write_bool("record-p1", logic.record_p1);
     Logic::write_bool("record-p2", logic.record_p2);
     Logic::write_bool("play-p1", logic.play_p1);
@@ -849,6 +853,7 @@ void Logic::save_settings_file() {
     json["no_overwrite"] = logic.no_overwrite;
     json["playback_tps_changes"] = logic.playback_tps_changes;
     json["trace_logging"] = logic.trace_logging;
+    json["no_editor_keybinds"] = logic.no_editor_keybinds;
     json["opt_effects"] = echo::opt::effects;
     json["record_p1"] = logic.record_p1;
     json["record_p2"] = logic.record_p2;

@@ -21,6 +21,8 @@
 #include <Geode/binding/GJSpiderSprite.hpp>
 #include <Geode/binding/HardStreak.hpp>
 #include <Geode/binding/PlayLayer.hpp>
+#include <Geode/binding/LevelEditorLayer.hpp>
+#include <Geode/binding/EditorPauseLayer.hpp>
 #include <Geode/binding/PlayerObject.hpp>
 #include <Geode/ui/Notification.hpp>
 #include <chrono>
@@ -700,8 +702,17 @@ void Logic::check_advance_pause(PlayLayer* play) {
     }
 }
 
+bool Logic::editor_holds_keys() {
+    if (!Logic::get().no_editor_keybinds || !LevelEditorLayer::get())
+        return false;
+    auto* scene = CCDirector::sharedDirector()->getRunningScene();
+    return !scene || !scene->getChildByType<EditorPauseLayer>(0);
+}
+
 void Logic::on_keybind(std::string_view key, bool down) {
     if (down && GUI::get().typing())
+        return;
+    if (down && Logic::editor_holds_keys())
         return;
     if (key == "open-menu") {
         if (down)
