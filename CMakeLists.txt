@@ -30,6 +30,14 @@ endif()
 
 target_include_directories(${PROJECT_NAME} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
+set(ECHO_BUILD_INFO "${CMAKE_CURRENT_BINARY_DIR}/generated/build_info.cpp")
+add_custom_target(echo_build_info ALL
+    COMMAND ${CMAKE_COMMAND} -E env TZ=America/Chicago ${CMAKE_COMMAND} -DOUT=${ECHO_BUILD_INFO} -DSRC=${CMAKE_CURRENT_SOURCE_DIR} -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/build_info.cmake
+    BYPRODUCTS ${ECHO_BUILD_INFO}
+    VERBATIM)
+add_dependencies(${PROJECT_NAME} echo_build_info)
+target_sources(${PROJECT_NAME} PRIVATE ${ECHO_BUILD_INFO})
+
 if (NOT DEFINED ENV{GEODE_SDK} OR NOT EXISTS "$ENV{GEODE_SDK}/CMakeLists.txt")
     foreach(_geode_candidate "$ENV{HOME}/Documents/Geode" "$ENV{HOME}/.local/share/Geode/sdk")
         if (EXISTS "${_geode_candidate}/CMakeLists.txt")

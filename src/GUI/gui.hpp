@@ -117,7 +117,6 @@ public:
 	void release_stuck_mouse();
 	void draw_frame_bar();
 	bool bar_only = false;
-	// the id of a thing thats being dragged up & down by a finger, so touch_scroll leaves the page alone
 	unsigned int scroll_hold = 0;
 	int bar_pressed = 0;
 	ImVec4 bar_area{}, bar_back{}, bar_step{}, bar_resume{}, bar_best{};

@@ -36,7 +36,6 @@ namespace echo::movement {
 		std::memcpy(static_cast<char*>(object) + offset, &value, sizeof(T));
 	}
 
-	// above 1e7 gd uses FLOAT below it DOUBLE. keep both
 	inline bool section(double position, float factor, int& result) {
 		if (!std::isfinite(position) || !std::isfinite(factor))
 			return false;
@@ -51,7 +50,7 @@ namespace echo::movement {
 	inline bool section_unchanged(void const* layer, void const* object, double px, double py) {
 		int old_x = read<int>(object, 0x278);
 		if (old_x < 0)
-			return true; // gd returns before reading pos
+			return true;
 #if defined(__SSE2__) || defined(_M_X64)
 		__m128d position = _mm_set_pd(py, px);
 		__m128d factors = _mm_cvtps_pd(_mm_castsi128_ps(_mm_cvtsi64_si128(read<int64_t>(layer, 0x36a0))));

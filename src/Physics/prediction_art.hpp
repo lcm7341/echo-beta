@@ -7,7 +7,6 @@ namespace phys {
 	// once before a prediction NOT every step
 	void prepare_prediction_art();
 	bool fast_prediction_pos();
-	// for the real player, no visual only exceptions
 	bool fast_live_pos();
 
 	inline void pos_without_art(PlayerObject* player, CCPoint const& position) {

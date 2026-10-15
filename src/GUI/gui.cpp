@@ -421,7 +421,6 @@ void GUI::draw_frame_bar() {
     if (!play)
         return;
     float font = ImGui::GetFontSize();
-    // drag it by the frame number. saved as a part of the screen so it lands the same after a rotate
     ImVec2 display = ImGui::GetIO().DisplaySize;
     ImVec2 spot(display.x * .5f, font * .5f);
     if (logic.frame_bar_x >= 0.f && logic.frame_bar_y >= 0.f)
@@ -583,9 +582,6 @@ void GUI::draw_window() {
         settings_measured = false;
     }
     float nav_top = ImGui::GetCursorScreenPos().y - ImGui::GetWindowPos().y;
-    // how tall the page part is allowed to be on a phone: the menu never gets taller than the screen. at the default scale
-    // every page fits & is stretched to end where the sidebar ends. at a bigger scale the page scrolls inside (drag it)
-    // & the header & sidebar stay put
     float view_cap = FLT_MAX;
 #ifdef GEODE_IS_MOBILE
     {
@@ -607,7 +603,6 @@ void GUI::draw_window() {
     // what doesnt fit we just scroll. there is probably a better way to do this too
     // TODO: brainstorm a better way to scale UI for fat thumbs
     float inner = 1.f;
-    // off for now: on a real phone every card came out as just its heading. the setting is kept, nothing reads it
 #if 0
     inner = std::clamp(Logic::get().menu_inner_scale, 1.f, 1.5f);
 #endif
@@ -784,7 +779,6 @@ void GUI::sync_menu_scale() {
 #ifdef GEODE_IS_MOBILE
     gui.scale_cap = std::min(gui.scale_cap, 1.f);
 #endif
-    // dont keep the scale
     float& saved = logic.docked_menu ? logic.menu_scale : logic.menu_scale_undocked;
     float scale = saved;
     if (Logic::get().render_active())
@@ -827,13 +821,11 @@ void GUI::apply_touch_style() {
     float grow = touch_scale();
     (void)base;
     style.TouchExtraPadding = ImVec2(std::max(style.TouchExtraPadding.x, 4.f * grow), std::max(style.TouchExtraPadding.y, 4.f * grow));
-    // a phone scrolls by dragging anywhere (touch_scroll), nobody grabs the bar. a fat one just ate room from the rows & sat on top of them
     style.ScrollbarSize = 4.f * grow;
     style.GrabMinSize = std::max(style.GrabMinSize, 14.f * grow);
     auto& io = ImGui::GetIO();
     io.MouseDoubleClickMaxDist = 30.f * grow;
     io.MouseDoubleClickTime = .4f;
-    // fix double tap
     io.MouseDragThreshold = std::max(io.MouseDragThreshold, 10.f * grow);
 #endif
 }
@@ -858,7 +850,6 @@ void GUI::touch_scroll() {
         return;
     if (g.ActiveId && g.ActiveIdWindow && g.ActiveId == ImGui::GetWindowScrollbarID(g.ActiveIdWindow, ImGuiAxis_Y))
         return;
-    // something that is dragged up & down itself (the label grips) has the finger, so no scrolling
     if (g.ActiveId && g.ActiveId == GUI::get().scroll_hold)
         return;
     ImGuiWindow* window = target;
@@ -923,7 +914,6 @@ bool GUI::menu_shown() {
     return imgui.isInitialized() && imgui.isVisible() && !GUI::get().bar_only;
 }
 
-// show cursor in game being off fix
 void GUI::sync_cursor() {
 #ifdef GEODE_IS_DESKTOP
     static bool forced = false;

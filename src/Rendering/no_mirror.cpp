@@ -22,7 +22,6 @@ namespace {
         return flips;
     }
 
-    // what the mirror transition moved this frame
     std::vector<Ref<GameObject>>& slid() {
         static std::vector<Ref<GameObject>> objects;
         return objects;
@@ -142,8 +141,6 @@ class $modify(NoMirrorObjects, PlayLayer) {
         PlayLayer::updateVisibility(dt);
         if (before.empty())
             return;
-        // gd slid it last frame & forgot about it this frame = its stuck mid slide
-        // (layout mode keeps those on screen)
         std::unordered_set<GameObject*> still;
         for (auto const& object : slid())
             still.insert(object.data());

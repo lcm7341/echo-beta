@@ -54,11 +54,9 @@ public:
 
 	void invalidate();
 
-	// lock fps: the trajectory is worked on across frames & the lvl waits for it
 	bool job_pending() const {
 		return job_running;
 	}
-	// only safe while the lvl hasnt moved since it began
 	void cancel_job();
 
 	bool survives(PlayLayer* play, bool player1, bool press, int delay);
@@ -110,7 +108,6 @@ private:
 	};
 
 	CCDrawNode* node = nullptr;
-	// a sliced trajectory draws here, swapped in when done
 	CCDrawNode* back_node = nullptr;
 	bool busy = false;
 	bool cached = false;
@@ -125,17 +122,13 @@ private:
 	bool parted = false;
 	bool held_p1 = false, held_p2 = false;
 	int clicked_frame = -1;
-	// steps from now the autoclicker has nothing to decide on, so they can run batched (the 1 it just checked counts)
 	int safe_steps = 1;
 	int measured[2] = {}, measured_full = 0;
 	std::vector<CCPoint>* path_sink = nullptr;
-	// death next label only, no moving object forecast
 	bool label_only = false;
 	std::unordered_set<EnhancedGameObject*> used_p1, used_p2;
 
-	// sliced trajectory, on its own fiber (windows)
 	struct SliceHook {
-		// every save runs before any pause
 		std::function<void()> save, pause, resume;
 	};
 	std::vector<SliceHook*> slice_hooks;

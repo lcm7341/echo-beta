@@ -15,7 +15,6 @@ using namespace geode::prelude;
 class $modify(EchoQuietLayer, GJBaseGameLayer) {
     void playExitDualEffect(PlayerObject* player) {
         auto& logic = Logic::get();
-        // dying in dual plays ts burst too, so disable death effect takes it as well
         if (logic.no_effects || (m_playerDied && logic.disable_death_effect))
             return;
         GJBaseGameLayer::playExitDualEffect(player);

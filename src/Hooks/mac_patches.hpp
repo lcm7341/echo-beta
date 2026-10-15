@@ -80,7 +80,6 @@ namespace echo::patches::mac {
 		0x00,
 		0x00,
 	};
-	// b past the second event map lookup, same idea as windows (game_patches.hpp)
 	inline constexpr std::array<uint8_t, 4> event_lookup_replacement = {
 		0x29,
 		0x00,
@@ -233,7 +232,6 @@ namespace echo::patches::mac {
 		0x00,
 	};
 #else
-	// intel slice, same patches
 	inline constexpr uintptr_t step_address = 0x1516cf, step_pointer_offset = 0x2;
 	inline constexpr uintptr_t event_address = 0x121590, event_size = 0x1ac, event_lookup_address = 0x12168b;
 	inline constexpr uint64_t event_hash = 0x92f729cfa2100615; // gd code hash

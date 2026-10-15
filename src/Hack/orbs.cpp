@@ -22,7 +22,6 @@ bool Orbs::click_orb_assist(bool player2) {
     auto& logic = Logic::get();
     if (!logic.click_dash_orbs && !logic.black_orb_assist())
         return false;
-    // playback uses the saved clicks only
     if (logic.plays_player(player2))
         return false;
     if (logic.is_playing() && !logic.is_recording())
@@ -36,7 +35,6 @@ namespace {
     constexpr int GREEN_DASH_ORB = 1704, BLACK_ORB = 1330;
 
     std::unordered_set<int> used_p1, used_p2;
-    // orbs the assist clicked for me, kept until i let go. see blockHoldRing
     std::unordered_set<int> claimed_p1, claimed_p2;
     bool jump_press_p1 = false, jump_press_p2 = false, hold_after_p1 = false, hold_after_p2 = false;
     bool tool_press_p1 = false, tool_press_p2 = false, tool_hit_p1 = false, tool_hit_p2 = false;
@@ -85,8 +83,6 @@ namespace {
         return Kind::None;
     }
 
-    // easy black orb ufo: a black orb is left alone while the icon is still going up (down, upside down), so a ufo click
-    // near one doesnt slam it back. click black orbs on its own takes them every time
     bool moving_up(PlayerObject* player) {
         if (Logic::get().click_black_orbs || !player)
             return false;
@@ -226,7 +222,6 @@ namespace {
         player->m_stateJumpBuffered = 1;
     }
 
-    // clicks an assist put in gds queue & that still have to reach the macro
     int queued_assist = 0;
 
     void queue_jump(PlayLayer* play, bool player2, bool down) {
@@ -239,7 +234,7 @@ namespace {
     struct PadStep {
         bool pending = false;
         bool live_black = false;
-        bool dash = false; // a held click started a dash, click it off next step
+        bool dash = false;
         int black = 0;
         bool anon = false;
         std::vector<GameObject*> blue;
@@ -456,9 +451,6 @@ void Orbs::click_pads(PlayLayer* play, PlayerObject* player, int objectType, Gam
         step.pads.push_back(pad->m_uniqueID);
 }
 
-// a dash a HELD click started (i was already holding when the icon got to the orb). the assist clicks every dash orb, so
-// ts one is let go & pressed again at the start of the next step, before the icon moves: same as a click, the dash is 0 steps long.
-// its done with real inputs that go in the macro, so playback (where gd starts the same dash off the same hold) ends it the same way
 void Orbs::note_dash(PlayLayer* play, PlayerObject* player, GameObject* ring) {
     auto& logic = Logic::get();
     if (!play || !player || logic.predicting || !logic.click_dash_orbs || tool_armed)
@@ -621,9 +613,6 @@ bool Orbs::blockHoldRing(PlayerObject* player, GameObject* object) {
         return false;
     if (tool_armed)
         return false;
-    // ONLY the orbs the assist clicked itself are held back: the swift it put in the macro already used them, so playback
-    // wont fire them again either. every other orb goes off the way gd does it. ts used to block every held click, so
-    // holding into a dash orb did nothing while recording & then dashed when the macro played (nothing in the macro can stop that)
     return (player2 ? claimed_p2 : claimed_p1).contains(object->m_uniqueID);
 }
 

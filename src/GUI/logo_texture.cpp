@@ -95,7 +95,6 @@ namespace eui {
         if (!loaded)
             return at->second;
         smooth(loaded);
-        // kept forever or the cache drops it between scenes
         loaded->retain();
         at->second = loaded;
         return at->second;

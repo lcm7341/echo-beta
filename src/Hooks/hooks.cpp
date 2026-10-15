@@ -5,6 +5,7 @@
 // the step count patches & silicates reset patches are at the bottom
 #include "Physics/object_counters.hpp"
 #include "Logic/logic.hpp"
+#include "Logic/perf.hpp"
 #include "Hooks/rotation.hpp"
 #include "Hooks/step.hpp"
 #include "Hooks/opt.hpp"
@@ -113,13 +114,10 @@ void echo_touch_hook(bool on);
 
 void Logic::sync_predict_hooks() {
     auto const& logic = Logic::get();
-    // death next frame is a recording aid. while a macro just plays it must not cost anything
     bool watching = logic.is_playing() && !logic.is_recording();
     bool want = logic.show_traj || logic.pause_before_kill || logic.traj_autoclicker || (logic.show_death_next && !watching) || logic.predicting;
-    // only for what uses the moving object forecast
     bool forecast_users = logic.show_traj || logic.pause_before_kill || logic.traj_autoclicker || logic.best_frame_running;
     echo_forecast_section_hook(forecast_users && logic.traj_moving_objects);
-    // ts hook was 12% of the physics in one fell swoop
     echo_touch_hook((logic.backstep && !Logic::get().render_capturing()) || logic.is_recording());
     if (want == predict_hooks_on)
         return;
@@ -130,7 +128,6 @@ void Logic::sync_predict_hooks() {
 }
 
 namespace {
-    // update calls, so the camera can tell batches apart
     uint64_t g_updatesRun = 0;
 }
 
@@ -140,28 +137,21 @@ namespace {
     constexpr int DASH_SPIN_TAG = 12;
     echo::effects::Frame g_effectFrame;
     int g_stackedWaves = 0;
-    // the orb ur jumping off already played its effects
     bool quiet_orb = false;
     // waves gd made for a dud ahh orb!
     std::vector<CCCircleWave*> g_dudWaves;
-    // the dash booms 1 frame merged. the 1st gets drawn again everywhere the rest would have been
     struct BoomStack {
         std::vector<CCPoint> offsets;
-        // how many merged ones each copy stands for, they draw additive
         std::vector<int> weights;
         int base = 1;
     };
     std::unordered_map<CCSprite*, BoomStack> g_boomStacks;
-    // every node goes thru it so its only on while a stack exists
     Hook* g_stackVisitHook = nullptr;
-    // ts frames 1st boom & where the orb was
     struct BoomFirst {
         CCSprite* sprite = nullptr;
         CCPoint at;
     };
-    // per orb AND player, in a dual each has its own color
     std::map<std::pair<GameObject*, PlayerObject*>, BoomFirst> g_boomFirst;
-    // same for the dash end afterimage (the white trail)
     std::unordered_map<PlayerObject*, BoomFirst> g_afterFirst;
     bool g_boomCapture = false;
     CCSprite* g_boomCaptured = nullptr;
@@ -171,14 +161,12 @@ namespace {
 class $modify(EchoBoomSprite, CCSprite) {
     static CCSprite* createWithSpriteFrameName(char const* name) {
         auto* made = CCSprite::createWithSpriteFrameName(name);
-        // the 1st one made is the effect, the rest are its children
         if (g_boomCapture && !g_boomCaptured)
             g_boomCaptured = made;
         return made;
     }
 };
 
-// CCSprite has no visit of its own, so the stacks are drawn from CCNode's
 class $modify(EchoStackNode, CCNode) {
     static void onModify(auto& self) {
         if (auto hook = self.getHook("cocos2d::CCNode::visit"); hook) {
@@ -214,7 +202,6 @@ class $modify(EchoStackNode, CCNode) {
             for (auto& [kid, opacity] : kids)
                 kid->setOpacity(scaled(opacity));
         };
-        // every copy gets the same share or the real one comes out dim
         int total = stack.base;
         for (int weight : stack.weights)
             total += weight;
@@ -234,7 +221,6 @@ class $modify(EchoStackNode, CCNode) {
     }
 };
 
-// stands in for a stack of the same wave from 1 shown frame & draws all of them, spread over their ages
 class $modify(EchoCircleWave, CCCircleWave) {
     struct Fields {
         int hits = 1;
@@ -252,7 +238,6 @@ class $modify(EchoCircleWave, CCCircleWave) {
     };
 
     bool init(float startRadius, float endRadius, float duration, bool fadeIn, bool easeOut) {
-        // gd sets ts up & adds it anyway, it just never gets its actions
         if (quiet_orb && !g_effectFrame.open) {
             this->retain();
             g_dudWaves.push_back(this);
@@ -298,7 +283,6 @@ class $modify(EchoCircleWave, CCCircleWave) {
             CCCircleWave::draw();
             return;
         }
-        // where it was a frame ago
         if (!fields->drawn) {
             fields->drawn = true;
             fields->seen_radius = fields->was_radius = m_radius;
@@ -314,7 +298,6 @@ class $modify(EchoCircleWave, CCCircleWave) {
         float young_radius = old_radius + (fields->was_radius - old_radius) * fields->span;
         float young_opacity = old_opacity + (fields->was_opacity - old_opacity) * fields->span;
         if (!fields->trail.empty()) {
-            // 1 copy on every spot, oldest to youngest
             int copies = static_cast<int>(fields->trail.size()) + 1;
             float each = std::max(1.f, static_cast<float>(fields->hits) / static_cast<float>(copies));
             for (int at = 0; at < copies; ++at) {
@@ -335,7 +318,6 @@ class $modify(EchoCircleWave, CCCircleWave) {
             m_opacity = old_opacity;
             return;
         }
-        // 1 circle every 0.15 units is already solid
         int amt = std::clamp(1 + static_cast<int>(std::fabs(old_radius - young_radius) / 0.15f), 1, std::min(fields->hits, 48));
         float each = static_cast<float>(fields->hits) / static_cast<float>(amt);
         for (int at = 0; at < amt; ++at) {
@@ -350,7 +332,6 @@ class $modify(EchoCircleWave, CCCircleWave) {
 };
 
 namespace {
-    // ts effects slot ts frame, nullptr = not stacking. fresh = 1st time
     echo::effects::Seen* effect_slot(echo::effects::Key const& key, CCPoint const* at, bool& fresh) {
         auto const& logic = Logic::get();
         fresh = false;
@@ -368,7 +349,6 @@ namespace {
         return seen;
     }
 
-    // 1 more of the same on the circles the 1st one made
     void count_repeat(echo::effects::Seen* seen, CCPoint const* at) {
         CCPoint offset;
         CCPoint const* moved = nullptr;
@@ -390,7 +370,6 @@ namespace {
         return true;
     }
 
-    // dash bursts play up to 16 times a frame spread over its steps instead of once, 16 already looks like all of them
     bool spread_effect(echo::effects::Key const& key) {
         constexpr int PER_FRAME = 16;
         auto& logic = Logic::get();
@@ -424,7 +403,6 @@ namespace {
         g_dudWaves.clear();
     }
 
-    // closes whatever repeated_effect opened inside it
     struct EffectScope {
         echo::effects::Seen* before = g_effectFrame.open;
         ~EffectScope() {
@@ -452,7 +430,6 @@ namespace {
 #endif
     }
 
-    // the sprite gd added to it while ts ran
     template <class F>
     CCSprite* added_effect(F&& run) {
         auto* layer = effect_layer();
@@ -499,7 +476,6 @@ namespace {
             (void)g_stackVisitHook->disable();
     }
 
-    // lets go of the waves & works out how much of the frame each stack was spread over
     void forget_effects() {
         forget_booms();
         int steps = Logic::get().step_frame - g_effectFrame.began;
@@ -851,7 +827,6 @@ class $modify(EchoPlayLayer, PlayLayer) {
 #ifdef GEODE_IS_WINDOWS
         check_physics_step_patch();
 #endif
-        // the macro says if ldm was on. has to be set BEFORE the level builds its objects
         if (auto& macro = Logic::get(); level && macro.macro_ldm_known && !macro.inputs.empty() && level->m_lowDetailModeToggled != macro.macro_ldm) {
             level->m_lowDetailModeToggled = macro.macro_ldm;
             Notification::create(macro.macro_ldm ? "Low Detail Mode turned on for this macro" : "Low Detail Mode turned off for this macro", NotificationIcon::Success)->show();
@@ -1085,6 +1060,15 @@ class $modify(EchoPlayLayer, PlayLayer) {
         PlayLayer::playPlatformerEndAnimationToPos(position, instant);
     }
 
+    void updateAttemptTime(float dt) {
+        auto& logic = Logic::get();
+        if (!logic.predicting && !logic.refresh_only && !m_playerDied && m_resumeTimer <= 8) {
+            Logic::get().step_object_states(this);
+            Logic::get().save_backstep(this);
+        }
+        PlayLayer::updateAttemptTime(dt);
+    }
+
     void pauseGame(bool unfocused) {
         PlayLayer::pauseGame(unfocused);
         echo::step::trace_flush();
@@ -1213,13 +1197,10 @@ namespace echo::step {
         }
         if (self->m_resumeTimer > 0 && self->m_resumeTimer <= 8)
             self->m_resumeTimer = 0;
-        if (play && !self->m_playerDied && self->m_resumeTimer <= 0) {
-            Logic::get().step_object_states(play);
-            // times itself, only when it saves (clock reads are slow under proton)
-            Logic::get().save_backstep(play);
-        }
         if (layer && !self->m_playerDied && self->m_resumeTimer <= 0)
             Logic::get().run_follow(layer);
+        if (play && !self->m_playerDied && self->m_resumeTimer <= 0 && !logic.predicting)
+            Logic::get().tick_straight_ufo(play);
         return layer;
     }
 
@@ -1317,7 +1298,6 @@ class $modify(EchoGameLayer, GJBaseGameLayer) {
             logic.steps_this_tick = static_cast<uint32_t>(std::max(logic.steps_left, 0));
         }
         else {
-            // was 1 no matter the batch, so lock tps ran 1 step where it owed 4+ (the insanely slow lock tps)
             logic.steps_this_tick = static_cast<uint32_t>(std::max(logic.steps_left, 0));
         }
         ++g_updatesRun;
@@ -1694,13 +1674,11 @@ class $modify(EchoGameLayer, GJBaseGameLayer) {
         // so a macro always holds the REAL player & records / plays the same with the option on or off
         bool flips = value.flip_controls() && !m_isPlatformer && !m_useReplay; // same checks gd does (handleButton, ios 0x1fabbc)
         bool mine = !value.applying_playback && !value.routing_input && !value.restoring_holds && !value.maintaining_gravity && !value.injecting && !value.follow_injecting && !orb_swift;
-        // the trajectory autoclickers own click for THAT player: no click both, swap or auto swift on it
         struct AssistScope {
             bool before = Logic::get().assist_input;
             ~AssistScope() { Logic::get().assist_input = before; }
         } assist_scope;
         if (mine && (button == 0 || button == static_cast<int>(PlayerButton::Jump))) {
-            // the respawn hold restore is already worked out per player too (inverse included)
             for (auto* counts : { &value.assist_clicks, &value.restored_clicks }) {
                 int& left = (*counts)[player1 ? 0 : 1][down ? 1 : 0];
                 if (left > 0) {
@@ -1713,7 +1691,6 @@ class $modify(EchoGameLayer, GJBaseGameLayer) {
         }
         if (flips && mine && m_levelSettings && m_levelSettings->m_twoPlayerMode)
             player1 = !player1;
-        // auto swift: every press lets go by itself on the same step, so my own release has nothing left to do
         bool auto_swift = value.auto_swift && mine && (button == 0 || button == static_cast<int>(PlayerButton::Jump)) && !(value.is_playing() && !value.is_recording());
         if (auto_swift && !down)
             return;
@@ -1785,7 +1762,6 @@ class $modify(EchoGameLayer, GJBaseGameLayer) {
         int jump = static_cast<int>(PlayerButton::Jump);
         int left = static_cast<int>(PlayerButton::Left), right = static_cast<int>(PlayerButton::Right);
         bool jump_button = button == 0 || button == jump;
-        // inverse inputs: MY click does the opposite on the player it ended up going to (after click both & co)
         bool my_click = !value.applying_playback && !value.restoring_holds && !value.maintaining_gravity && !value.injecting &&
                         !value.follow_injecting && !orb_swift && !value.assist_input;
         if (my_click && jump_button) {
@@ -1797,7 +1773,6 @@ class $modify(EchoGameLayer, GJBaseGameLayer) {
         if (down && jump_button && !orb_swift && !value.applying_playback && !value.injecting && !value.restoring_holds && !value.maintaining_gravity) {
             PlayerObject* body = player1 ? m_player1 : m_player2;
             swifts = Orbs::claim_click(this, body, !player1);
-            // extra clicks: that many more let go + press pairs on every press, on the same step
             if (value.extra_clicks && !value.routing_input && !value.follow_injecting && !(value.is_playing() && !value.is_recording()))
                 swifts += std::clamp(value.extra_click_count, 1, 16);
         }
@@ -1827,13 +1802,13 @@ class $modify(EchoGameLayer, GJBaseGameLayer) {
             if (!logic.injecting && !orb_swift && !logic.routing_input && !ignored_p2)
                 Logic::get().note_click(play, down, player1, button);
             if (!logic.applying_playback && logic.is_recording() && !logic.injecting && !logic.restoring_holds) {
-                Logic::get().record_input(play, down, player1, button, orb_swift);
+                Logic::get().record_input(play, down, player1, button, orb_swift || Logic::record_every_input());
             }
         }
         else if (Logic::get().editor_testing && Logic::as_editor(this)) {
             auto& logic = Logic::get();
             if (!logic.applying_playback && logic.is_recording() && !logic.injecting && !logic.restoring_holds) {
-                Logic::get().record_input(this, down, player1, button, orb_swift);
+                Logic::get().record_input(this, down, player1, button, orb_swift || Logic::record_every_input());
             }
         }
         bool one_replay = value.applying_playback && value.play_p1 != value.play_p2;
@@ -1845,8 +1820,6 @@ class $modify(EchoGameLayer, GJBaseGameLayer) {
         }
         else {
 #ifdef GEODE_IS_IOS
-            // ios gd keeps a list of (button, down) it already did & skips repeats
-            // so a swift click only got its 1st press. empty the list before mine
             if (value.applying_playback || orb_swift)
                 m_allowedButtons.clear();
 #endif
@@ -2164,7 +2137,6 @@ class $modify(EchoPlayerObject, PlayerObject) {
             phys::ringJump(this, ring);
             return;
         }
-        // 1 line for every orb that DID something (the velocity, gravity or dash changed)
         struct RingNote {
             PlayerObject* player; RingObject* ring; bool on, dashing, flipped; double vel;
             RingNote(PlayerObject* p, RingObject* r) : player(p), ring(r), on(echo::step::tracing()), dashing(p->m_isDashing), flipped(p->m_isUpsideDown), vel(p->m_yVelocity) {}
@@ -2178,8 +2150,6 @@ class $modify(EchoPlayerObject, PlayerObject) {
                     Logic::button_held(player, static_cast<int>(PlayerButton::Jump)), player->getPositionX(), player->getPositionY()));
             }
         } ring_note{ this, ring };
-        // spam on 1 orb: the 1st jump makes the circles & the rest are counted on them
-        // m_playEffects also picks how a gravity orb flips in a dual, so ts never touches it
         bool hidden = Logic::get().player_hidden(this);
         EffectScope scope;
         auto ring_at = ring ? ring->getPosition() : CCPointZero;
@@ -2198,7 +2168,6 @@ class $modify(EchoPlayerObject, PlayerObject) {
         double vel = m_yVelocity;
         PlayerObject::ringJump(ring, skipCheck);
         quiet_orb = was_quiet;
-        // only a jump that happened goes on the stack
         bool jumped = g_dudWaves.size() > duds || dashing != m_isDashing || flipped != m_isUpsideDown || vel != m_yVelocity;
         if (seen && jumped)
             count_repeat(seen, &ring_at);
@@ -2244,16 +2213,12 @@ class $modify(EchoPlayerObject, PlayerObject) {
                 layer && this == layer->m_player2, ring ? ring->m_objectID : 0, ring ? ring->m_uniqueID : 0, m_isDashing, getPositionX(), getPositionY()));
         }
         bool loud = m_playEffects;
-        // physics still runs; only repeated bursts within this shown frame are quiet
         EffectScope scope;
-        // unique id, the object id is the same for every dash orb
         bool repeat = loud && ring && spread_effect({ this, 0, ring->m_uniqueID });
         if (repeat && ring && !m_isDashing) {
-            // merged, it goes on the 1st ones stack
             if (auto first = g_boomFirst.find({ ring, this }); first != g_boomFirst.end() && first->second.sprite)
                 stack_offset(first->second, ring->getPosition());
         }
-        // in here m_playEffects only does the boom sprite
         if (Logic::get().no_effects || repeat || Logic::get().player_hidden(this))
             m_playEffects = false;
         bool capture = !repeat && m_playEffects && ring && !m_isDashing && g_effectFrame.on && echo::opt::effects;
@@ -2297,7 +2262,6 @@ class $modify(EchoPlayerObject, PlayerObject) {
         bool reduced = m_maybeReducedEffects;
         EffectScope scope;
         bool repeat = was_dashing && !reduced && spread_effect({ this, 1, 0 });
-        // merged, its afterimage goes on the 1st ones stack
         if (repeat) {
             if (auto first = g_afterFirst.find(this); first != g_afterFirst.end() && first->second.sprite)
                 stack_offset(first->second, getPosition());
@@ -2581,6 +2545,16 @@ class $modify(EchoScheduler, CCScheduler) {
                     end_effects();
             }
         } effects_frame;
+        bool timed_frame = effects_frame.outer;
+        if (timed_frame)
+            echo::perf::frame_start();
+        struct LogicDone {
+            bool on;
+            ~LogicDone() {
+                if (on)
+                    echo::perf::logic_done();
+            }
+        } logic_done{ timed_frame };
         Logic::get().sync_predict_hooks();
         keep_menu_cursor();
         auto& logic = Logic::get();
@@ -2601,7 +2575,6 @@ class $modify(EchoScheduler, CCScheduler) {
             restore_tilt(layer->m_player2);
         }
         bool pause_menu = Logic::get().pause_menu_open();
-        // every macro button asked & it walks the whole scene. a new PauseLayer drops ts
         struct PauseKnown {
             PauseKnown(bool open) {
                 Logic::get().pause_cached = open;
@@ -2611,7 +2584,6 @@ class $modify(EchoScheduler, CCScheduler) {
                 Logic::get().pause_known = false;
             }
         } pause_known{ pause_menu };
-        // releasing every frame broke dragging in the menu
         static bool was_paused = false;
         if (pause_menu && play) {
             play->m_isPaused = true;
@@ -2651,10 +2623,15 @@ class $modify(EchoScheduler, CCScheduler) {
         logic.save_shown_step = logic.frame_advance && logic.backstep;
         int frames_before = logic.step_frame;
         logic.in_scheduler = true;
-        Logic::get().run_frame(layer, dt, [this](float delta) {
-            CCScheduler::update(delta);
-        });
+        {
+            echo::perf::Scope physics_time(echo::perf::Physics);
+            Logic::get().run_frame(layer, dt, [this](float delta) {
+                CCScheduler::update(delta);
+            });
+        }
         logic.in_scheduler = false;
+        if (play)
+            echo::perf::note_steps(logic.step_frame, play->m_gameState.m_levelTime);
         logic.save_shown_step = false;
         if (layer) {
             bool paused = logic.editor_paused;
@@ -2671,6 +2648,7 @@ class $modify(EchoScheduler, CCScheduler) {
             }
             if (auto* live = Logic::as_play(layer); live && !paused && !dead)
                 Logic::get().note_shown_camera(live, logic.step_frame > frames_before);
+            echo::perf::Scope hitbox_time(echo::perf::Hitboxes);
             Logic::get().draw_hitboxes(layer);
         }
         else if (auto* editor = LevelEditorLayer::get(); editor && logic.show_hitboxes) {
@@ -2718,7 +2696,6 @@ class $modify(EchoGameObject, GameObject) {
 };
 
 #ifndef GEODE_IS_WINDOWS
-// gd lists the keys every step even when its empty (inlined on windows)
 class $modify(EchoActionManager, GJActionManager) {
     void updateInternalActions(float dt, bool remove) {
         if (m_internalActions && m_internalActions->count() == 0)
@@ -2729,7 +2706,6 @@ class $modify(EchoActionManager, GJActionManager) {
 #endif
 
 class $modify(EchoEffectObject, EffectGameObject) {
-    // the orbs own pulse. ringJump plays it no matter what m_playEffects says
     void playTriggerEffect() {
         if (quiet_orb)
             return;
@@ -2802,7 +2778,6 @@ class $modify(EchoEnhancedObject, EnhancedGameObject) {
             phys::activateForTrajectory(static_cast<EffectGameObject*>(static_cast<GameObject*>(this)), player);
             return;
         }
-        // every portal / pad / orb the real icon sets off. a recording & its playback must have the same list
         if (Logic::get().trace_logging && !Logic::get().predicting)
             echo::step::trace_note(fmt::format("ACT frame={} uid={} id={} x={:.3f} y={:.3f} p2={} was={}{} off={} state={}\n", Logic::get().step_frame, m_uniqueID, m_objectID,
                 m_positionX, m_positionY, player && player->m_isSecondPlayer, m_activatedByPlayer1 ? 1 : 0, m_activatedByPlayer2 ? 1 : 0, m_isGroupDisabled,
@@ -2879,7 +2854,6 @@ void check_physics_step_patch() {
             return;
         }
     }
-    // nobody owns it so take it back
     if (g_step_patch) {
         (void)g_step_patch->disable();
         (void)g_step_patch->enable();
@@ -2938,15 +2912,12 @@ void install_android_silicate_patches() {
         std::memcpy(bytes.data(), replacement.begin(), bytes.size());
         (void)Mod::get()->patch(address, bytes);
     };
-    // resetLevelVariables keeps both players held buttons (no releaseAllButtons on either)
     patch(0x88abe0, { 0x97f6c0d7 }, { nop }, "GJBaseGameLayer::resetLevelVariables P1");
     patch(0x88abe8, { 0x97f6c0d5 }, { nop }, "GJBaseGameLayer::resetLevelVariables P2");
-    // the restart key leaves the ui's touches and button state alone
     patch(0x5c6f5c, { 0xb9024a61, 0xb9024e61, 0x97fffefa }, { nop, nop, nop }, "UILayer::handleKeypress");
     // resetLevel skips the GameManager check, removeReleasedButtons & the held check. always queues the jump
     // fmov d0, xzr (d0 is queueButton's timestamp); b 0x5e571c
     patch(0x5e56e4, { 0x94002767, 0x394ccc00 }, { 0x9e6703e0, 0x1400000d }, "PlayLayer::resetLevel");
-    // resumeAndRestart keeps p1's held buttons
     patch(0x5d27e0, { 0x9401a1d7 }, { nop }, "PlayLayer::resumeAndRestart");
 }
 #endif
@@ -3128,15 +3099,12 @@ class $modify(EchoHardStreak, HardStreak) {
             HardStreak::addPoint(point);
             return;
         }
-        // only a point on the SAME spot is dropped (a click & release in 1 step). it used to drop anything within 0.25,
-        // but at 3000 tps a wave moves ~0.15 a step: spam there lost random corners & the trail came out all spikes
         if (ccpDistanceSQ(last->m_point, point) < 1e-6f)
             return;
         HardStreak::addPoint(point);
     }
 };
 
-// cocos uploads the whole buffer every redraw & it never shrinks. a long wave trail left 21mb per frame after a restart
 class $modify(EchoDrawNode, CCDrawNode) {
     void draw() {
         unsigned capacity = m_uBufferCapacity;
@@ -3188,7 +3156,6 @@ class $modify(EchoDirector, CCDirector) {
         if (auto* play = PlayLayer::get(); play && (logic.show_hitboxes || logic.show_traj)) {
             logic.sync_overlay_seats(play);
         }
-        // on mac & android the menu draws from a drawScene hook under mine, which a render skips
         static bool menu_under_me = false;
         if (!logic.render_capturing()) {
             auto started = chrono::steady_clock::now();
@@ -3220,7 +3187,6 @@ class $modify(EchoDirector, CCDirector) {
         };
         while (advance() && logic.render_batch_more(started)) {
         }
-        // a render never sets the frame time so the menu crawled
         static auto last_shown = chrono::steady_clock::now();
         auto shown = chrono::steady_clock::now();
         m_fDeltaTime = std::clamp(chrono::duration<float>(shown - last_shown).count(), 0.f, 0.25f);
@@ -3265,10 +3231,9 @@ class $modify(EchoEGLView, CCEGLView) {
 // run ~240 times a second on the real steps, & physics gets its values, tweens & layers back right after.
 // frames are drawn w/ the pictures
 namespace {
-    // the bits of camera state updateCamera writes, learned from what its calls change
     struct CameraState {
         std::vector<std::pair<uint32_t, uint32_t>> regions; // offset in the layer, 4 byte words
-        std::vector<uint32_t> mask; // 1 per word, updateCamera wrote it at some point
+        std::vector<uint32_t> mask;
         std::vector<uint32_t> before, shown, physics;
         std::size_t words = 0;
 
@@ -3279,7 +3244,6 @@ namespace {
                 auto start = reinterpret_cast<uintptr_t>(from) - base, end = reinterpret_cast<uintptr_t>(to) - base;
                 regions.push_back({ static_cast<uint32_t>(start / 4), static_cast<uint32_t>((end - start) / 4) });
             };
-            // every plain value around the camera, never the maps & vectors between them
             add(&gs, &gs.m_spawnChannelRelated0);
             add(&gs.m_cameraPosition, &gs.m_tweenActions);
             add(&gs.m_cameraEdgeValue0, &gs.m_gameObjectPhysics);
@@ -3324,7 +3288,6 @@ namespace {
             each(layer, [&](uint32_t& word, std::size_t at) { word = from[at]; });
         }
 
-        // only the words updateCamera owns, the rest stay what physics has rn
         void load_shown(GJBaseGameLayer* layer) {
             each(layer, [&](uint32_t& word, std::size_t at) {
                 if (mask[at])
@@ -3337,7 +3300,6 @@ namespace {
         }
     };
 
-    // layer positions, so the picture can borrow them
     struct NodeSpot {
         Ref<CCNode> node;
         CCPoint position;
@@ -3351,7 +3313,6 @@ namespace {
                 spots.push_back({ node, node->getPosition(), node->getScaleX(), node->getScaleY(), node->getRotationX(), node->getRotationY(),
                     node->getSkewX(), node->getSkewY() });
         };
-        // 2 levels down, the ground sprites sit in a batch node
         auto with_children = [&](CCNode* node) {
             keep(node);
             if (!node || !node->getChildren())
@@ -3392,9 +3353,7 @@ namespace {
         int at = 0, since = 0;
         bool have_shown = false, shadow = false;
         CCPoint last1, last2;
-        // where the pictures camera put the layers
         std::vector<NodeSpot> shown_nodes, physics_nodes;
-        // gd snapped its camera (a teleport), the picture snaps too
         bool snap = false, have_cam = false;
         CCPoint cam_after;
         // gd moves the camera w/ tweens (cameraMoveX/Y are keys 1 & 2) from where it is rn. the picture keeps its own
@@ -3402,7 +3361,6 @@ namespace {
         std::unordered_map<int, GJValueTween> tweens;
         std::unordered_set<int> owned{ 1, 2 };
         int mirror_depth = 0;
-        // where m_cameraPosition sits in the saved words
         std::size_t camera_word = 0;
     };
     CameraPace g_cameraPace;
@@ -3435,7 +3393,6 @@ namespace {
             map.emplace(key, *tween);
     }
 
-    // gds map back, untouched keys stay where they are
     void restore_tweens(GJBaseGameLayer* layer, TweenMap const& from) {
         std::vector<int> extra;
         for (auto const& [key, tween] : layer->m_gameState.m_tweenActions)
@@ -3480,7 +3437,6 @@ namespace {
         return std::max(static_cast<int>(std::lround(Logic::get().sample_rate() / VANILLA_TPS)), 1);
     }
 
-    // 1 run of the pictures camera on what the steps since its last run owe
     void run_shown_camera(GJBaseGameLayer* layer) {
         auto& pace = g_cameraPace;
         auto& state = pace.state;
@@ -3490,7 +3446,6 @@ namespace {
         keep_nodes(layer, pace.physics_nodes);
         TweenMap physics_tweens = copy_tweens(layer);
         if (!pace.have_shown || pace.snap) {
-            // start over from gds camera
             state.shown = state.physics;
             pace.shown_nodes = pace.physics_nodes;
             pace.tweens.clear();
@@ -3506,7 +3461,6 @@ namespace {
         }
         state.load_shown(layer);
         install_tweens(layer);
-        // what gd does every step: its own tweens stepped by the time since it last ran, gds put on as they are
         float elapsed = static_cast<float>(pace.since) * Logic::get().physics_step();
         std::vector<int> finished;
         for (auto& [key, tween] : layer->m_gameState.m_tweenActions) {
@@ -3526,7 +3480,6 @@ namespace {
         p1->m_lastPosition = pace.last1;
         if (p2)
             p2->m_lastPosition = pace.last2;
-        // counted in calls, the dt that arrives in updateCamera isnt usable
         float owed = static_cast<float>(60.0 / Logic::get().sample_rate() * std::max(pace.since, 1));
         pace.shadow = true;
         layer->updateCamera(owed);
@@ -3543,7 +3496,6 @@ namespace {
         pace.since = 0;
         state.save(layer, state.shown);
         keep_nodes(layer, pace.shown_nodes);
-        // physics gets everything back
         state.load(layer, state.physics);
         restore_tweens(layer, physics_tweens);
         put_back(pace.physics_nodes);
@@ -3573,7 +3525,6 @@ namespace {
         call();
         pace.shadow = false;
         keep_tweens(layer, installed);
-        // only what came out different is the pictures, the rest keeps following physics
         std::size_t at = 0;
         for (auto const& [start, count] : state.regions)
             for (uint32_t w = 0; w < count; ++w, ++at)
@@ -3605,7 +3556,6 @@ class $modify(EchoCameraPace, GJBaseGameLayer) {
             pace.state.build(this);
             pace.camera_word = pace.state.index_of(&m_gameState.m_cameraPosition, this);
         }
-        // level setup & resets start the picture over from gds camera
         if (logic.resetting || logic.refresh_only)
             pace.have_shown = false;
         if (pace.update != g_updatesRun) {
@@ -3640,13 +3590,11 @@ class $modify(EchoCameraPace, GJBaseGameLayer) {
     }
 };
 
-// let go of the lvls nodes while it still exists
 void echo_forget_camera(GJBaseGameLayer* layer) {
     if (g_cameraPace.layer == layer)
         g_cameraPace = {};
 }
 
-// no Refs, a save can outlive the lvl
 using NodeShot = std::array<float, 8>;
 
 static std::vector<NodeShot> shoot_nodes(std::vector<NodeSpot> const& spots) {
@@ -3672,9 +3620,7 @@ static void unshoot_nodes(std::vector<NodeShot> const& shots, std::vector<NodeSp
 }
 
 struct ShownCamera {
-    // gd moves bg & ground by camera delta & checkpoints dont keep them
     std::vector<NodeShot> physics;
-    // the pictures own camera, only at high tps
     bool picture = false;
     std::vector<uint32_t> shown;
     std::vector<NodeShot> nodes;
@@ -3719,7 +3665,6 @@ void echo_load_shown_camera(GJBaseGameLayer* layer, ShownCamera const* saved) {
     auto& pace = g_cameraPace;
     if (pace.layer != layer)
         return;
-    // not a teleport, dont snap
     pace.snap = false;
     pace.have_cam = true;
     pace.cam_after = layer->m_gameState.m_cameraPosition;
@@ -3745,7 +3690,6 @@ class $modify(EchoCameraShow, GJBaseGameLayer) {
             GJBaseGameLayer::visit();
             return;
         }
-        // steps the last run didnt cover get paid now
         if (pace.since > 0)
             run_shown_camera(this);
         std::vector<NodeSpot> now;
@@ -3774,7 +3718,6 @@ class $modify(EchoCameraShow, GJBaseGameLayer) {
 
 class $modify(EchoCameraMirror, GJBaseGameLayer) {
 #ifndef GEODE_IS_WINDOWS
-    // inlined on windows
     void updateCameraMode(EffectGameObject* obj, bool updateDual) {
         mirror_camera(this, [&] { GJBaseGameLayer::updateCameraMode(obj, updateDual); });
     }

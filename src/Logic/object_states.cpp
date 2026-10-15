@@ -360,7 +360,6 @@ void Logic::note_backstep_objects(PlayLayer* play) {
     auto& undo = logic.backsteps[logic.backsteps.size() - 2].object_undo;
     undo.clear();
     line.scratch.resize(STRIDE);
-    // every 32nd save checks EVERYTHING
     bool verify = !line.full && !line.always_full && (++line.saves % 32) == 0;
     bool everything = line.full || line.always_full || verify || !g_touch_tracking;
     int missed = 0;
@@ -491,9 +490,6 @@ void Logic::load_backstep_objects(int frame) {
     line.full = true;
 }
 
-// updateObjectSection runs for EVERY object that moves on EVERY step, & a hook on it costs more than the function itself.
-// so ts one is only on while something needs to know what moved (recording or backstep).
-// while its off a save just compares everything, & turning it back on forces 1 full save to catch up
 void echo_touch_hook(bool on) {
     if (!g_touch_hook || on == g_touch_tracking)
         return;
@@ -516,7 +512,7 @@ class $modify(BackstepTouched, GJBaseGameLayer) {
         for (unsigned n = 0; n < objects->count(); ++n) {
             auto* obj = static_cast<GameObject*>(objects->objectAtIndex(n));
             if (!obj)
-                break; // rob stops at the first null
+                break;
             touch_object(obj);
         }
     }

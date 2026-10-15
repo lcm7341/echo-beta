@@ -1,3 +1,4 @@
+#include "Logic/build_info.hpp"
 #include <Geode/Geode.hpp>
 #include <Geode/fmod/fmod.hpp>
 #include "Hooks/step.hpp"
@@ -5,6 +6,7 @@
 #include <chrono>
 #include <cstdint>
 #include <fstream>
+#include <filesystem>
 #include <string>
 #include <vector>
 
@@ -34,25 +36,25 @@ namespace {
     static_assert(sizeof(TraceStep) == 40);
     constexpr size_t TRACE_CAP = 400000;
     std::vector<TraceStep> g_trace;
-    std::vector<TraceStep> g_trace2; // player 2, same rows (2 player lvls die on EITHER icon)
+    std::vector<TraceStep> g_trace2;
     std::string g_events;
     std::string g_pace;
     std::string g_head;
     std::uint32_t g_lastMs = 0;
     bool g_finished = false;
-    bool g_record = false; // ts trace is a recording, it goes to its own files so playing it back after doesnt wipe it
+    constexpr char const* PREFIX[] = { "", "record-", "attempt-" };
+    int g_kind = 0;
     bool g_began = false;
     bool g_deadNoted = false;
 
     bool tracing() {
         auto& logic = Logic::get();
-        return logic.trace_logging && (logic.is_playing() || logic.is_recording()) && !logic.predicting;
+        return logic.trace_logging && !logic.predicting;
     }
 
-    // everything about the setup, once per attempt. costs nothing while playing
     std::string head(GJBaseGameLayer* self) {
         auto& logic = Logic::get();
-        std::string out = fmt::format("I echo={} geode={} gd={} platform={}\n", Mod::get()->getVersion().toVString(),
+        std::string out = fmt::format("I echo={} build={} geode={} gd={} platform={}\n", Mod::get()->getVersion().toVString(), echo::build_id(),
             Loader::get()->getVersion().toVString(), GEODE_GD_VERSION_STRING, GEODE_PLATFORM_NAME);
         auto win = CCDirector::sharedDirector()->getWinSize();
         auto frame = CCEGLView::sharedOpenGLView()->getFrameSize();
@@ -71,14 +73,12 @@ namespace {
         for (auto* mod : Loader::get()->getAllMods())
             if (mod->isLoaded())
                 out += fmt::format("M {} {}\n", mod->getID(), mod->getVersion().toVString());
-        // the whole settings file, 1 line
         std::ifstream file(logic.save_root() / "settings.json");
         std::string text((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
         std::erase_if(text, [](char c) {
             return c == '\n' || c == '\r' || c == '\t';
         });
         out += "S " + text + "\n";
-        // what the macro holds when the attempt starts. playing = the whole thing, recording = whatever was kept
         size_t shown = 0;
         for (auto const& input : logic.inputs) {
             if (++shown > 4000)
@@ -88,12 +88,10 @@ namespace {
         return out;
     }
 
-    size_t g_saved = 0, g_saved2 = 0; // rows already in the files
-    std::uint64_t g_steps = 0; // every step, also the ones past the cap
+    size_t g_saved = 0, g_saved2 = 0;
+    std::uint64_t g_steps = 0;
     std::uint32_t g_textMs = 0;
 
-    // only the NEW rows go out. it used to write the whole thing again each time, & once the cap was hit that was
-    // 32mb EVERY step (the crazy slow at frame 400k)
     void write_rows(char const* name, std::vector<TraceStep> const& rows, size_t& saved) {
         std::ofstream out(Logic::get().save_root() / "logs" / name, std::ios::binary | (saved == 0 ? std::ios::trunc : std::ios::app));
         if (rows.size() > saved)
@@ -101,13 +99,29 @@ namespace {
         saved = rows.size();
     }
 
+    bool g_rotate = false;
+
+    void rotate_files() {
+        std::string prefix = PREFIX[g_kind];
+        auto dir = Logic::get().save_root() / "logs";
+        for (char const* name : { "buttons.txt", "steps.bin", "steps-p2.bin" }) {
+            auto from = dir / (prefix + name);
+            auto stem = std::filesystem::path(name).stem().string(), ext = std::filesystem::path(name).extension().string();
+            std::error_code ec;
+            if (std::filesystem::exists(from, ec))
+                std::filesystem::rename(from, dir / (prefix + stem + "-prev" + ext), ec);
+        }
+    }
+
     void write_out() {
+        if (std::exchange(g_rotate, false))
+            rotate_files();
         {
-            std::ofstream events(Logic::get().save_root() / "logs" / (g_record ? "record-buttons.txt" : "buttons.txt"), std::ios::trunc);
+            std::ofstream events(Logic::get().save_root() / "logs" / (std::string(PREFIX[g_kind]) + "buttons.txt"), std::ios::trunc);
             events << g_head << g_events << g_pace;
         }
-        write_rows(g_record ? "record-steps.bin" : "steps.bin", g_trace, g_saved);
-        write_rows(g_record ? "record-steps-p2.bin" : "steps-p2.bin", g_trace2, g_saved2);
+        write_rows((std::string(PREFIX[g_kind]) + "steps.bin").c_str(), g_trace, g_saved);
+        write_rows((std::string(PREFIX[g_kind]) + "steps-p2.bin").c_str(), g_trace2, g_saved2);
     }
     std::chrono::steady_clock::time_point g_start;
     int g_eventCount = 0;
@@ -115,7 +129,6 @@ namespace {
 }
 
 namespace echo::step {
-    // a free form line in the trace, for whatever is being chased
     void trace_note(std::string const& line) {
         if (Logic::get().trace_logging && g_pace.size() < 400000)
             g_pace += line;
@@ -125,7 +138,6 @@ namespace echo::step {
         return ::tracing() && !g_written && g_eventCount < 20000;
     }
 
-    // same as a button line but free form, & in the same list so the order inside a step is kept
     void trace_event(std::string const& line) {
         if (!tracing())
             return;
@@ -133,7 +145,6 @@ namespace echo::step {
         g_events += line;
     }
 
-    // pause / quit, so the last second of a recording is in the file
     void trace_flush() {
         if (Logic::get().trace_logging && g_began && !g_written)
             write_out();
@@ -156,9 +167,10 @@ namespace echo::step {
             return;
         // a step back replays the macro up to the frame it wants (state goes to playing for that bit). that is still the
         // same recording, w/out ts every back / best wiped the recordings trace & started a playback one D:
-        bool record = logic.backstep_target >= 0 && g_began ? g_record : logic.is_recording();
-        if ((logic.step_frame <= 1 && !self->m_playerDied) || !g_began || record != g_record) {
-            g_record = record;
+        int kind = logic.backstep_target >= 0 && g_began ? g_kind : logic.is_recording() ? 1 : logic.is_playing() ? 0 : 2;
+        if ((logic.step_frame <= 1 && !self->m_playerDied) || !g_began || kind != g_kind) {
+            g_kind = kind;
+            g_rotate = true;
             g_began = true;
             g_deadNoted = false;
             g_trace.clear();
@@ -177,26 +189,20 @@ namespace echo::step {
         }
         if (g_written)
             return;
-        // real ms since the trace began, goes in the old pad field
         auto ms = static_cast<std::uint32_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - g_start).count());
         if (g_trace.size() < TRACE_CAP) {
             g_trace.push_back({ logic.step_frame, player->getPositionX(), player->getPositionY(), player->getRotation(),
                 player->m_yVelocity, self->m_gameState.m_levelTime, Logic::button_held(player, static_cast<int>(PlayerButton::Jump)),
                 self->m_playerDied, static_cast<std::uint16_t>(std::min<std::uint32_t>(logic.steps_this_tick, 65535)), ms });
-            // batch field = what the icon is: 1 dual on, 2 dead, 4 upside down, 8 on ground
             if (auto* other = self->m_player2)
                 g_trace2.push_back({ logic.step_frame, other->getPositionX(), other->getPositionY(), other->getRotation(),
                     other->m_yVelocity, self->m_gameState.m_levelTime, Logic::button_held(other, static_cast<int>(PlayerButton::Jump)),
                     self->m_playerDied, static_cast<std::uint16_t>((self->m_gameState.m_isDualMode ? 1 : 0) | (other->m_isDead ? 2 : 0) | (other->m_isUpsideDown ? 4 : 0) | (other->m_isOnGround ? 8 : 0)), ms });
         }
-        // 1 line of pacing a (game) second, so a slow run says WHY in the same file
-        // per second of LEVEL, at 7220 tps every 240 steps filled the log before the level was half done
         auto every = static_cast<std::uint64_t>(std::max(240.0, std::round(logic.sample_rate())));
         if (g_steps++ % every == 0 && g_pace.size() < 200000)
             g_pace += fmt::format("T frame={} ms={} {}\n", logic.step_frame, ms, echo::step::pace());
         {
-            // where the song is against the level, once a game second. a render logs the same numbers (logs/render.txt)
-            // so the 2 can be put side by side
             if (g_steps % every == 1 && g_pace.size() < 200000) {
                 auto* engine = FMODAudioEngine::get();
                 unsigned raw = 0;
@@ -206,7 +212,6 @@ namespace echo::step {
                     engine ? engine->getMusicTimeMS(0) : 0, raw, player->getPositionX());
             }
         }
-        // a step that waited over 100ms of real time = a lag spike
         if (ms > g_lastMs + 100 && g_pace.size() < 200000)
             g_pace += fmt::format("L frame={} ms={} gap_ms={}\n", logic.step_frame, ms, ms - g_lastMs);
         g_lastMs = ms;
@@ -216,7 +221,6 @@ namespace echo::step {
             g_finished = true;
             g_pace += fmt::format("E frame={} ms={} x={} y={} level complete\n", logic.step_frame, ms, player->getPositionX(), player->getPositionY());
         }
-        // a recording keeps going after a death (practice mode), so 1 line a death & the trace stays open
         bool note_death = self->m_playerDied && !g_deadNoted;
         g_deadNoted = self->m_playerDied;
         if (note_death)
@@ -229,8 +233,6 @@ namespace echo::step {
                 g_pace += fmt::format("D2 dual={} p1_dead={} p2_dead={} p2_x={} p2_y={} p2_yvel={} p2_rot={} p2_upside_down={} p2_mode={}\n", self->m_gameState.m_isDualMode,
                     player->m_isDead, other->m_isDead, other->getPositionX(), other->getPositionY(), other->m_yVelocity, other->getRotation(), other->m_isUpsideDown,
                     other->m_isShip ? "ship" : other->m_isBall ? "ball" : other->m_isBird ? "ufo" : other->m_isDart ? "wave" : other->m_isRobot ? "robot" : other->m_isSpider ? "spider" : other->m_isSwing ? "swing" : "cube");
-        // 4000 new rows, or (past the cap, where no rows come anymore) the text every 2 real seconds
-        // & never more than 4 times a real second. sped up, 4000 rows is 1 frame: it wrote the files every frame
         bool full = (g_trace.size() - g_saved >= 4000 && ms >= g_textMs + 250) || ms >= g_textMs + 2000;
         if (full)
             g_textMs = ms;
@@ -238,7 +240,7 @@ namespace echo::step {
         // the whole text log every dead step, thousands of times a death at high tps
         if (!note_death && !full && !finished)
             return;
-        if (self->m_playerDied && !g_record)
+        if (self->m_playerDied && g_kind != 1)
             g_written = true;
 #ifdef GEODE_IS_ANDROID64
         g_pace += fmt::format("A sort={} calls={}\n", echo::sort::status, echo::sort::calls);

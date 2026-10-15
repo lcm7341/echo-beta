@@ -14,8 +14,6 @@ using namespace geode::prelude;
 
 #if defined(__aarch64__)
 namespace {
-    // what the patched update() calls for its delta
-    // the inlined code already ran the resume timer so hold it at 0 or it runs twice
     double modified_delta(GJBaseGameLayer* self, float dt) {
         static_assert(offsetof(GJBaseGameLayer, m_resumeTimer) == 0x310c);
         int timer = std::exchange(self->m_resumeTimer, 0);
@@ -30,12 +28,10 @@ $execute {
     namespace native = echo::patches::mac;
     auto base = geode::base::get();
     auto* site = reinterpret_cast<void*>(base + native::step_address);
-    // step count patch. not robs bytes = leave it alone
     if (std::memcmp(site, native::step_original.data(), native::step_original.size()) == 0) {
         auto bytes = native::step_replacement;
         auto* amt = &Logic::get().steps_this_tick;
         static_assert(sizeof(amt) == 8);
-        // the address of our count goes into the patch itself
         std::memcpy(bytes.data() + native::step_pointer_offset, &amt, sizeof(amt));
         auto res = Mod::get()->patch(site, std::vector<uint8_t>(bytes.begin(), bytes.end()));
         if (res) {
@@ -44,8 +40,6 @@ $execute {
     }
 
 #if defined(__aarch64__)
-    // without ts gd rounds every update to whole 240ths & splits that over my steps
-    // so every step was the wrong length & macros at a weird tps died on the first click
     auto* delta = reinterpret_cast<void*>(base + native::delta_address);
     if (step_patched && std::memcmp(delta, native::delta_original.data(), native::delta_original.size()) == 0) {
         auto bytes = native::delta_replacement;

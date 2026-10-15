@@ -59,7 +59,7 @@ namespace {
             auto vtable = field<std::uintptr_t>(object, 0);
             auto base = reinterpret_cast<std::uintptr_t>(GetModuleHandleW(nullptr));
             if (vtable < base || vtable > base + 0x1000000)
-                return false; // vtable has to be inside the exe
+                return false;
             out.id = field<int>(object, offsetof(GameObject, m_objectID));
             out.uid = field<int>(object, offsetof(GameObject, m_uniqueID));
             out.type = static_cast<int>(field<GameObjectType>(object, offsetof(GameObject, m_objectType)));

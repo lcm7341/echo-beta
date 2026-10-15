@@ -17,7 +17,6 @@ using namespace geode::prelude;
 
 namespace EchoUI {
     namespace {
-        // fix priority
         constexpr int TOUCH_PRIORITY = -510;
 
         bool s_preview = false;
@@ -290,7 +289,6 @@ namespace EchoUI {
                     gui.bar_pressed = 4;
                 }
                 else {
-                    // not on a button = dragging the bar
                     m_dragging = true;
                     m_dragged = false;
                     m_start = at;
@@ -344,7 +342,6 @@ namespace EchoUI {
                     logic.holding_advance = false;
                     logic.disarm_length_pause_if_holding();
                 }
-                // resume & pause are the same button. the bar itself stays where it is
                 if (which == 3 && onResume)
                     gui.set_frame_advance(!logic.frame_advance);
                 if (which == 4 && onResume)
@@ -359,7 +356,6 @@ namespace EchoUI {
 
 #ifdef GEODE_IS_MOBILE
     namespace {
-        // fix priority
         class MenuDismiss : public CCNode, public CCTouchDelegate {
         public:
             static MenuDismiss* create() {

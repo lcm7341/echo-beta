@@ -12,18 +12,14 @@
 using namespace geode::prelude;
 
 namespace {
-    // same lcg as the windows shake midhook (hooks.cpp), so shake is the same on playback
     int shake_random() {
         auto& state = Logic::get().shake_random;
         state = ((214013ull * state + 2531011ull) >> 16) & 0x7fff; // msvc rand()
-        // mac wants a 31 bit int so scale my 15 bit one up, comes out the same as windows
         float unit = static_cast<float>(state) / 32767.f;
         auto scaled = static_cast<uint64_t>(static_cast<double>(unit) * 2147483648.0);
         return static_cast<int>(std::min(scaled, uint64_t{ 0x7fffffff }));
     }
 
-    // a bl cant always reach the mod so grab a free page near the game & tail jump from there
-    // a fixed alloc just fails if the address is taken
     mach_vm_address_t near_veneer(uintptr_t base) {
         for (uintptr_t delta = 0x1000000; delta < 0x7f00000; delta += 0x10000) {
             mach_vm_address_t address = (base + delta) & ~uintptr_t{ 0xfff };
@@ -53,7 +49,6 @@ namespace {
 $execute {
     namespace native = echo::patches::mac;
     auto base = geode::base::get();
-    // all of them match or i touch NONE
     bool matches = std::all_of(native::shake_sites.begin(), native::shake_sites.end(), [base](auto const& site) {
         return std::memcmp(reinterpret_cast<void*>(base + site.offset), site.original.data(), site.original.size()) == 0;
     });
@@ -64,7 +59,6 @@ $execute {
         bool success = true;
         for (auto const& site : native::shake_sites) {
 #ifdef GEODE_IS_ARM_MAC
-            // bl veneer
             auto displacement = static_cast<int64_t>(veneer) - static_cast<int64_t>(base + site.offset);
             uint32_t call = 0x94000000 | (static_cast<uint32_t>(displacement / 4) & 0x03ffffff); // arm64 bl
             std::vector<uint8_t> bytes(4);
@@ -83,7 +77,6 @@ $execute {
             installed.push_back(patch.unwrap());
         }
         if (!success) {
-            // take the ones that went in back out (the veneer stays mapped so nothing calls into nothing)
             for (auto* patch : installed)
                 (void)patch->disable();
         }

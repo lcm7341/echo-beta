@@ -60,7 +60,6 @@ namespace {
         return key == KEY_Space;
     }
 
-    // fix priority
     ListenerResult shield_typing(KeyboardInputData& event) {
         auto& backend = ImGuiCocos::get();
         if (!backend.isInitialized() || !backend.isVisible() || !ImGui::GetIO().WantTextInput)

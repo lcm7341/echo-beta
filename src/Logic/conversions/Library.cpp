@@ -110,7 +110,6 @@ bool Logic::write_file() {
     auto direct = dir / (base + ".echo");
     if (logic.no_overwrite)
         logic.macro_path = ReplayIO::unique_file(dir, base, ".echo");
-    // the name wins. the old path was still the LAST macro so a new recording saved over it
     else if (logic.macro_path.empty() || ReplayIO::lower_ext(logic.macro_path) != ".echo" || ReplayIO::is_autosave(logic.macro_path) ||
              ReplayIO::sanitize(ReplayIO::import_stem(logic.macro_path)) != base)
         logic.macro_path = direct;

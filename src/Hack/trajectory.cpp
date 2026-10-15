@@ -4,6 +4,7 @@
 // each path is drawn as lines w/ a marker where it dies
 // predicting must NEVER touch the real attempt: triggers dont fire for real, deaths stay on the fake, the random state is put back after
 // the same thing answers "does the next step kill me" (pause before kill, the autoclicker) & "how long do i live if i flip now" (find best frame)
+#include "Logic/perf.hpp"
 #include "Hack/trajectory.hpp"
 #include "Hack/level_forecast.hpp"
 #include "Hack/trajectory_path.hpp"
@@ -495,7 +496,6 @@ void Trajectory::simulate(PlayLayer* play, bool player1, Click click, bool both,
     PlayerObject* partner_real = player1 ? play->m_player2 : play->m_player1;
     if (!fake || !real)
         return;
-    // restoring the real players puts them back on their physics pos, that froze the end animation every step
     if (play->m_hasCompletedLevel || play->m_levelEndAnimationStarted)
         return;
     auto random_state = GameToolbox::getfast_srand();
@@ -618,7 +618,6 @@ void Trajectory::simulate(PlayLayer* play, bool player1, Click click, bool both,
             if (!already_held && logic.maintain_gravity && key_held && body->m_isDart && click == Click::Hold) {
                 already_held = true;
             }
-            // holding thru stays a hold not new press
             if (click == Click::Hold && already_held)
                 return;
             if (click != Click::Release && click != Click::Replay)
@@ -639,6 +638,7 @@ void Trajectory::simulate(PlayLayer* play, bool player1, Click click, bool both,
     int steps = echo::trajectory::prediction_steps(logic.traj_seconds, logic.sample_rate(), warp);
     if (limit > 0)
         steps = std::min(steps, limit);
+    echo::perf::count_traj_steps(steps);
     bool moving_objects = logic.traj_moving_objects && !label_only;
     if (moving_objects)
         forecast::prepare(play, steps, step_delta / 60.f);
@@ -755,7 +755,6 @@ void Trajectory::simulate(PlayLayer* play, bool player1, Click click, bool both,
         put_rings(play->m_player2, rings2);
     };
 
-    // a slice pauses here: the real lvl goes back, the prediction comes back after
     std::unique_ptr<echo::SavedGameState> sim_state;
     decltype(random_state) sim_random{};
     decltype(teleport_roll) sim_teleport{};
@@ -806,7 +805,6 @@ void Trajectory::simulate(PlayLayer* play, bool player1, Click click, bool both,
                 manager->m_performanceMode = performance;
         },
         [&] {
-            // input that came in while paused is real
             queued = play->m_queuedButtons;
             recorded = play->m_queuedRecordedButtons;
             recorded_size = play->m_queuedRecordedButtonsSize;
@@ -875,6 +873,7 @@ void Trajectory::simulate(PlayLayer* play, bool player1, Click click, bool both,
         slice_point();
         if (job_cancel)
             break;
+
         if (varying) {
             step_len = 1.f / std::max(logic.rate_at(frame + i), 1.f);
             step_delta = step_len * 60.f * std::min(warp, 1.f);
@@ -890,7 +889,6 @@ void Trajectory::simulate(PlayLayer* play, bool player1, Click click, bool both,
                 bottom = std::min(bottom, other.y);
                 top = std::max(top, other.y);
             }
-            // the forecasts path is p1s, so only a line led by p1 can say how far off that path it is
             if (moving_objects)
                 forecast::apply(play, i + 1, { left - REACH, bottom - REACH, right - left + 2.f * REACH, top - bottom + 2.f * REACH }, fake == fake1 ? at.y : NAN);
         }
@@ -950,7 +948,7 @@ void Trajectory::simulate(PlayLayer* play, bool player1, Click click, bool both,
             }
         }
 
-        bool pressed_now = i == 0 && (click == Click::Swift || (click == Click::Hold && !started_held));
+        bool pressed_now = (i == 0 && (click == Click::Swift || (click == Click::Hold && !started_held)));
         if (clicker) {
             if (clock.pressed)
                 ++clock.since_press;
@@ -1140,7 +1138,6 @@ void Trajectory::refresh_now(PlayLayer* play) {
     if (!play || !play->m_started || !play->m_player1 || !node || !fake1 || !fake2)
         return;
     auto& logic = Logic::get();
-    // do this or breaks traj on end
     if (play->m_hasCompletedLevel || play->m_levelEndAnimationStarted) {
         if (node->isVisible())
             node->setVisible(false);
@@ -1162,7 +1159,6 @@ void Trajectory::refresh_now(PlayLayer* play) {
             node->setVisible(false);
         bool pause_kill = logic.pause_before_kill && logic.is_recording();
         if (!rendering && ((logic.show_death_next && !(logic.is_playing() && !logic.is_recording())) || pause_kill)) {
-            // the death label alone doesnt need the moving object forecast
             label_only = !pause_kill;
             lookahead(play);
             label_only = false;
@@ -1232,7 +1228,6 @@ void Trajectory::refresh_now(PlayLayer* play) {
     phys::prepare_prediction_art();
     logic.predicting = true;
     Logic::get().sync_predict_hooks();
-    // sliced: draw into the hidden node til done
     if (in_job && !job_swapped && back_node) {
         std::swap(node, back_node);
         job_swapped = true;
@@ -1242,7 +1237,6 @@ void Trajectory::refresh_now(PlayLayer* play) {
     auto snap = [](PlayerObject* body) {
         return body ? std::pair{ body->m_jumpBuffered, body->m_holdingButtons } : std::pair{ false, gd::map<int, bool>{} };
     };
-    // copies into an existing pair, gd::map's move assign doesnt build on android
     auto take = [](std::pair<bool, gd::map<int, bool>>& into, PlayerObject* body) {
         into.first = body ? body->m_jumpBuffered : false;
         if (body)
@@ -1298,7 +1292,6 @@ void Trajectory::refresh_now(PlayLayer* play) {
             Logic::get().sync_predict_hooks();
         },
         [&] {
-            // input that came in while paused is real
             take(p1_hold, play->m_player1);
             take(p2_hold, play->m_player2);
             if (auto* ui = play->m_uiLayer) {
@@ -1433,6 +1426,7 @@ void Trajectory::refresh_now(PlayLayer* play) {
 }
 
 void Trajectory::refresh(PlayLayer* play) {
+    echo::perf::Scope traj_time(echo::perf::Trajectory);
 #ifdef GEODE_IS_WINDOWS
     if (in_job)
         return;
@@ -1448,7 +1442,6 @@ void Trajectory::refresh(PlayLayer* play) {
     if (want_slicing(play)) {
         if (!main_fiber)
             main_fiber = IsThreadAFiber() ? GetCurrentFiber() : ConvertThreadToFiber(nullptr);
-        // 1 fiber, reused for every trajectory
         if (main_fiber && !job_fiber)
             job_fiber = CreateFiber(4u << 20, reinterpret_cast<LPFIBER_START_ROUTINE>(&Trajectory::job_entry), this);
         if (job_fiber) {
@@ -1468,7 +1461,6 @@ void Trajectory::refresh(PlayLayer* play) {
 bool Trajectory::want_slicing(PlayLayer* play) const {
 #ifdef GEODE_IS_WINDOWS
     auto const& logic = Logic::get();
-    // those step 1 at a time & need the whole trajectory
     if (!(play && node && back_node && logic.lock_delta && logic.show_traj && !Logic::get().render_capturing() && !logic.frame_advance &&
             !logic.traj_autoclicker && !(logic.pause_before_kill && logic.is_recording()) && !play->m_playerDied && !path_sink))
         return false;
@@ -1498,7 +1490,6 @@ void Trajectory::slice_point() {
 #ifdef GEODE_IS_WINDOWS
     if (!in_job || job_cancel)
         return;
-    // clock reads are slow under proton
     if ((++slice_counter & 15) != 0)
         return;
     if (std::chrono::duration<double>(std::chrono::steady_clock::now() - slice_began).count() < slice_budget)
@@ -1521,16 +1512,13 @@ void Trajectory::run_slice() {
         return;
     auto* director = CCDirector::sharedDirector();
     unsigned drawn = director ? director->getTotalFrames() : 0;
-    // 1 slice a drawn frame
     if (drawn != 0 && drawn == job_drawn)
         return;
-    // the lvl moved under it, its saved state is stale
     if (job_play != PlayLayer::get() || job_frame != Logic::get().step_frame) {
         abandon_job();
         return;
     }
     job_drawn = drawn;
-    // whats left of 1 / fps after ts frames work & last frames drawing
     auto& logic = Logic::get();
     double interval = director ? director->getAnimationInterval() : 1.0 / 60.0;
     slice_began = std::chrono::steady_clock::now();
@@ -1553,7 +1541,6 @@ void Trajectory::finish_job() {
 #ifdef GEODE_IS_WINDOWS
     job_running = false;
     if (job_swapped) {
-        // cancelled: keep the old 1
         if (job_cancel)
             std::swap(node, back_node);
         back_node->clear();
@@ -1583,7 +1570,6 @@ void Trajectory::cancel_job() {
 #endif
 }
 
-// the lvl moved while paused: drop the fiber as is (its stack leaks)
 void Trajectory::abandon_job() {
 #ifdef GEODE_IS_WINDOWS
     if (job_fiber)
@@ -1694,7 +1680,6 @@ int Trajectory::click_survival(PlayLayer* play, bool player1, Click click, int& 
     bool linked = player1 && play->m_gameState.m_isDualMode && play->m_player2 && !twoPlayer;
     measured[0] = measured[1] = measured_full = 0;
     predicting(play, [&] {
-        // 8 = counted, but none of the live / hold / release numbers the labels use are touched
         simulate(play, player1, click, linked, false, limit, 8);
     });
     cached = false;
@@ -1703,6 +1688,7 @@ int Trajectory::click_survival(PlayLayer* play, bool player1, Click click, int& 
 }
 
 void Trajectory::autoclick(PlayLayer* play) {
+    echo::perf::Scope click_time(echo::perf::Autoclick);
     auto& logic = Logic::get();
     safe_steps = 1;
     if (!logic.traj_autoclicker || !play || play->m_isPaused || play->m_playerDied)
@@ -1713,7 +1699,6 @@ void Trajectory::autoclick(PlayLayer* play) {
         clicked_frame = -1;
     if (logic.step_frame == clicked_frame)
         return;
-    // whatever it queued last step got handled (or thrown out) by now
     std::memset(logic.assist_clicks, 0, sizeof(logic.assist_clicks));
     lookahead(play);
     bool twoPlayer = play->m_levelSettings && play->m_levelSettings->m_twoPlayerMode;
@@ -1721,14 +1706,11 @@ void Trajectory::autoclick(PlayLayer* play) {
     bool flip1 = logic.death_next_p1 || (dual && !twoPlayer && logic.death_next_p2);
     bool flip2 = dual && twoPlayer && logic.death_next_p2;
     int ahead = std::max(logic.traj_click_lookahead, 1);
-    // how long i live if i keep doing what im doing, 0 = past the lookahead
     int keep_lives[2] = { 0, 0 };
-    // 2 lookaheads: the 1st says click or not, & a death in the 2nd cant need a click yet, so those steps can be batched
     int soonest = std::numeric_limits<int>::max();
     auto watched = [&](bool player2) {
         return logic.is_recording() ? logic.records_player(player2) : !logic.plays_player(player2);
     };
-    // true = dies inside the lookahead
     auto measure = [&](bool player1) {
         int full = 0;
         int lives = click_survival(play, player1, next_click(play, player1), full, ahead * 2);
@@ -1753,7 +1735,6 @@ void Trajectory::autoclick(PlayLayer* play) {
             flip2 = soon;
     }
     if (!flip1 && !flip2) {
-        // nothing can come into the lookahead until soonest - ahead steps from now
         if (soonest != std::numeric_limits<int>::max())
             safe_steps = std::max(1, soonest - ahead + 1);
         else
@@ -1762,11 +1743,10 @@ void Trajectory::autoclick(PlayLayer* play) {
     }
     int jump = static_cast<int>(PlayerButton::Jump);
     bool linked = dual && !twoPlayer;
-    // would ts click kill me on the next step
     auto dies = [&](bool player1, Click click) {
         logic.death_next_p1 = logic.death_next_p2 = false;
         predicting(play, [&] {
-            simulate(play, player1, click, player1 && linked, false, 1, 1); // 1 = MEASURE_LIVE
+            simulate(play, player1, click, player1 && linked, false, 1, 1);
         });
         cached = false;
         return player1 ? logic.death_next_p1 || (linked && logic.death_next_p2) : logic.death_next_p2;
@@ -1774,13 +1754,6 @@ void Trajectory::autoclick(PlayLayer* play) {
     auto flip = [&](bool player1) {
         bool held = next_click(play, player1) == Click::Hold;
         auto* body = player1 ? play->m_player1 : play->m_player2;
-        // 2 things it can do here: flip the button (press & hold, or let go), or a swift (tap & let go on the same frame).
-        // both are looked ahead the whole trajectory & the 1 that lives longer is what it does, a tie is the plain flip.
-        // (it used to only think of a swift w/ the swift line turned on, & only when the flip died on the very next step.
-        // an orb sitting on a wave needs the swift, the clicks after a 1 time orb is used need the hold, & auto swift
-        // could only give it 1 of those for every click)
-        // a death further out than the next step only gets a click if the click actually lives longer.
-        // that can run every step for a while so it only looks a few lookaheads out, not the whole trajectory
         int keep = keep_lives[player1 ? 0 : 1];
         int horizon = keep > 0 ? ahead * 2 : 0;
         int flip_full = 0, swift_full = 0;
@@ -1788,7 +1761,6 @@ void Trajectory::autoclick(PlayLayer* play) {
         int swift_lives = click_survival(play, player1, Click::Swift, swift_full, horizon);
         if (keep > 0 && std::max(flip_lives, swift_lives) <= keep)
             return;
-        // maintain gravity decides the button from what im "holding" so flip that instead
         if (logic.maintain_gravity && body && body->m_isDart && logic.records_player(!player1)) {
             bool& flipped = player1 ? logic.traj_flip_p1 : logic.traj_flip_p2;
             if (!flipped) {
@@ -1820,6 +1792,7 @@ void Trajectory::autoclick(PlayLayer* play) {
 }
 
 void Trajectory::lookahead(PlayLayer* play) {
+    echo::perf::Scope look_time(echo::perf::Autoclick);
     auto& logic = Logic::get();
     logic.death_next_p1 = false;
     logic.death_next_p2 = false;

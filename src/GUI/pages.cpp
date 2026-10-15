@@ -189,13 +189,16 @@ namespace {
         if (eui::InputInt("##percent-accuracy", &logic.percent_accuracy))
             logic.percent_accuracy = std::clamp(logic.percent_accuracy, 0, 6);
         saved_on_release();
+        eui::Row("Position decimals", "Decimals on the position & velocity labels.");
+        if (eui::InputInt("##label-decimals", &logic.label_decimals))
+            logic.label_decimals = std::clamp(logic.label_decimals, 0, 8);
+        saved_on_release();
 
         eui::SectionLabel("Labels");
         ImGui::TextDisabled(logic.labels_auto ? "Drag a label by its grip to reorder it." : "Auto Position stacks the labels in this order.");
         auto order = ordered_labels(logic);
         float font1 = ImGui::GetFontSize();
 #ifdef GEODE_IS_MOBILE
-        // a finger needs more than a mouse does
         float grip_w = font1 * 1.9f;
 #else
         float grip_w = font1 * .9f;
@@ -203,9 +206,7 @@ namespace {
         float title_x = ImGui::GetStyle().WindowPadding.x + font1 * 2.7f + grip_w;
         float field_w = font1 * 3.4f;
         float gap = ImGui::GetStyle().ItemSpacing.x;
-        int columns = logic.labels_auto ? 2 : 4;
-        // the list of labels is the only part that scrolls. it gets whatever height the screen has left under the settings
-        // above, so the window itself never has to scroll (it did, all of it, & on a phone that was the only way to reach anything)
+        int columns = logic.labels_auto ? 3 : 5;
         float inset = ImGui::GetStyle().WindowPadding.x;
         float row_tall = ImGui::GetFrameHeightWithSpacing();
         float list_needs = row_tall * (float)(order.size());
@@ -226,8 +227,8 @@ namespace {
         }
         heading("Size");
         heading("Opacity");
+        heading("Prefix");
         ImGui::BeginChild("##label-list", ImVec2(eui::em(34.f), list_tall));
-        // a child starts at 0, the window started at its padding
         title_x -= inset;
         fields_x -= inset;
         for (std::size_t i = 0; i < order.size(); ++i) {
@@ -237,7 +238,6 @@ namespace {
             eui::Selectable("=##grip", false, ImGuiSelectableFlags_NoAutoClosePopups, ImVec2(grip_w, 0.f));
             if (ImGui::IsItemHovered() || ImGui::IsItemActive())
                 ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNS);
-            // the grip is dragged up & down, which is also how a touch scrolls the page. while its held the page stays put
             if (ImGui::IsItemActive())
                 GUI::get().scroll_hold = ImGui::GetItemID();
             if (ImGui::IsItemActive()) {
@@ -280,6 +280,9 @@ namespace {
             if (eui::DragInt("##opacity", &opacity, 1.f, 0, 100, "%d%%"))
                 place.opacity = std::clamp(opacity, 0, 100);
             saved_on_release();
+            ImGui::SameLine();
+            if (eui::Checkbox("##prefix", &place.prefix))
+                save();
             ImGui::PopItemWidth();
             ImGui::PopID();
         }
@@ -563,7 +566,6 @@ void GUI::main() {
             dragged = logic.speedhack;
         float stepped = std::clamp(std::round(dragged / .05f) * .05f, .01f, 5.f);
         auto shown = fmt::format("{:.2f}x", stepped);
-        // above 1x it drags faster, in proportion to the speed
         float drag_rate = 0.005f * std::max(dragged, 1.f);
         if (eui::DragFloat("##speed", &dragged, drag_rate, 0.01f, 5.f, dragging ? shown.c_str() : "%.3fx", dragging ? ImGuiSliderFlags_NoRoundToFormat : ImGuiSliderFlags_None)) {
             GUI::get().setSpeed(typing ? dragged : std::clamp(std::round(dragged / .05f) * .05f, .01f, 5.f), false);
@@ -601,7 +603,6 @@ void GUI::main() {
             GUI::get().drop_carry();
         tip("Moves the level exactly one frame for every frame drawn, essentially smooth fix.");
         eui::RowHalf();
-        // lock fps never has time left over for real time to catch up on
         ImGui::BeginDisabled(logic.lock_delta);
         if (toggle("Real Time", logic.real_time_mode))
             GUI::get().drop_carry();
@@ -628,7 +629,6 @@ void GUI::main() {
             logic.macro_path.clear();
         ImGui::TextDisabled("%i inputs   %s TPS%s", (int)(logic.inputs.size()), fmt::format("{:g}", logic.fps).c_str(), !logic.macro_ldm_known ? "" : logic.macro_ldm ? "   LDM on" : "   LDM off");
         float half = eui::RowButton(2);
-        // better saving info
         bool just_saved = std::chrono::steady_clock::now() - logic.saved_at < std::chrono::seconds(1);
         ImGui::BeginDisabled(just_saved);
         if (eui::Button(just_saved ? "Saved###save-replay" : "Save###save-replay", ImVec2(half, 0.f)))
@@ -684,7 +684,6 @@ void GUI::main() {
     if (eui::BeginCard("Frame Advance", card_width())) {
         bool advancing = logic.frame_advance;
 #ifdef GEODE_IS_MOBILE
-        // since resume/pause added, unticking fa takes the bar away
         advancing = advancing || logic.frame_bar_open;
 #endif
         if (eui::Checkbox("Frame Advance", &advancing)) {
@@ -693,8 +692,6 @@ void GUI::main() {
         }
         GUI::get().offer_rebind("toggle-advance");
 #ifdef GEODE_IS_MOBILE
-        // the fa bar is hidden while the menu is open
-        // same row as step so the card (& the whole menu) doesnt get taller
         if (logic.frame_advance || logic.frame_bar_open) {
             float both = eui::RowRight(9.6f);
             float each = (both - ImGui::GetStyle().ItemSpacing.x) * .5f;
@@ -926,7 +923,7 @@ void GUI::tools() {
             persist_on_release();
         };
         char const* fly_hint = "How fast the ship has to be going up or down before it is corrected.";
-        char const* ufo_hint = "How far from that height the UFO can get before it clicks.";
+        char const* ufo_hint = "How far from that height the UFO may go. On a black orb, under it = click release click (goes up), over it = release click release (comes down), inside it they take turns. Off an orb it jumps when it falls under the height.";
         eui::SectionLabel("Ship");
         value_row("Threshold P1", "##fly-threshold-1", logic.straight_fly_threshold_p1, .01f, fly_hint);
         value_row("Threshold P2", "##fly-threshold-2", logic.straight_fly_threshold_p2, .01f, fly_hint);
@@ -1064,6 +1061,9 @@ void GUI::draw_visuals() {
     if (eui::BeginModal("Layout Mode", 18.f)) {
         toggle("Use Regular Background", logic.layout_use_regular_bg);
         tip("Uses the level's actual background");
+        if (toggle("Default Art", logic.layout_default_art))
+            Logic::get().refresh_default_art();
+        tip("Draws every block, slope & spike as the standard one, sized to its hitbox.");
         if (eui::ColorEdit3("Background color", logic.backgroundColor))
             save();
         if (eui::ColorEdit3("Ground color", logic.blocks_color))
@@ -1489,9 +1489,8 @@ void GUI::draw_theme() {
             save();
             gui.export_theme(gui.theme_path("current"));
         }
-#if 0 // control size is off for now, it blanked every page on a real phone
+#if 0
         {
-            // only applied when the finger lets go. not sure if i like this but eh
             static float draft = 1.f;
             static bool dragging = false;
             if (!dragging)

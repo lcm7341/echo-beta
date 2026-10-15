@@ -164,7 +164,7 @@ bool replaced_by_default_art(GameObject* object) {
     // TODO cant figure out saws
     case GameObjectType::Hazard:
     case GameObjectType::AnimatedHazard:
-        return object->m_objectRadius <= 0.f; // negative scale
+        return object->m_objectRadius <= 0.f;
     default:
         return false;
     }
@@ -202,6 +202,19 @@ std::unordered_set<GameObject*>& art_hidden() {
     return objects;
 }
 
+void Logic::refresh_default_art() {
+    for (auto* object : art_hidden()) {
+        if (!object)
+            continue;
+        object->m_isHide = false;
+        object->setOpacity(255);
+        if (object->m_colorSprite)
+            object->m_colorSprite->setVisible(true);
+    }
+    art_hidden().clear();
+    Logic::get().layout_styled = false;
+}
+
 void Logic::clear_layout_hidden() {
     lvl_hidden().clear();
     art_hidden().clear();
@@ -232,7 +245,6 @@ void LevelLayout::style_solid_object(GameObject* object) {
     object->m_detailUsesHSV = false;
     object->m_isDontFade = true;
     object->m_isDontEnter = true;
-    // fix colors
     bool hazard = object->m_objectType == GameObjectType::Hazard || object->m_objectType == GameObjectType::AnimatedHazard;
     for (auto* sprite : { object->m_baseColor, object->m_detailColor }) {
         if (!sprite)
@@ -338,7 +350,6 @@ void Logic::style_layout_object(GameObject* object) {
         LevelLayout::get().hide_object(object);
         return;
     }
-    // coins keep their own color (user coins went blue)
     if (object->m_objectType == GameObjectType::UserCoin || object->m_objectType == GameObjectType::SecretCoin)
         return;
     LevelLayout::get().style_solid_object(object);
@@ -380,7 +391,6 @@ void Logic::apply_layout(PlayLayer* play) {
     }
 }
 
-// default art
 namespace {
     constexpr int LAYOUT_ART_TAG = 0x4543484c; // "ECHL"
 
@@ -399,7 +409,6 @@ namespace {
         bool loaded = false;
     };
 
-    // createWithKey gives the wrong hitbox
     DefaultArt& default_art(PlayLayer* play) {
         static DefaultArt art;
         if (!art.loaded) {
@@ -514,10 +523,8 @@ void Logic::draw_layout_art(PlayLayer* play) {
     auto place = [&](GameObject* object) {
         if (!object || !replaced_by_default_art(object) || object->m_isDisabled || object->m_isGroupDisabled)
             return;
-        // anticheat spike
         if (object == play->m_anticheatSpike || object == play->m_player1CollisionBlock || object == play->m_player2CollisionBlock)
             return;
-        // invisible blocks
         if (object->m_objectType == GameObjectType::Solid && (object->m_isNoTouch || object->m_isPassable || lvl_hidden().contains(object) || lvl_invisible(object))) {
             object->setOpacity(0);
             return;
@@ -534,10 +541,13 @@ void Logic::draw_layout_art(PlayLayer* play) {
         std::optional<CCRect> block_box;
         bool slope_flip_x = false, slope_flip_y = false;
         if (slope) {
-            float w = object->m_width * scaleX, h = object->m_height * scaleY;
-            float turns = object->getRotation() / 90.f;
-            if (std::abs(turns - std::round(turns)) < 0.001f && static_cast<long>(std::round(turns)) % 2 != 0)
-                std::swap(w, h);
+            auto box = Logic::object_hitbox(object);
+            if (box.size.width < 0.5f || box.size.height < 0.5f) {
+                object->setOpacity(0);
+                return;
+            }
+            pos = CCPoint{ box.getMidX(), box.getMidY() };
+            float w = box.size.width, h = box.size.height;
             bool wide = w > h * 1.5f;
             piece = wide ? &art.wide_slope : &art.slope;
             sx = w / piece->width;
@@ -579,7 +589,6 @@ void Logic::draw_layout_art(PlayLayer* play) {
             }
             block_box = box;
         }
-        // opacity 0 AFTER gd sets it or it dont work
         object->setOpacity(0);
         if (object->m_colorSprite)
             object->m_colorSprite->setVisible(false);
@@ -636,8 +645,8 @@ void Logic::draw_layout_art(PlayLayer* play) {
         if (piece->halves)
             draw(piece->frame, 180.f);
     };
-    auto& grid = play->m_nonEffectObjects;
-    auto& sizes = play->m_nonEffectObjectsSizes;
+    auto& grid = play->m_sections;
+    auto& sizes = play->m_sectionSizes;
     float xFactor = play->m_sectionXFactor > 0.f ? play->m_sectionXFactor : 0.01f;
     int first_x = std::max((int)(std::floor(minX * xFactor)) - 1, 0);
     int last_x = std::min((int)(std::floor(maxX * xFactor)) + 1, (int)(std::min(grid.size(), sizes.size())) - 1);

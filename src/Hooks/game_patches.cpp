@@ -7,14 +7,12 @@
 using namespace geode::prelude;
 
 namespace {
-    // it is important that we know what we're doing
     template <class T, size_t N>
     bool matches(uintptr_t offset, std::array<T, N> const& expected) {
         return std::memcmp(reinterpret_cast<void*>(geode::base::get() + offset),
                    expected.data(), sizeof(expected)) == 0;
     }
 
-    // send through geode so it can be turned back off
     template <class T, size_t N>
     auto install(uintptr_t offset, std::array<T, N> const& replacement) {
         auto* bytes = reinterpret_cast<uint8_t const*>(replacement.data());
@@ -36,7 +34,6 @@ $execute {
     }
 #endif
 #ifdef GEODE_IS_WINDOWS
-    // check the lookup too, if someone hooked it then once isnt the same as twice
     if (matches(event_lookup_signature_address, event_lookup_original) &&
         echo::circles::fingerprint(reinterpret_cast<uint8_t const*>(geode::base::get() + event_map_address),
             event_map_size) == event_map_hash) {

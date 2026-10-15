@@ -3,7 +3,6 @@
 #include <cstdint>
 
 namespace echo::patches::mac {
-	// every spot the shake code calls rand, with the 16 bytes that have to be there
 	struct RandomSite {
 		uintptr_t offset;
 		std::array<uint8_t, 16> original;

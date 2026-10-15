@@ -118,7 +118,6 @@ namespace eui {
 
 	bool& single_column();
 	
-	// the mark that says how far a touch scrolled child is
 	void ScrollMark();
 	void BeginTiles(float left, float top, float right, float bottom, float tile_width_em, float shown = 1.f, float rate = 1.f);
 

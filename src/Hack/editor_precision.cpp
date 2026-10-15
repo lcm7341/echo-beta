@@ -13,7 +13,6 @@ using namespace geode::prelude;
 // we skid hpe
 namespace {
     bool other_mod_saves() {
-        // unless its here :}
         static bool const other = Loader::get()->isModLoaded("kxtbit.high_precision_editor");
         return other;
     }
@@ -31,7 +30,6 @@ namespace {
 
     std::optional<float> number(std::string_view text) {
 #if defined(GEODE_IS_IOS) || defined(GEODE_IS_MACOS)
-        // thank you john apple
         if (text.empty() || text.find_first_not_of("+-.0123456789eE") != std::string_view::npos)
             return std::nullopt;
         std::string copy(text);

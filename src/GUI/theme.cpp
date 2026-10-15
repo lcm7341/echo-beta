@@ -79,7 +79,6 @@ ImVec2 GUI::unscaled(ImVec2 value) {
 }
 
 matjson::Value GUI::style_json() {
-    // sizes before scale
     ImGuiStyle style = GUI::get().has_base ? GUI::get().base_style : ImGui::GetStyle();
     for (int i = 0; i < ImGuiCol_COUNT; ++i)
         style.Colors[i] = ImGui::GetStyle().Colors[i];
@@ -367,7 +366,6 @@ void GUI::paint_editor_from_theme() {
     ImGui::ColorConvertRGBtoHSV(accent.x, accent.y, accent.z, h, sat, val);
     ImVec4 second = accent;
     if (sat < .08f) {
-        // grey themes have no accent to turn so p2 gets a soft blue
         ImGui::ColorConvertHSVtoRGB(.6f, .4f, std::max(val, .6f), second.x, second.y, second.z);
     }
     else {
@@ -445,7 +443,6 @@ void GUI::apply_saved_theme() {
     GUI::get().apply_style_json(parsed.unwrap());
 }
 
-// convert old
 matjson::Value GUI::convert_old_theme(matjson::Value const& old, std::string const& name) {
     matjson::Value json;
     json["name"] = name;

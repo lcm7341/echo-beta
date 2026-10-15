@@ -66,8 +66,6 @@ namespace eui {
 
         void button_skin(ImDrawList* draw, ImRect const& body, float rounding, ImGuiID id, float hot, float down, float keep = 1.f, ImVec4 const* own = nullptr, float own_amount = 1.f);
 
-        // how far custom color moved off the themes own colors: hue turned (0-1), saturation & brightness scaled.
-        // saturation 0 = greyscale
         struct Grade {
             float turn = 0.f;
             float saturation = 1.f;
@@ -99,7 +97,6 @@ namespace eui {
             h += grade.turn;
             h -= std::floor(h);
             sat = std::clamp(sat * grade.saturation, 0.f, 1.f);
-            // darker crushes the dim parts first & leaves the bright ones (a dark space keeps its stars), brighter scales
             if (grade.brightness < 1.f)
                 val = std::pow(val, 1.f / std::max(grade.brightness, .1f));
             else
@@ -655,13 +652,11 @@ namespace eui {
 
         void heaven_scene(Backdrop const& back) {
             float dawn = .5f + .5f * std::sin(back.time * .3f);
-            // turned down it goes thru a sunset to night (a deep blue sky, a pale moon instead of the sun), never grey
             auto by_night = [](ImVec4 day, ImVec4 dusk, ImVec4 dark) {
                 return night < .5f ? mix(day, dusk, night * 2.f) : mix(dusk, dark, night * 2.f - 1.f);
             };
             ImVec4 sky_top = by_night(mix(ImVec4(.70f, .85f, 1.f, 1.f), ImVec4(1.f, .82f, .9f, 1.f), dawn), ImVec4(.36f, .27f, .66f, 1.f), mix(ImVec4(.05f, .06f, .18f, 1.f), ImVec4(.1f, .06f, .2f, 1.f), dawn));
             ImVec4 sky_low = by_night(ImVec4(1.f, .96f, .86f, 1.f), ImVec4(1.f, .6f, .42f, 1.f), ImVec4(.2f, .14f, .3f, 1.f));
-            // the light keeps the themes own colour at every brightness, it only gets softer
             ImVec4 light_tint(1.f, .9f, .55f, 1.f);
             ImVec4 beam_tint(1.f, .8f, .3f, 1.f);
             ImVec4 ring_tint(1.f, .86f, .45f, 1.f);
@@ -716,7 +711,6 @@ namespace eui {
             backdrop_fill(back, IM_COL32(4, 5, 15, 255), IM_COL32(4, 5, 15, 255));
             back.draw->PushClipRect(back.a, back.b, true);
             float diagonal = std::sqrt(back.width * back.width + back.tall * back.tall);
-            // 3 layers drifting at their own speed: near stars pass faster than far ones
             auto drifted = [&](ImVec2 at, float speed) {
                 float x = at.x - back.a.x - back.time * back.unit * speed;
                 x -= std::floor(x / back.width) * back.width;
@@ -740,7 +734,6 @@ namespace eui {
                         back.draw->PrimWriteIdx(static_cast<ImDrawIdx>(first + offset));
                 }
             };
-            // the milky way: a band of tiny far stars, no haze
             float band_angle = -.35f - .3f * chance(back, 0, 90);
             ImVec2 band_dir(std::cos(band_angle), std::sin(band_angle));
             ImVec2 band_side(-band_dir.y, band_dir.x);
@@ -755,7 +748,6 @@ namespace eui {
                 float size = std::max(.6f, back.unit * .035f);
                 back.draw->AddRectFilled(ImVec2(at.x - size * .5f, at.y - size * .5f), ImVec2(at.x + size * .5f, at.y + size * .5f), ImGui::ColorConvertFloat4ToU32(ImVec4(.85f, .86f, 1.f, lit)));
             }
-            // the stars: mostly faint, a few bright, colour by temperature
             constexpr float TEMPS[][4] = { { .66f, .78f, 1.f, .2f }, { .86f, .9f, 1.f, .75f }, { 1.f, .95f, .84f, .93f }, { 1.f, .8f, .62f, 1.f } };
             constexpr float LAYER_SPEED[] = { .15f, .4f, .9f };
             int stars = scatter(back, 3.5f, 30, 260);
@@ -777,7 +769,6 @@ namespace eui {
                 if (bright > .75f)
                     spikes(at, size * (5.f + 6.f * twinkle), std::max(.5f, size * .3f), faded(tint, .6f * lit));
             }
-            // a satellite crossing now & then, blinking
             {
                 float every = 14.f + 8.f * chance(back, 0, 61);
                 float clock = back.time / every + chance(back, 0, 62);
@@ -793,7 +784,6 @@ namespace eui {
                     back.draw->AddCircleFilled(at, std::max(.8f, back.unit * .06f), ImGui::ColorConvertFloat4ToU32(ImVec4(1.f, .95f, .9f, blink * back.alpha)), 6);
                 }
             }
-            // shooting stars
             for (int lane = 0; lane < 2; ++lane) {
                 float every = 2.5f + 2.5f * chance(back, lane, 71);
                 float clock = back.time / every + chance(back, lane, 72);
@@ -903,20 +893,18 @@ namespace eui {
             std::uint32_t seed = 0;
         };
 
-        // how a liquid in a button tank moves. heights & speeds are in button heights (per second)
         struct Liquid {
-            float level;       // resting surface, from the top
-            float swing;       // the 1st sloshing mode, swings a second
-            float settle;      // seconds for the slosh to die down to a third
-            float height;      // how high the slosh throws the surface
-            float idle;        // speed of the surface ripple at rest
+            float level;
+            float swing;
+            float settle;
+            float height;
+            float idle;
             int drops;
             float drop_size, throw_up, spread, gravity;
             ImVec4 body, top, drop;
         };
 
         constexpr Liquid WATER{ .72f, 1.f, .7f, .9f, 1.f, 10, .065f, 4.5f, 6.f, 16.f, { .65f, 1.f, .95f, .4f }, { .65f, 1.f, .95f, .65f }, { .75f, .97f, 1.f, .85f } };
-        // lava: thick, so it swings slow, settles slow & only throws a few heavy blobs
         constexpr Liquid LAVA{ .74f, .55f, 1.1f, .6f, .5f, 4, .11f, 2.6f, 2.5f, 7.f, { 1.f, .38f, .05f, .75f }, { 1.f, .78f, .25f, .95f }, { 1.f, .6f, .15f, .95f } };
 
         std::unordered_map<ImGuiID, std::vector<Splash>>& splashes() {
@@ -944,12 +932,9 @@ namespace eui {
                 { { .64f, .3f, .48f, 1.f }, { .33f, .13f, .3f, 1.f }, { 1.f, .82f, .9f, 1.f }, { 1.f, .62f, .8f, 1.f } },
             };
             Look look = LOOKS[(int)(which)];
-            // the base also follows the bodys brightness, so a darker theme darkens its buttons too
             Grade dim{ 0.f, 1.f, body_turn.brightness };
             look.top = turned(turned(look.top, accent_turn), dim);
             look.bottom = turned(turned(look.bottom, accent_turn), dim);
-            // a light theme at night: its buttons become the themes own dark buttons (the accent colour, like any dark
-            // theme), not some other colour
             if (night_menu > 0.f) {
                 ImVec4 night_button = color(ImGuiCol_Button);
                 night_button.w = 1.f;
@@ -977,7 +962,6 @@ namespace eui {
                 return ImGui::ColorConvertFloat4ToU32(tint);
             };
             int from = draw->VtxBuffer.Size;
-            // flat: the top lit gradient + white top line read as windows 7 glass. each theme adds its own life below
             draw->AddRectFilled(body.Min, body.Max, shaded(mix(look.top, look.bottom, .6f)), rounding);
             fade_verts(draw, from, .94f * alpha);
             alpha *= lively;
@@ -992,20 +976,16 @@ namespace eui {
             auto line = [&](float y, float thick, ImVec4 tint, float inset) {
                 draw->AddLine(ImVec2(body.Min.x + inset, y), ImVec2(body.Max.x - inset, y), ImGui::ColorConvertFloat4ToU32(tint), thick);
             };
-            // the button is a sealed tank: a press dips the liquid where you clicked & it sloshes off the walls
             auto tank = [&](Liquid const& liquid) {
-                // every press adds its own waves on top of the ones still going, none replace each other
                 ImGuiContext& g = *GImGui;
                 auto& presses = splashes()[id];
                 if (g.ActiveId == id && g.ActiveIdIsJustActivated) {
                     static std::uint32_t count = 0;
                     presses.push_back({ time, std::clamp((ImGui::GetIO().MousePos.x - body.Min.x) / std::max(wide, 1.f), 0.f, 1.f), ++count });
                 }
-                // gone once its waves die down to under 1%
                 std::erase_if(presses, [&](Splash const& press) {
                     return time - press.began > liquid.settle * 4.6f;
                 });
-                // a tanks own waves: standing modes cos(n pi x), deep liquid so each 1 swings at sqrt(n) times the 1st
                 constexpr int MODES = 8;
                 float modes[MODES] = {};
                 float total = 0.f;
@@ -1026,7 +1006,6 @@ namespace eui {
                     float slosh = 0.f;
                     for (int n = 1; n <= MODES; ++n)
                         slosh += modes[n - 1] * std::cos(3.1415927f * (float)(n) * u);
-                    // the lid & floor hold it in, however many presses stack up
                     return body.Min.y + tall * std::clamp(level + .07f * (noise(x / tall * .5f + time * .45f * liquid.idle, time * .4f * liquid.idle + own(1) * 9.f) - .5f) + liquid.height * slosh, .04f, .98f);
                 };
                 // the buttons real outline, rounded corners & all (the same points its frame is drawn w/), so the
@@ -1076,7 +1055,6 @@ namespace eui {
                 for (auto const& at : top_line)
                     draw->PathLineTo(at);
                 draw->PathStroke(ImGui::ColorConvertFloat4ToU32(faded(turned(liquid.top, accent_turn), alpha)), 0, std::max(1.f, tall * .045f));
-                // drops thrown up stay in the tank: they bounce off its walls & lid, then fall back in
                 float flight = 2.f * liquid.throw_up / liquid.gravity;
                 auto fold = [](float v, float lo, float hi) {
                     float span = std::max(hi - lo, 1.f);
@@ -1108,10 +1086,8 @@ namespace eui {
                     }
                 }
             };
-            // off = same colors but nothing moves
             switch (button_effects() ? which : Scene::None) {
             case Scene::Halloween: {
-                // a candle line along the bottom & a bat now & then
                 float flame = .55f + .25f * std::sin(time * (3.f + 3.f * own(1)) + own(2) * 40.f) + .2f * std::sin(time * (9.f + 4.f * own(3)) + own(4) * 20.f);
                 line(body.Max.y - 1.5f, std::max(1.5f, tall * .07f), faded(look.glow, flame * alpha), rounding * .5f);
                 float every = 4.f + 3.f * own(11);
@@ -1132,7 +1108,6 @@ namespace eui {
             }
             case Scene::Hell: {
                 tank(LAVA);
-                // embers rising off the lava
                 for (int i = 0; i < 4; ++i) {
                     float life = time * (.5f + .5f * own(10 + i)) + own(20 + i);
                     life -= std::floor(life);
@@ -1145,7 +1120,6 @@ namespace eui {
                 break;
             }
             case Scene::Heaven: {
-                // a 2nd gold frame inside the edge, breathing slowly, & glints popping in & out
                 float breath = .55f + .25f * std::sin(time * 1.3f + own(6) * 6.2831853f) + .2f * hot;
                 float inset = std::max(2.f, tall * .12f);
                 draw->AddRect(ImVec2(body.Min.x + inset, body.Min.y + inset), ImVec2(body.Max.x - inset, body.Max.y - inset), ImGui::ColorConvertFloat4ToU32(faded(look.edge, breath * alpha)), std::max(0.f, rounding - inset), 0, 1.f);
@@ -1214,10 +1188,6 @@ namespace eui {
             draw->AddRect(body.Min, body.Max, ImGui::ColorConvertFloat4ToU32(faded(edge, (.45f + .45f * hot) * alpha)), rounding, 0, 1.f);
         }
 
-        // the backdrop is clipped to the windows rectangle, but the window has round corners: anything big crossing a
-        // corner (a heaven ray) showed past the rounding. this cuts every triangle drawn since (vtx, idx, cmd) along the
-        // windows real outline (the same points its frame uses). the outline is convex, so each triangle is clipped
-        // edge by edge & what stays is a convex polygon, drawn as a fan
         void round_off(ImDrawList* draw, int idx_from, int cmd_from, ImRect const& box, float rounding) {
             if (rounding < .5f || draw->CmdBuffer.Size == 0)
                 return;
@@ -1232,7 +1202,6 @@ namespace eui {
                 turn += (b.x - a.x) * (b.y + a.y);
             }
             float side = turn < 0.f ? 1.f : -1.f;
-            // only the corners can be outside: a triangle all in the middle band either way is fine as it is
             auto plain = [&](ImVec2 p) {
                 return (p.x >= box.Min.x + rounding && p.x <= box.Max.x - rounding) ? 1 : (p.y >= box.Min.y + rounding && p.y <= box.Max.y - rounding) ? 2 : 0;
             };
@@ -1547,7 +1516,6 @@ namespace eui {
             if (lum > .55f) {
                 ImVec4 dark = color(ImGuiCol_WindowBg);
                 float body_lum = dark.x * .2126f + dark.y * .7152f + dark.z * .0722f;
-                // the body as ink only when its really dark, a mid body (a light theme fading to night) is mud on a fill
                 if (body_lum > .12f)
                     dark = ImVec4(.08f, .08f, .08f, 1.f);
                 dark.w = 1.f;
@@ -1727,7 +1695,6 @@ namespace eui {
         ImVec4 fill = mix(idle, running, on);
         draw->AddRectFilled(body.Min, body.Max, ImGui::GetColorU32(fill), style.FrameRounding);
         gloss(draw, body, style.FrameRounding);
-        // running keeps the themes effects, in the running colour
         button_skin(draw, body, style.FrameRounding, id, hot, down, 1.f, &running, on);
         draw->AddRect(body.Min, body.Max, ImGui::GetColorU32(faded(accent, std::max(hot * .55f, .35f * (1.f - on)))), style.FrameRounding, 0, 1.f);
         ImVec4 ink = mix(color(ImGuiCol_Text), ink_on(running), on);
@@ -1745,7 +1712,6 @@ namespace eui {
         return pressed;
     }
 
-    // pad | icon | gap | text | pad
     float nav_pad() {
         return ImGui::GetStyle().FramePadding.x + ImGui::GetFontSize() * .3f;
     }
@@ -1901,7 +1867,6 @@ namespace eui {
             return s_rowWidths.empty() ? ImGui::GetContentRegionAvail().x : s_rowWidths.back();
         }
 
-        // 1 line down the middle for fields, right checkboxes & the 2nd half button
         float control_start() {
             return ImGui::GetStyle().WindowPadding.x + (row_width() + ImGui::GetStyle().ItemSpacing.x) * .5f;
         }
@@ -1944,7 +1909,6 @@ namespace eui {
         ImGui::SetCursorPosX(ImGui::GetCursorPosX() + x);
         ImGui::SetWindowFontScale(1.12f);
         ImGui::SetCursorPosY(start_y + (height - ImGui::GetFontSize()) * .5f);
-        // anything after ## is the id
         char const* end = ImGui::FindRenderedTextEnd(title);
         ImGui::TextUnformatted(title, end);
         ImGui::SetWindowFontScale(1.f);
@@ -2369,7 +2333,6 @@ namespace eui {
             return begin_tile(title, width_em);
         ImGuiStyle const& style = ImGui::GetStyle();
         float width = em(width_em), height = 0.f;
-        // 1 card a row, as wide as the page
         if (single_column())
             width = std::max(width, ImGui::GetContentRegionAvail().x);
         if (!s_cardRows.empty() && !single_column()) {
@@ -2458,16 +2421,13 @@ namespace eui {
     bool BeginModal(char const* title, float width_em, bool closable) {
         ImGuiWindowFlags flags = ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoTitleBar;
         ImVec2 display = ImGui::GetIO().DisplaySize;
-        // never bigger than the screen
         ImGui::SetNextWindowSizeConstraints(ImVec2(0.f, 0.f), ImVec2(display.x * .97f, display.y * .95f));
 #ifdef GEODE_IS_MOBILE
-        // on a phone it stays in the middle. a finger that scrolls it was dragging the whole thing around
         ImGui::SetNextWindowPos(ImVec2(display.x * .5f, display.y * .5f), ImGuiCond_Always, ImVec2(.5f, .5f));
         flags |= ImGuiWindowFlags_NoMove;
 #endif
         if (!ImGui::BeginPopupModal(title, nullptr, flags))
             return false;
-        // a click / tap outside it closes it. only when its the top popup, so picking from a dropdown it opened doesnt count
         {
             ImGuiContext& g = *ImGui::GetCurrentContext();
             ImGuiWindow* window = ImGui::GetCurrentWindow();
@@ -2787,7 +2747,6 @@ namespace eui {
         style.WindowTitleAlign = ImVec2(.5f, .5f);
     }
 
-    // a loaded theme only brings colors back, the scene tint has to be worked out again
     void sync_scene_turn(Palette const& palette) {
         body_turn = accent_turn = Grade{};
         night = 0.f;
@@ -2801,7 +2760,6 @@ namespace eui {
             body_turn = { palette.hue - own.hue, ratio(palette.richness, own.richness), ratio(palette.depth, own.depth) };
             if (own.light) {
                 night = std::clamp((1.f - body_turn.brightness) / (1.f - .5f), 0.f, 1.f);
-                // the night look IS the darkening, under .5 the night itself gets darker
                 body_turn.brightness = std::min(1.f, palette.depth / .5f);
             }
             accent_turn = { palette.accent_hue - own.accent_hue, ratio(palette.accent_saturation, own.accent_saturation), ratio(palette.accent_value, own.accent_value) };
@@ -2833,7 +2791,6 @@ namespace eui {
         };
         auto dark_set = [&](float dd) {
             dd = std::max(dd, 0.f);
-            // under .5 it heads to black, but each layer stops at its own floor so panels, lines & buttons stay apart
             auto value = [dd](float base, float floor) {
                 return dd >= .5f ? base * dd : floor + (base * .5f - floor) * dd / .5f;
             };
@@ -2849,12 +2806,9 @@ namespace eui {
         if (!palette.light)
             look = dark_set(d);
         else {
-            // a light theme turned down fades into its night look, not grey
             float fade = night_fade(d);
             Set day = light_set(std::min(1.f, .85f + .15f * (d - NIGHT_LOW) / (1.f - NIGHT_LOW)));
             Set dark = dark_set(.8f + (std::min(d, NIGHT_TOP) - .5f) / (NIGHT_TOP - .5f) * .7f);
-            // the text is never faded between dark & light (thats grey on grey), it switches in 1 go at the panel
-            // luminance where both read the same (~.18), so its contrast never drops under what either gives there
             ImVec4 under = mix(day.panel, dark.panel, fade);
             auto linear = [](float c) {
                 return std::pow(c, 2.2f);

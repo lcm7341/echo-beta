@@ -18,7 +18,6 @@ namespace {
         return value;
     }
 
-    // what i turned off, so turning back on only touches those (some patches are meant to be off)
     std::vector<Patch*> g_patches;
     std::vector<Hook*> g_hooks;
 
@@ -32,7 +31,6 @@ namespace {
             }
             for (auto* hook : Mod::get()->getHooks()) {
                 auto name = std::string(hook->getDisplayName());
-                // keep what draws the menu & takes its input, and the 1 hook the trace sits on (it only passes thru)
                 bool menu = name.starts_with("cocos2d::") && name != "cocos2d::CCScheduler::update";
                 if (menu || name == "PlayerObject::update" || !hook->isEnabled())
                     continue;
@@ -54,7 +52,6 @@ namespace {
     }
 }
 
-// disable bot: every patch & gameplay hook off, only the menu & the step trace stay
 bool Session::bot_disabled() {
     return off();
 }
@@ -78,9 +75,6 @@ void Session::set_bot_disabled(bool on) {
     logic.message = on ? "Echo is off" : "Echo is back on";
 }
 
-// macros saved before the sort fix have p1 before p2 on every frame, whatever the real order was
-// outside 2 player levels "p1 press, p2 release" followed by ANOTHER release cant be right (2 releases in a row),
-// the release came first. so swap those back
 void Session::repair_player_order(PlayLayer* play) {
     static uint64_t checked = ~0ull;
     static Frame const* owner = nullptr;
@@ -98,7 +92,6 @@ void Session::repair_player_order(PlayLayer* play) {
         auto& b = inputs[i + 1];
         if (a.number != b.number || a.player2 == b.player2 || button(a) != button(b) || !a.holding || b.holding)
             continue;
-        // what comes next on that button, from either player
         size_t next = i + 2;
         while (next < inputs.size() && button(inputs[next]) != button(a))
             ++next;
@@ -129,7 +122,6 @@ void Session::set_macro_ldm(bool on) {
 }
 
 $on_mod(Loaded) {
-    // was off when the game closed. echo loads before any other bot patches the game, so this puts gds own code back first
     if (off())
         apply(true);
 }

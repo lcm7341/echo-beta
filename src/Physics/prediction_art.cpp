@@ -10,7 +10,6 @@ using namespace geode::prelude;
 
 namespace phys {
     namespace {
-        // the real player still needs other mods setPosition hooks (misc bugfixes fixes the wave trail there)
         bool fast_pos = false, fast_live = false;
     }
 
@@ -37,7 +36,6 @@ namespace phys {
             reported = true;
             return;
         }
-        // visual only setPosition hooks, fake players can skip them
         constexpr std::string_view VISUAL_ONLY[] = { "cvolton.misc_bugfixes" };
         for (auto* mod : Loader::get()->getAllMods()) {
             if (mod == Mod::get())

@@ -1,5 +1,7 @@
 // the on screen labels (frame, time, percent, cps, position, velocity ...)
 // auto position stacks the visible ones from a corner
+#include "Logic/build_info.hpp"
+#include "Logic/perf.hpp"
 #include "Logic/logic.hpp"
 #include "Hack/trajectory.hpp"
 #include "Hack/label_kinds.hpp"
@@ -7,6 +9,11 @@
 #include <Geode/binding/PlayerObject.hpp>
 #include <Geode/binding/GameObject.hpp>
 #include <Geode/binding/OBB2D.hpp>
+#include <Geode/binding/FMODAudioEngine.hpp>
+#ifdef GEODE_IS_WINDOWS
+#include <Windows.h>
+#include <psapi.h>
+#endif
 #include <algorithm>
 #include <cmath>
 #include <deque>
@@ -34,6 +41,7 @@ constexpr int FRAME_TAG = 0xEC01, CPS_TAG = 0xEC02, PERCENT_TAG = 0xEC03, TIME_T
 constexpr int RECORD_TAG = 0xEC05, DEBUG_TAG = 0xEC07, POS_TAG = 0xEC08, VELOCITY_TAG = 0xEC09;
 constexpr int ALIVE_TAG = 0xEC0A, MAX_CPS_TAG = 0xEC0B, GRAVITY_TAG = 0xEC0C, DEATH_TAG = 0xEC0D;
 constexpr int UTILITY_TAG = 0xEC0E, SAFE_MODE_TAG = 0xEC0F;
+constexpr int FPS_TAG = 0xEC20, DEBUG_STATS_TAG = 0xEC21, SPEED_TAG = 0xEC22, SSB_TAG = 0xEC23;
 
 namespace {
     LabelInfo const LABELS[] = {
@@ -50,6 +58,10 @@ namespace {
         { "Safe Mode Cheats", "safe_mode", &Session::show_safe_mode, &Session::safe_mode_label, SAFE_MODE_TAG },
         { "Death Next Frame", "death_next", &Session::show_death_next, &Session::death_label, DEATH_TAG },
         { "Show Percent", "percent", &Session::show_percent, &Session::percent_label, PERCENT_TAG },
+        { "Show FPS", "fps", &Session::show_fps, &Session::fps_label, FPS_TAG },
+        { "Debug Stats", "debug", &Session::show_debug, &Session::debug_label, DEBUG_STATS_TAG },
+        { "Show Speed", "speed", &Session::show_speed, &Session::speed_label, SPEED_TAG },
+        { "Show SSB", "ssb", &Session::show_ssb, &Session::ssb_label, SSB_TAG },
     };
 
     std::vector<std::string> build_font_names() {
@@ -177,7 +189,6 @@ void Labels::layout(PlayLayer* play) {
     auto order = ordered_labels(logic);
     if (bottom)
         std::ranges::reverse(order);
-    // fix ios labels being cut off
     float radius = 0.f;
 #ifdef GEODE_IS_IOS
     // 1.15: apples corners are not circles belief it or no
@@ -221,7 +232,67 @@ std::string Labels::format_clock(double seconds) {
     return fmt::format("{:02}:{:02}:{:02}", hours, minutes, secs);
 }
 
+namespace {
+    std::string ram_text() {
+#ifdef GEODE_IS_WINDOWS
+        PROCESS_MEMORY_COUNTERS info{};
+        if (GetProcessMemoryInfo(GetCurrentProcess(), &info, sizeof(info)))
+            return fmt::format("  RAM {}MB", info.WorkingSetSize / (1024 * 1024));
+#endif
+        return {};
+    }
+
+    void sync_perf_labels(PlayLayer* play, bool show_labels) {
+        auto const& logic = Logic::get();
+        auto const& s = echo::perf::summary();
+        bool fps_on = show_labels && logic.show_fps;
+        bool debug_on = show_labels && logic.show_debug;
+        Labels::get().sync_label(play, FPS_TAG, fps_on, logic.fps_label, logic.fps_label.prefix ? fmt::format("FPS: {:.0f}", s.fps) : fmt::format("{:.0f} fps", s.fps), { 255, 255, 255 });
+        if (!debug_on) {
+            Labels::get().sync_label(play, DEBUG_STATS_TAG, false, logic.debug_label, "", { 255, 255, 255 });
+            return;
+        }
+        static std::string text;
+        static auto built = std::chrono::steady_clock::time_point{};
+        auto now = std::chrono::steady_clock::now();
+        if (!text.empty() && now - built < std::chrono::milliseconds(250)) {
+            Labels::get().sync_label(play, DEBUG_STATS_TAG, true, logic.debug_label, text, { 255, 255, 255 });
+            return;
+        }
+        built = now;
+        text.clear();
+        text += fmt::format("{:.1f} fps  avg {:.2f}ms  median {:.2f}  1% {:.2f}  max {:.2f}  hitches/s {}\n", s.fps, s.avg_ms, s.median_ms, s.low1_ms, s.max_ms, s.hitches);
+        if (!s.last_hitch.empty())
+            text += "last hitch: " + s.last_hitch + "\n";
+        text += fmt::format("avg ms  phys {:.2f}  bstep {:.2f}  traj {:.2f}  auto {:.2f}  hbox {:.2f}  lbl {:.2f}  draw+wait {:.2f}\n", s.slot_ms[echo::perf::Physics], s.slot_ms[echo::perf::Backstep],
+            s.slot_ms[echo::perf::Trajectory], s.slot_ms[echo::perf::Autoclick], s.slot_ms[echo::perf::Hitboxes], s.slot_ms[echo::perf::Labels], s.draw_ms);
+        text += fmt::format("max ms  phys {:.2f}  bstep {:.2f}  traj {:.2f}  auto {:.2f}  hbox {:.2f}  lbl {:.2f}\n", s.slot_max_ms[echo::perf::Physics], s.slot_max_ms[echo::perf::Backstep],
+            s.slot_max_ms[echo::perf::Trajectory], s.slot_max_ms[echo::perf::Autoclick], s.slot_max_ms[echo::perf::Hitboxes], s.slot_max_ms[echo::perf::Labels]);
+        text += fmt::format("tps {:.1f} real / {:g} set  steps/frame {:.2f}  level speed {:.3f}x (hack {:g}x)\n", s.steps_per_sec, logic.sample_rate(), s.steps_per_frame,
+            s.level_speed, logic.speedhack);
+        auto* director = CCDirector::sharedDirector();
+        text += fmt::format("dt gd {:.2f}ms used {:.2f}ms  cap {:.2f}ms  carry {:.3f}ms  lock fps {}  real time {}\n", s.gd_dt_ms, s.used_dt_ms,
+            director ? director->getAnimationInterval() * 1000.0 : 0.0, logic.carry * 1000.0, logic.lock_delta ? "on" : "off", logic.real_time_mode ? "on" : "off");
+        if (logic.backstep)
+            text += fmt::format("backstep  saves/s {}  gap {} steps  save {:.2f}ms avg  held {}  last: gd {:.2f} extra {:.2f} objects {:.2f} trim {:.2f}\n",
+                s.saves_per_sec, logic.backstep_interval(), logic.backstep_save_sec * 1000.0, logic.backsteps.size(), s.save_gd_ms, s.save_extra_ms,
+                s.save_objects_ms, s.save_trim_ms);
+        if (s.traj_steps_per_frame > 0.0 || logic.show_traj || logic.traj_autoclicker || logic.pause_before_kill)
+            text += fmt::format("trajectory  {:.0f} predicted steps/frame  moving objects {}\n", s.traj_steps_per_frame, logic.traj_moving_objects ? "on" : "off");
+        double level_ms = play->m_gameState.m_levelTime * 1000.0;
+        double music_ms = FMODAudioEngine::get() ? FMODAudioEngine::get()->getMusicTimeMS(0) : 0.0;
+        text += fmt::format("build {}  frame {}  objects {}  music - level {:.0f}ms{}", echo::build_id(), logic.step_frame, play->m_objects ? play->m_objects->count() : 0,
+            music_ms - level_ms, ram_text());
+        Labels::get().sync_label(play, DEBUG_STATS_TAG, true, logic.debug_label, text, { 255, 255, 255 });
+    }
+}
+
+static std::string named_label(LabelPlacement const& place, char const* name, std::string text) {
+    return place.prefix ? fmt::format("{}: {}", name, text) : text;
+}
+
 void Logic::draw_overlay(PlayLayer* play) {
+    echo::perf::Scope label_time(echo::perf::Labels);
     auto const& logic = Logic::get();
     auto& labels = Labels::get();
     auto font = label_font_file(label_font_index(logic.labelFont));
@@ -233,7 +304,7 @@ void Logic::draw_overlay(PlayLayer* play) {
         }
     }
     bool show_labels = !(logic.render_hide_labels && Logic::get().render_capturing());
-    Labels::get().sync_label(play, FRAME_TAG, show_labels && logic.show_frame, logic.frame_label, fmt::format("Frame: {}", Logic::get().get_frame(play) + 1), { 255, 255, 255 });
+    Labels::get().sync_label(play, FRAME_TAG, show_labels && logic.show_frame, logic.frame_label, named_label(logic.frame_label, "Frame", fmt::format("{}", Logic::get().get_frame(play) + 1)), { 255, 255, 255 });
 
     unsigned p1 = Logic::get().count_presses_in_last_second(false);
     bool two_dual = play->m_levelSettings && play->m_levelSettings->m_twoPlayerMode && play->m_gameState.m_isDualMode;
@@ -246,9 +317,9 @@ void Logic::draw_overlay(PlayLayer* play) {
     else if (logic.over_max_cps)
         cps_color = { 255, 72, 0 };
     if (two_dual)
-        Labels::get().sync_label(play, CPS_TAG, show_labels && logic.show_cps, logic.cps_label, fmt::format("CPS: {}/{}", p1, p2), cps_color);
+        Labels::get().sync_label(play, CPS_TAG, show_labels && logic.show_cps, logic.cps_label, named_label(logic.cps_label, "CPS", fmt::format("{}/{}", p1, p2)), cps_color);
     else
-        Labels::get().sync_label(play, CPS_TAG, show_labels && logic.show_cps, logic.cps_label, fmt::format("CPS: {}", p1), cps_color);
+        Labels::get().sync_label(play, CPS_TAG, show_labels && logic.show_cps, logic.cps_label, named_label(logic.cps_label, "CPS", fmt::format("{}", p1)), cps_color);
 
     static PlayLayer* peak_lvl = nullptr;
     static unsigned peak_p1 = 0, peak_p2 = 0;
@@ -277,13 +348,13 @@ void Logic::draw_overlay(PlayLayer* play) {
         else
             percent = fmt::format("{:.{}f}%", amount, logic.percent_accuracy);
     }
-    Labels::get().sync_label(play, PERCENT_TAG, show_labels && logic.show_percent, logic.percent_label, percent, { 255, 255, 255 });
+    Labels::get().sync_label(play, PERCENT_TAG, show_labels && logic.show_percent, logic.percent_label, named_label(logic.percent_label, "Percent", percent), { 255, 255, 255 });
     Labels::get().sync_label(
         play,
         TIME_TAG,
         show_labels && logic.show_time,
         logic.time_label,
-        Labels::get().format_clock(play->m_gameState.m_levelTime),
+        named_label(logic.time_label, "Time", Labels::get().format_clock(play->m_gameState.m_levelTime)),
         { 255, 255, 255 });
 
     // backstep is playing but ehhh no its not
@@ -294,7 +365,7 @@ void Logic::draw_overlay(PlayLayer* play) {
         RECORD_TAG,
         recording_shown,
         logic.recording_label,
-        fmt::format("Recording: {}/{}", holds, releases),
+        named_label(logic.recording_label, "Recording", fmt::format("{}/{}", holds, releases)),
         { 255, 255, 255 });
 
     if (auto* debug = typeinfo_cast<CCLabelBMFont*>(play->getChildByTag(DEBUG_TAG)))
@@ -312,14 +383,15 @@ void Logic::draw_overlay(PlayLayer* play) {
             return text;
         return std::string(second ? "P2 " : "P1 ") + text;
     };
-    Labels::get().sync_label(play, POS_TAG, show_labels && logic.show_pos, logic.pos_label, body_text([&](PlayerObject* body, bool second) {
+    int places = std::clamp(logic.label_decimals, 0, 8);
+    Labels::get().sync_label(play, POS_TAG, show_labels && logic.show_pos, logic.pos_label, named_label(logic.pos_label, "Position", body_text([&](PlayerObject* body, bool second) {
         if (!body)
             return named(second, "--");
         auto pos = body->getPosition();
-        return named(second, fmt::format("{:.2f}, {:.2f}", pos.x, pos.y));
-    }),
+        return named(second, fmt::format("{:.{}f}, {:.{}f}", pos.x, places, pos.y, places));
+    })),
         { 255, 255, 255 });
-    Labels::get().sync_label(play, VELOCITY_TAG, show_labels && logic.show_velocity, logic.velocity_label, body_text([&](PlayerObject* body, bool second) {
+    Labels::get().sync_label(play, VELOCITY_TAG, show_labels && logic.show_velocity, logic.velocity_label, named_label(logic.velocity_label, "Velocity", body_text([&](PlayerObject* body, bool second) {
         if (!body)
             return named(second, "--");
         float forward = body->m_playerSpeed * (float)(body->m_speedMultiplier) * 5.77f;
@@ -329,24 +401,34 @@ void Logic::draw_overlay(PlayLayer* play) {
             forward = (float)(body->m_platformerXVelocity);
         float vx = body->m_isSideways ? (float)(body->m_yVelocity) : forward;
         float vy = body->m_isSideways ? forward : (float)(body->m_yVelocity);
-        return named(second, fmt::format("{:.2f}, {:.2f}", vx, vy));
-    }),
+        return named(second, fmt::format("{:.{}f}, {:.{}f}", vx, places, vy, places));
+    })),
         { 255, 255, 255 });
     auto clipped = [&](bool second) {
         return second ? logic.noclip_p2 && logic.noclip_dead_p2 : logic.noclip_p1 && logic.noclip_dead_p1;
     };
     bool dead = play->m_playerDied || (play->m_player1 && play->m_player1->m_isDead) || (dual && play->m_player2 && play->m_player2->m_isDead) || clipped(false) || (dual && clipped(true));
-    Labels::get().sync_label(play, ALIVE_TAG, show_labels && logic.show_alive, logic.alive_label, body_text([&](PlayerObject* body, bool second) {
+    Labels::get().sync_label(play, ALIVE_TAG, show_labels && logic.show_alive, logic.alive_label, named_label(logic.alive_label, "Status", body_text([&](PlayerObject* body, bool second) {
         bool gone = play->m_playerDied || (body && body->m_isDead) || clipped(second);
         return named(second, gone ? "Dead" : "Alive");
-    }),
+    })),
         dead ? ccColor3B{ 255, 60, 60 } : ccColor3B{ 80, 255, 120 });
-    Labels::get().sync_label(play, MAX_CPS_TAG, show_labels && logic.show_max_cps, logic.max_cps_label, fmt::format("Max CPS: {}", max_cps_text), { 255, 255, 255 });
-    Labels::get().sync_label(play, GRAVITY_TAG, show_labels && logic.show_gravity, logic.gravity_label, body_text([&](PlayerObject* body, bool second) {
+    Labels::get().sync_label(play, MAX_CPS_TAG, show_labels && logic.show_max_cps, logic.max_cps_label, named_label(logic.max_cps_label, "Max CPS", max_cps_text), { 255, 255, 255 });
+    Labels::get().sync_label(play, GRAVITY_TAG, show_labels && logic.show_gravity, logic.gravity_label, named_label(logic.gravity_label, "Gravity", body_text([&](PlayerObject* body, bool second) {
         bool flipped = body && body->m_isUpsideDown;
         return named(second, flipped ? "Flipped" : "Normal");
-    }),
+    })),
         { 255, 255, 255 });
+    Labels::get().sync_label(play, SPEED_TAG, show_labels && logic.show_speed, logic.speed_label, named_label(logic.speed_label, "Speed", body_text([&](PlayerObject* body, bool second) {
+        if (!body)
+            return named(second, "--");
+        float speed = body->m_playerSpeed;
+        char const* text = speed == 0.7f ? "0.5x" : speed == 1.1f ? "2x" : speed == 1.3f ? "3x" : speed == 1.6f ? "4x" : speed == 0.9f ? "1x" : nullptr;
+        return named(second, text ? std::string(text) : fmt::format("{:g}", speed));
+    })),
+        { 255, 255, 255 });
+    Labels::get().sync_label(play, SSB_TAG, show_labels && logic.show_ssb, logic.ssb_label,
+        named_label(logic.ssb_label, "SSB", fmt::format("{:.6f}x", Logic::get().scroll_speed_factor())), { 255, 255, 255 });
     // so were in copper
     std::string utilities;
     if (show_labels && logic.show_utilities) {
@@ -410,6 +492,7 @@ void Logic::draw_overlay(PlayLayer* play) {
         }
     }
     Labels::get().sync_label(play, SAFE_MODE_TAG, !blocked.empty(), logic.safe_mode_label, blocked, { 255, 60, 60 });
+    sync_perf_labels(play, show_labels);
     for (int tag = 0xEC10; tag <= 0xEC1F; ++tag) {
         if (auto* leftover = play->getChildByTag(tag))
             leftover->removeFromParent();

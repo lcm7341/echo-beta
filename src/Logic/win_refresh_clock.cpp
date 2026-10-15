@@ -15,9 +15,9 @@
 static bool windows_said_no = false;
 static uint64_t ticks_last_frame = 0;
 static bool is_first_frame = true;
-// kept within 1 refresh of real time
 static LARGE_INTEGER qpc_last{};
 static double real_total = 0.0, used_total = 0.0;
+static double gd_average = 0.0;
 
 static bool ask_windows_for_ticks(uint64_t& total_ticks, double& seconds_per_tick) {
     if (windows_said_no)
@@ -34,7 +34,6 @@ static bool ask_windows_for_ticks(uint64_t& total_ticks, double& seconds_per_tic
         return false;
     seconds_per_tick = (double)info.rateRefresh.uiDenominator / info.rateRefresh.uiNumerator;
     total_ticks = info.cRefresh;
-    // wine leaves the count at 0
     if (total_ticks == 0) {
         windows_said_no = true;
         return false;
@@ -49,7 +48,6 @@ namespace echo::win {
         QueryPerformanceFrequency(&frequency);
         double real = qpc_last.QuadPart ? static_cast<double>(now.QuadPart - qpc_last.QuadPart) / static_cast<double>(frequency.QuadPart) : -1.0;
         qpc_last = now;
-        // not called for a while: start over
         if (!(real >= 0.0) || real > 0.25)
             is_first_frame = true;
 
@@ -63,6 +61,12 @@ namespace echo::win {
 
         if (is_first_frame) {
             is_first_frame = false;
+            real_total = used_total = 0.0;
+            gd_average = gd_time;
+            return gd_time;
+        }
+        gd_average += (gd_time - gd_average) * 0.1;
+        if (gd_average < seconds_per_tick * 0.75) {
             real_total = used_total = 0.0;
             return gd_time;
         }

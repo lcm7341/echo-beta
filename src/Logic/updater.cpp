@@ -8,6 +8,7 @@
 // affordable_steps times real steps & the rest of the frame, then caps the frame to what fits. heavy levels slow down, they dont freeze
 // time warp below 1x makes each step SHORTER in level time, it does not add steps
 // find best frame is here too: step forward, ask the trajectory how long a flip would survive, stop on the best frame
+#include "Logic/perf.hpp"
 #include "Logic/logic.hpp"
 #include "GUI/gui.hpp"
 #include "Hooks/step.hpp"
@@ -74,7 +75,6 @@ bool Logic::lock_delta_active() const {
 }
 
 namespace {
-    // the speedhack of the frame thats running, for the step cap
     float g_frame_speed = 1.f;
 }
 
@@ -153,7 +153,6 @@ namespace {
         sample.steps += clock.steps;
         if (clock.sampled_step < 2)
             return;
-        // a backstep save isnt a per step cost, counted in it made the cap let 28 of 276 steps run
         sample.spans += std::max(0.0, seconds_since(clock.first, clock.last) - clock.untimed);
         sample.gaps += clock.sampled_step - 1;
     }
@@ -185,7 +184,6 @@ namespace {
 }
 
 namespace {
-    // the 1 step at a time path (autoclicker, prevent death): what a step really costs there, autoclicker included
     bool g_single_path = false;
     double g_single_cost = 0.0;
 
@@ -225,7 +223,6 @@ void Logic::note_step() {
     clock.sampled_step = clock.steps;
 }
 
-// everything a frame does that ISNT physics
 void Logic::note_frame_work(double seconds) {
     if (std::isfinite(seconds))
         frame_work = frame_work > 0.0 ? frame_work + (seconds - frame_work) * 0.05 : seconds;
@@ -236,7 +233,6 @@ void Logic::note_frame_work(double seconds) {
     cost.other_work = cost.other_work > 0.0 ? cost.other_work + (other - cost.other_work) * 0.2 : other;
 }
 
-// for the trace. what the pacing thinks a step & a frame cost rn
 std::string echo::step::pace() {
     auto& logic = Logic::get();
     auto const& cost = step_cost();
@@ -255,7 +251,6 @@ int Logic::affordable_steps() const {
     double interval = director ? director->getAnimationInterval() : 1.0 / 60.0;
     if (!std::isfinite(interval) || interval <= 0.0)
         interval = 1.0 / 60.0;
-    // real time gets the same budget now & keeps what didnt fit in carry
     double budget = std::clamp(interval * 1.5, 0.004, 0.05);
     double fixed = cost.per_update + cost.other_work;
     double floor = std::max(cost.per_update, std::min(fixed * 4.0, 0.05 - fixed));
@@ -275,8 +270,6 @@ int Logic::count_unlocked_steps(GJBaseGameLayer* play, double dt) {
     float warp = std::min(play->m_gameState.m_timeWarp, 1.f);
     if (!std::isfinite(warp) || warp < 0.f)
         warp = 1.f;
-    // a time warp under 1x makes each step SHORTER in level time, it does not add steps (gd runs the same step count)
-    // dividing by the warp here ran 2x the steps at 0.5x so the level never slowed down
     (void)warp;
     float wanted = logic.physics_step();
     if (!std::isfinite(wanted) || !(wanted > 0.f))
@@ -297,10 +290,8 @@ int Logic::count_unlocked_steps(GJBaseGameLayer* play, double dt) {
     if (steps < 0)
         steps = 0;
     bool capped = false;
-    // lock fps runs EXACTLY 1 frame of steps a frame, true real time runs every step it owes
     bool real_time = logic.real_time_now();
     bool uncapped = real_time && logic.true_real_time;
-    // renders run every step, real time rendering only caps once the lvl is beaten
     bool render_cap = false;
     if (Logic::get().render_capturing() && logic.render_real_time) {
         auto* live = Logic::as_play(play);
@@ -312,7 +303,6 @@ int Logic::count_unlocked_steps(GJBaseGameLayer* play, double dt) {
         capped = steps > cap;
         steps = std::min(steps, cap);
     }
-    // real time catches up on what didnt fit, but only 100ms of it
     constexpr double REAL_TIME_BACKLOG = 0.1;
     logic.carry = capped && !real_time ? 0.f : pending - static_cast<double>(steps) * wanted;
     if (capped && real_time)
@@ -356,7 +346,6 @@ void Logic::run_frame(GJBaseGameLayer* play, float dt, std::function<void(float)
         tick(dt);
         return;
     }
-    // death timer & auto retry are in here. skipping it freezes the attempt
     if (auto* live = Logic::as_play(play); live && live->m_playerDied) {
         logic.carry = 0.f;
         logic.steps_left = 0;
@@ -411,10 +400,9 @@ void Logic::run_frame(GJBaseGameLayer* play, float dt, std::function<void(float)
     if (!rendering)
         frame_dt = static_cast<float>(echo::win::refresh_frame_time(frame_dt));
 #endif
+    echo::perf::note_frame_dt(dt, frame_dt);
     if (!rendering && !logic.real_time_mode && frame_dt > 0.25f)
         frame_dt = 0.25f;
-    // lock tps: every drawn frame moves the lvl exactly 1 frame at my fps, no matter how long it really took.
-    // the real frame time wobbles, so the steps a frame ran did too & it looked choppy
     if (!rendering && logic.lock_delta) {
         auto* director = CCDirector::sharedDirector();
         double interval = director ? director->getAnimationInterval() : 0.0;
@@ -422,8 +410,6 @@ void Logic::run_frame(GJBaseGameLayer* play, float dt, std::function<void(float)
             frame_dt = static_cast<float>(interval);
     }
     frame_dt *= speed;
-    // a time warp over 1x: gd speeds the whole scheduler up for it (steps stay the same length, more of them run).
-    // i pin the schedulers speed to 1 in a lvl, so a warp over 1 did nothing at all
     if (float warp = play->m_gameState.m_timeWarp; std::isfinite(warp) && warp > 1.f)
         frame_dt *= std::min(warp, 10.f);
     g_frame_speed = speed;
@@ -473,7 +459,6 @@ void Logic::run_frame(GJBaseGameLayer* play, float dt, std::function<void(float)
         if (traj_click)
             Trajectory::get().autoclick(PlayLayer::get());
     };
-    // a sliced trajectory part way done: wait for it, or drop it before anything else steps
     if (auto& traj = Trajectory::get(); traj.job_pending()) {
         bool plain = !force_step && !(logic.frame_advance && !rendering) && !pause_kill && !traj_click;
         if (plain) {
@@ -496,7 +481,6 @@ void Logic::run_frame(GJBaseGameLayer* play, float dt, std::function<void(float)
         }
     }
     bool can_batch = step_patched || logic.sample_rate() == VANILLA_TPS;
-    // lock tps used to force 1 whole update per step (his trace: 21657 steps, 21657 updates). only frame advance needs that
     bool single_steps = logic.frame_advance && !rendering;
     if (!force_step && !single_steps && !pause_kill && !traj_click && can_batch) {
         int steps = Logic::get().count_unlocked_steps(play, frame_dt);
@@ -543,7 +527,6 @@ void Logic::run_frame(GJBaseGameLayer* play, float dt, std::function<void(float)
     }
 
     if (!force_step) {
-        // ts path pays a whole update per step (+ the autoclicker), the batch cost doesnt fit it. cap by what it really costs
         g_single_path = true;
         int steps = Logic::get().count_unlocked_steps(play, frame_dt);
         steps = std::min(steps, pause_kill_safe_steps());
@@ -575,11 +558,7 @@ void Logic::run_frame(GJBaseGameLayer* play, float dt, std::function<void(float)
                     finished = true;
                     break;
                 }
-                // the autoclicker only needs a whole update per step near a click. the steps it can leave alone go
-                // in 1 update, a full gd update for every step on a big lvl was the lag
                 int chunk = 1;
-                if (traj_click && !pause_kill && can_batch)
-                    chunk = std::clamp(Trajectory::get().batchable_steps(), 1, batch - i);
                 float step_dt = logic.physics_step();
                 logic.steps_left = chunk;
                 logic.steps_this_tick = static_cast<uint32_t>(chunk);
@@ -716,7 +695,6 @@ void Logic::stop_best_frame(char const* why) {
 }
 
 namespace {
-    // move, rotate, follow, follow player y, scale
     bool lvl_moves_objects(PlayLayer* play) {
         if (!play->m_objects)
             return false;
@@ -752,7 +730,6 @@ void Logic::request_best_frame() {
         logic.message = "Turn on Backstep first";
         return;
     }
-    // 1st time in a lvl moving obj suggestion
     if (!logic.traj_moving_objects && play->m_level) {
         static std::unordered_set<int> asked;
         int id = play->m_level->m_levelID.value();
@@ -772,8 +749,6 @@ void Logic::request_best_frame() {
     logic.find_best_queued = true;
     // keep going = keep clicking. w/ click that frame off there is nothing to keep going with, it just stops on the frame
     logic.best_frame_running = logic.best_frame_auto && logic.best_frame_click;
-    // pressed again right where it just clicked: that click is still waiting for the next step. take that step 1st so the
-    // search starts from after it, or it would find ts same frame again & flip the click right back
     logic.best_frame_step_first = logic.best_frame_click && logic.best_frame_clicked_at == logic.step_frame && !play->m_queuedButtons.empty();
 }
 
@@ -880,7 +855,6 @@ void Logic::click_best_frame(PlayLayer* play) {
     bool player1 = logic.best_frame_click_p1;
     bool held = Trajectory::get().held_next(play, player1);
     play->queueButton(static_cast<int>(PlayerButton::Jump), !held, !player1, Logic::get().click_stamp());
-    // its click is a press nobody is physically holding (see best_hold_owned in logic.hpp)
     logic.best_frame_clicked_at = logic.step_frame;
     logic.best_hold_owned = true;
     logic.best_hold = !held;

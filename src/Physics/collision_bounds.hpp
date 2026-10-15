@@ -17,8 +17,6 @@ namespace echo::collision_bounds {
 	inline constexpr std::array<std::uint8_t, 10> maxY{ 0xf3, 0x0f, 0x10, 0x41, 0x0c, 0xf3, 0x0f, 0x58, 0x41, 0x04 };
 	inline constexpr std::array<std::uint8_t, 5> minY{ 0xf3, 0x0f, 0x10, 0x41, 0x04 };
 
-	// only the getter calls get inlined, robs 4 comiss/ja compares stay
-	// rcx & xmm0 end up the same as native
 	inline std::array<std::uint8_t, size> code(std::uintptr_t address, std::uintptr_t rejected) {
 		std::array<std::uint8_t, size> result;
 		result.fill(0x90);
@@ -34,7 +32,6 @@ namespace echo::collision_bounds {
 			used += 4;
 		};
 		emit(std::array<std::uint8_t, 5>{ 0x48, 0x8d, 0x4c, 0x24, 0x40 }); // lea rcx,[rsp+40h]
-		// same order the game calls them in: getMinX, getMaxX, getMinY, getMaxY
 		emit(minX);
 		emit(std::array<std::uint8_t, 3>{ 0x0f, 0x2f, 0xc7 });
 		branch();

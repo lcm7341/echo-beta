@@ -44,7 +44,6 @@ namespace {
         if (prepared)
             return;
         prepared = true;
-        // chizz's mod patches the same bytes, we would fight over them
         if (Loader::get()->isModLoaded("chizz.velocity-unrounding")) {
             return;
         }
@@ -64,7 +63,6 @@ namespace {
                 return;
             }
             auto* patch = res.unwrap();
-            // installed but off, sync_unrounding flips them
             patch->setAutoEnable(false);
             (void)patch->disable();
             patches.push_back(patch);

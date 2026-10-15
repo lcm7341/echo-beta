@@ -56,7 +56,6 @@ struct QueuedClick {
     bool player1 = true;
 };
 
-// fmods lowest priority: when its out of voices it takes a click, never gds music or sfx
 constexpr int CLICK_PRIORITY = 256;
 
 class Clickbot {
@@ -208,7 +207,6 @@ FMOD::Sound* Clickbot::sound_for(PackCache& cache, FMOD::System* system, fs::pat
     if (!fs::is_regular_file(file, error))
         return nullptr;
     FMOD::Sound* sound = nullptr;
-    // fmod #needdat utf8
     auto path = geode::utils::string::pathToString(file);
     FMOD_MODE mode = FMOD_LOOP_OFF | FMOD_2D | FMOD_ACCURATETIME;
     if (system->createSound(path.c_str(), mode, nullptr, &sound) != FMOD_OK || !sound)
@@ -249,7 +247,6 @@ void Clickbot::play_file(bool player1, fs::path const& file, float volume) {
     if (!sound)
         return;
 
-    // dont use sfx vol
     FMOD::ChannelGroup* group = nullptr;
     engine->m_system->getMasterChannelGroup(&group);
 

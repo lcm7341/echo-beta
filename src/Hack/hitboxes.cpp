@@ -48,7 +48,6 @@ public:
 constexpr int HITBOX_TAG = 0xEC06;
 
 namespace {
-    // looking it up by tag walked every child of the lvl every frame
     CCDrawNode* g_hitbox_node = nullptr;
 }
 
@@ -233,7 +232,6 @@ void refresh_object_hitbox(GameObject* object) {
     object->m_isObjectRectDirty = true;
 }
 
-// obj hitbox without touching its caches
 CCRect Logic::object_hitbox(GameObject* object) {
     if (!object)
         return {};
@@ -372,7 +370,6 @@ void Hitboxes::draw_player_hitbox(CCDrawNode* node, GJBaseGameLayer* play, Playe
     }
     float radius = std::abs(rect.size.width) * 0.5f;
     float zoom = std::max(play->m_gameState.m_cameraZoom, 0.05f);
-    // with fix radius collision on gd uses a circle not the box
     bool fix_radius = play->m_levelSettings && play->m_levelSettings->m_fixRadiusCollision;
     if ((logic.hitbox_circle || fix_radius) && radius > 0.f) {
         unsigned segments = static_cast<unsigned>(std::max(radius, 8.f) * 2.f * std::sqrt(zoom));
@@ -380,7 +377,6 @@ void Hitboxes::draw_player_hitbox(CCDrawNode* node, GJBaseGameLayer* play, Playe
     }
 }
 
-// Outline Only --> collects every shape then cuts the edges that are inside another one
 namespace {
     struct OutlineShape {
         std::vector<CCPoint> points;
@@ -569,7 +565,6 @@ void Hitboxes::draw_object_hitbox(CCDrawNode* node, GJBaseGameLayer* play, GameO
         return;
     if (object == play->m_player1 || object == play->m_player2 || Logic::get().is_traj_player(object))
         return;
-    // gd's own player collision blocks, in the editor too
     if (object == play->m_player1CollisionBlock || object == play->m_player2CollisionBlock)
         return;
     if (auto* live = Logic::as_play(play); live && object == live->m_anticheatSpike)
@@ -1088,7 +1083,6 @@ void Logic::draw_hitboxes(GJBaseGameLayer* play) {
                 }
             }
         }
-        // moving objects arent actually in the grid
         auto const& moving = play->m_calcNonEffectObjects;
         int moving_count = std::min<int>(play->m_calcNonEffectObjectsSize, (int)(moving.size()));
         for (int i = 0; i < moving_count; ++i) {

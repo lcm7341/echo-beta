@@ -467,8 +467,6 @@ namespace {
         bool sorted = true;
         int holds = 0;
         int releases = 0;
-        // 0-5 = p1 & p2 jump, left, right. 6-8 = the same 3 buttons with BOTH players together
-        // (outside 2 player levels gd gives every input to the same icon)
         std::array<HeldLane, 9> lanes;
     };
 
@@ -611,7 +609,6 @@ bool Logic::held_at(Session const& value, bool player2, int frame, int button) {
     size_t slot = static_cast<size_t>(lane);
     if (value.live_seen[slot] && frame >= value.live_frame[slot])
         return value.live_held[slot] != 0;
-    // playing a macro outside a 2 player level: a p2 input moves the same icon as a p1 input, so count them as 1
     if (value.is_playing() && !value.is_recording()) {
         auto* play = PlayLayer::get();
         if (play && !(play->m_levelSettings && play->m_levelSettings->m_twoPlayerMode)) {
@@ -844,7 +841,6 @@ void Logic::eval_player_cps(std::vector<int> const& presses, bool player2, Sessi
             Logic::get().note_rule(notes, presses[left], presses[right], "Rule 1");
     }
 
-    // 5 or more clicks faster than 48/s breaks the rule
     int n = static_cast<int>(presses.size());
     double rate = static_cast<double>(Logic::MAX_BURST_RATE);
     std::vector<double> lead(presses.size());
@@ -917,7 +913,6 @@ namespace {
     }
 }
 
-// runs on a worker so big macros dont freeze the game
 void Logic::recompute_cps(Session& value) {
     auto [p1, p2] = split_presses(value.inputs);
     if (&value != &Logic::live()) {

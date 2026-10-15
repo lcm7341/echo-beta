@@ -7,5 +7,4 @@ class GJBaseGameLayer;
 // picture kept showing where it was before, until the gap got big enough to snap
 struct ShownCamera;
 std::shared_ptr<ShownCamera> echo_save_shown_camera(GJBaseGameLayer* layer);
-// null = start the picture over from physics' camera
 void echo_load_shown_camera(GJBaseGameLayer* layer, ShownCamera const* saved);

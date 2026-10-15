@@ -76,6 +76,7 @@ matjson::Value Logic::placement_json(LabelPlacement const& placement) {
     json["y"] = placement.y;
     json["scale"] = placement.scale;
     json["opacity"] = placement.opacity;
+    json["prefix"] = placement.prefix;
     return json;
 }
 
@@ -90,6 +91,8 @@ LabelPlacement Logic::read_placement(matjson::Value const& json, LabelPlacement 
         fallback.scale = static_cast<float>(number.unwrap());
     if (auto number = json["opacity"].asInt())
         fallback.opacity = static_cast<int>(number.unwrap());
+    if (auto flag = json["prefix"].asBool())
+        fallback.prefix = flag.unwrap();
     return fallback;
 }
 
@@ -268,6 +271,16 @@ void Logic::pull_settings() {
                 logic.show_recording = flag.unwrap();
             if (auto flag = json["show_position"].asBool())
                 logic.show_pos = flag.unwrap();
+            if (auto flag = json["show_fps"].asBool())
+                logic.show_fps = flag.unwrap();
+            if (auto flag = json["show_debug"].asBool())
+                logic.show_debug = flag.unwrap();
+            if (auto flag = json["show_speed"].asBool())
+                logic.show_speed = flag.unwrap();
+            if (auto flag = json["show_ssb"].asBool())
+                logic.show_ssb = flag.unwrap();
+            if (auto number = json["label_decimals"].asInt())
+                logic.label_decimals = std::clamp(static_cast<int>(number.unwrap()), 0, 8);
             if (auto flag = json["show_velocity"].asBool())
                 logic.show_velocity = flag.unwrap();
             if (auto flag = json["show_alive"].asBool())
@@ -365,7 +378,6 @@ void Logic::pull_settings() {
                 logic.max_cps = static_cast<float>(number.unwrap());
             if (auto number = json["hitbox_thickness"].asDouble())
                 logic.hitbox_thickness = static_cast<float>(number.unwrap());
-            // default should be 0.3 now
             if (!json.contains("hitbox_thickness_thin") && logic.hitbox_thickness == 1.f)
                 logic.hitbox_thickness = 0.3f;
             if (auto number = json["trail_length"].asInt())
@@ -462,7 +474,6 @@ void Logic::pull_settings() {
             }
             if (auto flag = json["hitbox_trail_visual"].asBool())
                 logic.hitbox_trail_visual = flag.unwrap();
-            // no toggle for ts so a saved true would be stuck
             logic.hitbox_dedup = false;
             if (auto flag = json["hitbox_player"].asBool())
                 logic.hitbox_player = flag.unwrap();
@@ -530,7 +541,6 @@ void Logic::pull_settings() {
             if (auto number = json["menu_scale"].asDouble())
                 logic.menu_scale = std::clamp(static_cast<float>(number.unwrap()), 0.35f, 3.f);
 #ifdef GEODE_IS_MOBILE
-            // phones that saved the old 1x default get the new one once
             if (!json.contains("menu_scale_phone"))
                 logic.menu_scale = std::min(logic.menu_scale, .96f);
 #endif
@@ -705,6 +715,10 @@ void Logic::pull_settings() {
             logic.time_label = Logic::get().read_placement(json["time_label"], logic.time_label);
             logic.recording_label = Logic::get().read_placement(json["recording_label"], logic.recording_label);
             logic.pos_label = Logic::get().read_placement(json["position_label"], logic.pos_label);
+            logic.fps_label = Logic::get().read_placement(json["fps_label"], logic.fps_label);
+            logic.debug_label = Logic::get().read_placement(json["debug_label"], logic.debug_label);
+            logic.speed_label = Logic::get().read_placement(json["speed_label"], logic.speed_label);
+            logic.ssb_label = Logic::get().read_placement(json["ssb_label"], logic.ssb_label);
             logic.velocity_label = Logic::get().read_placement(json["velocity_label"], logic.velocity_label);
             logic.alive_label = Logic::get().read_placement(json["alive_label"], logic.alive_label);
             logic.max_cps_label = Logic::get().read_placement(json["max_cps_label"], logic.max_cps_label);
@@ -893,6 +907,11 @@ void Logic::save_settings_file() {
     json["show_time"] = logic.show_time;
     json["show_recording"] = logic.show_recording;
     json["show_position"] = logic.show_pos;
+    json["show_fps"] = logic.show_fps;
+    json["show_debug"] = logic.show_debug;
+    json["show_speed"] = logic.show_speed;
+    json["show_ssb"] = logic.show_ssb;
+    json["label_decimals"] = logic.label_decimals;
     json["show_velocity"] = logic.show_velocity;
     json["show_alive"] = logic.show_alive;
     json["show_max_cps"] = logic.show_max_cps;
@@ -1108,6 +1127,10 @@ void Logic::save_settings_file() {
     json["time_label"] = Logic::get().placement_json(logic.time_label);
     json["recording_label"] = Logic::get().placement_json(logic.recording_label);
     json["position_label"] = Logic::get().placement_json(logic.pos_label);
+    json["fps_label"] = Logic::get().placement_json(logic.fps_label);
+    json["debug_label"] = Logic::get().placement_json(logic.debug_label);
+    json["speed_label"] = Logic::get().placement_json(logic.speed_label);
+    json["ssb_label"] = Logic::get().placement_json(logic.ssb_label);
     json["velocity_label"] = Logic::get().placement_json(logic.velocity_label);
     json["alive_label"] = Logic::get().placement_json(logic.alive_label);
     json["max_cps_label"] = Logic::get().placement_json(logic.max_cps_label);

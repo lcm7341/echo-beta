@@ -129,7 +129,6 @@ void Logic::sync_music_pitch() {
     if (play)
         pitch = rendering || !Logic::get().audio_speedhack ? 1.f : std::max(Logic::get().speedhack, 0.01f);
 
-    // freeze music til it actually starts
     if (play && !play->m_started) {
         if (!g_liveOpeningHeld) {
             g_liveOpeningHeld = true;
@@ -267,7 +266,6 @@ void Logic::sync_audio_clock() {
     auto* engine = FMODAudioEngine::sharedEngine();
     if (!engine || !engine->m_system)
         return;
-    // song at 1x & the level at another speed cant be lined up
     bool apart = !logic.audio_speedhack && std::fabs(logic.speedhack - 1.f) > 0.001f;
     if (!logic.sync_audio || logic.render_active() || apart) {
         release_song(engine);

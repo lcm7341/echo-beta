@@ -12,7 +12,6 @@ namespace echo::trajectory {
 		return static_cast<int>(std::clamp(count, 1., double(std::numeric_limits<int>::max() - 1)));
 	}
 
-	// only merge segments that are excactly in line
 	template <class Point, class Emit>
 	void draw_path(std::vector<Point> const& points, Emit emit) {
 		if (points.size() < 2)

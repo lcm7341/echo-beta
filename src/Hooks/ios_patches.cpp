@@ -51,7 +51,6 @@ $execute {
         return std::memcmp(site, words.data(), sizeof(words)) == 0;
     };
     if (Loader::get()->isPatchless()) {
-        // STEP_REPLACEMENT byte for byte, at STEP_SITE
         GEODE_MOD_STATIC_PATCH(0x1fe730, {
                                              0xa8,
                                              0x35,
@@ -92,7 +91,6 @@ $execute {
         std::memcpy(bytes.data(), STEP_REPLACEMENT.data(), bytes.size());
         (void)Mod::get()->patch(site, bytes);
     }
-    // only installed if the bytes are REALLY there
     if (is(STEP_REPLACEMENT)) {
         g_stepPatched = true;
         step_patched = true;
@@ -100,13 +98,11 @@ $execute {
     else if (is(STEP_ORIGINAL)) {
     }
     else {
-        // another mods patch is there (a tps bypass does the same spot)
     }
 }
 
 class $modify(EchoIosStepCount, GJBaseGameLayer) {
     static void onModify(auto& self) {
-        // innermost, so the count in the slot is the one in force when the game reads it
         (void)self.setHookPriority("GJBaseGameLayer::update", Priority::Last);
     }
 

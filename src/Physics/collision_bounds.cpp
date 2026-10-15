@@ -22,7 +22,6 @@ namespace {
                matches(0xcc30, 0x515e90, minY) && matches(0xcbc0, 0x515e88, maxY);
     }
 
-    // another mod hooking the function we patched into
     bool foreign_hook() {
         for (auto* mod : Loader::get()->getAllMods()) {
             if (mod == Mod::get())
@@ -36,7 +35,6 @@ namespace {
 }
 
 namespace echo::collision_bounds {
-    // another mod hooked it after me = take mine out & let theirs run
     void prepare() {
         if (!bounds_patch)
             return;
@@ -46,7 +44,6 @@ namespace echo::collision_bounds {
             }
             return;
         }
-        // while the bot is disabled its patches are not mine to touch
         if (!Logic::bot_disabled() && !bounds_patch->isEnabled())
             (void)bounds_patch->enable();
     }

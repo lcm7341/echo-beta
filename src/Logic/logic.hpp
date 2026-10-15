@@ -106,7 +106,7 @@ struct Replay {
 
 struct AutoClick {
 	int press_interval = 50, release_interval = 50;
-	int swifts = 0; // extra clicks on the SAME frame as each press
+	int swifts = 0;
 	int since_press = 0, since_release = 0;
 	bool pressed = false;
 	int disable_in = 1;
@@ -116,6 +116,7 @@ struct LabelPlacement {
 	float x = 0.f, y = 0.f;
 	float scale = 0.4f;
 	int opacity = 40;
+	bool prefix = false;
 };
 
 struct PlayerSnapshot {
@@ -249,12 +250,12 @@ struct ObjectBase {
 
 struct ObjectStates {
 	int frame = -1;
-	std::shared_ptr<ObjectBase const> base; // every checkpoint shares ts
-	std::vector<std::uint8_t> diff; // only what changed from base
+	std::shared_ptr<ObjectBase const> base;
+	std::vector<std::uint8_t> diff;
 };
 
 struct Checkpoint {
-	CheckpointObject* object = nullptr; // gd owns it
+	CheckpointObject* object = nullptr;
 	int frame = 0;
 	size_t replay_pos = 0;
 	int removed_frames = 0;
@@ -312,12 +313,12 @@ struct Session {
 		Checkpoint echo;
 		std::shared_ptr<BackstepExtra> extra;
 		std::vector<std::uint8_t> object_undo;
-		bool broken = false; // failed the check
+		bool broken = false;
 	};
 
 	std::deque<BackstepSave> backsteps;
 	bool backstepping = false;
-	int backstep_target = -1; // -1 = none
+	int backstep_target = -1;
 	RunState backstep_state = RunState::Idle;
 	bool backstep_play_p1 = false, backstep_play_p2 = false;
 	bool holding_back = false;
@@ -329,7 +330,7 @@ struct Session {
 	RunState backstep_saved_state = RunState::Idle;
 	bool backstep_swapped = false;
 	chrono::steady_clock::time_point back_hold_start{}, last_back_step{};
-	double back_owed = 0.0; // held step back: steps owed, a bit every drawn frame
+	double back_owed = 0.0;
 	CheckpointObject* restored_checkpoint = nullptr;
 	std::vector<Replay> sequence;
 	std::vector<size_t> sequence_order;
@@ -406,10 +407,8 @@ struct Session {
 	bool safeMode = false;
 	bool swap_players = false;
 	bool inverse_p1 = false, inverse_p2 = false, noclip_p1 = false, noclip_p2 = false;
-	// for slicing the trajectory under lock fps
 	chrono::steady_clock::time_point frame_start{};
 	double scheduler_time = 0.0, draw_time = 0.0;
-	// what the noclip keybind turns back on
 	bool noclip_memory_p1 = true, noclip_memory_p2 = true;
 	bool show_hitboxes = false, fill_hitboxes = false;
 	bool hitbox_outline_only = false, hitbox_trail = false, hitbox_trail_visual = false, hitbox_dedup = false;
@@ -446,12 +445,11 @@ struct Session {
 	std::vector<TilePlace> tile_places;
 	int ui_style = 0;
 	float floating_x = -1.f, floating_y = -1.f;
-	float frame_bar_x = -1.f, frame_bar_y = -1.f; // where the mobile frame advance bar sits, -1 = top middle
+	float frame_bar_x = -1.f, frame_bar_y = -1.f;
 	bool frame_bar_open = false;
 	bool floating_hide_in_lvl = true;
 	float floating_size = 38.f;
 #ifdef GEODE_IS_MOBILE
-	// .96 is where the menu fits a phone screen top to bottom
 	float menu_scale = .96f, menu_scale_undocked = 1.f, menu_anim_speed = 1.f;
 #else
 	float menu_scale = 1.f, menu_scale_undocked = 1.f, menu_anim_speed = 1.f;
@@ -463,6 +461,7 @@ struct Session {
 	bool show_frame = false, show_cps = false, show_percent = false, show_time = false, show_recording = true;
 	bool show_pos = false, show_velocity = false, show_alive = false, show_max_cps = false;
 	bool show_gravity = false, show_utilities = false, show_safe_mode = true, show_death_next = false;
+	bool show_fps = false, show_debug = false, show_speed = false, show_ssb = false;
 	bool click_dash_orbs = false, click_black_orbs = false;
 	int orb_click_count = 1;
 	bool pad_black_orb = false, pad_blue_orb = false;
@@ -473,6 +472,7 @@ struct Session {
 	float straight_fly_threshold_p1 = 0.f, straight_fly_threshold_p2 = 0.f;
 	bool straight_ufo_p1 = false, straight_ufo_p2 = false;
 	float straight_ufo_target_p1 = 135.f, straight_ufo_target_p2 = 135.f, straight_ufo_threshold_p1 = 0.f, straight_ufo_threshold_p2 = 0.f;
+	int straight_ufo_phase[2] = {}, straight_ufo_gone[2] = {};
 	bool hide_endscreen = false, hide_new_best = false, no_effects = false;
 	bool straight_fly() const {
 		return straight_fly_p1 || straight_fly_p2;
@@ -490,23 +490,18 @@ struct Session {
 	float traj_release_alive_p2 = 0.f;
 	bool pause_before_kill = false;
 	bool traj_autoclicker = false;
-	int traj_click_lookahead = 1; // steps ahead a death has to be for the trajectory autoclicker to click
-	bool traj_flip_p1 = false, traj_flip_p2 = false; // trajectory autoclicker "holding" for me (maintain gravity)
-	bool traj_flip_raw_p1 = false, traj_flip_raw_p2 = false; // what i was really holding when it flipped
-	bool held_raw_p1 = false, held_raw_p2 = false; // what i was really holding the last time physical_hold looked
-	// trajectory autoclicker clicks queued ts step, [player2][down]. click both, swap & co are for MY clicks only
+	int traj_click_lookahead = 1;
+	bool traj_flip_p1 = false, traj_flip_p2 = false;
+	bool traj_flip_raw_p1 = false, traj_flip_raw_p2 = false;
+	bool held_raw_p1 = false, held_raw_p2 = false;
 	int assist_clicks[2][2] = {};
-	// holds restore_holds queued after a respawn, already worked out per player (inverse included)
 	int restored_clicks[2][2] = {};
 	bool assist_input = false;
 	bool find_best_queued = false;
 	int best_frame_range = 120;
 	bool best_frame_click = true;
 	int best_frame_click_at = -1;
-	int best_frame_clicked_at = -1; // the frame best frame last put a click on
-	// best frames own finger. its click is a press nobody is physically holding, so the 1st step back let go of it again
-	// (after a step back the buttons are matched to what im really holding) & the next best frame pressed AGAIN instead of
-	// releasing. while ts is owned, "what im holding" is what best frame last did, until i touch the button myself
+	int best_frame_clicked_at = -1;
 	bool best_hold_owned = false, best_hold = false, best_hold_raw = false;
 
 	bool best_frame_click_p1 = true, best_frame_auto = false, best_frame_running = false;
@@ -514,17 +509,19 @@ struct Session {
 	bool traj_moving_objects = true;
 	bool backstep = false;
 	int backstep_percent = 100;
+	double backstep_save_sec = 0.0;
 	bool pause_at_traj_length = false;
 	unsigned pause_traj_ms = 500;
 	bool pause_kill_armed = true, pause_length_armed = true;
 	int percent_accuracy = 1;
+	int label_decimals = 4;
 	int max_cps = 16;
 	float current_cps = 0.f;
 	bool over_max_cps = false, cps_breaking = false;
 	bool currently_pressing = false;
 	bool autoclicker = false;
 	bool sync_audio = false;
-	int sync_audio_threshold = 400; // ms the song may drift before it gets moved
+	int sync_audio_threshold = 400;
 	bool audio_speedhack = true;
 	bool practice_music_hack = false;
 	bool autoclick_p1 = true, autoclick_p2 = true, autoclick_auto_disable = false;
@@ -553,7 +550,7 @@ struct Session {
 	unsigned advance_hold_ms = 300, advance_delay_ms = 50;
 	float advance_speed = 100.f;
 	chrono::steady_clock::time_point advance_hold_start{}, last_advance_step{};
-	double advance_owed = 0.0; // held frame advance: steps owed, a bit every drawn frame
+	double advance_owed = 0.0;
 	bool injecting = false;
 	bool applying_playback = false;
 	bool hold_sync = false, keep_checkpoint_hold = true;
@@ -574,9 +571,8 @@ struct Session {
 	fs::path macro_path, autosaved_path;
 	std::string rename_format = "_#";
 	std::string message = "Ready";
-	bool ask_moving_objects = false; // best frame moving obj traj checker
+	bool ask_moving_objects = false;
 	chrono::steady_clock::time_point saved_at{}; // legit to wait 1 second . most certainly a better way to do this
-	// movil: how big everything INSIDE the menu is, not menu scale
 	float menu_inner_scale = 1.f;
 	int attempts = 1;
 	double recording_seconds = 0.0;
@@ -584,10 +580,9 @@ struct Session {
 	bool lvl_seed_known = false;
 	bool velocity_unrounding = false;
 	bool macro_unrounded = false, macro_silicate_variance = false;
-	bool macro_ldm = false, macro_ldm_known = false; // low detail mode when it was recorded (old macros dont know)
+	bool macro_ldm = false, macro_ldm_known = false;
 	void set_macro_ldm(bool on);
 	void repair_player_order(PlayLayer* play);
-	// everything off after a restart, only the menu & the step trace stay. for comparing against another bot
 	static bool bot_disabled();
 	static void set_bot_disabled(bool on);
 
@@ -611,7 +606,6 @@ struct Session {
 	uint64_t shake_random = 0, teleport_random = 0;
 	float end_x = 0.f;
 	bool display_fps_locked = false;
-	// gds frame cap from before tps changed it, 0 = none
 	float level_interval_held = 0.f;
 	float backgroundColor[3] = { 0.28235295f, 0.49019608f, 1.f };
 	float blocks_color[3] = { 0.28235295f, 0.49019608f, 1.f };
@@ -621,24 +615,26 @@ struct Session {
 	float render_sfx = 1.f;
 	bool render_queued = false, render_record_pause = false, render_show_lvl = true;
 	bool render_screen_shape = true, render_ssb_fix = true, render_speedhack = false;
-	bool render_real_time = false; // a render gets the same lag cap as playing does
-	double render_physics = 0.0; // seconds of physics this render, for logs/render.txt
+	bool render_real_time = false;
+	double render_physics = 0.0;
 	float render_speed_locked = 0.f;
 	bool render_hide_labels = false, render_hide_pause = false, render_color_fix = true;
 	bool merge_busy = false;
-	std::atomic<float> merge_seconds = 0.f; // how long the joined video will be
+	std::atomic<float> merge_seconds = 0.f;
 	fs::path merge_folder;
 	std::string merge_label;
 	bool render_auto_exit = false;
 	std::string render_codec = "libx264", render_preset = "veryfast", render_extension = "mp4", render_args;
 	std::string render_name;
-	LabelPlacement frame_label{ 3.f, 268.f, 0.4f, 35 }, cps_label{ 3.f, 280.f, 0.4f, 35 };
+	LabelPlacement frame_label{ 3.f, 268.f, 0.4f, 35, true }, cps_label{ 3.f, 280.f, 0.4f, 35, true };
 	LabelPlacement percent_label{ 3.f, 310.f, 0.55f, 35 }, time_label{ 3.f, 294.f, 0.4f, 35 };
-	LabelPlacement recording_label{ 0.f, 15.f, 0.75f, 70 }, pos_label{ 3.f, 252.f, 0.4f, 35 };
+	LabelPlacement recording_label{ 0.f, 15.f, 0.75f, 70, true }, pos_label{ 3.f, 252.f, 0.4f, 35 };
 	LabelPlacement velocity_label{ 3.f, 238.f, 0.4f, 35 }, alive_label{ 3.f, 224.f, 0.4f, 35 };
-	LabelPlacement max_cps_label{ 3.f, 210.f, 0.4f, 35 }, gravity_label{ 3.f, 196.f, 0.4f, 35 };
+	LabelPlacement max_cps_label{ 3.f, 210.f, 0.4f, 35, true }, gravity_label{ 3.f, 196.f, 0.4f, 35 };
 	LabelPlacement utility_label{ 3.f, 150.f, 0.35f, 80 }, death_label{ 3.f, 170.f, 0.5f, 100 };
 	LabelPlacement safe_mode_label{ 3.f, 130.f, 0.35f, 80 };
+	LabelPlacement fps_label{ 3.f, 182.f, 0.4f, 60 }, debug_label{ 3.f, 110.f, 0.3f, 85 };
+	LabelPlacement speed_label{ 3.f, 168.f, 0.4f, 35 }, ssb_label{ 3.f, 154.f, 0.4f, 35 };
 	bool labels_auto = true;
 	int label_corner = 0;
 	float labelScale = 1.f;
@@ -816,6 +812,7 @@ public:
 	static bool editor_holds_keys();
 	void tick_autoclicker(PlayLayer* play);
 	void tick_straight(PlayLayer* play);
+	void tick_straight_ufo(PlayLayer* play);
 	void after_frame(PlayLayer* play, float dt);
 	std::vector<std::string_view> active_cheats() const;
 	std::vector<std::string_view> const& attempt_cheats() const;
@@ -920,7 +917,6 @@ public:
 	void play_click(PlayLayer* play, bool down, bool player1);
 	void flush_clicks();
 	void note_step();
-	// time inside a step that isnt the step (a backstep save), kept out of the step cost
 	void note_untimed(double seconds);
 	void release_replay_index();
 	int affordable_steps() const;
@@ -932,6 +928,7 @@ public:
 	void draw_layout_art(PlayLayer* play);
 	static CCRect object_hitbox(GameObject* object);
 	void clear_layout_hidden();
+	void refresh_default_art();
 	bool layout_active();
 	void paint_layout_colors(PlayLayer* play);
 	void paint_layout_channels(GJEffectManager* effects);
@@ -964,7 +961,6 @@ public:
 	float scroll_speed_factor();
 	float render_game_step();
 	float render_frame_game_step = 0.f;
-	// for logs/render.txt: how far the ssb fix moved the game clock away from the video clock
 	double render_game_seconds = 0.0, render_factor_sum = 0.0;
 	float render_factor_low = 1.f, render_factor_high = 1.f;
 	int render_factor_count = 0;
@@ -1033,6 +1029,13 @@ public:
 	size_t add_input(Session& value, Frame const& frame);
 	void refresh_live_hold();
 	void record_input(GJBaseGameLayer* play, bool down, bool player1, int button = static_cast<int>(PlayerButton::Jump), bool force = false);
+	static constexpr bool record_every_input() {
+#ifdef GEODE_IS_WINDOWS
+		return true;
+#else
+		return false;
+#endif
+	}
 	void inject_button(PlayLayer* play, bool down, int button, bool player1);
 	void note_rule(std::vector<CpsNote>& notes, int first, int last, std::string text);
 	void eval_player_cps(std::vector<int> const& presses, bool player2, Session& value);

@@ -24,6 +24,7 @@
 #include <Geode/binding/LevelEditorLayer.hpp>
 #include <Geode/binding/EditorPauseLayer.hpp>
 #include <Geode/binding/PlayerObject.hpp>
+#include <Geode/binding/RingObject.hpp>
 #include <Geode/ui/Notification.hpp>
 #include <chrono>
 #include <algorithm>
@@ -66,7 +67,6 @@ void Logic::toggle_recording() {
         logic.macro_unrounded = logic.velocity_unrounding;
         logic.macro_silicate_variance = false;
         auto* play = PlayLayer::get();
-        // ldm takes objects OUT of the level (some are hazards) so the macro has to know
         if (logic.inputs.empty() && play && play->m_level) {
             logic.macro_ldm = play->m_level->m_lowDetailModeToggled;
             logic.macro_ldm_known = true;
@@ -149,7 +149,6 @@ bool Logic::play_input(GJBaseGameLayer* play, bool icon2, bool down, int button)
     return true;
 }
 
-// the button itself: a finger / key / mouse really down for that icon
 bool Logic::raw_jump(GJBaseGameLayer* play, bool icon2) const {
     if (!play || !play->m_uiLayer)
         return false;
@@ -167,7 +166,6 @@ bool Logic::physical_hold(GJBaseGameLayer* play, bool icon2) {
     bool p2 = ui->m_p2Jumping || ui->m_p2TouchId != -1 || key_jump_p2 || (restart_hold_captured && death_jump_p2);
     if (best_hold_owned) {
         bool icon = !best_frame_click_p1;
-        // i touched the button myself = its mine again
         if (Logic::raw_jump(play, icon) != best_hold_raw)
             best_hold_owned = false;
         else
@@ -176,8 +174,6 @@ bool Logic::physical_hold(GJBaseGameLayer* play, bool icon2) {
     if (restart_hold_captured && ((death_jump_p1 && (ui->m_p1Jumping || ui->m_p1TouchId != -1)) || (death_jump_p2 && (ui->m_p2Jumping || ui->m_p2TouchId != -1)))) {
         restart_hold_captured = false;
     }
-    // maintain gravity reads what im holding so the trajectory autoclicker flips THAT, not the button.
-    // the moment i press or let go myself its mine again, or every click after its 1st flip comes out backwards
     held_raw_p1 = p1;
     held_raw_p2 = p2;
     if (traj_flip_p1 && p1 != traj_flip_raw_p1)
@@ -199,10 +195,8 @@ bool Logic::physical_hold(GJBaseGameLayer* play, bool icon2) {
         return icon2 ? p2 : p1;
     };
     bool held = mine();
-    // inverse inputs: the player my click goes to does the opposite
     if (icon2 && !one_player_dual ? inverse_p2 : inverse_p1)
         held = !held;
-    // the autoclickers flip goes on after click both & swap, those are for my clicks only. its flip is for THAT icon
     if (traj_autoclicker && maintain_gravity)
         held = held != (icon2 && !one_player_dual ? traj_flip_p2 : traj_flip_p1);
     return held;
@@ -372,7 +366,6 @@ void Logic::capture_restart_holds(PlayLayer* play) {
         play->m_player2->releaseAllButtons();
 }
 
-// the block only ended inside a step so frame advance never got out of it
 void Logic::poll_hold_block() {
     if (!suppress_auto_hold)
         return;
@@ -385,8 +378,6 @@ void Logic::poll_hold_block() {
         suppress_auto_hold = false;
 }
 
-// a step back loads the buttons of THAT frame, not what im pressing now
-// so next step press/release whatever is different
 void Logic::match_live_holds(PlayLayer* play) {
     if (!play || suppress_auto_hold)
         return;
@@ -468,8 +459,6 @@ void Logic::apply_maintain_gravity(GJBaseGameLayer* play) {
     };
     auto correct = [&](PlayerObject* body, bool icon2) {
         maintaining_gravity = true;
-        // same gravity used to cap ts at 1 bc its flipGravity made the clicks toggle forever. it dont flip waves anymore,
-        // & the trajectory always does all 8 so a cap here makes the autoclicker plan clicks that never happen
         int limit = 8;
         for (int step = 0; step < limit; ++step) {
             bool push = false;
@@ -560,12 +549,10 @@ void Logic::sync_same_gravity(GJBaseGameLayer* play) {
     auto match = [&](PlayerObject* body, bool icon2) {
         if (!body || !records_player(icon2) || body->m_controlsDisabled || body->m_isUpsideDown == target)
             return;
-        // ball spider & swing flip with a click so do a REAL click & record it
-        // (flipGravity is not an input so the macro never had it)
         bool clicks = body->m_isSwing || ((body->m_isBall || body->m_isSpider) && body->m_isOnGround);
         if (body->m_isBall || body->m_isSpider || body->m_isSwing) {
             if (!clicks)
-                return; // in the air, wait for the ground
+                return;
             auto put = [&](bool push) {
                 Frame input;
                 input.number = step_frame + 1;
@@ -584,8 +571,6 @@ void Logic::sync_same_gravity(GJBaseGameLayer* play) {
             maintaining_gravity = false;
             return;
         }
-        // everything else only changes what gets recorded, never the physics. a wave already moves the same way
-        // on both gravities thru maintain gravity, & a flipGravity here is not an input so playback never had it
     };
     match(first, false);
     match(second, true);
@@ -646,10 +631,8 @@ void Logic::poll_advance_hold() {
     double rate = logic.sample_rate() * std::clamp(logic.advance_speed, 1.f, 200.f) / 100.0 * logic.speedhack;
     if (!std::isfinite(rate) || !(rate > 0.0))
         return;
-    // the last batch hasnt run yet, dont pile more on
     if (logic.advance_queued)
         return;
-    // counted in drawn frames not real time, or a slow frame owed more steps & made the next slower still
     double interval = CCDirector::sharedDirector() ? CCDirector::sharedDirector()->getAnimationInterval() : 1.0 / 60.0;
     if (!std::isfinite(interval) || interval <= 0.0)
         interval = 1.0 / 60.0;
@@ -706,7 +689,6 @@ bool Logic::editor_holds_keys() {
     auto* editor = LevelEditorLayer::get();
     if (!Logic::get().no_editor_keybinds || !editor)
         return false;
-    // EditorUI adds its pause menu to the editor layer, not the scene
     return !editor->getChildByType<EditorPauseLayer>(0);
 }
 
@@ -770,7 +752,6 @@ void Logic::sync_time_scale() {
         scheduler->setTimeScale(speed);
         return;
     }
-    // speedhack is for levels only
     scheduler->setTimeScale(1.f);
 }
 
@@ -801,7 +782,6 @@ void Logic::sync_playback_fps() {
         if (!logic.playback_fps_held)
             logic.held_interval = logic.level_interval_held > 0.f ? logic.level_interval_held : director->getAnimationInterval();
         logic.playback_fps_held = true;
-        // speedhack does NOT scale the fps anymore, 240 stays 240 at 0.5x
         director->setAnimationInterval(1.f / logic.playback_fps);
         return;
     }
@@ -1137,8 +1117,6 @@ void Logic::on_play_init(PlayLayer* play) {
         Logic::get().set_level_interval(1.f / std::max(logic.fps, 1.f));
         logic.display_fps_locked = true;
     }
-    // w/out lock fps the lvl still draws as often as it steps. set_tps used to set ts from the menu & it stuck, since
-    // the cap is lvl only nothing set it on entry & gd's own (60) took over
     else if (logic.playback_fps < 1.f)
         Logic::get().set_level_interval(1.f / std::max(logic.fps, 1.f));
     Logic::get().sync_time_scale();
@@ -1891,7 +1869,6 @@ bool Logic::defer_physics() const {
     return Logic::get().vanilla_click_physics();
 }
 
-// gd holds a click til its input clock passes its timestamp, at high tps that lost clicks. due now, like mine
 void Logic::flatten_click_times(GJBaseGameLayer* play) {
     if (!play || Logic::get().predicting || Logic::get().cbf_enabled())
         return;
@@ -1955,8 +1932,6 @@ void Logic::prepare_buttons(GJBaseGameLayer* play) {
     int frame = Logic::get().step_frame + 1;
     std::array<char, 6> queued{};
     bool two_player = play->m_levelSettings && play->m_levelSettings->m_twoPlayerMode;
-    // gd ignores p2 in a 2 player lvl til the dual starts, so p2 only follows the macros holds after an input inside it
-    // -1 = didnt see the dual start, trust the macro
     static struct {
         int frame = -1, began = -1;
         bool dual = false;
@@ -1997,8 +1972,6 @@ void Logic::prepare_buttons(GJBaseGameLayer* play) {
         ++logic.replay_clicks_left;
         echo::step::trace_button('Q', holding, static_cast<int>(play->m_queuedButtons.size()));
     };
-    // ignore inputs just emptied the queue. if the macros inputs for ts frame were already in it (the reset queues frame 1 early)
-    // they got thrown out with mine, so go back & queue them again
     if (!logic.restoring_holds && logic.ignore_inputs) {
         while (logic.replay_pos > 0 && logic.replay_pos <= logic.inputs.size() && logic.inputs[logic.replay_pos - 1].number >= frame)
             --logic.replay_pos;
@@ -2101,7 +2074,7 @@ void run_orb_clicks(GJBaseGameLayer* play, GJBaseGameLayer* layer, float dt) {
     if (!play->m_queuedButtons.empty()) {
         if (logic.is_recording() && !logic.restoring_holds) {
             for (auto const& cmd : play->m_queuedButtons) {
-                Logic::get().record_input(play, cmd.m_isPush, !cmd.m_isPlayer2, static_cast<int>(cmd.m_button), Orbs::take_queued_assist());
+                Logic::get().record_input(play, cmd.m_isPush, !cmd.m_isPlayer2, static_cast<int>(cmd.m_button), Orbs::take_queued_assist() || Logic::record_every_input());
             }
         }
         logic.injecting = true;
@@ -2136,7 +2109,7 @@ void Logic::play_macro(GJBaseGameLayer* play, GJBaseGameLayer* layer, float dt, 
                 logic.suppress_click_hitbox = true;
                 if (logic.is_recording() && !logic.restoring_holds) {
                     for (auto const& cmd : orbs) {
-                        Logic::get().record_input(play, cmd.m_isPush, !cmd.m_isPlayer2, static_cast<int>(cmd.m_button), Orbs::take_queued_assist());
+                        Logic::get().record_input(play, cmd.m_isPush, !cmd.m_isPlayer2, static_cast<int>(cmd.m_button), Orbs::take_queued_assist() || Logic::record_every_input());
                     }
                 }
                 play->m_queuedButtons = orbs;
@@ -2336,7 +2309,6 @@ void Logic::sort_inputs() {
     auto& logic = Logic::get();
     auto& inputs = logic.inputs;
     // by frame ONLY. outside 2 player levels p1 & p2 inputs drive the same icon, so their order on a frame matters
-    // (it used to put p1 first: "p2 release, p1 press" became "p1 press, p2 release" & let go of a hold)
     if (std::is_sorted(inputs.begin(), inputs.end(), [](Frame const& a, Frame const& b) {
             return a.number < b.number;
         })) {
@@ -2441,7 +2413,6 @@ void Logic::clear_inputs() {
 }
 
 void Logic::notify(std::string const& text, bool success) {
-    // errors only go to the status line now, no popup
     if (success)
         Notification::create(text, NotificationIcon::Success)->show();
     Logic::get().message = text;
@@ -2478,7 +2449,6 @@ void Logic::note_click(PlayLayer* play, bool down, bool player1, int button) {
     size_t before = clicks.size();
     while (clicks.size() > 1 && now_t - logic.seconds_at(clicks.front()) > 2.0)
         clicks.pop_front();
-    // was capped at 4096, which capped cps
     while (clicks.size() > (1u << 20))
         clicks.pop_front();
     if (clicks.size() != before)
@@ -2613,7 +2583,6 @@ void Logic::set_tps(float rate) {
         Trajectory::get().invalidate();
         logic.message = fmt::format("Starting TPS {:.2f}", logic.macro_fps);
     }
-    // only in a lvl
     if (logic.playback_fps < 1.f && PlayLayer::get())
         Logic::get().set_level_interval(1.f / rate);
 }
@@ -2745,7 +2714,6 @@ void Logic::tick_autoclicker(PlayLayer* play) {
         if (!player1 && !twoPlayer)
             return;
         play->queueButton(jump, true, !player1, Logic::get().click_stamp());
-        // swift = let go & press again on the same frame
         for (int i = 0; i < click.swifts; ++i) {
             play->queueButton(jump, false, !player1, Logic::get().click_stamp());
             play->queueButton(jump, true, !player1, Logic::get().click_stamp());
@@ -2798,8 +2766,6 @@ void Logic::tick_autoclicker(PlayLayer* play) {
 // auto straight fly & auto straight ufo (scarlet utils has these). both just queue plain clicks at the end of a step, the way the
 // autoclicker does, so they are recorded & play back like anything i pressed myself.
 // fly: a ship that sinks faster than the threshold gets held, one that rises faster gets let go. it ends up wobbling around level.
-// ufo: under the target height & falling = 1 click (let go + press on the same step). over it & still rising = 1 click too,
-// which swaps whatever threw it up there for a normal ufo jump
 void Logic::tick_straight(PlayLayer* play) {
     auto& logic = Logic::get();
     if ((!logic.straight_fly() && !logic.straight_ufo()) || !play || play->m_isPaused || play->m_playerDied)
@@ -2811,7 +2777,6 @@ void Logic::tick_straight(PlayLayer* play) {
     auto run = [&](PlayerObject* player, bool player2) {
         if (!player || player->m_isDead || logic.plays_player(player2))
             return;
-        // p2 only has its own button in a 2 player lvl. anywhere else a p2 click moves BOTH icons
         if (player2 && !(two_player && play->m_gameState.m_isDualMode))
             return;
         double vel = player->m_yVelocity;
@@ -2823,18 +2788,69 @@ void Logic::tick_straight(PlayLayer* play) {
             if ((vel < -limit && !held) || (vel > limit && held))
                 play->queueButton(jump, !held, player2, logic.click_stamp());
         }
-        if ((player2 ? logic.straight_ufo_p2 : logic.straight_ufo_p1) && player->m_isBird) {
-            double target = player2 ? logic.straight_ufo_target_p2 : logic.straight_ufo_target_p1;
-            double band = player2 ? logic.straight_ufo_threshold_p2 : logic.straight_ufo_threshold_p1;
-            double y = player->getPositionY();
-            bool flipped = player->m_isUpsideDown;
-            // "under" = the side gravity pulls to
-            bool under = flipped ? y > target + band : y < target - band;
-            bool over = flipped ? y < target - band : y > target + band;
-            if ((under && vel <= 0.0) || (over && vel > 0.0)) {
-                play->queueButton(jump, false, player2, logic.click_stamp());
-                play->queueButton(jump, true, player2, logic.click_stamp());
+    };
+    run(play->m_player1, false);
+    run(play->m_player2, true);
+}
+
+void Logic::tick_straight_ufo(PlayLayer* play) {
+    auto& logic = Logic::get();
+    if (!logic.straight_ufo() || !play || play->m_isPaused || play->m_playerDied || logic.predicting)
+        return;
+    if (logic.is_playing() && !logic.is_recording())
+        return;
+    bool two_player = play->m_levelSettings && play->m_levelSettings->m_twoPlayerMode;
+    int jump = static_cast<int>(PlayerButton::Jump);
+    auto run = [&](PlayerObject* player, bool player2) {
+        int side = player2 ? 1 : 0;
+        int& phase = logic.straight_ufo_phase[side];
+        if (!player || player->m_isDead || logic.plays_player(player2) || !player->m_isBird || !(player2 ? logic.straight_ufo_p2 : logic.straight_ufo_p1)) {
+            phase = 0;
+            return;
+        }
+        if (player2 && !(two_player && play->m_gameState.m_isDualMode))
+            return;
+        double up = player->m_isUpsideDown ? -1.0 : 1.0;
+        double vel = player->m_yVelocity * up;
+        double target = player2 ? logic.straight_ufo_target_p2 : logic.straight_ufo_target_p1;
+        double band = player2 ? logic.straight_ufo_threshold_p2 : logic.straight_ufo_threshold_p1;
+        double y = player->getPositionY();
+        double off = (y - target) * up;
+        bool black = false;
+        if (auto* rings = player->m_touchingRings) {
+            for (auto* object : CCArrayExt<GameObject*>(rings))
+                black = black || (object && object->m_objectType == GameObjectType::DropRing);
+        }
+        int& gone = logic.straight_ufo_gone[side];
+        gone = black ? 0 : gone + 1;
+        auto queue = [&](bool down) {
+            play->queueButton(jump, down, player2, logic.click_stamp());
+        };
+        if (phase != 0 && gone >= 3) {
+            if (phase == 1)
+                queue(false);
+            phase = 0;
+        }
+        bool on_orb = black || phase != 0;
+        if (!on_orb) {
+            if (off < -band && vel <= 0.0) {
+                queue(false);
+                queue(true);
             }
+            return;
+        }
+        bool up_step = off < -band ? true : off > band ? false : phase != 1;
+        if (up_step) {
+            queue(true);
+            queue(false);
+            queue(true);
+            phase = 1;
+        }
+        else {
+            queue(false);
+            queue(true);
+            queue(false);
+            phase = 2;
         }
     };
     run(play->m_player1, false);

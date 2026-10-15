@@ -6,6 +6,7 @@
 // audio is tapped off gds own mixer (AudioTap): frozen between frames & moved on by exactly 1 frame of sound each time,
 //   so it cant drift from the picture. it is muxed into the video in a 2nd pass
 // gd streams songs off disk in pieces, too slow for a render that runs faster than real time. render_song loads the whole song
+#include "Logic/build_info.hpp"
 #include "GUI/gui.hpp"
 #include "Recorder/stereo_audio.hpp"
 #include "Logic/conversions/codecs.hpp"
@@ -107,7 +108,6 @@ namespace {
         if (context && s_echoColorFix && s_setSwsColors && s_getSwsCoefficients) {
             constexpr int ITU709 = 1;
             auto const* bt709 = s_getSwsCoefficients(ITU709);
-            // rgba in is full range, the video out is tv range
             s_setSwsColors(context, bt709, 1, bt709, 0, 0, 1 << 16, 1 << 16);
         }
         return context;
@@ -175,7 +175,6 @@ namespace {
     };
 
     RenderTiming g_timing;
-    // lines for logs/render.txt, 1 every 5 seconds of video: where the level, the song & the icon are
     std::string g_render_notes;
 
     struct Timed {
@@ -207,13 +206,12 @@ public:
     int rate = 0;
     int channels = 0;
     uint64_t written = 0;
-    unsigned song_at_start = 0; // where the song was when the render took it over
+    unsigned song_at_start = 0;
     uint64_t stray_blocks = 0;
 
 private:
     FMOD::DSP* dsp = nullptr;
     FMOD::ChannelGroup* master = nullptr;
-    // where gds groups hung before bind_bus moved them under the master
     std::vector<std::pair<FMOD::ChannelGroup*, FMOD::ChannelGroup*>> moved_groups;
     std::mutex lock;
     std::vector<float> pending;
@@ -239,7 +237,6 @@ public:
         static Recorder value;
         return value;
     }
-    // quitting mid render destroyed a running thread & aborted
     ~Recorder() {
         if (worker.joinable())
             worker.detach();
@@ -340,7 +337,6 @@ public:
     float audio_speed = 1.f;
     CCSize saved_frame{}, saved_pixels{};
     float saved_win_width = 0.f, ui_shift = 0.f;
-    // the shader layers texture & sizes from before the render, put back as they were (not rebuilt from the window)
     struct ShaderSave {
         ShaderLayer* layer = nullptr;
         CCRenderTexture* texture = nullptr;
@@ -370,7 +366,6 @@ public:
     std::array<GLsync, RING> fences{};
 #endif
     CCLayerColor* shade = nullptr;
-    // GD progress sprites used by the render diagnostics overlay.
     CCSprite* bar_back = nullptr;
     CCSprite* bar_fill = nullptr;
     CCLabelBMFont* bar_text = nullptr;
@@ -380,10 +375,7 @@ public:
     bool ticked = false;
     float wall_delta = 0.f;
     double busy_seconds = 0.0;
-    // how fast the last few seconds went, for the time left. the average of the whole render is way off whenever
-    // the level gets heavier or lighter part way
     double pace = 0.0;
-    // (busy seconds, video seconds) every half second, the pace is worked out over all of them
     std::deque<std::pair<double, double>> pace_marks;
     chrono::steady_clock::time_point text_at{};
     CCSize real_frame();
@@ -501,8 +493,6 @@ bool AudioTap::attach(float music, float sfx, fs::path const& file) {
     system->getSoftwareFormat(&rate, nullptr, nullptr);
     if (!song.empty()) {
         engine->stopAndRemoveMusic(0);
-        // gd loads songs bit by bit & render is faster than that so the song ran out
-        // i just load the whole thing
         if (auto it = engine->m_fmodMusic.find(0); it != engine->m_fmodMusic.end() && it->second.m_sound) {
             FMOD_MODE mode = 0;
             it->second.m_sound->getMode(&mode);
@@ -1061,7 +1051,6 @@ namespace {
         return res;
     }
 
-    // same codec & quality as a normal render
     std::string merge_encode() {
         auto& logic = Logic::get();
         std::string codec = logic.render_codec.empty() ? "libx264" : logic.render_codec;
@@ -1335,7 +1324,6 @@ namespace {
         return !text.empty();
     }
 
-    // same codec & quality as a normal render
     std::vector<std::string> merge_encode() {
         auto& logic = Logic::get();
         std::string codec = logic.render_codec.empty() ? "libx264" : logic.render_codec;
@@ -1344,7 +1332,6 @@ namespace {
         std::string extra = clash ? std::string() : logic.render_args;
         bool hardware = codec.find("videotoolbox") != std::string::npos;
         std::vector<std::string> flags{ "-c:v", codec };
-        // no size to go off of so 1080p60
         auto rate = video_rate(codec, logic.render_bitrate, extra, static_cast<int64_t>(1920) * 1080 * 60);
         flags.insert(flags.end(), rate.begin(), rate.end());
         if (extra.find("-pix_fmt") == std::string::npos)
@@ -1458,7 +1445,6 @@ void Logic::merge_renders(fs::path const&, fs::path const&) {
 }
 #endif
 
-// ffmpeg writes how far it is to a file, -1 = dont know yet
 float Logic::merge_progress() {
     static float shown = -1.f;
     static chrono::steady_clock::time_point last;
@@ -1477,7 +1463,6 @@ float Logic::merge_progress() {
     std::string tail(static_cast<size_t>(len), '\0');
     in.seekg(size - len);
     in.read(tail.data(), len);
-    // old ffmpeg calls it out_time_ms but its STILL microseconds
     auto at = tail.rfind("out_time_us=");
     if (at == std::string::npos)
         at = tail.rfind("out_time_ms=");
@@ -1544,7 +1529,6 @@ std::optional<CCSize> Recorder::window_pixels() {
 #endif
 }
 
-// the bar & the % were placed for the screens width. a video of another shape has to move them or they sit off centre
 void Recorder::shift_ui(PlayLayer* play, float by) {
     if (!play || by == 0.f)
         return;
@@ -1603,7 +1587,6 @@ void Recorder::hold_view() {
     }
 }
 
-// the windows own frame size, even if it got resized mid render
 CCSize Recorder::real_frame() {
     auto pixels = window_pixels().value_or(saved_pixels);
     return CCSize(
@@ -1640,7 +1623,6 @@ void Recorder::release_view() {
         Recorder::get().resize_shader_layer(restore);
     }
     shader_saved = {};
-    // only the level that got moved, a new one was built at the videos shape already
     if (ui_owner && ui_owner == PlayLayer::get())
         shift_ui(ui_owner, -ui_shift);
     ui_owner = nullptr;
@@ -1973,7 +1955,6 @@ bool Recorder::open_target() {
 #endif
 
 #ifdef GEODE_IS_MACOS
-    // Keep BGRA and CPU color conversion, but read pixels back a few frames later.
     buffered_capture = !use_api;
     if (buffered_capture) {
         glGenBuffers(RING, pbo.data());
@@ -2006,7 +1987,6 @@ bool Recorder::open_target() {
     if (bar_fill)
         bar_fill->retain();
     if (bar_back && bar_fill) {
-        // same setup PlayLayer does for its bar: the fill repeats sideways & sits 2px in, behind the groove
         ccTexParams params = { GL_LINEAR, GL_LINEAR, GL_REPEAT, GL_CLAMP_TO_EDGE };
         bar_fill->getTexture()->setTexParameters(&params);
         bar_fill->setAnchorPoint({ 0.f, 0.5f });
@@ -2161,7 +2141,6 @@ void Recorder::drawFrame() {
 void Recorder::show_overlay() {
     if (!active)
         return;
-    // the window, menus & clicks get the real size back til the next frame starts
     if (holding) {
 #ifdef GEODE_IS_MOBILE
         silent_change_size(saved_frame);
@@ -2208,7 +2187,6 @@ void Recorder::show_overlay() {
     glClearColor(clear[0], clear[1], clear[2], clear[3]);
     if (scissor)
         glEnable(GL_SCISSOR_TEST);
-    // the menu is drawn after ts & needs the whole window
     glViewport(0, 0, static_cast<GLsizei>(pixels.width), static_cast<GLsizei>(pixels.height));
 }
 
@@ -2344,7 +2322,6 @@ void Recorder::draw_progress() {
         bar_back->setScale(1.3f * scale);
         bar_back->setPosition(middle);
     }
-    // by the real clock
     auto now = chrono::steady_clock::now();
     if (bar_shown.empty() || now - text_at >= chrono::milliseconds(200)) {
         text_at = now;
@@ -2374,7 +2351,6 @@ bool Recorder::harvest(bool wait) {
     glDeleteSync(fences[slot]);
     fences[slot] = nullptr;
 #else
-    // Leave the oldest transfer several frames to finish before mapping it.
     if (!wait && static_cast<int>(in_flight.size()) < RING - 1)
         return false;
     Timed timed{ g_timing.read_ns };
@@ -2614,7 +2590,6 @@ std::string Recorder::open_api(int fps) {
         return !name.empty() && offered(name) && std::ranges::find(picks, name) == picks.end();
     });
 #ifdef GEODE_IS_ANDROID
-    // color fix happens in the conversion on android (echo_get_sws), never thru the api's filter
     auto color_modes = std::vector<bool>{ false };
 #else
     auto color_modes = logic.render_color_fix ? std::vector<bool>{ true, false } : std::vector<bool>{ false };
@@ -2770,10 +2745,7 @@ void Recorder::save_api_render() {
             } reset_header;
 #endif
             try {
-                // mixVideoRaw takes the samples as 44100 no matter what (phones are 48000, & render speed moves it too)
-                // so anything else goes in as a wav, the api reads the real rate off that & converts it
 #ifdef GEODE_IS_IOS
-                // ios is my own mixer, it works the rate out from the videos length
                 if (auto mixed = ffmpeg::events::AudioMixer::mixVideoRaw(video, stereo, temp); mixed.isErr())
                     failed = mixed.unwrapErr();
 #else
@@ -2980,7 +2952,6 @@ RenderStatus Logic::render_status() {
     double video = (double)(film.frames) * (double)(Logic::get().render_step());
     if (film.busy_seconds > 0.05)
         status.speed = (float)(video / film.busy_seconds);
-    // pace over the last 10 seconds, not since the start
     auto& marks = film.pace_marks;
     if (!marks.empty() && (film.busy_seconds < marks.back().first || video < marks.back().second)) {
         marks.clear();
@@ -3003,8 +2974,6 @@ RenderStatus Logic::render_status() {
         status.text = fmt::format("Finishing  |  {}  |  {}", speed, elapsed);
         return status;
     }
-    // how much level is left in SECONDS (gd works it out from the speed portals), not in distance.
-    // by distance a 4x speed part counted the same as a half speed part & the time left jumped around
     double left_game = -1.0;
     if (play && !play->m_isPlatformer && play->m_player1 && play->m_endPortal) {
         int channel = play->m_gameState.m_currentChannel;
@@ -3149,7 +3118,6 @@ bool Logic::begin_render_frame() {
     film.hold_view();
     bool capture = !Logic::get().render_should_skip();
     if (capture) {
-        // the whole gap, capping it at 0.25 made elapsed run slow
         film.busy_seconds += std::clamp(gap, 0.0, 30.0);
         AudioTap::get().hold_effects();
     }
@@ -3254,12 +3222,12 @@ void Logic::stop_render() {
         auto each = [frames](std::atomic<long long> const& ns) {
             return (double)(ns.load()) / 1e6 / frames;
         };
-        // where the time went & whether the song stayed with the level. logs/render.txt, written over by every render
         auto& logic = Logic::get();
         auto& tap = AudioTap::get();
         std::error_code error;
         fs::create_directories(logic.save_root() / "logs", error);
         std::ofstream out(logic.save_root() / "logs" / "render.txt", std::ios::trunc);
+        out << fmt::format("echo {} build {}\n", Mod::get()->getVersion().toVString(), echo::build_id());
         out << fmt::format("render {}x{} @{}fps codec={} platform={} capture={}\n", film.width, film.height, logic.render_fps, logic.render_codec,
             GEODE_PLATFORM_NAME, film.use_api ? "api" : film.nv12 ? "nv12 ring" : film.buffered_capture ? "bgra ring" : "bgra direct");
         out << fmt::format("frames={} video={:.3f}s wall={:.3f}s speed={:.2f} fps ({:.2f}x real time)\n", film.frames, frames / std::max(logic.render_fps, 1), wall,

@@ -734,7 +734,7 @@ bool read_varint(std::istream& file, uint64_t& value) {
 
 constexpr uint8_t FLAG_SAMPLES = 1, FLAG_WHOLE_FPS = 2, FLAG_SEED = 4, FLAG_UNROUNDED = 8;
 constexpr uint8_t FLAG_SILICATE_VARIANCE = 16;
-constexpr uint8_t FLAG_LDM_KNOWN = 32, FLAG_LDM = 64; // old macros have neither = dont know
+constexpr uint8_t FLAG_LDM_KNOWN = 32, FLAG_LDM = 64;
 
 struct PackedBody {
     float fps = 240.f;

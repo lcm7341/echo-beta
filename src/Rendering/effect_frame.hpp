@@ -4,7 +4,6 @@
 
 // the same effect again in 1 shown frame: the 1st plays & the rest are counted on its circle waves (EchoCircleWave)
 namespace echo::effects {
-	// what makes 2 effects the same one: who its on, which effect & where
 	struct Key {
 		void const* owner;
 		int effect, kind;
@@ -14,27 +13,20 @@ namespace echo::effects {
 
 	struct Seen {
 		Key key{};
-		// the circle waves the 1st one made (CCCircleWave, held til the frame ends)
 		std::array<void*, 4> waves{};
 		int wave_amt = 0;
-		// where the orb was the 1st time
 		float first_x = 0.f, first_y = 0.f;
 		bool has_first = false;
-		// dash bursts, see spread_effect
 		int last_step = 0, plays = 0;
 	};
 
 	struct Frame {
-		// 64 is plenty. past that they all just play
 		std::array<Seen, 64> seen{};
 		std::size_t amt = 0;
 		bool on = false;
-		// the one thats playing rn. a wave made while ts is set belongs to it
 		Seen* open = nullptr;
-		// the step the frame began on
 		int began = 0;
 
-		// nullptr = not on, or full. fresh = ts is the 1st time ts frame
 		Seen* find(Key const& key, bool& fresh) {
 			fresh = false;
 			if (!on)
@@ -43,7 +35,6 @@ namespace echo::effects {
 			for (std::size_t i = 0; i < amt; ++i) {
 				if (seen[i].key == key)
 					return &seen[i];
-				// given back by a touch that didnt jump, or a spam frame runs out
 				if (!free && !seen[i].key.owner)
 					free = &seen[i];
 			}

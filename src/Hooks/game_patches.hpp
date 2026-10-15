@@ -37,11 +37,9 @@ namespace echo::patches {
 		0xa9be7bfd, 0x910003fd, 0xbd400020, 0xf9000bf3, 0xbd400421,
 		0xaa0003f3, 0x97fffff7, 0xaa1303e0, 0xf9400bf3, 0xa8c27bfd, 0xd65f03c0
 	};
-	// so copy it inline. loads both floats first so src == dst still works
 	inline constexpr std::array<uint32_t, 5> point_replacement = {
 		0xbd400020, 0xbd400421, 0xbd000000, 0xbd000401, 0xd65f03c0
 	};
-	// android: the set clear that runs even when the set is empty
 	inline constexpr uintptr_t rings_address = 0x623e2c;
 	inline constexpr std::array<uint32_t, 13> rings_original = {
 		0xf9451680, 0xb40000a0, 0xf9400013, 0x941aa02e, 0xaa1303e0,
@@ -50,7 +48,6 @@ namespace echo::patches {
 	};
 	// longer cbz so an empty set skips the memset too
 	inline constexpr std::array<uint32_t, 1> rings_replacement = { 0xb4000140 };
-	// windows: queued buttons. the game calls memmove even when theres 0 bytes to move
 	inline constexpr uintptr_t queue_address = 0x231daa;
 	inline constexpr std::array<uint8_t, 16> queue_original = {
 		0xe8, 0x87, 0xfa, 0x29, 0x00, 0x48, 0x83, 0x83,
@@ -58,7 +55,6 @@ namespace echo::patches {
 	};
 	// call the cave instead of memmove
 	inline constexpr std::array<uint8_t, 5> queue_replacement = { 0xe8, 0x44, 0, 0, 0 };
-	// 13 int3s of padding nobody uses, the cave goes here
 	inline constexpr uintptr_t queue_cave_address = 0x231df3;
 	inline constexpr std::array<uint8_t, 13> queue_cave_original = {
 		0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc

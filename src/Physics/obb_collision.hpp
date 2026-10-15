@@ -4,7 +4,6 @@ namespace echo::obb {
 	template <class Point>
 	inline float dot(Point const& a, Point const& b) {
 #pragma clang fp contract(off)
-		// arm's fused dot moves pad contacts by a step at high tps
 		return a.x * b.x + a.y * b.y;
 	}
 

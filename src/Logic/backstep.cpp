@@ -1,10 +1,10 @@
 // stepping backwards while recording
 //
-// every few steps the whole level is saved w/ gds own checkpoint (every step at 240 tps, less often above that, a save can cost 1ms)
 // gds checkpoint misses things: held buttons, the jump buffer, orb state, per player clocks, the camera. those ride along in BackstepExtra
 // stepping back = load the newest save at or before the target frame, then replay the recorded inputs forward to the exact frame
 // only backstep_percent of a seconds worth of saves is kept, the oldest are dropped
 // a save is checked before it is loaded (state_check). a broken one is leaked on purpose bc gds destructor would crash on it
+#include "Logic/perf.hpp"
 #include "Logic/logic.hpp"
 #include "GUI/gui.hpp"
 #include "Physics/checkpoint.hpp"
@@ -213,92 +213,11 @@ struct BackstepExtra {
 };
 
 namespace {
-    struct Buttons {
-        bool jump_buffered = false, state_ring_jump = false, was_jump_buffered = false, was_robot_jump = false;
-        unsigned char state_jump_buffered = 0;
-        bool state_ring_jump2 = false, touched_ring = false, touched_custom_ring = false, touched_gravity_portal = false, touched_pad = false;
-        bool ring_jump_related = false, holding_left = false, holding_right = false;
-        // NOT in gds checkpoint either
-        double fall_speed = 0;
-        int reverse_related = 0;
-        geode::SeedValueRSV jump_related{};
-        std::array<std::int8_t, 4> holding{ -1, -1, -1, -1 };
-        std::vector<int> touched_rings, ring_related;
-        bool present = false;
-
-        static Buttons of(PlayerObject* body) {
-            Buttons out;
-            if (!body)
-                return out;
-            out.present = true;
-            out.jump_buffered = body->m_jumpBuffered;
-            out.state_ring_jump = body->m_stateRingJump;
-            out.was_jump_buffered = body->m_wasJumpBuffered;
-            out.was_robot_jump = body->m_wasRobotJump;
-            out.state_jump_buffered = body->m_stateJumpBuffered;
-            out.state_ring_jump2 = body->m_stateRingJump2;
-            out.touched_ring = body->m_touchedRing;
-            out.touched_custom_ring = body->m_touchedCustomRing;
-            out.touched_gravity_portal = body->m_touchedGravityPortal;
-            out.touched_pad = body->m_touchedPad;
-            out.ring_jump_related = body->m_ringJumpRelated;
-            out.holding_left = body->m_holdingLeft;
-            out.holding_right = body->m_holdingRight;
-            out.fall_speed = body->m_fallSpeed;
-            out.reverse_related = body->m_reverseRelated;
-            out.jump_related = body->m_jumpRelatedAC2;
-            for (auto const& [button, held] : body->m_holdingButtons)
-                if (button >= 0 && button < 4)
-                    out.holding[static_cast<std::size_t>(button)] = held ? 1 : 0;
-            // 1 by 1 bc android sets dont do assign :/
-            for (int ring : body->m_touchedRings)
-                out.touched_rings.push_back(ring);
-            for (int ring : body->m_ringRelatedSet)
-                out.ring_related.push_back(ring);
-            return out;
-        }
-
-        void apply(PlayerObject* body) const {
-            if (!body || !present)
-                return;
-            body->m_jumpBuffered = jump_buffered;
-            body->m_stateRingJump = state_ring_jump;
-            body->m_wasJumpBuffered = was_jump_buffered;
-            body->m_wasRobotJump = was_robot_jump;
-            body->m_stateJumpBuffered = state_jump_buffered;
-            body->m_stateRingJump2 = state_ring_jump2;
-            body->m_touchedRing = touched_ring;
-            body->m_touchedCustomRing = touched_custom_ring;
-            body->m_touchedGravityPortal = touched_gravity_portal;
-            body->m_touchedPad = touched_pad;
-            body->m_ringJumpRelated = ring_jump_related;
-            body->m_holdingLeft = holding_left;
-            body->m_holdingRight = holding_right;
-            body->m_fallSpeed = fall_speed;
-            body->m_reverseRelated = reverse_related;
-            body->m_jumpRelatedAC2 = jump_related;
-            body->m_holdingButtons.clear();
-            for (int button = 0; button < 4; ++button)
-                if (holding[static_cast<std::size_t>(button)] >= 0)
-                    body->m_holdingButtons[button] = holding[static_cast<std::size_t>(button)] != 0;
-            body->m_touchedRings.clear();
-            for (int ring : touched_rings)
-                body->m_touchedRings.insert(ring);
-            body->m_ringRelatedSet.clear();
-            for (int ring : ring_related)
-                body->m_ringRelatedSet.insert(ring);
-        }
-    };
-
     struct Probe {
-        double x = 0, y = 0, yVelocity = 0, levelTime = 0, rotation = 0, node_x = 0, node_y = 0, last_x = 0, last_y = 0;
-        CCPoint position1, position2, node1, node2;
-        double time1 = 0, time2 = 0;
-        Buttons buttons1, buttons2;
-        std::uint64_t inputs = 0;
-        unsigned attempt = 0;
+        CCPoint node1, node2;
+        double yvel1 = 0.0, yvel2 = 0.0;
         bool has_player2 = false;
-        unsigned progress = 0;
+        bool operator==(Probe const&) const = default;
     };
 
     constexpr size_t RING = 1 << 17;
@@ -309,37 +228,15 @@ namespace {
 
     Probe probe(PlayLayer* play) {
         Probe value;
-        std::uint64_t inputs = 0xcbf29ce484222325ull; // fnv-1a start value
-        for (auto const& cmd : play->m_queuedButtons) {
-            std::uint64_t word = static_cast<std::uint64_t>(static_cast<int>(cmd.m_button)) | (static_cast<std::uint64_t>(cmd.m_isPush) << 8) |
-                                 (static_cast<std::uint64_t>(cmd.m_isPlayer2) << 9);
-            inputs = (inputs ^ word) * 0x100000001b3ull; // fnv-1a prime
-        }
-        value.inputs = inputs;
-        value.attempt = attempt_number;
         if (auto* body = play->m_player1) {
-            value.x = body->m_position.x;
-            value.y = body->m_position.y;
-            value.yVelocity = body->m_yVelocity;
-            value.rotation = body->getRotation();
-            value.node_x = body->getPositionX();
-            value.node_y = body->getPositionY();
-            value.last_x = body->m_lastPosition.x;
-            value.last_y = body->m_lastPosition.y;
-            value.position1 = body->m_position;
-            value.node1 = CCPoint(body->getPositionX(), body->getPositionY());
-            value.time1 = body->m_totalTime;
-            value.buttons1 = Buttons::of(body);
+            value.node1 = body->getPosition();
+            value.yvel1 = body->m_yVelocity;
         }
         if (auto* body = play->m_player2) {
-            value.position2 = body->m_position;
-            value.node2 = CCPoint(body->getPositionX(), body->getPositionY());
-            value.time2 = body->m_totalTime;
-            value.buttons2 = Buttons::of(body);
+            value.node2 = body->getPosition();
+            value.yvel2 = body->m_yVelocity;
             value.has_player2 = true;
         }
-        value.levelTime = play->m_gameState.m_levelTime;
-        value.progress = play->m_gameState.m_currentProgress;
         return value;
     }
 
@@ -356,16 +253,13 @@ namespace {
             slot = { frame, now };
             return;
         }
-        auto put = [](PlayerObject* body, CCPoint node, CCPoint position, double time, Buttons const& buttons) {
-            body->setPosition(node);
-            body->m_position = position;
-            body->m_totalTime = time;
-            buttons.apply(body);
-        };
-        if (play->m_player1)
-            put(play->m_player1, slot.second.node1, slot.second.position1, slot.second.time1, slot.second.buttons1);
-        if (play->m_player2 && slot.second.has_player2)
-            put(play->m_player2, slot.second.node2, slot.second.position2, slot.second.time2, slot.second.buttons2);
+        if (now == slot.second || reported)
+            return;
+        reported = true;
+        auto const& was = slot.second;
+        Logic::get().message = fmt::format("Step back replay drifted at frame {}, this part may not play back the same", frame);
+        echo::step::trace_note(fmt::format("DRIFT frame={} p1 was={:.4f},{:.4f} yvel={:.4f} now={:.4f},{:.4f} yvel={:.4f}\n", frame, was.node1.x,
+            was.node1.y, was.yvel1, now.node1.x, now.node1.y, now.yvel1));
     }
 }
 
@@ -373,12 +267,13 @@ int Logic::backstep_interval() const {
     double rate = sample_rate();
     if (!std::isfinite(rate) || rate <= 60.0)
         return 1;
-    // 60 saves a REAL second, not a game second. sped up it was 60 a game second: at 99x thats 5940 full saves a second
-    // & the lvl ran at 3x instead (desideration, 170us a step, all of it saving)
     double speed = frame_advance ? 1.0 : std::clamp(static_cast<double>(speedhack), 1.0, 1000.0);
-    // & sped up nobody needs 60 a second: 10. a save of a big lvl is ~5ms, 60 of them was a third of every second
     double per_second = speed > 1.0 ? 10.0 : 60.0;
-    return std::max(1, static_cast<int>(std::lround(rate / per_second * speed)));
+    double gap = rate / per_second * speed;
+    constexpr double SAVE_BUDGET = 0.05;
+    if (std::isfinite(backstep_save_sec) && backstep_save_sec > 0.0)
+        gap = std::max(gap, std::min(backstep_save_sec * rate * speed / SAVE_BUDGET, rate / 2.0 * speed));
+    return std::max(1, static_cast<int>(std::lround(gap)));
 }
 
 void Logic::release_backstep(BackstepSave& save, char const* why) {
@@ -397,7 +292,8 @@ void Logic::release_backstep(BackstepSave& save, char const* why) {
 void Logic::clear_backsteps() {
     ++attempt_number;
     auto& logic = Logic::get();
-    history.clear();
+    for (auto& slot : history)
+        slot.first = -1;
     reported = false;
     for (auto& save : logic.backsteps)
         Logic::get().release_backstep(save, "clear");
@@ -409,7 +305,6 @@ void Logic::clear_backsteps() {
         logic.backstep_inputs.clear();
 }
 
-// runs BEFORE the step so the save is the state at step_frame
 void Logic::save_backstep(PlayLayer* play) {
     auto& logic = Logic::get();
     if (!play || logic.predicting || logic.backstepping)
@@ -433,11 +328,7 @@ void Logic::save_backstep(PlayLayer* play) {
     compare(play, frame, resim);
     bool shown = logic.save_shown_step;
     logic.save_shown_step = false;
-    // the replay up to the frame a step back wants used to save EVERY step. that was fine when saves were 28 steps apart.
-    // sped up they are thousands apart now, so 1 back took thousands of saves (the hang at 99x). only the last bit
-    // before the target is saved every step, the way there gets 1 a game second
     int close_by = std::max(1, static_cast<int>(std::lround(logic.sample_rate() / 60.0)));
-    // held: no dense saves, it resims every frame anyway. pressed: the last 60 steps
     if (resim) {
         bool repeating = logic.holding_back && chrono::steady_clock::now() >= logic.back_hold_start + chrono::milliseconds(logic.advance_hold_ms);
         close_by = repeating ? 0 : std::min(close_by, 60);
@@ -452,12 +343,15 @@ void Logic::save_backstep(PlayLayer* play) {
     if (!logic.backsteps.empty() && logic.backsteps.back().echo.frame >= frame)
         return;
     auto saving = chrono::steady_clock::now();
+    echo::perf::Scope save_time(echo::perf::Backstep);
+    echo::perf::count_backstep_save();
     struct Untimed {
         chrono::steady_clock::time_point from;
         ~Untimed() { Logic::get().note_untimed(chrono::duration<double>(chrono::steady_clock::now() - from).count()); }
     } untimed{ saving };
     // createCheckpoint must NOT change the object counters
     auto* obj = play->createCheckpoint();
+    auto gd_done = chrono::steady_clock::now();
     if (!obj)
         return;
     obj->retain();
@@ -476,7 +370,9 @@ void Logic::save_backstep(PlayLayer* play) {
     extra->camera = CameraState::of(play);
     extra->shown_camera = echo_save_shown_camera(play);
     logic.backsteps.push_back({ obj, Logic::get().capture_checkpoint(play, obj, frame), std::move(extra), {} });
+    auto extra_done = chrono::steady_clock::now();
     Logic::get().note_backstep_objects(play);
+    auto objects_done = chrono::steady_clock::now();
     double rate = logic.sample_rate();
     if (!std::isfinite(rate) || rate <= 0.0)
         rate = 240.0;
@@ -485,6 +381,14 @@ void Logic::save_backstep(PlayLayer* play) {
         Logic::get().release_backstep(logic.backsteps.front(), "trim");
         logic.backsteps.pop_front();
     }
+    auto trim_done = chrono::steady_clock::now();
+    auto ms = [](auto from, auto to) {
+        return chrono::duration<double, std::milli>(to - from).count();
+    };
+    echo::perf::note_save_parts(ms(saving, gd_done), ms(gd_done, extra_done), ms(extra_done, objects_done), ms(objects_done, trim_done));
+    double took = chrono::duration<double>(chrono::steady_clock::now() - saving).count();
+    if (std::isfinite(took) && took > 0.0)
+        logic.backstep_save_sec = logic.backstep_save_sec > 0.0 ? logic.backstep_save_sec + (took - logic.backstep_save_sec) * 0.2 : took;
 }
 
 void Logic::trim_backsteps(PlayLayer* play) {
@@ -522,7 +426,6 @@ bool Logic::step_to(PlayLayer* play, int target, int keep_up_to) {
             logic.message = "Turn on Backstep first";
         return false;
     }
-    // stepped back to before best frames last click: that click is gone & so is its finger
     if (target <= logic.best_frame_clicked_at)
         logic.best_hold_owned = false;
     int keep = std::min(target, keep_up_to);
@@ -615,7 +518,6 @@ bool Logic::step_to(PlayLayer* play, int target, int keep_up_to) {
         play->m_calcNonEffectObjects = extra->calc_non_effect;
         play->m_calcNonEffectObjectsSize = extra->calc_non_effect_size;
         for (auto const& mark : extra->used) {
-            // an object the save says is unused but is used right now = something the take being thrown away set off
             if (logic.trace_logging && (mark.object->m_activatedByPlayer1 != mark.p1 || mark.object->m_activatedByPlayer2 != mark.p2))
                 echo::step::trace_note(fmt::format("UNUSE save={} uid={} id={} now={}{} saved={}{}\n", save.echo.frame, mark.object->m_uniqueID, mark.object->m_objectID,
                     mark.object->m_activatedByPlayer1 ? 1 : 0, mark.object->m_activatedByPlayer2 ? 1 : 0, mark.p1 ? 1 : 0, mark.p2 ? 1 : 0));
@@ -642,7 +544,6 @@ bool Logic::step_to(PlayLayer* play, int target, int keep_up_to) {
         if (!resim)
             pin_camera(play);
     }
-    // the picture camera goes back too
     echo_load_shown_camera(play, save.extra ? save.extra->shown_camera.get() : nullptr);
     logic.backstepping = false;
     logic.frame_advance = true;
@@ -655,8 +556,6 @@ bool Logic::step_to(PlayLayer* play, int target, int keep_up_to) {
     else {
         logic.advance_queued = false;
         Logic::get().match_live_holds(play);
-        // the labels are only redrawn after a step runs, & landing right on a saved frame runs none. so the frame label
-        // (& every other label) kept showing the frame i stepped back FROM until the next step forward
         Logic::get().draw_overlay(play);
     }
     return true;
@@ -707,7 +606,6 @@ void Logic::finish_backstep(PlayLayer* play) {
 void Logic::poll_back_hold() {
     auto& logic = Logic::get();
     auto* play = PlayLayer::get();
-    // taps step back here, inside the scheduler like holds
     if (logic.back_tap_queued) {
         if (!play)
             logic.back_tap_queued = false;
@@ -734,7 +632,6 @@ void Logic::poll_back_hold() {
     double rate = logic.sample_rate() * std::clamp(logic.advance_speed, 1.f, 200.f) / 100.0 * logic.speedhack;
     if (!std::isfinite(rate) || !(rate > 0.0))
         return;
-    // same as holding frame advance, steps every drawn frame not every second
     double interval = CCDirector::sharedDirector() ? CCDirector::sharedDirector()->getAnimationInterval() : 1.0 / 60.0;
     if (!std::isfinite(interval) || interval <= 0.0)
         interval = 1.0 / 60.0;

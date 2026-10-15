@@ -173,10 +173,6 @@ namespace {
         GameObject* probe = nullptr;
         bool probed = false;
         bool probe_had = false;
-        // which section & slot every object i touch says its in, from BEFORE i touched it. the lists are put back below,
-        // but an object only got its indexes put back if it was in the main list of a cell i kept. a collision block isnt
-        // (it has its own grid & uses the same index fields), so after a look ahead it could say section -1 or the wrong
-        // cell while sitting in another: gd then takes it out of the wrong place (crash in updateCollisionBlocks)
         struct Indexes {
             int other, inner, outer, middle;
         };
@@ -274,8 +270,6 @@ namespace {
             if (!active)
                 return;
             active = false;
-            // what each object said before, 1st. then the lists below fix the slot of everything thats in them
-            // (a slot can change bc ANOTHER object left the list, so the lists know better than what i wrote down)
             for (auto const& [object, was] : indexes) {
                 object->m_someOtherIndex = was.other;
                 object->m_innerSectionIndex = was.inner;
@@ -348,9 +342,6 @@ namespace {
         std::vector<std::uint8_t> lock_y;
         std::vector<double> pre_y;
 
-        // where the SPRITE was right before ts forecast run could move it (not the objects position fields, those are in base).
-        // taken fresh every run. it used to live in the cached base & that could be a frame old, so objects got put back a frame behind
-        // fixes jitter
         std::vector<CCPoint> spot;
         std::vector<std::uint32_t> spot_stamp;
 
@@ -359,12 +350,12 @@ namespace {
         // way gd does (processPlayerFollowActions): y += clamp(speed * (icon y + offset - y), max speed)
         struct Follow {
             int group;
-            float speed, max, delay; // speed & max are per 1/60s like gd has them
+            float speed, max, delay;
             int offset;
         };
-        std::vector<std::vector<Follow>> follow_frames; // what follow commands run on each forecast step, next to frames
+        std::vector<std::vector<Follow>> follow_frames;
         std::unordered_map<int, std::vector<std::uint32_t>> follow_members;
-        std::vector<double> line_y; // where the line being drawn has each follower right now
+        std::vector<double> line_y;
         std::vector<std::uint32_t> line_stamp;
         std::uint32_t line_epoch = 1;
         // gd keeps the icons last 200 y's, 1 every 0.01s (PlayerObject::updateSpecial), & a follow w/ a delay reads back
@@ -597,7 +588,6 @@ namespace {
         // hitbox made from where the object really is. w/out ts a portal could go off where a line had put it
         obj->m_isObjectRectDirty = true;
         obj->m_isOrientedBoxDirty = true;
-        // gd normally only moves the SPRITE later, in the visibility pass, so putting the fields back was enough before
         // but some objects get quickUpdatePosition at the end of the move step, which moves the sprite right away AND the color sprite (the detail part) with it
         // after a forecast they sat wherever the forecast last had them until the next live step: jittering, not where the hitbox was
         // the detail was the problem
@@ -728,7 +718,6 @@ namespace {
         auto random_state = GameToolbox::getfast_srand();
         bool predicting = logic.predicting;
         logic.predicting = true;
-        // save EVERYTHING that could move first
         ++f.touch_epoch;
         f.touched.clear();
         for (std::uint32_t i = 0; i < f.objects.size(); ++i)
@@ -792,11 +781,9 @@ namespace {
                 play->m_gameState.m_cameraPosition2 = camera2 + shift;
             }
             fire_ahead(f, play, fire_from);
-            // follow player y doesnt go thru moveObjects the y is just set
             auto& follows = f.follow_frames.emplace_back();
             // m_unkVector6f0 is the list gd walks in processPlayerFollowActions (the effect manager + 0x608 on mac).
             // each 1 is a CCMoveCNode: its tag is the group, 0a8 the speed, 0b0 the delay, 0b8 the offset, 0c0 the max speed.
-            // i had the wrong list here before (m_unkVector600), it was always empty so no follower was ever worked out
             for (auto* follow : f.shadow->m_unkVector6f0) {
                 if (!follow)
                     continue;
@@ -817,7 +804,6 @@ namespace {
                     // itself (apply). & no updateObjectSection for them, gd doesnt call it for a follow either (these sit
                     // in the collision grid, not the normal sections)
                     touch(f, i);
-                    // 3 = follows the icons y
                     f.lock_y[i] = 3;
                     if (fresh)
                         listed->second.push_back(i);
@@ -832,7 +818,6 @@ namespace {
             frame.reserve(f.moved.size());
             for (auto i : f.moved) {
                 touch(f, i);
-                // check if it moved by exactly what the player moved that step
                 if (!sideways && f.lock_y[i] < 2) {
                     double dy = f.objects[i]->m_positionY - f.pre_y[i];
                     if (std::abs(player_dy) > 0.0001 || std::abs(dy) > 0.0001)
@@ -1194,7 +1179,6 @@ namespace forecast {
                 f.ring_time = body->m_unk838;
             }
             else {
-                // what updateSpecial did at the end of the step before ts one
                 f.ring_time += f.dt;
                 if (f.ring_time >= 0.01f) {
                     f.ring_time += -0.01f;
@@ -1202,7 +1186,6 @@ namespace forecast {
                 }
                 f.ring[static_cast<std::size_t>(slot())] = player_y;
             }
-            // past what the forecast has built the same follows are still running
             auto const& follows = f.follow_frames[std::min(static_cast<std::size_t>(step - 1), f.follow_frames.size() - 1)];
             float tick = f.dt * 60.f;
             for (auto const& follow : follows) {
@@ -1217,7 +1200,6 @@ namespace forecast {
                     int at = slot() - back;
                     icon = f.ring[static_cast<std::size_t>(at < 0 ? at + 200 : at)];
                 }
-                // gd skips a 0 too
                 if (icon == 0.f)
                     continue;
                 float target = icon + static_cast<float>(follow.offset);
@@ -1225,7 +1207,6 @@ namespace forecast {
                 for (auto i : members->second) {
                     keep_base(f, i);
                     if (f.line_stamp[i] != f.line_epoch) {
-                        // starts where it really is
                         std::memcpy(&f.line_y[i], f.base.data() + static_cast<std::size_t>(i) * STRIDE + RECORD_POS + sizeof(double), sizeof(double));
                         f.line_stamp[i] = f.line_epoch;
                     }
@@ -1251,7 +1232,6 @@ namespace forecast {
         if (step > f.horizon)
             return;
         auto const& frame = f.frames[static_cast<std::size_t>(step - 1)];
-        // a 1:1 lock to the icons y: the forecast had the icon on 1 path, on another line its that much higher / lower
         double lift = 0.0;
         if (std::isfinite(player_y) && static_cast<std::size_t>(step - 1) < f.fired_from.size()) {
             float assumed = f.fired_from[static_cast<std::size_t>(step - 1)].y;
@@ -1306,7 +1286,6 @@ namespace forecast {
 
     void rewind(PlayLayer* play) {
         auto& f = state();
-        // the next line starts its followers over
         ++f.line_epoch;
         f.ring_ready = false;
         suspend(play);
@@ -1401,7 +1380,6 @@ class $modify(ForecastSections, GJBaseGameLayer) {
     }
 };
 
-// while forecasting nothing real gets toggled
 class $modify(ForecastMoves, GJBaseGameLayer) {
     static void note_moving(CCArray* objects) {
         auto& f = state();
@@ -1475,8 +1453,6 @@ class $modify(ForecastAreas, GJBaseGameLayer) {
         }
         auto& grid = *reinterpret_cast<Grid*>(&m_sections);
         auto& counts = *reinterpret_cast<Counts*>(&m_sectionSizes);
-        // an area trigger can hand over a range WAY past the grid (ufofu hung forever walking empty sections), so only
-        // walk the sections that exist
         int last_x = std::min(outerMax, static_cast<int>(grid.size()) - 1);
         for (int x = std::max(outerMin, 0); x <= last_x; ++x) {
             if (!grid[x])
