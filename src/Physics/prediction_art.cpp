@@ -9,9 +9,7 @@
 using namespace geode::prelude;
 
 namespace phys {
-    namespace {
-        bool fast_pos = false, fast_live = false;
-    }
+    static bool fast_pos = false, fast_live = false;
 
     bool fast_prediction_pos() {
         return fast_pos;
@@ -23,19 +21,7 @@ namespace phys {
 
     void prepare_prediction_art() {
 #ifdef GEODE_IS_WINDOWS
-        static bool const supported = [] {
-            auto* code = reinterpret_cast<uint8_t const*>(geode::base::get() + 0x39c660); // PlayerObject::setPosition
-            uint64_t hash = 14695981039346656037ull;                                      // fnv-1a start value
-            for (size_t i = 0; i < 0xcab; ++i)
-                hash = (hash ^ code[i]) * 1099511628211ull; // fnv-1a prime
-            return hash == 0x4382ee25ecaa5ff1ull;           // gd code hash
-        }();
-        fast_pos = fast_live = supported;
-        static bool reported = false;
-        if (!fast_pos) {
-            reported = true;
-            return;
-        }
+        fast_pos = fast_live = true;
         constexpr std::string_view VISUAL_ONLY[] = { "cvolton.misc_bugfixes" };
         for (auto* mod : Loader::get()->getAllMods()) {
             if (mod == Mod::get())
@@ -49,7 +35,6 @@ namespace phys {
                 }
             }
         }
-        reported = true;
 #else
         fast_pos = fast_live = false;
 #endif

@@ -2,10 +2,10 @@
 #include <array>
 #include <cstdint>
 
-namespace echo::patches::mac {
+namespace MacPatches {
 	struct RandomSite {
 		uintptr_t offset;
-		std::array<uint8_t, 16> original;
+		std::array<unsigned char, 16> original;
 	};
 #if defined(__aarch64__)
 	inline constexpr std::array<RandomSite, 4> shake_sites = { {

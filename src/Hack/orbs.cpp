@@ -67,7 +67,7 @@ namespace {
     bool holding_jump(PlayerObject* player) {
         if (!player)
             return false;
-        int jump = static_cast<int>(PlayerButton::Jump);
+        int jump = (int)PlayerButton::Jump;
         auto it = player->m_holdingButtons.find(jump);
         return it != player->m_holdingButtons.end() && it->second;
     }
@@ -101,19 +101,19 @@ namespace {
     void each_near(GJBaseGameLayer* play, CCPoint pos, int span, auto&& visit) {
         float factor_x = play->m_sectionXFactor > 1.f ? play->m_sectionXFactor : 100.f;
         float factor_y = play->m_sectionYFactor > 1.f ? play->m_sectionYFactor : 100.f;
-        int centerX = static_cast<int>(std::floor(pos.x / factor_x));
-        int centerY = static_cast<int>(std::floor(pos.y / factor_y));
+        int centerX = (int)std::floor(pos.x / factor_x);
+        int centerY = (int)std::floor(pos.y / factor_y);
         auto const& columns = play->m_sections;
         for (int column_index = centerX - span; column_index <= centerX + span; ++column_index) {
-            if (column_index < 0 || column_index >= static_cast<int>(columns.size()))
+            if (column_index < 0 || column_index >= (int)columns.size())
                 continue;
-            auto* column = columns[static_cast<size_t>(column_index)];
+            auto* column = columns[(size_t)column_index];
             if (!column)
                 continue;
             for (int row_index = centerY - span; row_index <= centerY + span; ++row_index) {
-                if (row_index < 0 || row_index >= static_cast<int>(column->size()))
+                if (row_index < 0 || row_index >= (int)column->size())
                     continue;
-                auto* row = (*column)[static_cast<size_t>(row_index)];
+                auto* row = (*column)[(size_t)row_index];
                 if (!row)
                     continue;
                 for (size_t i = 0; i < row->size(); ++i) {
@@ -127,8 +127,8 @@ namespace {
 
     int travel_span(GJBaseGameLayer* play, PlayerObject* player) {
         float factor = play->m_sectionXFactor > 1.f ? play->m_sectionXFactor : 100.f;
-        float speed = std::abs(player->m_playerSpeed * static_cast<float>(player->m_speedMultiplier) * 5.77f);
-        int span = static_cast<int>(std::ceil(speed * Logic::get().traj_seconds / factor)) + 2;
+        float speed = std::abs(player->m_playerSpeed * (float)player->m_speedMultiplier * 5.77f);
+        int span = (int)std::ceil(speed * Logic::get().traj_seconds / factor) + 2;
         return std::clamp(span, 2, 24);
     }
 
@@ -147,10 +147,10 @@ namespace {
     // 1 steps worth, it was a whole 60fps frame at any tps so orbs got clicked early
     // yw scarlet W bug reporting
     CCPoint step_delta(PlayerObject* player) {
-        float scale = 60.f / static_cast<float>(std::max(Logic::get().sample_rate(), 1.0));
-        float speed = player->m_playerSpeed * static_cast<float>(player->m_speedMultiplier) * 5.77f * scale;
+        float scale = 60.f / (float)std::max(Logic::get().sample_rate(), 1.0);
+        float speed = player->m_playerSpeed * (float)player->m_speedMultiplier * 5.77f * scale;
         float dx = player->m_isGoingLeft ? -speed : speed;
-        return { dx, static_cast<float>(player->m_yVelocity) * scale };
+        return { dx, (float)player->m_yVelocity * scale };
     }
 
     bool overlaps_soon(PlayerObject* player, GameObject* object) {
@@ -207,7 +207,7 @@ namespace {
 
     void swift_hold(PlayerObject* player, bool keep_hold) {
         auto key = PlayerButton::Jump;
-        int jump = static_cast<int>(key);
+        int jump = (int)key;
         Orbs::arm_tool(true);
         player->m_stateRingJump2 = true;
         player->pushButton(key);
@@ -226,9 +226,9 @@ namespace {
 
     void queue_jump(PlayLayer* play, bool player2, bool down) {
         ++queued_assist;
-        if (echo::step::tracing())
-            echo::step::trace_event(fmt::format("ASSIST_QUEUE frame={} p2={} down={}\n", Logic::get().step_frame + 1, player2, down));
-        play->queueButton(static_cast<int>(PlayerButton::Jump), down, player2, Logic::get().click_stamp());
+        if (tracing())
+            trace_event(fmt::format("ASSIST_QUEUE frame={} p2={} down={}\n", Logic::get().step_frame + 1, player2, down));
+        play->queueButton((int)PlayerButton::Jump, down, player2, Logic::get().click_stamp());
     }
 
     struct PadStep {
@@ -258,7 +258,7 @@ namespace {
     std::unordered_set<int> pred_spent_black1, pred_spent_black2;
 
     bool jump_or_gravity_pad(int type) {
-        return type == static_cast<int>(GameObjectType::YellowJumpPad) || type == static_cast<int>(GameObjectType::PinkJumpPad) || type == static_cast<int>(GameObjectType::RedJumpPad) || type == static_cast<int>(GameObjectType::GravityPad) || type == static_cast<int>(GameObjectType::SpiderPad);
+        return type == (int)GameObjectType::YellowJumpPad || type == (int)GameObjectType::PinkJumpPad || type == (int)GameObjectType::RedJumpPad || type == (int)GameObjectType::GravityPad || type == (int)GameObjectType::SpiderPad;
     }
 
     bool black_orb(GameObject* object) {
@@ -382,18 +382,11 @@ void Orbs::restore(std::vector<Pose> const& poses) {
     }
 }
 
-uint32_t Orbs::pose_hash(GJBaseGameLayer* play, PlayerObject* player) {
-    uint32_t hash = 2166136261u;
-    auto mix = [&](uint32_t value) {
-        hash ^= value + 0x9e3779b9u + (hash << 6) + (hash >> 2);
-    }; // boost hash_combine
-    for (auto const& pose : capture(play, player)) {
-        mix(static_cast<uint32_t>(pose.object->m_uniqueID));
-        mix(std::bit_cast<uint32_t>(pose.pos.x));
-        mix(std::bit_cast<uint32_t>(pose.pos.y));
-        mix(std::bit_cast<uint32_t>(pose.rotation));
-    }
-    return hash;
+std::vector<Orbs::Spot> Orbs::orb_spots(GJBaseGameLayer* play, PlayerObject* player) {
+    std::vector<Spot> spots;
+    for (auto const& pose : capture(play, player))
+        spots.push_back({ pose.object->m_uniqueID, pose.pos.x, pose.pos.y, pose.rotation });
+    return spots;
 }
 
 void Orbs::clear() {
@@ -435,7 +428,7 @@ void Orbs::click_pads(PlayLayer* play, PlayerObject* player, int objectType, Gam
     bool player2 = player == play->m_player2;
     if (logic.plays_player(player2))
         return;
-    if (pad && !jump_or_gravity_pad(static_cast<int>(pad->m_objectType)))
+    if (pad && !jump_or_gravity_pad((int)pad->m_objectType))
         pad = nullptr;
     auto& step = player2 ? pad_p2 : pad_p1;
     auto& spent_pads = player2 ? spent_pad_p2 : spent_pad_p1;
@@ -640,9 +633,9 @@ void Orbs::note_jump_presses(PlayLayer* play) {
     hold_after_p2 = play && play->m_player2 && holding_jump(play->m_player2);
     if (!play)
         return;
-    int jump = static_cast<int>(PlayerButton::Jump);
+    int jump = (int)PlayerButton::Jump;
     for (auto const& cmd : play->m_queuedButtons) {
-        int button = static_cast<int>(cmd.m_button);
+        int button = (int)cmd.m_button;
         if (button != 0 && button != jump)
             continue;
         if (cmd.m_isPush)
@@ -685,10 +678,10 @@ int Orbs::claim_click(GJBaseGameLayer* layer, PlayerObject* player, bool player2
             (player2 ? claimed_p2 : claimed_p1).insert(obj->m_uniqueID);
         }
     }
-    if (echo::step::tracing())
-        echo::step::trace_event(fmt::format("ASSIST_CLICK frame={} p2={} orb_id={} orb_uid={} stack={} (that many extra release+press on ts press)\n",
+    if (tracing())
+        trace_event(fmt::format("ASSIST_CLICK frame={} p2={} orb_id={} orb_uid={} stack={} (that many extra release+press on ts press)\n",
             Logic::get().step_frame + 1, player2, orb->m_objectID, orb->m_uniqueID, stack.size()));
-    return std::max(1, static_cast<int>(stack.size()));
+    return std::max(1, (int)stack.size());
 }
 
 namespace {
@@ -744,7 +737,7 @@ void Orbs::notePredictionPad(GJBaseGameLayer* play, PlayerObject* player, GameOb
     bool player2 = icon2_of(player);
     if (logic.plays_player(player2))
         return;
-    if (pad && !jump_or_gravity_pad(static_cast<int>(pad->m_objectType)))
+    if (pad && !jump_or_gravity_pad((int)pad->m_objectType))
         return;
     auto& step = player2 ? pred_pad2 : pred_pad1;
     auto& spent_pads = player2 ? pred_spent_pad2 : pred_spent_pad1;
@@ -844,7 +837,7 @@ void Orbs::click_fake(GJBaseGameLayer* play, PlayerObject* player, bool player2,
     }
     if (classify(orb) == Kind::Black)
         (player2 ? pred_pad2 : pred_pad1).live_black = true;
-    int swifts = std::max(1, static_cast<int>(stack.size()));
+    int swifts = std::max(1, (int)stack.size());
     if (held)
         player->releaseButton(key);
     for (int i = 0; i < swifts; ++i) {
@@ -857,7 +850,7 @@ void Orbs::click_fake(GJBaseGameLayer* play, PlayerObject* player, bool player2,
     }
     if (held) {
         player->pushButton(key);
-        int jump = static_cast<int>(key);
+        int jump = (int)key;
         player->m_holdingButtons[jump] = true;
         player->m_jumpBuffered = true;
         player->m_wasJumpBuffered = true;

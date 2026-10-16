@@ -1,12 +1,8 @@
-// the box math for obb_fast.cpp (the rotated hitbox of an object: its 4 corners & its 2 sides)
-// add / sub / mul / div each do exactly 1 float op ON PURPOSE. the compiler must NOT merge or reorder them,
-//   the result has to match gds own function bit for bit or macros stop syncing
-// so dont "clean up" the order of anything in here, a + b & b + a are not the same thing to ts file
 #pragma once
 #include <cstdint>
 #include <cstring>
 
-namespace echo::obb {
+namespace OBB {
 	using Trig = float (*)(float);
 
 	struct Point {
@@ -14,11 +10,11 @@ namespace echo::obb {
 	};
 
 	// write straight into gds OBB2D, at the offset it keeps that value
-	inline void put(std::uint8_t* box, std::size_t offset, Point p) {
+	inline void put(unsigned char* box, std::size_t offset, Point p) {
 		std::memcpy(box + offset, &p, sizeof(p));
 	}
 
-	inline void put_double(std::uint8_t* box, std::size_t offset, double value) {
+	inline void put_double(unsigned char* box, std::size_t offset, double value) {
 		std::memcpy(box + offset, &value, sizeof(value));
 	}
 
@@ -63,7 +59,7 @@ namespace echo::obb {
 		return add(mul(corner.y, side.y), mul(corner.x, side.x));
 	}
 
-	inline void calculate(std::uint8_t* box, Point center, float width, float height, float angle,
+	inline void calculate(unsigned char* box, Point center, float width, float height, float angle,
 		Trig cosine, Trig sine, float half, float one) {
 		put(box, 0x1b0, center);
 		Point x{ cosine(angle), sine(angle) }, y{ -sine(angle), cosine(angle) };
@@ -78,9 +74,9 @@ namespace echo::obb {
 		Point side0 = sub(c1, c0), side1 = sub(c3, c0);
 		side0 = scale(side0, div(one, length_squared(side0)));
 		put(box, 0x180, side0);
-		put_double(box, 0x1a0, static_cast<double>(along(c0, side0)));
+		put_double(box, 0x1a0, (double)along(c0, side0));
 		side1 = scale(side1, div(one, length_squared(side1)));
 		put(box, 0x188, side1);
-		put_double(box, 0x1a8, static_cast<double>(along(c0, side1)));
+		put_double(box, 0x1a8, (double)along(c0, side1));
 	}
 }

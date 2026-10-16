@@ -12,12 +12,12 @@ using namespace geode::prelude;
 class GdrReplay {
 public:
     static constexpr float game_version = 2.2081f, format_version = 1.f;
-    static constexpr int maxDepth = 64;
+    static constexpr int max_depth = 64;
 
-    static uint64_t big(ByteCursor& in, size_t width) {
+    static unsigned long long big(ByteCursor& in, size_t width) {
         if (!in.take(width))
             return 0;
-        uint64_t value = 0;
+        unsigned long long value = 0;
         for (size_t i = 0; i < width; ++i)
             value = value << 8 | in.data[in.at - width + i];
         return value;
@@ -26,21 +26,21 @@ public:
     static std::string text(ByteCursor& in, size_t size) {
         if (!in.take(size))
             return {};
-        return { reinterpret_cast<char const*>(in.data.data() + in.at - size), size };
+        return { reinterpret_cast<const char*>(in.data.data() + in.at - size), size };
     }
 
     static matjson::Value decode(ByteCursor& in, int depth = 0) {
-        if (depth > maxDepth) {
+        if (depth > max_depth) {
             in.failed = true;
             return nullptr;
         }
-        auto type = static_cast<uint8_t>(in.uint(1));
+        auto type = (unsigned char)in.uint(1);
         if (in.failed)
             return nullptr;
         if (type <= 0x7f)
-            return matjson::Value(static_cast<std::intmax_t>(type));
+            return matjson::Value((std::intmax_t)type);
         if (type >= 0xe0)
-            return matjson::Value(static_cast<std::intmax_t>(static_cast<int8_t>(type)));
+            return matjson::Value((std::intmax_t)((signed char)type));
         if ((type & 0xf0) == 0x80)
             return map(in, type & 0x0f, depth);
         if ((type & 0xf0) == 0x90)
@@ -67,22 +67,22 @@ public:
             return nullptr;
         }
         case 0xca:
-            return static_cast<double>(std::bit_cast<float>(static_cast<uint32_t>(big(in, 4))));
+            return (double)(std::bit_cast<float>((unsigned)big(in, 4)));
         case 0xcb:
             return std::bit_cast<double>(big(in, 8));
         case 0xcc:
         case 0xcd:
         case 0xce:
         case 0xcf:
-            return matjson::Value(static_cast<std::uintmax_t>(big(in, size_t(1) << (type - 0xcc))));
+            return matjson::Value((std::uintmax_t)big(in, size_t(1) << (type - 0xcc)));
         case 0xd0:
-            return matjson::Value(static_cast<std::intmax_t>(static_cast<int8_t>(big(in, 1))));
+            return matjson::Value((std::intmax_t)((signed char)big(in, 1)));
         case 0xd1:
-            return matjson::Value(static_cast<std::intmax_t>(static_cast<int16_t>(big(in, 2))));
+            return matjson::Value((std::intmax_t)((short)big(in, 2)));
         case 0xd2:
-            return matjson::Value(static_cast<std::intmax_t>(static_cast<int32_t>(big(in, 4))));
+            return matjson::Value((std::intmax_t)((int)big(in, 4)));
         case 0xd3:
-            return matjson::Value(static_cast<std::intmax_t>(static_cast<int64_t>(big(in, 8))));
+            return matjson::Value((std::intmax_t)((long long)big(in, 8)));
         case 0xd4:
         case 0xd5:
         case 0xd6:
@@ -106,16 +106,16 @@ public:
         }
     }
 
-    static matjson::Value array(ByteCursor& in, uint64_t count, int depth) {
+    static matjson::Value array(ByteCursor& in, unsigned long long count, int depth) {
         auto value = matjson::Value::array();
-        for (uint64_t i = 0; i < count && !in.failed; ++i)
+        for (unsigned long long i = 0; i < count && !in.failed; ++i)
             value.push(decode(in, depth + 1));
         return value;
     }
 
-    static matjson::Value map(ByteCursor& in, uint64_t count, int depth) {
+    static matjson::Value map(ByteCursor& in, unsigned long long count, int depth) {
         auto value = matjson::Value::object();
-        for (uint64_t i = 0; i < count && !in.failed; ++i) {
+        for (unsigned long long i = 0; i < count && !in.failed; ++i) {
             auto key = decode(in, depth + 1);
             auto item = decode(in, depth + 1);
             value[key.isString() ? key.asString().unwrap() : key.dump(matjson::NO_INDENTATION)] = std::move(item);
@@ -141,9 +141,9 @@ public:
         }
     }
 
-    static void big_out(ByteSink& out, uint64_t value, size_t width) {
+    static void big_out(ByteSink& out, unsigned long long value, size_t width) {
         for (size_t i = width; i-- > 0;)
-            out.data.push_back(static_cast<uint8_t>(value >> (8 * i)));
+            out.data.push_back((unsigned char)(value >> (8 * i)));
     }
 
     static void string(ByteSink& out, std::string_view value) {
@@ -165,34 +165,34 @@ public:
         out.text(value);
     }
 
-    static void integer(ByteSink& out, int64_t value) {
+    static void integer(ByteSink& out, long long value) {
         if (value >= 0 && value <= 0x7f) {
-            out.uint(static_cast<uint64_t>(value), 1);
+            out.uint((unsigned long long)value, 1);
         }
         else if (value < 0 && value >= -32) {
-            out.uint(static_cast<uint8_t>(value), 1);
+            out.uint((unsigned char)value, 1);
         }
         else if (value >= 0 && value <= 0xff) {
             out.uint(0xcc, 1);
-            big_out(out, static_cast<uint64_t>(value), 1);
+            big_out(out, (unsigned long long)value, 1);
         }
         else if (value >= 0 && value <= 0xffff) {
             out.uint(0xcd, 1);
-            big_out(out, static_cast<uint64_t>(value), 2);
+            big_out(out, (unsigned long long)value, 2);
         }
         else if (value >= 0 && value <= 0xffffffffll) {
             out.uint(0xce, 1);
-            big_out(out, static_cast<uint64_t>(value), 4);
+            big_out(out, (unsigned long long)value, 4);
         }
         else {
             out.uint(0xd3, 1);
-            big_out(out, static_cast<uint64_t>(value), 8);
+            big_out(out, (unsigned long long)value, 8);
         }
     }
 
     static void real(ByteSink& out, float value) {
         out.uint(0xca, 1);
-        big_out(out, std::bit_cast<uint32_t>(value), 4);
+        big_out(out, std::bit_cast<unsigned>(value), 4);
     }
 
     static void boolean(ByteSink& out, bool value) {
@@ -204,15 +204,15 @@ public:
     }
 };
 
-bool ReplayIO::read_gdr(fs::path const& path) {
+bool ReplayIO::read_gdr(const fs::path& path, MacroSnap& out) {
     ByteCursor in{ ReplayIO::read_all(path) };
     auto& data = in.data;
-    auto start = std::find_if(data.begin(), data.end(), [](uint8_t c) {
+    auto start = std::find_if(data.begin(), data.end(), [](unsigned char c) {
         return c != ' ' && c != '\t' && c != '\r' && c != '\n';
     });
     matjson::Value json;
     if (start != data.end() && *start == '{') {
-        auto parsed = matjson::parse(std::string_view(reinterpret_cast<char const*>(data.data()), data.size()));
+        auto parsed = matjson::parse(std::string_view(reinterpret_cast<const char*>(data.data()), data.size()));
         if (!parsed)
             return false;
         json = parsed.unwrap();
@@ -225,7 +225,7 @@ bool ReplayIO::read_gdr(fs::path const& path) {
     if (!json.isObject() || !json["inputs"].isArray())
         return false;
     std::vector<Frame> inputs;
-    for (auto const& item : json["inputs"]) {
+    for (const auto& item : json["inputs"]) {
         Frame input;
         input.number = std::max(ReplayIO::read_int(item["frame"], 0), 0);
         input.button = ReplayIO::read_int(item["btn"], 1);
@@ -235,21 +235,20 @@ bool ReplayIO::read_gdr(fs::path const& path) {
         input.holding = ReplayIO::read_boolish(item["down"]);
         inputs.push_back(input);
     }
-    ReplayIO::adopt_inputs(std::move(inputs), static_cast<float>(ReplayIO::read_number(json["framerate"], 240.0)));
+    ReplayIO::adopt_inputs(out, std::move(inputs), (float)ReplayIO::read_number(json["framerate"], 240.0));
     return true;
 }
 
-bool ReplayIO::write_gdr(fs::path const& path) {
-    auto const& logic = Logic::get();
-    auto inputs = ReplayIO::sorted_inputs();
+bool ReplayIO::write_gdr(const fs::path& path, const MacroSnap& snap) {
+    auto inputs = ReplayIO::sorted_inputs(snap);
     int lvl_id = 0;
-    std::string lvl_name = logic.macro_name;
+    std::string lvl_name = snap.name;
     if (auto* play = PlayLayer::get(); play && play->m_level) {
         lvl_id = play->m_level->m_levelID.value();
         lvl_name = play->m_level->m_levelName;
     }
     std::string author = GameManager::sharedState()->m_playerName;
-    double duration = inputs.empty() ? 0.0 : inputs.back().number / logic.sample_rate();
+    double duration = inputs.empty() ? 0.0 : inputs.back().number / ReplayIO::snap_sample_rate(snap);
 
     ByteSink out;
     GdrReplay::map_header(out, 12);
@@ -260,7 +259,7 @@ bool ReplayIO::write_gdr(fs::path const& path) {
     GdrReplay::key(out, "version");
     GdrReplay::real(out, GdrReplay::format_version);
     GdrReplay::key(out, "duration");
-    GdrReplay::real(out, static_cast<float>(duration));
+    GdrReplay::real(out, (float)duration);
     GdrReplay::key(out, "author");
     GdrReplay::string(out, author);
     GdrReplay::key(out, "seed");
@@ -283,7 +282,7 @@ bool ReplayIO::write_gdr(fs::path const& path) {
     GdrReplay::string(out, lvl_name);
     GdrReplay::key(out, "inputs");
     GdrReplay::array_header(out, inputs.size());
-    for (auto const& input : inputs) {
+    for (const auto& input : inputs) {
         GdrReplay::map_header(out, 4);
         GdrReplay::key(out, "frame");
         GdrReplay::integer(out, input.number);
@@ -295,6 +294,6 @@ bool ReplayIO::write_gdr(fs::path const& path) {
         GdrReplay::boolean(out, input.holding);
     }
     GdrReplay::key(out, "framerate");
-    GdrReplay::real(out, logic.macro_fps);
+    GdrReplay::real(out, snap.fps);
     return out.save(path);
 }

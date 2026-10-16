@@ -228,9 +228,9 @@ Trajectory::Key Trajectory::make_key(PlayLayer* play) const {
         out[0] = player->m_position.x;
         out[1] = player->m_position.y;
         out[2] = player->getRotation();
-        out[3] = static_cast<float>(player->m_yVelocity);
-        out[4] = static_cast<float>(player->m_platformerXVelocity);
-        out[5] = static_cast<float>((player->m_holdingLeft ? 1 : 0) | (player->m_holdingRight ? 2 : 0) | (player->m_leftPressedFirst ? 4 : 0));
+        out[3] = (float)player->m_yVelocity;
+        out[4] = (float)player->m_platformerXVelocity;
+        out[5] = (float)((player->m_holdingLeft ? 1 : 0) | (player->m_holdingRight ? 2 : 0) | (player->m_leftPressedFirst ? 4 : 0));
     };
     fill(play->m_player1, key.p1);
     fill(play->m_player2, key.p2);
@@ -238,7 +238,7 @@ Trajectory::Key Trajectory::make_key(PlayLayer* play) const {
     auto jump_held = [](PlayerObject* body) {
         if (!body)
             return false;
-        int jump = static_cast<int>(PlayerButton::Jump);
+        int jump = (int)PlayerButton::Jump;
         auto it = body->m_holdingButtons.find(jump);
         return it != body->m_holdingButtons.end() && it->second;
     };
@@ -265,9 +265,11 @@ Trajectory::Key Trajectory::make_key(PlayLayer* play) const {
     key.pause_ms = logic.pause_traj_ms;
     key.hide_p1 = Logic::get().traj_player_hidden(false);
     key.hide_p2 = Logic::get().traj_player_hidden(true);
-    key.orbs = Orbs::pose_hash(play, play->m_player1);
-    if (play->m_player2)
-        key.orbs ^= Orbs::pose_hash(play, play->m_player2) + 0x9e3779b9u; // same magic number as hash_combine
+    key.orbs = Orbs::orb_spots(play, play->m_player1);
+    if (play->m_player2) {
+        auto spots = Orbs::orb_spots(play, play->m_player2);
+        key.orbs.insert(key.orbs.end(), spots.begin(), spots.end());
+    }
     key.seconds = logic.traj_seconds;
     key.width = logic.traj_width;
     key.zoom = play->m_gameState.m_cameraZoom;
@@ -326,7 +328,7 @@ void Trajectory::dualPortal(GJBaseGameLayer* layer, PlayerObject* player, Effect
         fake2->m_isOnGround2 = false;
         if (twoPlayer) {
             if (!fake2->m_inputsLocked)
-                fake2->m_holdingButtons[static_cast<int>(PlayerButton::Jump)] = false;
+                fake2->m_holdingButtons[(int)PlayerButton::Jump] = false;
             if (!fake2->m_controlsDisabled) {
                 fake2->m_jumpBuffered = false;
                 fake2->m_stateRingJump = false;
@@ -357,9 +359,9 @@ void Trajectory::dualPortal(GJBaseGameLayer* layer, PlayerObject* player, Effect
     if (fake1->m_isShip || fake1->m_isBird || fake1->m_isDart || fake1->m_isSwing)
         mode = 5;
     else if (fake1->m_isBall)
-        mode = 0x10;
+        mode = 16;
     else if (fake1->m_isSpider)
-        mode = 0x21;
+        mode = 33;
     with_fakes([&] {
         layer->updateDualGround(player, mode, false, 0.f);
     });
@@ -417,7 +419,7 @@ bool Trajectory::advance(PlayLayer* play, PlayerObject* fake, float step_delta, 
     bool live_was_dead = play->m_playerDied || (play->m_player1 && play->m_player1->m_isDead) || (play->m_player2 && play->m_player2->m_isDead);
     // a fire sprite w a type that has no frames must never reach update()
     if (int fire = (int)(fake->m_shipStreakType); fake->m_shipStreak && (fire < 2 || fire > 6))
-        fake->m_shipStreakType = static_cast<ShipStreak>(2);
+        fake->m_shipStreakType = (ShipStreak)2;
     fake->update(step_delta);
     fake->m_unkUnused3 = fake->getRotation();
     fake->updateRotation(step_delta);
@@ -566,7 +568,7 @@ void Trajectory::simulate(PlayLayer* play, bool player1, Click click, bool both,
         }
     };
 
-    echo::SavedGameState saved_state(play->m_gameState);
+    SavedGameState saved_state(play->m_gameState);
     Orbs::reset_prediction_pads();
     seed(fake, real);
     if (pair)
@@ -590,7 +592,7 @@ void Trajectory::simulate(PlayLayer* play, bool player1, Click click, bool both,
     auto jump_held = [](PlayerObject* body) {
         if (!body)
             return false;
-        int jump = static_cast<int>(PlayerButton::Jump);
+        int jump = (int)PlayerButton::Jump;
         auto it = body->m_holdingButtons.find(jump);
         return it != body->m_holdingButtons.end() && it->second;
     };
@@ -638,7 +640,7 @@ void Trajectory::simulate(PlayLayer* play, bool player1, Click click, bool both,
     int steps = echo::trajectory::prediction_steps(logic.traj_seconds, logic.sample_rate(), warp);
     if (limit > 0)
         steps = std::min(steps, limit);
-    echo::perf::count_traj_steps(steps);
+    perf_count_traj_steps(steps);
     bool moving_objects = logic.traj_moving_objects && !label_only;
     if (moving_objects)
         forecast::prepare(play, steps, step_delta / 60.f);
@@ -651,7 +653,7 @@ void Trajectory::simulate(PlayLayer* play, bool player1, Click click, bool both,
     }
     int frame = logic.get_frame(play);
     size_t cursor = logic.replay_pos;
-    constexpr int HOLD_BUTTONS[] = { static_cast<int>(PlayerButton::Jump), static_cast<int>(PlayerButton::Left), static_cast<int>(PlayerButton::Right) };
+    constexpr int HOLD_BUTTONS[] = { (int)PlayerButton::Jump, (int)PlayerButton::Left, (int)PlayerButton::Right };
     std::array<std::array<bool, 3>, 2> macro_held{};
     std::array<int, 2> last_input = { -1, -1 };
     if (logic.is_playing()) {
@@ -659,7 +661,7 @@ void Trajectory::simulate(PlayLayer* play, bool player1, Click click, bool both,
             if (!logic.plays_player(side == 1))
                 continue;
             for (int b = 0; b < (play->m_isPlatformer ? 3 : 1); ++b)
-                macro_held[side][b] = Logic::get().held_at(logic, side == 1, frame, HOLD_BUTTONS[b]);
+                macro_held[side][b] = Logic::get().held_at(side == 1, frame, HOLD_BUTTONS[b]);
         }
         for (size_t i = logic.inputs.size(); i-- > 0 && (last_input[0] < 0 || last_input[1] < 0);) {
             int& last = last_input[logic.inputs[i].player2 ? 1 : 0];
@@ -755,7 +757,7 @@ void Trajectory::simulate(PlayLayer* play, bool player1, Click click, bool both,
         put_rings(play->m_player2, rings2);
     };
 
-    std::unique_ptr<echo::SavedGameState> sim_state;
+    std::unique_ptr<SavedGameState> sim_state;
     decltype(random_state) sim_random{};
     decltype(teleport_roll) sim_teleport{};
     decltype(shake_roll) sim_shake{};
@@ -769,7 +771,7 @@ void Trajectory::simulate(PlayLayer* play, bool player1, Click click, bool both,
     float sim_scale_x = layer_scale_x, sim_scale_y = layer_scale_y, sim_rotation = layer_rotation;
     SliceHook world{
         [&] {
-            sim_state = std::make_unique<echo::SavedGameState>(play->m_gameState);
+            sim_state = std::make_unique<SavedGameState>(play->m_gameState);
             sim_random = GameToolbox::getfast_srand();
             sim_teleport = logic.teleport_random;
             sim_shake = logic.shake_random;
@@ -866,7 +868,7 @@ void Trajectory::simulate(PlayLayer* play, bool player1, Click click, bool both,
     std::vector<CCPoint> player_path;
     bool note_path = (measure & MEASURE_LIVE) && fake == fake1 && steps >= 30 && !died;
     if (note_path) {
-        player_path.reserve(static_cast<size_t>(steps) + 1);
+        player_path.reserve((size_t)steps + 1);
         player_path.push_back(fake->getPosition());
     }
     for (int i = 0; i < steps && !(done1 && done2); ++i) {
@@ -919,7 +921,7 @@ void Trajectory::simulate(PlayLayer* play, bool player1, Click click, bool both,
                 int raw = input.button == 0 ? 1 : input.button;
                 // outside 2 player levels gd gives p2 inputs to p1 (silicate macros can be all p2)
                 bool to_p2 = input.player2 && two_player_lvl;
-                send(to_p2 ? fake2 : fake1, to_p2, static_cast<PlayerButton>(raw), input.holding);
+                send(to_p2 ? fake2 : fake1, to_p2, (PlayerButton)raw, input.holding);
                 int side = to_p2 ? 1 : 0;
                 for (int b = 0; b < 3; ++b) {
                     if (HOLD_BUTTONS[b] != raw)
@@ -943,7 +945,7 @@ void Trajectory::simulate(PlayLayer* play, bool player1, Click click, bool both,
                         continue;
                     if (Logic::button_held(body, HOLD_BUTTONS[b]) == macro_held[side][b])
                         continue;
-                    send(body, side == 1, static_cast<PlayerButton>(HOLD_BUTTONS[b]), macro_held[side][b]);
+                    send(body, side == 1, (PlayerButton)HOLD_BUTTONS[b], macro_held[side][b]);
                 }
             }
         }
@@ -1020,7 +1022,7 @@ void Trajectory::simulate(PlayLayer* play, bool player1, Click click, bool both,
         state.m_totalTime += dt;
         state.m_unkDouble3 += dt / state.m_timeWarp;
         state.m_currentProgress++;
-        state.m_unkUint5 += static_cast<int>(roundf(state.m_timeWarp * 1000.0f));
+        state.m_unkUint5 += (int)roundf(state.m_timeWarp * 1000.0f);
         float timeMod = *reinterpret_cast<float*>(&state.m_timeModRelated);
         if (timeMod != 0.0f) {
             state.m_timeModRelated = 0;
@@ -1069,18 +1071,18 @@ void Trajectory::simulate(PlayLayer* play, bool player1, Click click, bool both,
         measured[0] = done1 && !ended1 ? live_steps1 : steps;
         measured[1] = pair && done2 && !ended2 ? live_steps2 : steps;
         measured_full = steps;
-        float scale = std::clamp(warp, 0.01f, 1.f) / static_cast<float>(logic.sample_rate());
+        float scale = std::clamp(warp, 0.01f, 1.f) / (float)logic.sample_rate();
         auto store = [&](float& alive1, bool& dies1, float& alive2, bool& dies2) {
             if (player1) {
-                alive1 = static_cast<float>(live_steps1) * scale;
+                alive1 = (float)live_steps1 * scale;
                 dies1 = done1 && !ended1;
                 if (pair) {
-                    alive2 = static_cast<float>(live_steps2) * scale;
+                    alive2 = (float)live_steps2 * scale;
                     dies2 = done2 && !ended2;
                 }
             }
             else {
-                alive2 = static_cast<float>(live_steps1) * scale;
+                alive2 = (float)live_steps1 * scale;
                 dies2 = done1 && !ended1;
             }
         };
@@ -1088,22 +1090,22 @@ void Trajectory::simulate(PlayLayer* play, bool player1, Click click, bool both,
             store(logic.traj_alive_p1, logic.traj_dies_p1, logic.traj_alive_p2, logic.traj_dies_p2);
         if (measure & MEASURE_HOLD) {
             if (player1) {
-                logic.traj_hold_alive_p1 = static_cast<float>(live_steps1) * scale;
+                logic.traj_hold_alive_p1 = (float)live_steps1 * scale;
                 if (pair)
-                    logic.traj_hold_alive_p2 = static_cast<float>(live_steps2) * scale;
+                    logic.traj_hold_alive_p2 = (float)live_steps2 * scale;
             }
             else {
-                logic.traj_hold_alive_p2 = static_cast<float>(live_steps1) * scale;
+                logic.traj_hold_alive_p2 = (float)live_steps1 * scale;
             }
         }
         if (measure & MEASURE_RELEASE) {
             if (player1) {
-                logic.traj_release_alive_p1 = static_cast<float>(live_steps1) * scale;
+                logic.traj_release_alive_p1 = (float)live_steps1 * scale;
                 if (pair)
-                    logic.traj_release_alive_p2 = static_cast<float>(live_steps2) * scale;
+                    logic.traj_release_alive_p2 = (float)live_steps2 * scale;
             }
             else {
-                logic.traj_release_alive_p2 = static_cast<float>(live_steps1) * scale;
+                logic.traj_release_alive_p2 = (float)live_steps1 * scale;
             }
         }
     }
@@ -1347,7 +1349,7 @@ void Trajectory::refresh_now(PlayLayer* play) {
     auto jump_held = [](PlayerObject* body) {
         if (!body)
             return false;
-        int jump = static_cast<int>(PlayerButton::Jump);
+        int jump = (int)PlayerButton::Jump;
         auto it = body->m_holdingButtons.find(jump);
         return it != body->m_holdingButtons.end() && it->second;
     };
@@ -1426,7 +1428,7 @@ void Trajectory::refresh_now(PlayLayer* play) {
 }
 
 void Trajectory::refresh(PlayLayer* play) {
-    echo::perf::Scope traj_time(echo::perf::Trajectory);
+    PerfScope traj_time(PERF_TRAJECTORY);
 #ifdef GEODE_IS_WINDOWS
     if (in_job)
         return;
@@ -1600,9 +1602,9 @@ Trajectory::Click Trajectory::next_click(PlayLayer* play, bool player1) const {
     PlayerObject* body = player1 ? play->m_player1 : play->m_player2;
     if (logic.maintain_gravity && logic.records_player(!player1) && body && body->m_isDart)
         return Logic::get().physical_hold(play, !player1) ? Click::Hold : Click::Release;
-    int jump = static_cast<int>(PlayerButton::Jump);
+    int jump = (int)PlayerButton::Jump;
     for (auto it = play->m_queuedButtons.rbegin(); it != play->m_queuedButtons.rend(); ++it) {
-        int button = static_cast<int>(it->m_button);
+        int button = (int)it->m_button;
         if ((button == 0 || button == jump) && it->m_isPlayer2 != player1)
             return it->m_isPush ? Click::Hold : Click::Release;
     }
@@ -1688,7 +1690,7 @@ int Trajectory::click_survival(PlayLayer* play, bool player1, Click click, int& 
 }
 
 void Trajectory::autoclick(PlayLayer* play) {
-    echo::perf::Scope click_time(echo::perf::Autoclick);
+    PerfScope click_time(PERF_AUTOCLICK);
     auto& logic = Logic::get();
     safe_steps = 1;
     if (!logic.traj_autoclicker || !play || play->m_isPaused || play->m_playerDied)
@@ -1741,7 +1743,7 @@ void Trajectory::autoclick(PlayLayer* play) {
             safe_steps = std::numeric_limits<int>::max();
         return;
     }
-    int jump = static_cast<int>(PlayerButton::Jump);
+    int jump = (int)PlayerButton::Jump;
     bool linked = dual && !twoPlayer;
     auto dies = [&](bool player1, Click click) {
         logic.death_next_p1 = logic.death_next_p2 = false;
@@ -1792,7 +1794,7 @@ void Trajectory::autoclick(PlayLayer* play) {
 }
 
 void Trajectory::lookahead(PlayLayer* play) {
-    echo::perf::Scope look_time(echo::perf::Autoclick);
+    PerfScope look_time(PERF_AUTOCLICK);
     auto& logic = Logic::get();
     logic.death_next_p1 = false;
     logic.death_next_p2 = false;

@@ -1,11 +1,7 @@
-// puts the mac byte patches in. the bytes & offsets are in mac_patches.hpp
-// arm & intel are separate slices of the same app, so every patch exists twice w/ its own offsets
-// before anything is written the original bytes are compared (or hashed). any mismatch & that patch is skipped
 #include <Geode/Geode.hpp>
 #ifdef GEODE_IS_MACOS
 #include "mac_patches.hpp"
 #include "Logic/logic.hpp"
-#include "Rendering/circle_signatures.hpp"
 #include <cstddef>
 #include <cstring>
 #include <utility>
@@ -13,48 +9,41 @@
 using namespace geode::prelude;
 
 #if defined(__aarch64__)
-namespace {
-    double modified_delta(GJBaseGameLayer* self, float dt) {
-        static_assert(offsetof(GJBaseGameLayer, m_resumeTimer) == 0x310c);
-        int timer = std::exchange(self->m_resumeTimer, 0);
-        double delta = self->getModifiedDelta(dt);
-        self->m_resumeTimer = timer;
-        return delta;
-    }
+static double modified_delta(GJBaseGameLayer* self, float dt) {
+    static_assert(offsetof(GJBaseGameLayer, m_resumeTimer) == 0x310c);
+    int timer = std::exchange(self->m_resumeTimer, 0);
+    double delta = self->getModifiedDelta(dt);
+    self->m_resumeTimer = timer;
+    return delta;
 }
 #endif
 
 $execute {
-    namespace native = echo::patches::mac;
     auto base = geode::base::get();
-    auto* site = reinterpret_cast<void*>(base + native::step_address);
-    if (std::memcmp(site, native::step_original.data(), native::step_original.size()) == 0) {
-        auto bytes = native::step_replacement;
+    auto* site = reinterpret_cast<void*>(base + MacPatches::step_address);
+    if (std::memcmp(site, MacPatches::step_original.data(), MacPatches::step_original.size()) == 0) {
+        auto bytes = MacPatches::step_replacement;
         auto* amt = &Logic::get().steps_this_tick;
         static_assert(sizeof(amt) == 8);
-        std::memcpy(bytes.data() + native::step_pointer_offset, &amt, sizeof(amt));
-        auto res = Mod::get()->patch(site, std::vector<uint8_t>(bytes.begin(), bytes.end()));
+        std::memcpy(bytes.data() + MacPatches::step_pointer_offset, &amt, sizeof(amt));
+        auto res = Mod::get()->patch(site, std::vector<unsigned char>(bytes.begin(), bytes.end()));
         if (res) {
             step_patched = true;
         }
     }
 
 #if defined(__aarch64__)
-    auto* delta = reinterpret_cast<void*>(base + native::delta_address);
-    if (step_patched && std::memcmp(delta, native::delta_original.data(), native::delta_original.size()) == 0) {
-        auto bytes = native::delta_replacement;
+    auto* delta = reinterpret_cast<void*>(base + MacPatches::delta_address);
+    if (step_patched && std::memcmp(delta, MacPatches::delta_original.data(), MacPatches::delta_original.size()) == 0) {
+        auto bytes = MacPatches::delta_replacement;
         double (*target)(GJBaseGameLayer*, float) = &modified_delta;
         static_assert(sizeof(target) == 8);
-        std::memcpy(bytes.data() + native::delta_pointer_offset, &target, sizeof(target));
-        auto res = Mod::get()->patch(delta, std::vector<uint8_t>(bytes.begin(), bytes.end()));
+        std::memcpy(bytes.data() + MacPatches::delta_pointer_offset, &target, sizeof(target));
+        auto res = Mod::get()->patch(delta, std::vector<unsigned char>(bytes.begin(), bytes.end()));
     }
 #endif
 
-    // libc++ inlined both lookups so theres no function to check, hash the whole thing instead
-    auto* event = reinterpret_cast<uint8_t const*>(base + native::event_address);
-    if (echo::circles::fingerprint(event, native::event_size) == native::event_hash) {
-        auto res = Mod::get()->patch(reinterpret_cast<void*>(base + native::event_lookup_address),
-            std::vector<uint8_t>(native::event_lookup_replacement.begin(), native::event_lookup_replacement.end()));
-    }
+    auto res = Mod::get()->patch(reinterpret_cast<void*>(base + MacPatches::event_lookup_address),
+        std::vector<unsigned char>(MacPatches::event_lookup_replacement.begin(), MacPatches::event_lookup_replacement.end()));
 }
 #endif

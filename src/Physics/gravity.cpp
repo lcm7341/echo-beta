@@ -109,10 +109,10 @@ void bumpPlayer(PlayerObject* player, float force, int p2, bool playBumpEffect,
         player->m_touchedPad = true;
     }
 
-    if (p2 != 0x2c) {
+    if (p2 != 44) {
         propellPlayer(player, force, playBumpEffect, p2);
         player->m_isAccelerating = false;
-        if (p2 == 0x22) {
+        if (p2 == 34) {
             player->m_isAccelerating = true;
             player->m_lastGroundedPos = CCPoint{0.0, 0.0};
         }

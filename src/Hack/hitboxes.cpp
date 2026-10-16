@@ -1,6 +1,7 @@
 // draws hitboxes for players & objects, the trail of where the player has been & marks where clicks happened
 // it reads the same collision lists gd checks, so only what can actually be hit is shown
 // outline only collects every shape & hides the edges that fall inside another shape
+#include <set>
 #include <cstring>
 #include "Logic/logic.hpp"
 #include "Hack/color.hpp"
@@ -45,8 +46,8 @@ public:
     void trim_trail(std::deque<HitboxTrailPoint>& trail, GJBaseGameLayer* play);
 };
 
-constexpr int HITBOX_TAG = 0xEC06;
-constexpr int FROZEN_TRAIL_NODE_TAG = 0xEC07;
+constexpr int HITBOX_TAG = 60422;
+constexpr int FROZEN_TRAIL_NODE_TAG = 60423;
 std::vector<float> g_frozen_trail_key;
 
 namespace {
@@ -175,9 +176,9 @@ float hazard_radius(GameObject* object) {
 class HitboxStateGuard {
     static constexpr size_t SPAN_FROM = 0x2e0, SPAN_TO = 0x370, BOX_FROM = 0x140, BOX_TO = 0x1b8;
     GameObject* m_object;
-    std::array<uint8_t, SPAN_TO - SPAN_FROM> m_fields{};
+    std::array<unsigned char, SPAN_TO - SPAN_FROM> m_fields{};
     OBB2D* m_box;
-    std::array<uint8_t, BOX_TO - BOX_FROM> m_boxData{};
+    std::array<unsigned char, BOX_TO - BOX_FROM> m_boxData{};
     // sits before the span. gd works the offset out ONCE & keeps it (the deadlocked teleport portal thing)
     bool m_offsetCalculated;
     CCPoint m_offset;
@@ -185,21 +186,21 @@ class HitboxStateGuard {
 public:
     explicit HitboxStateGuard(GameObject* object) : m_object(object), m_box(object->m_orientedBox),
         m_offsetCalculated(object->m_boxOffsetCalculated), m_offset(object->m_boxOffset) {
-        auto* bytes = reinterpret_cast<uint8_t*>(object);
+        auto* bytes = reinterpret_cast<unsigned char*>(object);
         std::memcpy(m_fields.data(), bytes + SPAN_FROM, m_fields.size());
         if (m_box)
-            std::memcpy(m_boxData.data(), reinterpret_cast<uint8_t*>(m_box) + BOX_FROM, m_boxData.size());
+            std::memcpy(m_boxData.data(), reinterpret_cast<unsigned char*>(m_box) + BOX_FROM, m_boxData.size());
     }
 
     ~HitboxStateGuard() {
         auto* created = m_object->m_orientedBox;
         if (created && created != m_box)
             created->release();
-        std::memcpy(reinterpret_cast<uint8_t*>(m_object) + SPAN_FROM, m_fields.data(), m_fields.size());
+        std::memcpy(reinterpret_cast<unsigned char*>(m_object) + SPAN_FROM, m_fields.data(), m_fields.size());
         m_object->m_boxOffsetCalculated = m_offsetCalculated;
         m_object->m_boxOffset = m_offset;
         if (m_box)
-            std::memcpy(reinterpret_cast<uint8_t*>(m_box) + BOX_FROM, m_boxData.data(), m_boxData.size());
+            std::memcpy(reinterpret_cast<unsigned char*>(m_box) + BOX_FROM, m_boxData.data(), m_boxData.size());
     }
 
     HitboxStateGuard(HitboxStateGuard const&) = delete;
@@ -377,14 +378,14 @@ void Hitboxes::draw_player_hitbox(CCDrawNode* node, GJBaseGameLayer* play, Playe
     float radius = std::abs(rect.size.width) * 0.5f;
     float zoom = std::max(play->m_gameState.m_cameraZoom, 0.05f);
     if (logic.hitbox_circle && radius > 0.f) {
-        unsigned segments = static_cast<unsigned>(std::max(radius, 8.f) * 2.f * std::sqrt(zoom));
+        unsigned segments = (unsigned)(std::max(radius, 8.f) * 2.f * std::sqrt(zoom));
         node->drawCircle(center, radius, { 0.f, 0.f, 0.f, 0.f }, width, HitboxColor::line_of(circle_color), std::max(segments, 8u));
     }
 }
 
 namespace {
     struct OutlineShape {
-        std::uint32_t first = 0, count = 0;
+        unsigned first = 0, count = 0;
         bool axis = false, circle = false;
         CCPoint center;
         float radius = 0.f;
@@ -399,12 +400,12 @@ namespace {
         int kind = 0;
         std::vector<OutlineShape> shapes;
         std::vector<CCPoint> points;
-        std::vector<std::pair<std::uint64_t, std::uint32_t>> cells;
-        std::vector<std::uint32_t> seen, nearby;
+        std::vector<std::pair<unsigned long long, unsigned>> cells;
+        std::vector<unsigned> seen, nearby;
         std::vector<float> cuts;
         std::vector<CCPoint> ring;
         std::vector<std::pair<float, float>> covered;
-        std::vector<std::uint32_t> around;
+        std::vector<unsigned> around;
     };
 
     OutlineSink& outlines() {
@@ -417,7 +418,7 @@ namespace {
             return;
         auto& sink = outlines();
         OutlineShape shape;
-        shape.first = static_cast<std::uint32_t>(sink.points.size());
+        shape.first = (unsigned)sink.points.size();
         shape.count = count;
         sink.points.insert(sink.points.end(), points, points + count);
         CCPoint* pts = sink.points.data() + shape.first;
@@ -471,7 +472,7 @@ namespace {
                 float angle = (float)(i) * 2.f * (float)(M_PI) / (float)(ring.size());
                 ring[i] = center + CCPoint{ std::cos(angle), std::sin(angle) } * radius;
             }
-            collect_shape(ring.data(), static_cast<unsigned>(ring.size()), fill, line);
+            collect_shape(ring.data(), (unsigned)ring.size(), fill, line);
             if (!outlines().shapes.empty()) {
                 auto& shape = outlines().shapes.back();
                 shape.circle = true;
@@ -487,7 +488,7 @@ namespace {
         if (!shape.bounds.containsPoint(p))
             return false;
         CCPoint const* pts = outlines().points.data() + shape.first;
-        for (std::uint32_t i = 0; i < shape.count; ++i) {
+        for (unsigned i = 0; i < shape.count; ++i) {
             auto const& a = pts[i];
             auto const& b = pts[(i + 1) % shape.count];
             if ((b.x - a.x) * (p.y - a.y) - (b.y - a.y) * (p.x - a.x) < -1e-4f)
@@ -511,12 +512,12 @@ namespace {
         }
         constexpr float CELL = 60.f;
         auto outline_cell_key = [](int kind, int x, int y) {
-            return (static_cast<std::uint64_t>(static_cast<std::uint32_t>(kind) & 0xff) << 56) |
-                   (static_cast<std::uint64_t>(static_cast<std::uint32_t>(x) & 0xfffffff) << 28) | (static_cast<std::uint32_t>(y) & 0xfffffff);
+            return ((unsigned long long)((unsigned)kind & 255) << 56) |
+                   ((unsigned long long)((unsigned)x & 268435455) << 28) | ((unsigned)y & 268435455);
         };
         auto& cells = sink.cells;
         cells.clear();
-        for (std::uint32_t i = 0; i < shapes.size(); ++i) {
+        for (unsigned i = 0; i < shapes.size(); ++i) {
             auto const& b = shapes[i].bounds;
             int x0 = (int)(std::floor(b.getMinX() / CELL)), x1 = (int)(std::floor(b.getMaxX() / CELL));
             int y0 = (int)(std::floor(b.getMinY() / CELL)), y1 = (int)(std::floor(b.getMaxY() / CELL));
@@ -528,11 +529,11 @@ namespace {
         auto& nearby = sink.nearby;
         auto& around = sink.around;
         auto& seen = sink.seen;
-        seen.assign(shapes.size(), UINT32_MAX);
+        seen.assign(shapes.size(), UINT_MAX);
         auto& cuts = sink.cuts;
         float depth = width;
         float probe = std::max(0.05f, width * 0.25f);
-        for (std::uint32_t i = 0; i < shapes.size(); ++i) {
+        for (unsigned i = 0; i < shapes.size(); ++i) {
             auto const& shape = shapes[i];
             around.clear();
             {
@@ -541,7 +542,7 @@ namespace {
                 for (int x = (int)(std::floor(minX / CELL)); x <= (int)(std::floor(maxX / CELL)); ++x)
                     for (int y = (int)(std::floor(minY / CELL)); y <= (int)(std::floor(maxY / CELL)); ++y) {
                         auto key = outline_cell_key(shape.kind, x, y);
-                        auto it = std::lower_bound(cells.begin(), cells.end(), std::pair<std::uint64_t, std::uint32_t>{ key, 0 });
+                        auto it = std::lower_bound(cells.begin(), cells.end(), std::pair<unsigned long long, unsigned>{ key, 0 });
                         for (; it != cells.end() && it->first == key; ++it) {
                             auto j = it->second;
                             if (j == i || seen[j] == i)
@@ -554,7 +555,7 @@ namespace {
                         }
                     }
             }
-            if (shape.circle && std::ranges::all_of(around, [&](std::uint32_t j) { return shapes[j].circle; })) {
+            if (shape.circle && std::ranges::all_of(around, [&](unsigned j) { return shapes[j].circle; })) {
                 constexpr float TAU = 6.28318530718f;
                 auto& covered = sink.covered;
                 covered.clear();
@@ -591,15 +592,15 @@ namespace {
                 if (hidden)
                     continue;
                 std::sort(covered.begin(), covered.end());
-                float step = TAU / static_cast<float>(std::max<std::uint32_t>(shape.count, 8));
+                float step = TAU / (float)(std::max<unsigned>(shape.count, 8));
                 float ring = std::max(shape.radius - depth, 0.f);
                 auto draw_uncovered_arc = [&](float from, float to) {
                     if (to - from < 1e-4f)
                         return;
-                    int parts = std::max(1, static_cast<int>(std::ceil((to - from) / step)));
+                    int parts = std::max(1, (int)std::ceil((to - from) / step));
                     CCPoint last = shape.center + CCPoint{ std::cos(from), std::sin(from) } * ring;
                     for (int k = 1; k <= parts; ++k) {
-                        float angle = from + (to - from) * static_cast<float>(k) / static_cast<float>(parts);
+                        float angle = from + (to - from) * (float)k / (float)parts;
                         CCPoint next = shape.center + CCPoint{ std::cos(angle), std::sin(angle) } * ring;
                         node->drawSegment(last, next, depth, shape.line);
                         last = next;
@@ -618,7 +619,7 @@ namespace {
                 continue;
             }
             CCPoint const* pts = sink.points.data() + shape.first;
-            for (std::uint32_t e = 0; e < shape.count; ++e) {
+            for (unsigned e = 0; e < shape.count; ++e) {
                 auto a = pts[e];
                 auto b = pts[(e + 1) % shape.count];
                 auto d = b - a;
@@ -635,7 +636,7 @@ namespace {
                         continue;
                     nearby.push_back(j);
                 }
-                bool axis_edge = shape.axis && std::ranges::all_of(nearby, [&](std::uint32_t j) {
+                bool axis_edge = shape.axis && std::ranges::all_of(nearby, [&](unsigned j) {
                     return shapes[j].axis;
                 });
                 if (axis_edge) {
@@ -694,8 +695,8 @@ namespace {
                 cuts.push_back(1.f);
                 for (auto j : nearby) {
                     CCPoint const* other = sink.points.data() + shapes[j].first;
-                    std::uint32_t n = shapes[j].count;
-                    for (std::uint32_t k = 0; k < n; ++k) {
+                    unsigned n = shapes[j].count;
+                    for (unsigned k = 0; k < n; ++k) {
                         auto c = other[k];
                         auto f = other[(k + 1) % n] - c;
                         float denom = d.x * f.y - d.y * f.x;
@@ -717,7 +718,7 @@ namespace {
                         continue;
                     if (!nearby.empty()) {
                         auto test = a + d * ((t0 + t1) * 0.5f) + outward * probe;
-                        bool covered = std::ranges::any_of(nearby, [&](std::uint32_t j) {
+                        bool covered = std::ranges::any_of(nearby, [&](unsigned j) {
                             return inside_shape(shapes[j], test);
                         });
                         if (covered)
@@ -815,7 +816,7 @@ void Hitboxes::draw_object_hitbox(CCDrawNode* node, GJBaseGameLayer* play, GameO
             break;
         if (object->m_slopeIsHazard) {
             int dir = object->m_slopeDirection;
-            bool ceiling = dir >= 0 && dir <= 6 && ((0x6a >> dir) & 1);
+            bool ceiling = dir >= 0 && dir <= 6 && ((106 >> dir) & 1);
             float shift = (ceiling ? -4.f : 4.f);
             int corner = 0;
             for (int k = 0; k < 3; ++k) {
@@ -860,7 +861,7 @@ void Hitboxes::draw_object_hitbox(CCDrawNode* node, GJBaseGameLayer* play, GameO
         float radius = hazard_radius(object);
         float zoom = std::max(play->m_gameState.m_cameraZoom, 0.05f);
         if (radius > 0.f) {
-            unsigned segments = static_cast<unsigned>(std::max(radius, 8.f) * 2.f * std::sqrt(zoom));
+            unsigned segments = (unsigned)(std::max(radius, 8.f) * 2.f * std::sqrt(zoom));
             emit_circle(node, object->getPosition(), radius, HitboxColor::with_fill(logic.hitbox_hazard_color, fill, logic.hitbox_fill_opacity), width, HitboxColor::line_of(logic.hitbox_hazard_color), std::max(segments, 8u));
         }
         else if (auto* box = use_plain_rect ? nullptr : live_oriented_box(object)) {
@@ -890,7 +891,7 @@ void Hitboxes::draw_object_hitbox(CCDrawNode* node, GJBaseGameLayer* play, GameO
         bool use_box = radius <= 0.f || (object->m_shouldUseOuterOb && !fix_radius);
         if (radius > 0.f) {
             float zoom = std::max(play->m_gameState.m_cameraZoom, 0.05f);
-            unsigned segments = static_cast<unsigned>(std::max(radius, 8.f) * 2.f * std::sqrt(zoom));
+            unsigned segments = (unsigned)(std::max(radius, 8.f) * 2.f * std::sqrt(zoom));
             emit_circle(node, object->getPosition(), radius, HitboxColor::with_fill(logic.hitbox_interact_color, fill, logic.hitbox_fill_opacity), width, HitboxColor::line_of(logic.hitbox_interact_color), std::max(segments, 8u));
         }
         if (use_box) {
@@ -1110,30 +1111,12 @@ void Logic::draw_hitboxes(GJBaseGameLayer* play) {
 
     struct Spot {
         int x, y, w, h;
-        bool operator==(Spot const& other) const = default;
-    };
-
-    struct SpotHash {
-        size_t operator()(Spot const& spot) const {
-            size_t hash = static_cast<size_t>(spot.x);
-            hash = hash * 1315423911u + static_cast<size_t>(spot.y);
-            hash = hash * 1315423911u + static_cast<size_t>(spot.w);
-            return hash * 1315423911u + static_cast<size_t>(spot.h);
-        }
+        auto operator<=>(Spot const& other) const = default;
     };
 
     struct Corners {
         std::array<int, 8> point{};
-        bool operator==(Corners const& other) const = default;
-    };
-
-    struct CornersHash {
-        size_t operator()(Corners const& corners) const {
-            size_t hash = 0;
-            for (int value : corners.point)
-                hash = hash * 1315423911u + static_cast<size_t>(value);
-            return hash;
-        }
+        auto operator<=>(Corners const& other) const = default;
     };
 
     auto quantize = [&](CCRect const& rect) {
@@ -1150,9 +1133,9 @@ void Logic::draw_hitboxes(GJBaseGameLayer* play) {
     auto quantize_circle = [&](CCPoint center, float radius) {
         return Spot{ grid(center.x), grid(center.y), grid(radius), 0 };
     };
-    static std::unordered_set<Spot, SpotHash> drawn_boxes;
-    static std::unordered_set<Corners, CornersHash> drawn_rotated;
-    static std::unordered_set<Spot, SpotHash> drawn_inner, drawn_circles;
+    static std::set<Spot> drawn_boxes;
+    static std::set<Corners> drawn_rotated;
+    static std::set<Spot> drawn_inner, drawn_circles;
     drawn_boxes.clear();
     drawn_rotated.clear();
     drawn_inner.clear();
@@ -1362,7 +1345,7 @@ void Logic::draw_hitboxes(GJBaseGameLayer* play) {
         auto const& moving = play->m_calcNonEffectObjects;
         int moving_count = std::min<int>(play->m_calcNonEffectObjectsSize, (int)(moving.size()));
         for (int i = 0; i < moving_count; ++i) {
-            auto* obj = moving[static_cast<std::size_t>(i)];
+            auto* obj = moving[(std::size_t)i];
             if (!obj || obj->m_isDisabled)
                 continue;
             if (std::fabs(obj->getPositionX() - view_x) > reach)

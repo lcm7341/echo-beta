@@ -2,8 +2,6 @@
 
 class PlayerObject;
 
-namespace echo::rotation {
-	float gameplay(PlayerObject* player);
-	float visual(PlayerObject* player);
-	void restore(PlayerObject* player, float gameplay, float visual);
-}
+float gameplay_rotation(PlayerObject* player);
+float visual_rotation(PlayerObject* player);
+void restore_rotation(PlayerObject* player, float gameplay, float visual);

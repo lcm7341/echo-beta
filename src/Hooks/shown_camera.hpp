@@ -7,4 +7,4 @@ class GJBaseGameLayer;
 // picture kept showing where it was before, until the gap got big enough to snap
 struct ShownCamera;
 std::shared_ptr<ShownCamera> echo_save_shown_camera(GJBaseGameLayer* layer);
-void echo_load_shown_camera(GJBaseGameLayer* layer, ShownCamera const* saved);
+void echo_load_shown_camera(GJBaseGameLayer* layer, const ShownCamera* saved);

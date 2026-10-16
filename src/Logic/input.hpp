@@ -8,8 +8,8 @@ using namespace cocos2d;
 namespace Input {
 	bool jump_key_down();
 	bool left_key_down();
-	bool rightKeyDown();
-	bool mouseDown();
+	bool right_key_down();
+	bool mouse_down();
 	void note_key(enumKeyCodes key, bool down);
 	void clear_keys();
 }

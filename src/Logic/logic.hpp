@@ -33,12 +33,20 @@ class GJBaseGameLayer;
 class LevelEditorLayer;
 class TeleportPortalObject;
 
+void echo_touch_hook(bool on);
+#ifdef GEODE_IS_WINDOWS
+void echo_raw_hooks(bool on);
+#endif
+
 #ifdef GEODE_IS_WINDOWS
 inline constexpr bool step_patched = true;
 #else
 inline bool step_patched = false;
 #endif
 inline constexpr float VANILLA_TPS = 240.f;
+inline constexpr int JUMP = (int)PlayerButton::Jump;
+inline constexpr int LEFT = (int)PlayerButton::Left;
+inline constexpr int RIGHT = (int)PlayerButton::Right;
 
 enum class RunState {
 	Idle,
@@ -66,7 +74,7 @@ struct RenderStatus {
 
 struct Frame {
 	int number = 0;
-	uint8_t button = 1;
+	unsigned char button = 1;
 	bool holding = false;
 	bool player2 = false;
 };
@@ -74,10 +82,17 @@ struct Frame {
 struct FramePose {
 	float x = 0.f, y = 0.f;
 	float rotation = 0.f;
-	double yVelocity = 0.0, x_velocity = 0.0;
+	double y_velocity = 0.0, x_velocity = 0.0;
 };
 
-struct RateChange;
+struct RateChange {
+	int frame = 0;
+	float fps = 240.f;
+};
+
+float rate_at_frame(const std::vector<RateChange>& rates, float start_fps, int frame);
+double seconds_at_frame(const std::vector<RateChange>& rates, float start_fps, int frame);
+void tidy_rates(std::vector<RateChange>& rates, float start_fps);
 
 struct TilePlace {
 	std::string key;
@@ -97,8 +112,8 @@ struct Replay {
 	std::string name;
 	std::vector<Frame> actions;
 	float fps = 240.f;
-	std::vector<struct RateChange> rates;
-	uint64_t lvl_seed = 0;
+	std::vector<RateChange> rates;
+	unsigned long long lvl_seed = 0;
 	bool lvl_seed_known = false;
 	bool unrounded = false;
 	bool silicate_variance = false;
@@ -123,14 +138,14 @@ struct PlayerSnapshot {
 	bool present = false;
 	float x = 0.f, y = 0.f;
 	float rotation = 0.f, visual_rotation = 0.f;
-	double yVelocity = 0.0, platformer_x_velocity = 0.0, y_velocity_related = 0.0;
+	double y_velocity = 0.0, platformer_x_velocity = 0.0, y_velocity_related = 0.0;
 	double fall_speed = 0.0;
 	double gravity = 0.0;
 	double speed_multiplier = 0.0;
 	double y_start = 0.0;
 	double maybe_reverse_speed = 0.0, maybe_reverse_acceleration = 0.0, acceleration_or_speed = 0.0;
 	double snap_distance = 0.0;
-	double last_flip_time = 0.0, game_mode_changed_time = 0.0, lastLandTime = 0.0, totalTime = 0.0;
+	double last_flip_time = 0.0, game_mode_changed_time = 0.0, last_land_time = 0.0, total_time = 0.0;
 	float player_speed = 0.f, player_speed_ac = 0.f;
 	float vehicle_size = 1.f;
 	float gravity_mod = 1.f;
@@ -168,8 +183,8 @@ struct PlayerSnapshot {
 	bool holding_right = false, holding_left = false;
 	int reverse_related = 0;
 	decltype(PlayerObject::m_leftPressedFirst) left_pressed_first{};
-	decltype(PlayerObject::m_platformerMovingLeft) movingLeft{};
-	decltype(PlayerObject::m_platformerMovingRight) movingRight{};
+	decltype(PlayerObject::m_platformerMovingLeft) moving_left{};
+	decltype(PlayerObject::m_platformerMovingRight) moving_right{};
 	decltype(PlayerObject::m_platformerVelocityRelated) platformer_velocity_related{};
 	decltype(PlayerObject::m_maybeIsBoosted) boosted{};
 	decltype(PlayerObject::m_scaleXRelatedTime) scale_x_related_time{};
@@ -226,17 +241,17 @@ struct PlayerSnapshot {
 	decltype(PlayerObject::m_dashRing) dash_ring{};
 	decltype(PlayerObject::m_spriteWidthScale) sprite_width_scale{};
 	decltype(PlayerObject::m_spriteHeightScale) sprite_height_scale{};
-	float scaleX = 1.f, scaleY = 1.f;
+	float scale_x = 1.f, scale_y = 1.f;
 	CCPoint internal_pos;
-	CCPoint lastPosition;
+	CCPoint last_position;
 };
 
 struct LayerSnapshot {
-	double levelTime = 0.0, totalTime = 0.0, unk_time = 0.0, attemptTime = 0.0;
+	double level_time = 0.0, total_time = 0.0, unk_time = 0.0, attempt_time = 0.0;
 	unsigned progress = 0;
-	float timeWarp = 1.f, queued_time_warp = 1.f, time_warp_related = 0.f, timeMod = 0.f;
+	float time_warp = 1.f, queued_time_warp = 1.f, time_warp_related = 0.f, time_mod = 0.f;
 	float camera_angle = 0.f;
-	float levelFlipping = 0.f;
+	float level_flipping = 0.f;
 	CCPoint camera_pos;
 	bool dual = false;
 	bool streak_blend = false;
@@ -245,13 +260,13 @@ struct LayerSnapshot {
 
 struct ObjectBase {
 	std::vector<GameObject*> objects;
-	std::vector<std::uint8_t> bytes;
+	std::vector<unsigned char> bytes;
 };
 
 struct ObjectStates {
 	int frame = -1;
 	std::shared_ptr<ObjectBase const> base;
-	std::vector<std::uint8_t> diff;
+	std::vector<unsigned char> diff;
 };
 
 struct Checkpoint {
@@ -263,20 +278,15 @@ struct Checkpoint {
 	bool held_right_p2 = false;
 	PlayerSnapshot player1, player2;
 	LayerSnapshot layer;
-	uint64_t random_state = 0, shake_random = 0, teleport_random = 0;
+	unsigned long long random_state = 0, shake_random = 0, teleport_random = 0;
 	std::vector<float> variance;
-	std::vector<std::pair<int, uint64_t>> rand_states;
+	std::vector<std::pair<int, unsigned long long>> rand_states;
 	std::shared_ptr<ObjectStates> objects;
 };
 
 struct CpsNote {
 	int first = 0, last = 0;
 	std::string text;
-};
-
-struct RateChange {
-	int frame = 0;
-	float fps = 240.f;
 };
 
 struct HitboxTrailPoint {
@@ -291,28 +301,29 @@ struct HitboxTrailPoint {
 
 struct BackstepExtra;
 
-struct Session {
+class Logic {
+public:
 	RunState state = RunState::Idle;
 	ReplayFormat format = ReplayFormat::Meta;
 	std::vector<Frame> inputs;
 	std::vector<FramePose> poses;
-	std::vector<uint64_t> input_ids;
+	std::vector<unsigned long long> input_ids;
 	std::array<int, 6> live_frame{ -1, -1, -1, -1, -1, -1 };
 	std::array<char, 6> live_held{}, live_seen{};
 	int newest_input = -1;
 	int hold_count = 0, release_count = 0;
 	bool inputs_in_order = true;
-	uint64_t inputs_revision = 0;
-	uint64_t next_input_id = 0;
+	unsigned long long inputs_revision = 0;
+	unsigned long long next_input_id = 0;
 	std::deque<int> clicks_p1, clicks_p2;
-	uint64_t clicks_revision = 0;
+	unsigned long long clicks_revision = 0;
 	std::vector<Checkpoint> checkpoints;
 
 	struct BackstepSave {
 		CheckpointObject* object = nullptr;
 		Checkpoint echo;
 		std::shared_ptr<BackstepExtra> extra;
-		std::vector<std::uint8_t> object_undo;
+		std::vector<unsigned char> object_undo;
 		bool broken = false;
 	};
 
@@ -325,7 +336,7 @@ struct Session {
 	bool back_tap_queued = false;
 	std::vector<Frame> backstep_inputs;
 	std::vector<FramePose> backstep_poses;
-	std::vector<uint64_t> backstep_ids;
+	std::vector<unsigned long long> backstep_ids;
 	size_t backstep_replay_pos = 0;
 	RunState backstep_saved_state = RunState::Idle;
 	bool backstep_swapped = false;
@@ -341,7 +352,7 @@ struct Session {
 	bool progress_base_set = false;
 	bool in_step = false;
 	bool pause_known = false, pause_cached = false;
-	uint32_t partner_presses = 0;
+	unsigned partner_presses = 0;
 	float fps = 240.f, macro_fps = 240.f;
 	// silicate saves the LAST tps it used, so a macro with tps changes can start on the wrong one. ts lets me fix it by hand
 	bool playback_tps_changes = false;
@@ -355,7 +366,7 @@ struct Session {
 	int steps_left = 0;
 	bool skip_physics = false;
 	bool defer_player_art = false, player_art_deferred = false;
-	uint32_t steps_this_tick = 0;
+	unsigned steps_this_tick = 0;
 	int frame_steps = 0;
 	int respawn_frames = 0, ignore_record_frames = 0;
 	bool restoring_holds = false;
@@ -404,7 +415,7 @@ struct Session {
 	bool hitboxes_follow_hide_player = true, hide_traj_p1 = false, hide_traj_p2 = false;
 	bool traj_follow_hide_player = true;
 	bool disable_death_effect = false;
-	bool safeMode = false;
+	bool safe_mode = false;
 	bool swap_players = false;
 	bool inverse_p1 = false, inverse_p2 = false, noclip_p1 = false, noclip_p2 = false;
 	chrono::steady_clock::time_point frame_start{};
@@ -578,7 +589,7 @@ struct Session {
 	float menu_inner_scale = 1.f;
 	int attempts = 1;
 	double recording_seconds = 0.0;
-	uint64_t lvl_seed = 0;
+	unsigned long long lvl_seed = 0;
 	bool lvl_seed_known = false;
 	bool velocity_unrounding = false;
 	bool macro_unrounded = false, macro_silicate_variance = false;
@@ -604,12 +615,12 @@ struct Session {
 	}
 
 	bool lvl_seed_from_file = false, keep_lvl_seed = false, seed_override = false;
-	uint64_t seed_override_value = 0;
-	uint64_t shake_random = 0, teleport_random = 0;
+	unsigned long long seed_override_value = 0;
+	unsigned long long shake_random = 0, teleport_random = 0;
 	float end_x = 0.f;
 	bool display_fps_locked = false;
 	float level_interval_held = 0.f;
-	float backgroundColor[3] = { 0.28235295f, 0.49019608f, 1.f };
+	float background_color[3] = { 0.28235295f, 0.49019608f, 1.f };
 	float blocks_color[3] = { 0.28235295f, 0.49019608f, 1.f };
 	std::vector<RenderPreset> render_presets;
 	int render_width = 1920, render_height = 1080, render_fps = 60, render_bitrate = 20000000;
@@ -639,19 +650,19 @@ struct Session {
 	LabelPlacement speed_label{ 3.f, 168.f, 0.4f, 35 }, ssb_label{ 3.f, 154.f, 0.4f, 35 };
 	bool labels_auto = true;
 	int label_corner = 0;
-	float labelScale = 1.f;
-	std::string labelFont = "bigFont.fnt";
+	float label_scale = 1.f;
+	std::string label_font = "bigFont.fnt";
 	std::vector<std::string> label_order;
 	std::deque<HitboxTrailPoint> trail_p1, trail_p2;
 	std::vector<GameObject*> hidden_decorations;
 	std::vector<CpsNote> cps_notes_p1, cps_notes_p2;
 	std::string highest_cps = "P1: 0";
 
-	uint64_t input_id(size_t index) const {
+	unsigned long long input_id(size_t index) const {
 		return index < input_ids.size() ? input_ids[index] : 0;
 	}
 
-	void set_input_id(size_t index, uint64_t id) {
+	void set_input_id(size_t index, unsigned long long id) {
 		if (index >= inputs.size())
 			return;
 		if (input_ids.size() <= index)
@@ -715,7 +726,7 @@ struct Session {
 	}
 
 	int steps_until_rate_change() const {
-		auto after = replay::rate_after(rates, step_frame);
+		auto after = rate_after(rates, step_frame);
 		if (after != rates.end())
 			return after->frame - step_frame;
 		return 2048;
@@ -723,59 +734,26 @@ struct Session {
 
 	double sample_rate() const {
 		float rate = std::isfinite(fps) ? fps : 240.f;
-		return static_cast<double>(std::max(rate, step_patched ? 1.f : VANILLA_TPS));
+		return (double)std::max(rate, step_patched ? 1.f : VANILLA_TPS);
 	}
 
 	float physics_step() const {
-		return static_cast<float>(1.0 / sample_rate());
+		return (float)(1.0 / sample_rate());
 	}
 
 	float rate_at(int frame) const {
-		float rate = std::isfinite(macro_fps) ? macro_fps : 240.f;
-		auto after = replay::rate_after(rates, frame);
-		while (after != rates.begin()) {
-			auto const& change = *--after;
-			if (std::isfinite(change.fps) && change.fps >= 1.f) {
-				rate = change.fps;
-				break;
-			}
-		}
-		return std::max(rate, 1.f);
+		return rate_at_frame(rates, macro_fps, frame);
 	}
 
 	double seconds_at(int frame) const {
-		if (frame <= 0)
-			return 0.0;
-		double time = 0.0;
-		int at = 0;
-		float rate = macro_fps;
-		auto add = [&](int upto) {
-			if (upto <= at)
-				return;
-			time += static_cast<double>(upto - at) / static_cast<double>(std::max(rate, 1.f));
-			at = upto;
-		};
-		for (auto const& change : rates) {
-			if (change.frame >= frame)
-				break;
-			if (change.frame > at)
-				add(change.frame);
-			rate = change.fps;
-		}
-		add(frame);
-		return time;
+		return seconds_at_frame(rates, macro_fps, frame);
 	}
-};
 
-class Logic : public Session {
-public:
 	static constexpr int MAX_PER_SECOND = 16, MAX_PER_FRAME = 3;
 	static constexpr float MAX_BURST_RATE = 48.f;
 	static constexpr int MIN_BURST_CLICKS = 5;
 
 	static Logic& get();
-	static Logic& live();
-	static void set_loading(Logic* session);
 	const char* state_name(RunState state);
 	void boot();
 	void pull_settings();
@@ -786,6 +764,7 @@ public:
 	void toggle_playing();
 	void toggle_frame_advance();
 	void advance_one_frame();
+	int owed_hold_steps(double& owed, double cap);
 	void poll_advance_hold();
 	int backstep_interval() const;
 	void save_backstep(PlayLayer* play);
@@ -793,7 +772,7 @@ public:
 	int follow_steps() const;
 	bool follow_active(GJBaseGameLayer* play) const;
 	void note_follow_press(GJBaseGameLayer* play, bool down, int button);
-	bool follow_due(FollowPress const& press, int frame, double time) const;
+	bool follow_due(const FollowPress& press, int frame, double time) const;
 	void rewind_follow(GJBaseGameLayer* play);
 	void run_follow(GJBaseGameLayer* play);
 	void clear_backsteps();
@@ -802,8 +781,8 @@ public:
 	bool step_to(PlayLayer* play, int target, int keep_up_to);
 	void finish_backstep(PlayLayer* play);
 	void request_best_frame();
-	void stop_best_frame(char const* why = nullptr);
-	void find_best_frame(PlayLayer* play, std::function<void(float)> const& tick);
+	void stop_best_frame(const char* why = nullptr);
+	void find_best_frame(PlayLayer* play, const std::function<void(float)>& tick);
 	void click_best_frame(PlayLayer* play);
 	bool raw_jump(GJBaseGameLayer* play, bool icon2) const;
 	void poll_back_hold();
@@ -817,7 +796,7 @@ public:
 	void tick_straight_ufo(PlayLayer* play);
 	void after_frame(PlayLayer* play, float dt);
 	std::vector<std::string_view> active_cheats() const;
-	std::vector<std::string_view> const& attempt_cheats() const;
+	const std::vector<std::string_view>& attempt_cheats() const;
 	bool attempt_cheated() const;
 	void update_safe_mode(PlayLayer* play);
 	void hold_safe_mode_test_mode(PlayLayer* play);
@@ -827,26 +806,26 @@ public:
 	bool hitbox_player_hidden(bool player2) const;
 	bool traj_player_hidden(bool player2) const;
 	void conceal_player(PlayerObject* player, bool hide);
-	void play_macro(GJBaseGameLayer* play, GJBaseGameLayer* layer, float dt, bool clearInputQueue);
+	void play_macro(GJBaseGameLayer* play, GJBaseGameLayer* layer, float dt, bool clear_input_queue);
 	void prepare_buttons(GJBaseGameLayer* play);
 	bool cbf_enabled() const;
 	bool vanilla_click_physics() const;
-	bool defer_physics() const;
+	bool defer_physics();
 	double click_stamp() const;
-	void remember_move(PlayerButtonCommand const& cmd);
+	void remember_move(const PlayerButtonCommand& cmd);
 	void restore_holds(PlayLayer* play);
 	void on_play_init(PlayLayer* play);
-	void onReset(PlayLayer* play);
+	void on_reset(PlayLayer* play);
 	void plant_lvl_seed(PlayLayer* play);
-	void apply_attempt_variance(PlayLayer* play, uint64_t seed);
+	void apply_attempt_variance(PlayLayer* play, unsigned long long seed);
 	void keep_variance(PlayLayer* play);
 	void roll_live_seed(PlayLayer* play);
 	void restore_checkpoint_random(PlayLayer* play);
-	void note_rand_trigger(int unique_id, uint64_t* state);
-	void reseed_rand_triggers(uint64_t seed);
+	void note_rand_trigger(int unique_id, unsigned long long* state);
+	void reseed_rand_triggers(unsigned long long seed);
 	void clear_rand_triggers();
-	uint64_t game_random_state();
-	void set_game_random_state(uint64_t state);
+	unsigned long long game_random_state();
+	void set_game_random_state(unsigned long long state);
 	void capture_restart_holds(PlayLayer* play);
 	void match_live_holds(PlayLayer* play);
 	void poll_hold_block();
@@ -856,17 +835,17 @@ public:
 	void note_backstep_objects(PlayLayer* play);
 	void pop_backstep();
 	void drop_backstep(std::size_t index);
-	void release_backstep(BackstepSave& save, char const* why);
+	void release_backstep(BackstepSave& save);
 	void clear_backstep_objects();
 	void load_backstep_objects(int frame);
 	CheckpointObject* object_capture = nullptr;
 	CheckpointObject* object_restore = nullptr;
 	void sync_checkpoints(PlayLayer* play);
-	Checkpoint const* get_latest_checkpoint(PlayLayer* play);
+	const Checkpoint* get_latest_checkpoint(PlayLayer* play);
 	void on_complete(PlayLayer* play);
-	void onQuit(PlayLayer* play);
+	void on_quit(PlayLayer* play);
 	bool should_noclip(PlayLayer* play, PlayerObject* player);
-	bool steer_player(bool& isPlayer1);
+	bool steer_player(bool& player1);
 	PlayerObject* icon_body(GJBaseGameLayer* play, bool icon2);
 	bool play_input(GJBaseGameLayer* play, bool icon2, bool down, int button);
 	bool physical_hold(GJBaseGameLayer* play, bool icon2);
@@ -882,26 +861,26 @@ public:
 	void flip_input_players();
 	void sort_inputs();
 	void identify_inputs(bool force = false);
-	uint64_t mint_input_id();
+	unsigned long long mint_input_id();
 	void clear_inputs();
 	bool dispatch_setting_key(std::string_view key, bool down);
 	fs::path save_root();
-	void notify(std::string const& text, bool success);
+	void notify(const std::string& text, bool success);
 	bool write_file();
 	bool autosave_replay();
 	void poll_autosave();
-	bool read_file(fs::path const& path);
+	bool read_file(const fs::path& path);
 	bool export_kind(std::string_view kind);
-	bool append_sequence_file(fs::path const& path, int amount);
-	bool merge_replay(fs::path const& path);
+	bool append_sequence_file(const fs::path& path, int amount);
+	bool merge_replay(const fs::path& path);
 	void pick_replay();
 	void import_replays();
 	int convert_legacy_echoes();
 	unsigned count_presses_in_last_second(bool player2);
-	void note_click(PlayLayer* play, bool down, bool player1, int button = static_cast<int>(PlayerButton::Jump));
+	void note_click(PlayLayer* play, bool down, bool player1, int button = JUMP);
 	void update_cps(PlayLayer* play);
-	bool burst_too_fast(Session const& value, int clicks, int first, int last) const;
-	bool player_cps_broken(std::deque<int> const& clicks, int now, float max_per_second) const;
+	static bool burst_too_fast(int clicks, double span);
+	bool player_cps_broken(const std::deque<int>& clicks, int now, float max_per_second) const;
 	void set_tps(float rate);
 	void place_rate(int frame, float rate);
 	void apply_rate(int frame);
@@ -912,7 +891,7 @@ public:
 	void set_level_interval(float interval);
 	void release_level_interval();
 	void sync_playback_fps();
-	int unlocked_step_cap() const;
+	int unlocked_step_cap();
 	void on_focus_change();
 	void resume_attempt(PlayLayer* play);
 	void retain_playback_hold(PlayLayer* play);
@@ -984,38 +963,38 @@ public:
 	std::string render_file_stem() const;
 	void start_render();
 	void stop_render();
-	void merge_renders(fs::path const& first, fs::path const& second);
+	void merge_renders(const fs::path& first, const fs::path& second);
 	float merge_progress();
 	void reset_traj();
 	bool is_traj_player(CCObject* object);
 	void sync_predict_hooks();
 	bool advance_paused(GJBaseGameLayer* play);
-	bool lock_delta_active() const;
+	bool lock_delta_active();
 	// real time & true real time only count while playing, or in a render w/ real time rendering on
-	bool real_time_now() const;
+	bool real_time_now();
 	int count_unlocked_steps(GJBaseGameLayer* play, double dt);
-	void run_frame(GJBaseGameLayer* play, float dt, std::function<void(float)> const& tick);
+	void run_frame(GJBaseGameLayer* play, float dt, const std::function<void(float)>& tick);
 	void cancel_steps();
 	void flush_visual_refresh();
-	void recompute_cps(Session& value);
+	void recompute_cps();
 
-	std::string read_folder_setting(char const* key);
-	matjson::Value placement_json(LabelPlacement const& placement);
-	LabelPlacement read_placement(matjson::Value const& json, LabelPlacement fallback);
+	std::string read_folder_setting(const char* key);
+	matjson::Value placement_json(const LabelPlacement& placement);
+	LabelPlacement read_placement(const matjson::Value& json, LabelPlacement fallback);
 	FramePose capture_pose(PlayerObject* player);
 	bool flip_controls();
 	void set_replay_pos(PlayLayer* play);
-	void trim_recorded_inputs(Session& value, int frame);
-	void trim_fresh_attempt(PlayLayer* play, Session& value);
+	void trim_recorded_inputs(int frame);
+	void trim_fresh_attempt();
 	PlayerSnapshot capture_player(PlayerObject* player);
-	void apply_player(PlayerObject* player, PlayerSnapshot const& shot);
+	void apply_player(PlayerObject* player, const PlayerSnapshot& shot);
 	LayerSnapshot capture_layer(PlayLayer* play);
-	void apply_layer(PlayLayer* play, LayerSnapshot const& shot);
-	void trim_from_checkpoint(PlayLayer* play, Session& value, Checkpoint const& checkpoint);
+	void apply_layer(PlayLayer* play, const LayerSnapshot& shot);
+	void trim_from_checkpoint(PlayLayer* play, const Checkpoint& checkpoint);
 	void clear_physical_holds();
-	bool held_at(Session const& value, bool player2, int frame, int button = static_cast<int>(PlayerButton::Jump));
-	std::pair<int, int> count_holds(Session const& value);
-	bool inputs_sorted(Session const& value);
+	bool held_at(bool player2, int frame, int button = JUMP);
+	std::pair<int, int> count_holds();
+	bool inputs_sorted();
 
 	// pressing a direction clears the other one even if its still held :/
 	static bool button_held(PlayerObject* body, int button) {
@@ -1023,18 +1002,28 @@ public:
 			return false;
 		auto found = body->m_holdingButtons.find(button);
 		bool mapped = found != body->m_holdingButtons.end() && found->second;
-		if (button == static_cast<int>(PlayerButton::Left))
+		if (button == LEFT)
 			return mapped || body->m_holdingLeft;
-		if (button == static_cast<int>(PlayerButton::Right))
+		if (button == RIGHT)
 			return mapped || body->m_holdingRight;
 		return mapped;
 	}
 
+	static int button_slot(int button) {
+		if (button == 0 || button == JUMP)
+			return 0;
+		if (button == LEFT)
+			return 1;
+		if (button == RIGHT)
+			return 2;
+		return -1;
+	}
+
 	static PlayLayer* as_play(GJBaseGameLayer* layer);
 	static LevelEditorLayer* as_editor(GJBaseGameLayer* layer);
-	size_t add_input(Session& value, Frame const& frame);
+	size_t add_input(const Frame& frame);
 	void refresh_live_hold();
-	void record_input(GJBaseGameLayer* play, bool down, bool player1, int button = static_cast<int>(PlayerButton::Jump), bool force = false);
+	void record_input(GJBaseGameLayer* play, bool down, bool player1, int button = JUMP, bool force = false);
 	static constexpr bool record_every_input() {
 #if defined(GEODE_IS_WINDOWS) || defined(GEODE_IS_MACOS)
 		return true;
@@ -1043,48 +1032,46 @@ public:
 #endif
 	}
 	void inject_button(PlayLayer* play, bool down, int button, bool player1);
-	void note_rule(std::vector<CpsNote>& notes, int first, int last, std::string text);
-	void eval_player_cps(std::vector<int> const& presses, bool player2, Session& value);
 
-	static float read_float(char const* key, float fallback) {
+	static float read_float(const char* key, float fallback) {
 		auto* mod = geode::Mod::get();
 		if (!mod->hasSetting(key))
 			return fallback;
 		return mod->getSettingValue<float>(key);
 	}
 
-	static bool read_bool(char const* key, bool fallback) {
+	static bool read_bool(const char* key, bool fallback) {
 		auto* mod = geode::Mod::get();
 		if (!mod->hasSetting(key))
 			return fallback;
 		return mod->getSettingValue<bool>(key);
 	}
 
-	static int read_int(char const* key, int fallback) {
+	static int read_int(const char* key, int fallback) {
 		auto* mod = geode::Mod::get();
 		if (!mod->hasSetting(key))
 			return fallback;
-		return static_cast<int>(mod->getSettingValue<int64_t>(key));
+		return (int)(mod->getSettingValue<long long>(key));
 	}
 
-	static void write_bool(char const* key, bool value) {
+	static void write_bool(const char* key, bool value) {
 		auto* mod = geode::Mod::get();
 		if (!mod->hasSetting(key))
 			return;
 		mod->setSettingValue<bool>(key, value);
 	}
 
-	static void write_float(char const* key, float value) {
+	static void write_float(const char* key, float value) {
 		auto* mod = geode::Mod::get();
 		if (!mod->hasSetting(key))
 			return;
 		mod->setSettingValue<float>(key, value);
 	}
 
-	static void write_int(char const* key, int value) {
+	static void write_int(const char* key, int value) {
 		auto* mod = geode::Mod::get();
 		if (!mod->hasSetting(key))
 			return;
-		mod->setSettingValue<int64_t>(key, static_cast<int64_t>(value));
+		mod->setSettingValue<long long>(key, (long long)value);
 	}
 };

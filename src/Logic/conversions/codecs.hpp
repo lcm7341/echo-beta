@@ -13,17 +13,8 @@
 
 namespace fs = std::filesystem;
 
-struct LegacyMacro {
-	std::vector<Frame> inputs;
-	std::vector<FramePose> poses;
-	ReplayFormat format = ReplayFormat::Meta;
-	float fps = 240.f;
-	float end_x = 0.f;
-	double seconds = 0.0;
-	int attempts = 1;
-};
-
 struct MacroSnap {
+	std::string name;
 	std::vector<Frame> inputs;
 	std::vector<FramePose> poses;
 	ReplayFormat format = ReplayFormat::Meta;
@@ -32,10 +23,11 @@ struct MacroSnap {
 	double recording_seconds = 0.0;
 	int attempts = 1;
 	bool save_debug = false;
-	uint64_t lvl_seed = 0;
+	unsigned long long lvl_seed = 0;
 	bool lvl_seed_known = false;
 	bool unrounded = false;
 	bool silicate_variance = false;
+	bool ldm = false, ldm_known = false;
 	std::vector<RateChange> rates;
 	std::string highest_cps = "P1: 0";
 	std::vector<CpsNote> cps_notes_p1, cps_notes_p2;
@@ -43,7 +35,7 @@ struct MacroSnap {
 
 class ByteCursor {
 public:
-	std::vector<uint8_t> data;
+	std::vector<unsigned char> data;
 	size_t at = 0;
 	bool failed = false;
 
@@ -60,12 +52,12 @@ public:
 		return true;
 	}
 
-	uint64_t uint(size_t width) {
+	unsigned long long uint(size_t width) {
 		if (!take(width))
 			return 0;
-		uint64_t value = 0;
+		unsigned long long value = 0;
 		for (size_t i = 0; i < width; ++i)
-			value |= static_cast<uint64_t>(data[at - width + i]) << (8 * i);
+			value |= (unsigned long long)data[at - width + i] << (8 * i);
 		return value;
 	}
 
@@ -77,14 +69,14 @@ public:
 		return value;
 	}
 
-	uint64_t leb128() {
-		uint64_t value = 0;
+	unsigned long long leb128() {
+		unsigned long long value = 0;
 		for (int shift = 0; shift < 64; shift += 7) {
 			auto byte = uint(1);
 			if (failed)
 				return 0;
-			value |= (byte & 0x7f) << shift;
-			if (!(byte & 0x80))
+			value |= (byte & 127) << shift;
+			if (!(byte & 128))
 				return value;
 		}
 		failed = true;
@@ -94,24 +86,24 @@ public:
 
 class ByteSink {
 public:
-	std::vector<uint8_t> data;
+	std::vector<unsigned char> data;
 
-	void uint(uint64_t value, size_t width) {
+	void uint(unsigned long long value, size_t width) {
 		for (size_t i = 0; i < width; ++i)
-			data.push_back(static_cast<uint8_t>(value >> (8 * i)));
+			data.push_back((unsigned char)(value >> (8 * i)));
 	}
 
 	template <typename T>
-	void pod(T const& value) {
-		auto const* bytes = reinterpret_cast<uint8_t const*>(&value);
+	void pod(const T& value) {
+		const auto* bytes = reinterpret_cast<const unsigned char*>(&value);
 		data.insert(data.end(), bytes, bytes + sizeof(T));
 	}
 
-	void leb128(uint64_t value) {
+	void leb128(unsigned long long value) {
 		do {
-			uint8_t byte = value & 0x7f;
+			unsigned char byte = value & 127;
 			value >>= 7;
-			data.push_back(value ? byte | 0x80 : byte);
+			data.push_back(value ? byte | 128 : byte);
 		} while (value);
 	}
 
@@ -119,62 +111,62 @@ public:
 		data.insert(data.end(), value.begin(), value.end());
 	}
 
-	bool save(fs::path const& path) const {
+	bool save(const fs::path& path) const {
 		std::ofstream file(path, std::ios::binary);
-		file.write(reinterpret_cast<char const*>(data.data()), static_cast<std::streamsize>(data.size()));
-		return static_cast<bool>(file);
+		file.write(reinterpret_cast<const char*>(data.data()), (std::streamsize)data.size());
+		return (bool)file;
 	}
 };
 
 class ReplayIO {
 public:
-	static constexpr uint64_t max_inputs = uint64_t{ 1 } << 26;
+	static constexpr unsigned long long max_inputs = 1ull << 26;
 
-	static std::string lower_ext(fs::path const& path);
+	static std::string lower_ext(const fs::path& path);
 	static std::string sanitize(std::string name);
-	static std::string strip_numbering(std::string const& base, std::string const& format);
-	static fs::path unique_file(fs::path const& directory, std::string const& base, std::string const& ext);
-	static bool read_boolish(matjson::Value const& json);
-	static double read_number(matjson::Value const& json, double fallback);
-	static int read_int(matjson::Value const& json, int fallback);
+	static std::string strip_numbering(const std::string& base, const std::string& format);
+	static fs::path unique_file(const fs::path& directory, const std::string& base, const std::string& ext);
+	static bool read_boolish(const matjson::Value& json);
+	static double read_number(const matjson::Value& json, double fallback);
+	static int read_int(const matjson::Value& json, int fallback);
 	static std::string format_name(ReplayFormat format);
-	static ReplayFormat format_from_name(std::string const& name);
+	static ReplayFormat format_from_name(const std::string& name);
 	static bool debug_format(ReplayFormat format);
 	static std::string clock(double seconds);
-	static void finish_load(std::string const& detail);
-	static bool write_echo_json(fs::path const& path);
-	static bool read_echo_json(fs::path const& path);
-	template <typename A1>
-	static bool read_pod(std::vector<uint8_t> const& data, size_t& cursor, A1& value);
-	static bool parse_legacy(std::vector<uint8_t> const& data, int string_bytes, bool with_meta, LegacyMacro& out);
-	static std::optional<LegacyMacro> read_legacy_bytes(std::vector<uint8_t> const& data);
-	static std::vector<uint8_t> read_all(fs::path const& path);
-	static bool read_legacy_echo(fs::path const& path);
-	static std::optional<MacroSnap> load_snap(fs::path const& path);
-	static bool fill_replay(fs::path const& path);
-	static bool fill_raw(fs::path const& path);
-	static bool save_as(fs::path const& path, bool (*write)(fs::path const&));
-	static bool is_autosave(fs::path const& path);
+	static void finish_load(const std::string& detail);
+	static bool write_echo_json(const fs::path& path, const MacroSnap& snap);
+	static bool read_echo_json(const fs::path& path, MacroSnap& out);
+	template <typename T>
+	static bool read_pod(const std::vector<unsigned char>& data, size_t& cursor, T& value);
+	static bool parse_legacy(const std::vector<unsigned char>& data, int string_bytes, bool with_meta, MacroSnap& out);
+	static std::vector<unsigned char> read_all(const fs::path& path);
+	static bool read_legacy_echo(const fs::path& path, MacroSnap& out);
+	static std::optional<MacroSnap> load_snap(const fs::path& path);
+	static bool read_any(const fs::path& path, MacroSnap& out);
+	static bool save_as(const fs::path& path, bool (*write)(const fs::path&, const MacroSnap&));
+	static bool save_snap(const fs::path& path, MacroSnap snap, bool (*write)(const fs::path&, const MacroSnap&));
+	static bool is_autosave(const fs::path& path);
 	static MacroSnap capture_macro();
-	static void restore_macro(MacroSnap const& snap);
-	static bool file_is_packed(fs::path const& path);
-	static std::string import_stem(fs::path const& path);
-	static void adopt_inputs(std::vector<Frame> inputs, float fps, std::vector<FramePose> poses = {});
-	static std::vector<Frame> sorted_inputs();
-	static int pack_button(int button);
-	static int unpack_button(int code);
-	template <typename A1>
-	static void write_pod(std::ostream& file, A1 const& value);
-	template <typename A1>
-	static bool read_pod(std::istream& file, A1& value);
-	static bool write_packed_echo(fs::path const& path);
-	static bool read_packed_echo(fs::path const& path);
-	static bool read_plain(fs::path const& path);
-	static bool write_plain(fs::path const& path);
-	static bool read_silicate(fs::path const& path);
-	static bool write_silicate(fs::path const& path);
-	static bool read_tcbot(fs::path const& path);
-	static bool write_tcbot(fs::path const& path);
-	static bool read_gdr(fs::path const& path);
-	static bool write_gdr(fs::path const& path);
+	static void restore_macro(const MacroSnap& snap);
+	static bool is_echo_file(const fs::path& path);
+	static std::string import_stem(const fs::path& path);
+	static void adopt_inputs(MacroSnap& out, std::vector<Frame> inputs, float fps, std::vector<FramePose> poses = {});
+	static std::vector<Frame> sorted_inputs(const MacroSnap& snap);
+	static double snap_sample_rate(const MacroSnap& snap);
+	static int button_code(int button);
+	static int code_button(int code);
+	template <typename T>
+	static void write_pod(std::ostream& file, const T& value);
+	template <typename T>
+	static bool read_pod(std::istream& file, T& value);
+	static bool write_echo(const fs::path& path, const MacroSnap& snap);
+	static bool read_echo(const fs::path& path, MacroSnap& out);
+	static bool read_plain(const fs::path& path, MacroSnap& out);
+	static bool write_plain(const fs::path& path, const MacroSnap& snap);
+	static bool read_silicate(const fs::path& path, MacroSnap& out);
+	static bool write_silicate(const fs::path& path, const MacroSnap& snap);
+	static bool read_tcbot(const fs::path& path, MacroSnap& out);
+	static bool write_tcbot(const fs::path& path, const MacroSnap& snap);
+	static bool read_gdr(const fs::path& path, MacroSnap& out);
+	static bool write_gdr(const fs::path& path, const MacroSnap& snap);
 };

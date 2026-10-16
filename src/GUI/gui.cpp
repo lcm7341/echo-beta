@@ -1,5 +1,3 @@
-// the menu window
-// docked = 1 window w/ a sidebar of pages. undocked = every section is its own tile that packs across the screen & can be pinned or hidden
 #include "GUI/gui.hpp"
 #include <imgui-cocos.hpp>
 #include <Geode/binding/PlatformToolbox.hpp>
@@ -35,11 +33,9 @@ GUI& GUI::get() {
 
 using namespace geode::prelude;
 
-namespace {
-    char const* menu_title() {
-        static std::string const title = fmt::format("Echo {}###Echo", Mod::get()->getVersion().toVString());
-        return title.c_str();
-    }
+static const char* menu_title() {
+    static const std::string title = fmt::format("Echo {}###Echo", Mod::get()->getVersion().toVString());
+    return title.c_str();
 }
 
 bool GUI::typing() {
@@ -67,7 +63,7 @@ bool GUI::typing() {
 
 void GUI::load_menu_font() {
     auto& io = ImGui::GetIO();
-    auto const path = Mod::get()->getResourcesDir() / "Roboto-Medium.ttf";
+    const auto path = Mod::get()->getResourcesDir() / "Roboto-Medium.ttf";
     ImFontConfig config;
     config.OversampleH = 2;
     config.OversampleV = 2;
@@ -79,7 +75,7 @@ void GUI::load_menu_font() {
         io.Fonts->AddFontDefault();
 }
 
-TabPage const PAGES[] = {
+const TabPage PAGES[] = {
     { "Replay", [] {
          GUI::get().main();
      } },
@@ -131,11 +127,11 @@ void GUI::ease_toward(ImVec2& current, ImVec2 target, float dt) {
 Slide GUI::roll_slide() {
     static std::mt19937 rng{ std::random_device{}() };
     std::uniform_int_distribution<int> dist(0, 3);
-    return static_cast<Slide>(dist(rng));
+    return (Slide)dist(rng);
 }
 
 void GUI::roll_directions() {
-    for (auto const& page : PAGES)
+    for (const auto& page : PAGES)
         GUI::get().slide[page.name] = GUI::get().roll_slide();
     GUI::get().dock_slide = GUI::get().roll_slide();
 }
@@ -188,11 +184,11 @@ void GUI::push_open_fade(StyleVarGuard& guard) {
     guard.count += 1;
 }
 
-float GUI::shared_button_width(std::initializer_list<char const*> labels) {
-    int amt = std::max(static_cast<int>(labels.size()), 1);
+float GUI::shared_button_width(std::initializer_list<const char*> labels) {
+    int amt = std::max((int)labels.size(), 1);
     float need = 0.f;
-    for (char const* label : labels)
-        need = std::max(need, GUI::get().labelWidth(label));
+    for (const char* label : labels)
+        need = std::max(need, GUI::get().label_width(label));
     ImGuiWindow* window = ImGui::GetCurrentWindow();
     bool stretches = (window->Flags & ImGuiWindowFlags_AlwaysAutoResize) != 0 || (window->ChildFlags & ImGuiChildFlags_AutoResizeX) != 0;
     // GetContentRegionAvail dont work idk
@@ -205,8 +201,7 @@ float GUI::shared_button_width(std::initializer_list<char const*> labels) {
     return std::max(need, room / (float)(amt));
 }
 
-template <typename A1>
-void GUI::fade_page(char const* name, A1&& draw) {
+void GUI::fade_page(const char* name, void (*draw)()) {
     if (GUI::get().motion.tab != name) {
         GUI::get().motion.tab = name;
         GUI::get().motion.tab_blend = 0.f;
@@ -218,8 +213,8 @@ void GUI::fade_page(char const* name, A1&& draw) {
     ImGui::PopStyleVar();
 }
 
-const TabPage* GUI::active_page(std::vector<TabPage> const& pages) {
-    for (auto const& page : pages) {
+const TabPage* GUI::active_page(const std::vector<TabPage>& pages) {
+    for (const auto& page : pages) {
         if (GUI::get().page == page.name)
             return &page;
     }
@@ -230,34 +225,32 @@ ImGuiWindowFlags GUI::menu_flags() {
     return ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
 }
 
-namespace {
-    eui::Icon icon_for(std::string_view page) {
-        if (page == "Replay")
-            return eui::Icon::Play;
-        if (page == "Assists")
-            return eui::Icon::Tools;
-        if (page == "Visuals")
-            return eui::Icon::Visuals;
-        if (page == "Editor")
-            return eui::Icon::Editor;
-        if (page == "Library")
-            return eui::Icon::Macro;
-        if (page == "Clickbot")
-            return eui::Icon::Clickbot;
-        if (page == "Render")
-            return eui::Icon::Render;
-        if (page == "Settings")
-            return eui::Icon::Gear;
-        return eui::Icon::None;
-    }
+static EchoUI::Icon icon_for(std::string_view page) {
+    if (page == "Replay")
+        return EchoUI::Icon::Play;
+    if (page == "Assists")
+        return EchoUI::Icon::Tools;
+    if (page == "Visuals")
+        return EchoUI::Icon::Visuals;
+    if (page == "Editor")
+        return EchoUI::Icon::Editor;
+    if (page == "Library")
+        return EchoUI::Icon::Macro;
+    if (page == "Clickbot")
+        return EchoUI::Icon::Clickbot;
+    if (page == "Render")
+        return EchoUI::Icon::Render;
+    if (page == "Settings")
+        return EchoUI::Icon::Gear;
+    return EchoUI::Icon::None;
 }
 
-void GUI::draw_nav(std::vector<TabPage> const& pages, float height) {
-    ImGuiStyle const& style = ImGui::GetStyle();
+void GUI::draw_nav(const std::vector<TabPage>& pages, float height) {
+    const ImGuiStyle& style = ImGui::GetStyle();
     ImGui::PushFont(nullptr, ImGui::GetFontSize() * 1.05f);
     float width = 0.f;
-    for (auto const& page : pages)
-        width = std::max(width, GUI::get().labelWidth(page.name));
+    for (const auto& page : pages)
+        width = std::max(width, GUI::get().label_width(page.name));
     float amt = (float)(std::max<size_t>(pages.size(), 1));
     float least = ImGui::GetFrameHeight() * 1.2f;
     float gaps = style.ItemSpacing.y * (amt - 1.f) + style.WindowPadding.y * 2.f;
@@ -267,9 +260,9 @@ void GUI::draw_nav(std::vector<TabPage> const& pages, float height) {
     ImGui::BeginChild("##echo-nav", ImVec2(0.f, tall), ImGuiChildFlags_Borders | ImGuiChildFlags_AutoResizeX);
     ImVec2 mark_min{}, mark_max{};
     bool marked = false;
-    for (auto const& page : pages) {
+    for (const auto& page : pages) {
         bool selected = GUI::get().page == page.name;
-        if (eui::NavItem(page.name, icon_for(page.name), selected, width, row))
+        if (EchoUI::NavItem(page.name, icon_for(page.name), selected, width, row))
             GUI::get().page = page.name;
         if (selected) {
             mark_min = ImGui::GetItemRectMin();
@@ -278,30 +271,30 @@ void GUI::draw_nav(std::vector<TabPage> const& pages, float height) {
         }
     }
     if (marked)
-        eui::NavMarker(mark_min, mark_max);
+        EchoUI::NavMarker(mark_min, mark_max);
     ImGui::EndChild();
     ImGui::PopFont();
 }
 
-void GUI::draw_floating(std::vector<TabPage> const& pages) {
+void GUI::draw_floating(const std::vector<TabPage>& pages) {
     auto& logic = Logic::get();
     StyleVarGuard fade;
     GUI::get().push_open_fade(fade);
-    auto is_open = [&](char const* name) {
+    auto is_open = [&](const char* name) {
         return std::find(logic.open_pages.begin(), logic.open_pages.end(), name) != logic.open_pages.end();
     };
     static bool loaded = false;
     if (!loaded) {
         loaded = true;
-        for (auto const& place : logic.tile_places) {
-            auto& state = eui::tile_states()[place.key];
+        for (const auto& place : logic.tile_places) {
+            auto& state = EchoUI::tile_states()[place.key];
             state.pinned = place.pinned;
             state.hidden = place.hidden;
             state.x = place.x;
             state.y = place.y;
         }
     }
-    auto set_open = [&](char const* name, bool on) {
+    auto set_open = [&](const char* name, bool on) {
         auto at = std::find(logic.open_pages.begin(), logic.open_pages.end(), name);
         if (on && at == logic.open_pages.end())
             logic.open_pages.emplace_back(name);
@@ -309,15 +302,15 @@ void GUI::draw_floating(std::vector<TabPage> const& pages) {
             logic.open_pages.erase(at);
         if (on) {
             auto prefix = std::string(name) + "/";
-            for (auto& [key, state] : eui::tile_states()) {
+            for (auto& [key, state] : EchoUI::tile_states()) {
                 if (key.starts_with(prefix))
                     state.hidden = false;
             }
-            eui::tiles_changed() = true;
+            EchoUI::tiles_changed() = true;
         }
         Logic::get().save_settings_file();
     };
-    ImGuiStyle const& style = ImGui::GetStyle();
+    const ImGuiStyle& style = ImGui::GetStyle();
     float font = ImGui::GetFontSize();
     float margin = font * .8f;
     ImVec2 display = ImGui::GetIO().DisplaySize;
@@ -325,7 +318,7 @@ void GUI::draw_floating(std::vector<TabPage> const& pages) {
 
     static float bar_tall = 0.f;
     float opened = GUI::get().motion.open;
-    float drop = GUI::get().closing ? GUI::get().smoothstep01(opened) : eui::glide_in(opened);
+    float drop = GUI::get().closing ? GUI::get().smoothstep01(opened) : EchoUI::glide_in(opened);
     ImGui::SetNextWindowPos(ImVec2(margin, margin - (1.f - drop) * (bar_tall + margin)), ImGuiCond_Always);
     ImGui::SetNextWindowSize(ImVec2(display.x - margin * 2.f, 0.f), ImGuiCond_Always);
     float bar_bottom = margin;
@@ -333,54 +326,54 @@ void GUI::draw_floating(std::vector<TabPage> const& pages) {
         int item = 0;
         float items = (float)(pages.size() + 5);
         auto enter = [&] {
-            eui::BeginEntrance((opened - .55f * (float)(item++) / items) / .45f);
+            EchoUI::BeginEntrance((opened - .55f * (float)(item++) / items) / .45f);
         };
         float height = ImGui::GetFrameHeight();
         if (ImTextureID logo = GUI::get().theme_logo()) {
             enter();
             ImGui::Image(ImTextureRef(logo), ImVec2(height, height));
-            eui::EndEntrance();
+            EchoUI::EndEntrance();
             ImGui::SameLine();
         }
         ImGui::AlignTextToFramePadding();
         enter();
         ImGui::TextUnformatted("Echo");
-        eui::EndEntrance();
+        EchoUI::EndEntrance();
         ImGui::SameLine();
         enter();
         ImGui::TextDisabled("%s", Mod::get()->getVersion().toVString().c_str());
-        eui::EndEntrance();
-        for (auto const& page : pages) {
+        EchoUI::EndEntrance();
+        for (const auto& page : pages) {
             ImGui::SameLine(0.f, style.ItemSpacing.x * .6f);
             bool open = is_open(page.name);
             enter();
-            bool pressed = eui::NavItem(page.name, icon_for(page.name), open, GUI::get().labelWidth(page.name));
-            eui::EndEntrance();
+            bool pressed = EchoUI::NavItem(page.name, icon_for(page.name), open, GUI::get().label_width(page.name));
+            EchoUI::EndEntrance();
             if (pressed)
                 set_open(page.name, !open);
         }
         ImGui::SameLine(0.f, font);
         enter();
         GUI::get().draw_status(false);
-        eui::EndEntrance();
-        float close_w = GUI::get().labelWidth("Close"), reset_w = GUI::get().labelWidth("Reset Layout");
+        EchoUI::EndEntrance();
+        float close_w = GUI::get().label_width("Close"), reset_w = GUI::get().label_width("Reset Layout");
         ImGui::SameLine(ImGui::GetWindowWidth() - style.WindowPadding.x - close_w - style.ItemSpacing.x - reset_w);
         enter();
-        bool reset = eui::Button("Reset Layout", ImVec2(reset_w, 0.f));
-        eui::EndEntrance();
+        bool reset = EchoUI::Button("Reset Layout", ImVec2(reset_w, 0.f));
+        EchoUI::EndEntrance();
         if (reset) {
-            for (auto& [key, state] : eui::tile_states()) {
+            for (auto& [key, state] : EchoUI::tile_states()) {
                 state.pinned = false;
                 state.hidden = false;
             }
-            eui::tiles_changed() = true;
+            EchoUI::tiles_changed() = true;
         }
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip("Unpins all tiles and shows the hidden ones.");
         ImGui::SameLine();
         enter();
-        bool close = eui::Button("Close", ImVec2(close_w, 0.f));
-        eui::EndEntrance();
+        bool close = EchoUI::Button("Close", ImVec2(close_w, 0.f));
+        EchoUI::EndEntrance();
         if (close)
             GUI::get().begin_close();
         GUI::get().offer_rebind("open-menu");
@@ -389,11 +382,11 @@ void GUI::draw_floating(std::vector<TabPage> const& pages) {
     }
     ImGui::End();
 
-    eui::BeginTiles(margin, bar_bottom + font * .55f, display.x - margin, display.y - margin, 18.f, GUI::get().motion.open, GUI::get().anim_rate());
-    for (auto const& page : pages) {
+    EchoUI::BeginTiles(margin, bar_bottom + font * .55f, display.x - margin, display.y - margin, 18.f, GUI::get().motion.open, GUI::get().anim_rate());
+    for (const auto& page : pages) {
         if (!is_open(page.name))
             continue;
-        eui::TileGroup(page.name);
+        EchoUI::TileGroup(page.name);
         auto host = fmt::format("###echo-host-{}", page.name);
         ImGui::SetNextWindowPos(ImVec2(0.f, 0.f), ImGuiCond_Always);
         ImGui::SetNextWindowSize(ImVec2(1.f, 1.f), ImGuiCond_Always);
@@ -402,11 +395,11 @@ void GUI::draw_floating(std::vector<TabPage> const& pages) {
         }
         ImGui::End();
     }
-    eui::EndTiles();
-    if (eui::tiles_changed()) {
-        eui::tiles_changed() = false;
+    EchoUI::EndTiles();
+    if (EchoUI::tiles_changed()) {
+        EchoUI::tiles_changed() = false;
         logic.tile_places.clear();
-        for (auto const& [key, state] : eui::tile_states()) {
+        for (const auto& [key, state] : EchoUI::tile_states()) {
             if (state.pinned || state.hidden)
                 logic.tile_places.push_back({ key, state.pinned, state.hidden, state.x, state.y });
         }
@@ -446,12 +439,12 @@ void GUI::draw_frame_bar() {
         ImGui::SetCursorPosY(at.y + (size.y - font) * .5f);
         ImGui::TextDisabled("Frame %d", logic.get_frame(play) + 1);
         ImGui::SetCursorPos(ImVec2(at.x + font * 6.f, at.y));
-        auto button = [&](char const* label, int which, bool enabled, ImVec4& where) {
+        auto button = [&](const char* label, int which, bool enabled, ImVec4& where) {
             ImGui::BeginDisabled(!enabled);
             bool held = gui.bar_pressed == which;
             if (held)
                 ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
-            eui::Button(label, size);
+            EchoUI::Button(label, size);
             if (held)
                 ImGui::PopStyleColor();
             ImGui::EndDisabled();
@@ -538,7 +531,7 @@ void GUI::draw_window() {
     }
     else if (!settle) {
         ImVec2 origin = GUI::get().offscreen(GUI::get().dock_slide, home, GUI::get().dock_size, display);
-        float along = GUI::get().closing ? eased : eui::glide_in(GUI::get().motion.open);
+        float along = GUI::get().closing ? eased : EchoUI::glide_in(GUI::get().motion.open);
         ImVec2 pos(std::lerp(origin.x, home.x, along), std::lerp(origin.y, home.y, along));
         ImGui::SetNextWindowPos(pos, ImGuiCond_Always);
     }
@@ -569,7 +562,7 @@ void GUI::draw_window() {
             GUI::get().dock_unit = ImVec2(std::max(GUI::get().dock_unit.x, needs.x / scale), std::max(GUI::get().dock_unit.y, needs.y / scale));
         }
     }
-    if (eui::Header("Echo", Mod::get()->getVersion().toVString().c_str(), GUI::get().theme_logo()))
+    if (EchoUI::Header("Echo", Mod::get()->getVersion().toVString().c_str(), GUI::get().theme_logo()))
         GUI::get().begin_close();
     static float page_height = 0.f;
     static float page_width = 0.f;
@@ -585,7 +578,7 @@ void GUI::draw_window() {
     float view_cap = FLT_MAX;
 #ifdef GEODE_IS_MOBILE
     {
-        ImGuiStyle const& style = ImGui::GetStyle();
+        const ImGuiStyle& style = ImGui::GetStyle();
         float under = ImGui::GetFrameHeightWithSpacing() + style.ItemSpacing.y * 2.f + style.WindowPadding.y;
         view_cap = std::max(display.y * .98f - nav_top - under, ImGui::GetFrameHeight() * 6.f);
     }
@@ -593,7 +586,7 @@ void GUI::draw_window() {
     float fill = std::min(page_height, view_cap);
     GUI::get().draw_nav(pages, fill);
     {
-        ImGuiStyle const& style = ImGui::GetStyle();
+        const ImGuiStyle& style = ImGui::GetStyle();
         float least = nav_top + GUI::get().nav_needs + ImGui::GetFrameHeightWithSpacing() + style.ItemSpacing.y * 2.f + style.WindowPadding.y;
         GUI::get().dock_least_tall = least / std::max(GUI::get().applied_scale, .01f);
     }
@@ -618,17 +611,17 @@ void GUI::draw_window() {
         auto& logic = Logic::get();
         if (logic.ask_moving_objects && !ImGui::IsPopupOpen("Moving Objects"))
             ImGui::OpenPopup("Moving Objects");
-        if (eui::BeginModal("Moving Objects", 22.f)) {
+        if (EchoUI::BeginModal("Moving Objects", 22.f)) {
             ImGui::PushTextWrapPos(0.f);
             ImGui::TextUnformatted("This level moves objects and the trajectory is not following them, so Best Frame may not be accurate.");
             ImGui::TextDisabled("Turn on Moving Objects for the trajectory?");
             ImGui::PopTextWrapPos();
-            float half = eui::RowButton(2);
+            float half = EchoUI::RowButton(2);
             int picked = 0;
-            if (eui::Button("Keep Off", ImVec2(half, 0.f)))
+            if (EchoUI::Button("Keep Off", ImVec2(half, 0.f)))
                 picked = 1;
             ImGui::SameLine();
-            if (eui::Button("Turn On", ImVec2(half, 0.f)))
+            if (EchoUI::Button("Turn On", ImVec2(half, 0.f)))
                 picked = 2;
             if (picked) {
                 if (picked == 2) {
@@ -640,7 +633,7 @@ void GUI::draw_window() {
                 GUI::get().begin_close();
                 logic.request_best_frame();
             }
-            eui::EndModal();
+            EchoUI::EndModal();
         }
         ImGui::End();
     };
@@ -648,19 +641,19 @@ void GUI::draw_window() {
         ImGui::BeginChild("##echo-page-roomy", ImVec2(page_width, fill), ImGuiChildFlags_None, ImGuiWindowFlags_NoScrollbar);
         // NOT SetWindowFontScale
         ImGui::PushFont(nullptr, ImGui::GetCurrentContext()->FontSizeBase * inner);
-        ImGuiStyle const& style = ImGui::GetStyle();
+        const ImGuiStyle& style = ImGui::GetStyle();
         ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(style.FramePadding.x * inner, style.FramePadding.y * inner));
         ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(style.ItemSpacing.x * inner, style.ItemSpacing.y * inner));
         ImGui::PushStyleVar(ImGuiStyleVar_ItemInnerSpacing, ImVec2(style.ItemInnerSpacing.x * inner, style.ItemInnerSpacing.y * inner));
-        eui::single_column() = true;
+        EchoUI::single_column() = true;
         if (auto* page = GUI::get().active_page(pages)) {
             GUI::get().page = page->name;
             GUI::get().fade_page(page->name, page->draw);
         }
-        eui::single_column() = false;
+        EchoUI::single_column() = false;
         ImGui::PopStyleVar(3);
         ImGui::PopFont();
-        eui::ScrollMark();
+        EchoUI::ScrollMark();
         ImGui::EndChild();
         finish();
         return;
@@ -668,7 +661,7 @@ void GUI::draw_window() {
     if (boxed)
         ImGui::BeginChild("##echo-page", ImVec2(0.f, view_cap), ImGuiChildFlags_AutoResizeX, ImGuiWindowFlags_NoScrollbar);
     ImGui::BeginGroup();
-    eui::last_card_row() = 0;
+    EchoUI::last_card_row() = 0;
     bool measuring = false;
     ImVec2 page_start = ImGui::GetCursorScreenPos();
     if (!settings_measured) {
@@ -677,24 +670,24 @@ void GUI::draw_window() {
         ImVec2 start = ImGui::GetCursorPos();
         std::vector<std::pair<ImGuiID, float>> rows;
         ImGui::PushStyleVar(ImGuiStyleVar_Alpha, 0.f);
-        for (auto const& page : pages) {
+        for (const auto& page : pages) {
             ImGui::SetCursorPos(start);
             ImGui::BeginGroup();
-            eui::last_card_row() = 0;
+            EchoUI::last_card_row() = 0;
             page.draw();
             ImGui::EndGroup();
-            ImGuiID row = eui::single_column() ? 0 : eui::last_card_row();
-            float natural = ImGui::GetItemRectSize().y - (row ? eui::card_row_extra(row) : 0.f);
+            ImGuiID row = EchoUI::single_column() ? 0 : EchoUI::last_card_row();
+            float natural = ImGui::GetItemRectSize().y - (row ? EchoUI::card_row_extra(row) : 0.f);
             page_height = std::max(page_height, natural);
             page_width = std::max(page_width, ImGui::GetItemRectSize().x);
             rows.emplace_back(row, natural);
         }
         ImGui::PopStyleVar();
-        for (auto const& [row, natural] : rows) {
+        for (const auto& [row, natural] : rows) {
             if (!row)
                 continue;
             float spare = std::min(page_height, view_cap) - natural;
-            eui::card_row_extra(row) = spare > 1.f ? spare : 0.f;
+            EchoUI::card_row_extra(row) = spare > 1.f ? spare : 0.f;
         }
     }
     if (!measuring) {
@@ -706,15 +699,15 @@ void GUI::draw_window() {
     if (auto* window = ImGui::GetCurrentWindow(); page_width > 0.f)
         window->DC.CursorMaxPos.x = std::max(window->DC.CursorMaxPos.x, page_start.x + page_width);
     ImGui::EndGroup();
-    ImGuiID last_row = measuring || eui::single_column() ? 0 : eui::last_card_row();
-    float natural = measuring ? page_height : ImGui::GetItemRectSize().y - (last_row ? eui::card_row_extra(last_row) : 0.f);
+    ImGuiID last_row = measuring || EchoUI::single_column() ? 0 : EchoUI::last_card_row();
+    float natural = measuring ? page_height : ImGui::GetItemRectSize().y - (last_row ? EchoUI::card_row_extra(last_row) : 0.f);
     page_height = std::max(page_height, natural);
     if (last_row) {
         float spare = std::min(page_height, view_cap) - natural;
-        eui::card_row_extra(last_row) = spare > 1.f ? spare : 0.f;
+        EchoUI::card_row_extra(last_row) = spare > 1.f ? spare : 0.f;
     }
     if (boxed) {
-        eui::ScrollMark();
+        EchoUI::ScrollMark();
         ImGui::EndChild();
     }
     finish();
@@ -723,14 +716,14 @@ void GUI::draw_window() {
 $on_mod(Loaded) {
     ImGuiCocos::get().setup([] {
                          GUI::get().load_menu_font();
-                         eui::apply_echo_theme();
+                         EchoUI::apply_echo_theme();
                          GUI::get().apply_saved_theme();
                          ImGuiCocos::get().setVisible(false);
                      })
         .draw([] {
             GUI::get().touch_scroll();
             GUI::get().draw_window();
-            eui::WindowRims(GUI::get().bar_only ? 1.f : GUI::get().smoothstep01(GUI::get().motion.open));
+            EchoUI::WindowRims(GUI::get().bar_only ? 1.f : GUI::get().smoothstep01(GUI::get().motion.open));
         });
 }
 
@@ -742,13 +735,13 @@ void GUI::draw_status(bool rule) {
     else if (logic.is_playing())
         tint = ImGui::GetStyleColorVec4(ImGuiCol_CheckMark);
     if (rule)
-        eui::Separator();
+        EchoUI::Separator();
     else
         ImGui::AlignTextToFramePadding();
-    eui::StatusDot(tint);
+    EchoUI::StatusDot(tint);
     ImGui::SameLine(0.f, ImGui::GetStyle().ItemInnerSpacing.x);
     ImGui::TextUnformatted(logic.state_name(logic.state));
-    auto note = [](std::string const& text) {
+    auto note = [](const std::string& text) {
         ImGui::SameLine(0.f, ImGui::GetFontSize() * .9f);
         ImGui::TextDisabled("%s", text.c_str());
     };
@@ -759,7 +752,7 @@ void GUI::draw_status(bool rule) {
     note(fmt::format("{:g}x speed", logic.speedhack));
     if (logic.frame_advance) {
         ImGui::SameLine(0.f, ImGui::GetFontSize() * .9f);
-        eui::StatusDot(ImGui::GetStyleColorVec4(ImGuiCol_CheckMark));
+        EchoUI::StatusDot(ImGui::GetStyleColorVec4(ImGuiCol_CheckMark));
         ImGui::SameLine(0.f, ImGui::GetStyle().ItemInnerSpacing.x);
         ImGui::TextUnformatted("Frame Advance");
     }
@@ -818,7 +811,7 @@ void GUI::apply_touch_style() {
     if (!GUI::get().has_base)
         return;
     auto& style = ImGui::GetStyle();
-    auto const& base = GUI::get().base_style;
+    const auto& base = GUI::get().base_style;
     float grow = touch_scale();
     (void)base;
     style.TouchExtraPadding = ImVec2(std::max(style.TouchExtraPadding.x, 4.f * grow), std::max(style.TouchExtraPadding.y, 4.f * grow));

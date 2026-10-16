@@ -13,13 +13,13 @@
 // & just default to regular dt on that frame
 
 static bool windows_said_no = false;
-static uint64_t ticks_last_frame = 0;
+static unsigned long long ticks_last_frame = 0;
 static bool is_first_frame = true;
 static LARGE_INTEGER qpc_last{};
 static double real_total = 0.0, used_total = 0.0;
 static double gd_average = 0.0;
 
-static bool ask_windows_for_ticks(uint64_t& total_ticks, double& seconds_per_tick) {
+static bool ask_windows_for_ticks(unsigned long long& total_ticks, double& seconds_per_tick) {
     if (windows_said_no)
         return false;
 
@@ -41,46 +41,44 @@ static bool ask_windows_for_ticks(uint64_t& total_ticks, double& seconds_per_tic
     return true;
 }
 
-namespace echo::win {
-    double refresh_frame_time(double gd_time) {
-        LARGE_INTEGER now, frequency;
-        QueryPerformanceCounter(&now);
-        QueryPerformanceFrequency(&frequency);
-        double real = qpc_last.QuadPart ? static_cast<double>(now.QuadPart - qpc_last.QuadPart) / static_cast<double>(frequency.QuadPart) : -1.0;
-        qpc_last = now;
-        if (!(real >= 0.0) || real > 0.25)
-            is_first_frame = true;
+double refresh_frame_time(double gd_time) {
+    LARGE_INTEGER now, frequency;
+    QueryPerformanceCounter(&now);
+    QueryPerformanceFrequency(&frequency);
+    double real = qpc_last.QuadPart ? (double)(now.QuadPart - qpc_last.QuadPart) / (double)frequency.QuadPart : -1.0;
+    qpc_last = now;
+    if (!(real >= 0.0) || real > 0.25)
+        is_first_frame = true;
 
-        uint64_t total_ticks;
-        double seconds_per_tick;
-        if (!ask_windows_for_ticks(total_ticks, seconds_per_tick))
-            return gd_time;
+    unsigned long long total_ticks;
+    double seconds_per_tick;
+    if (!ask_windows_for_ticks(total_ticks, seconds_per_tick))
+        return gd_time;
 
-        uint64_t ticks_this_frame = total_ticks - ticks_last_frame;
-        ticks_last_frame = total_ticks;
+    unsigned long long ticks_this_frame = total_ticks - ticks_last_frame;
+    ticks_last_frame = total_ticks;
 
-        if (is_first_frame) {
-            is_first_frame = false;
-            real_total = used_total = 0.0;
-            gd_average = gd_time;
-            return gd_time;
-        }
-        gd_average += (gd_time - gd_average) * 0.1;
-        if (gd_average < seconds_per_tick * 0.75) {
-            real_total = used_total = 0.0;
-            return gd_time;
-        }
-        real_total += real;
-
-        double screen_time = ticks_this_frame * seconds_per_tick;
-        if (std::abs(screen_time - gd_time) > seconds_per_tick * 2)
-            screen_time = gd_time;
-        if (std::abs(used_total + screen_time - real_total) > seconds_per_tick)
-            screen_time = std::max(real_total - used_total, 0.0);
-        used_total += screen_time;
-        double settled = std::min(used_total, real_total);
-        used_total -= settled;
-        real_total -= settled;
-        return screen_time;
+    if (is_first_frame) {
+        is_first_frame = false;
+        real_total = used_total = 0.0;
+        gd_average = gd_time;
+        return gd_time;
     }
+    gd_average += (gd_time - gd_average) * 0.1;
+    if (gd_average < seconds_per_tick * 0.75) {
+        real_total = used_total = 0.0;
+        return gd_time;
+    }
+    real_total += real;
+
+    double screen_time = ticks_this_frame * seconds_per_tick;
+    if (std::abs(screen_time - gd_time) > seconds_per_tick * 2)
+        screen_time = gd_time;
+    if (std::abs(used_total + screen_time - real_total) > seconds_per_tick)
+        screen_time = std::max(real_total - used_total, 0.0);
+    used_total += screen_time;
+    double settled = std::min(used_total, real_total);
+    used_total -= settled;
+    real_total -= settled;
+    return screen_time;
 }

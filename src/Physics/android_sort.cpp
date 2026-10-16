@@ -21,19 +21,17 @@
 
 using namespace geode::prelude;
 
-namespace echo::sort {
-    char const* status = "not tried";
-    unsigned long calls = 0;
-}
+const char* sort_status = "not tried";
+unsigned long sort_calls = 0;
 
-static void my_qsort(void* array, size_t count, size_t item_size, int (*compare)(void const*, void const*)) {
-    echo::sort::calls++;
+static void my_qsort(void* array, size_t count, size_t item_size, int (*compare)(const void*, const void*)) {
+    sort_calls++;
     if (array == nullptr || compare == nullptr || count < 2 || item_size == 0)
         return;
     if (Logic::bot_disabled())
         qsort(array, count, item_size, compare);
     else
-        echo::sort::apple_qsort(array, count, item_size, compare);
+        apple_qsort(array, count, item_size, compare);
 }
 
 static void* read_slot(void** slot) {
@@ -47,14 +45,14 @@ $execute {
     void* mine = (void*)&my_qsort;
 
     if (read_slot(slot) != (void*)&qsort) {
-        echo::sort::status = "slot is not qsort";
+        sort_status = "slot is not qsort";
         return;
     }
 
     geode::ByteVector bytes(sizeof(mine));
     std::memcpy(bytes.data(), &mine, sizeof(mine));
     if (Mod::get()->patch(slot, bytes) && read_slot(slot) == mine) {
-        echo::sort::status = "on";
+        sort_status = "on";
         return;
     }
 
@@ -62,9 +60,9 @@ $execute {
     uintptr_t page_start = (uintptr_t)slot & ~(uintptr_t)(page_size - 1);
     uintptr_t page_end = ((uintptr_t)slot + sizeof(mine) + page_size - 1) & ~(uintptr_t)(page_size - 1);
     if (page_size <= 0 || mprotect((void*)page_start, page_end - page_start, PROT_READ | PROT_WRITE) != 0) {
-        echo::sort::status = "could not open the page";
+        sort_status = "could not open the page";
         return;
     }
     std::memcpy(slot, &mine, sizeof(mine));
-    echo::sort::status = read_slot(slot) == mine ? "on" : "wrote but slot unchanged";
+    sort_status = read_slot(slot) == mine ? "on" : "wrote but slot unchanged";
 }

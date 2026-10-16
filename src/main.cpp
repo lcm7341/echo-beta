@@ -4,10 +4,10 @@
 using namespace geode::prelude;
 
 $execute {
-    log::info("Echo {} build {}", Mod::get()->getVersion().toVString(), echo::build_id());
+    log::info("Echo {} build {}", Mod::get()->getVersion().toVString(), build_id());
     Logic::get().boot();
 #ifndef GEODE_IS_MOBILE
-    listenForAllKeybindSettingPresses([](std::string_view key, Keybind const&, bool down, bool repeat, double) {
+    listenForAllKeybindSettingPresses([](std::string_view key, const Keybind&, bool down, bool repeat, double) {
         if (repeat)
             return;
         Logic::get().on_keybind(key, down);

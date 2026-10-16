@@ -5,16 +5,16 @@
 
 using namespace geode::prelude;
 
-void GUI::rewrite_selected(std::function<void(Frame&)> const& edit) {
+void GUI::rewrite_selected(const std::function<void(Frame&)>& edit) {
     auto& inputs = Logic::get().inputs;
     int first = 0, last = 0;
     if (!selection_span(first, last))
         return;
     std::ranges::for_each(inputs.begin() + first, inputs.begin() + last + 1, edit);
     if (selected >= first && selected <= last)
-        draft = inputs[static_cast<size_t>(selected)];
+        draft = inputs[(size_t)selected];
     if (selected >= 0)
-        selected_id = Logic::get().input_id(static_cast<size_t>(selected));
+        selected_id = Logic::get().input_id((size_t)selected);
     Logic::get().touch_inputs();
     Logic::get().refresh_live_hold();
     Logic::get().autosave_replay();
@@ -25,13 +25,13 @@ void GUI::move_selected(int dir) {
     int first = 0, last = 0;
     if (!selection_span(first, last))
         return;
-    int n = static_cast<int>(inputs.size());
+    int n = (int)inputs.size();
     if (dir < 0 && first <= 0)
         return;
     if (dir > 0 && last + 1 >= n)
         return;
     auto rotate = [&](auto& side) {
-        if (static_cast<int>(side.size()) != n)
+        if ((int)side.size() != n)
             return;
         auto at = side.begin();
         if (dir < 0)
@@ -45,20 +45,20 @@ void GUI::move_selected(int dir) {
     selected += dir;
     if (anchor >= 0)
         anchor += dir;
-    selected_id = Logic::get().input_id(static_cast<size_t>(selected));
+    selected_id = Logic::get().input_id((size_t)selected);
     if (anchor >= 0)
-        anchor_id = Logic::get().input_id(static_cast<size_t>(anchor));
+        anchor_id = Logic::get().input_id((size_t)anchor);
     sync_draft();
     Logic::get().touch_inputs();
     Logic::get().refresh_live_hold();
     Logic::get().autosave_replay();
 }
 
-void GUI::addInput(int frame) {
+void GUI::add_input(int frame) {
     auto& logic = Logic::get();
     auto& inputs = logic.inputs;
     Frame created;
-    uint64_t created_id = Logic::get().mint_input_id();
+    unsigned long long created_id = Logic::get().mint_input_id();
     created.number = frame;
     created.holding = true;
     created.player2 = !show_editor_p1 && show_editor_p2;
@@ -71,30 +71,30 @@ void GUI::addInput(int frame) {
             return;
         }
         if (side.size() < inputs.size()) {
-            if (idx >= static_cast<int>(side.size()))
+            if (idx >= (int)side.size())
                 side.push_back(empty);
             else
                 side.insert(side.begin() + idx, empty);
         }
     };
-    if (idx < 0 || idx >= static_cast<int>(inputs.size())) {
+    if (idx < 0 || idx >= (int)inputs.size()) {
         inputs.push_back(created);
-        idx = static_cast<int>(inputs.size()) - 1;
+        idx = (int)inputs.size() - 1;
     }
     else {
         inputs.insert(inputs.begin() + idx, created);
         Logic::get().touch_inputs();
     }
     insert_side(logic.poses, FramePose{}, true);
-    insert_side(logic.input_ids, uint64_t{ 0 }, false);
+    insert_side(logic.input_ids, 0ull, false);
     select_input(idx);
-    Logic::get().set_input_id(static_cast<size_t>(idx), created_id);
+    Logic::get().set_input_id((size_t)idx, created_id);
     Logic::get().refresh_live_hold();
     plain = false;
     Logic::get().autosave_replay();
 }
 
-void GUI::deleteSelected() {
+void GUI::delete_selected() {
     auto& logic = Logic::get();
     auto& inputs = logic.inputs;
     int first = 0, last = 0;
@@ -112,7 +112,7 @@ void GUI::deleteSelected() {
     inputs.erase(inputs.begin() + first, inputs.begin() + last + 1);
     Logic::get().touch_inputs();
     Logic::get().refresh_live_hold();
-    select_input(std::min(first, static_cast<int>(inputs.size()) - 1));
+    select_input(std::min(first, (int)inputs.size() - 1));
     Logic::get().autosave_replay();
 }
 
@@ -165,7 +165,7 @@ void GUI::apply_seed_override() {
     logic.lvl_seed_from_file = false;
 }
 
-void GUI::setSpeed(float speed, bool settle) {
+void GUI::set_speed(float speed, bool settle) {
     auto& logic = Logic::get();
     logic.speedhack = std::clamp(speed, 0.01f, 100.f);
     bool normal = std::abs(logic.speedhack - 1.f) < .00001f;

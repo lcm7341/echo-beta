@@ -173,7 +173,7 @@ void preSlopeCollision(PlayerObject* player, float dt, GameObject* slope) {
     }
 
     [[maybe_unused]] bool unk2 = false;
-    if ((slopeDir < 7) && ((0x6aU >> (slopeDir & 0x1f) & 1) != 0)) {
+    if ((slopeDir < 7) && ((106U >> (slopeDir & 31) & 1) != 0)) {
         unk2 = true;
     }
 
@@ -274,7 +274,7 @@ void bumpPlayerFromGJBGL(GJBaseGameLayer* pl, PlayerObject* player,
         }
         player->m_lastActivatedPortal = object;
         if (auto* play = PlayLayer::get()) Orbs::notePredictionPad(play, player, object);
-        phys::bumpPlayer(player, force, static_cast<int>(object->m_objectType),
+        phys::bumpPlayer(player, force, (int)object->m_objectType,
                          false, object);
     }
 }
@@ -292,7 +292,7 @@ void collisionCheckObjects(GJBaseGameLayer* pl, PlayerObject* player,
     [[maybe_unused]] float playerMaxY = playerRect.getMaxY();
 
     for (int i = 0; i < objectCount; i++) {
-        if (static_cast<size_t>(i) >= objects->size()) break;
+        if ((size_t)i >= objects->size()) break;
         GameObject* object = objects->at(i);
 
         if (!object) continue;
@@ -512,16 +512,16 @@ void collisionCheckObjects(GJBaseGameLayer* pl, PlayerObject* player,
                 }
                 break;
             case GameObjectType::Special:
-                if (object->m_objectID == 0x743) {
+                if (object->m_objectID == 1859) {
                     player->m_stateHitHead = 2;
-                } else if (object->m_objectID == 0x6db) {
+                } else if (object->m_objectID == 1755) {
                     player->m_stateDartSlide = 2;
-                } else if (object->m_objectID == 0x715) {
+                } else if (object->m_objectID == 1813) {
                     player->m_stateNoAutoJump = 2;
-                } else if (object->m_objectID == 0x725 && player->m_isDashing) {
+                } else if (object->m_objectID == 1829 && player->m_isDashing) {
                     phys::stopDashing(player);
                     player->m_jumpBuffered = false;
-                } else if (object->m_objectID == 0xb32) {
+                } else if (object->m_objectID == 2866) {
                     player->m_stateFlipGravity = 2;
                 } else if (object->m_objectID == 2069 ||
                            object->m_objectID == 3645) {
@@ -671,7 +671,7 @@ void checkSpawnObjects(GJBaseGameLayer* pl, PlayerObject* player) {
     int startingIndex = startIt == related0.end() ? 0 : startIt->second;
     bool goingBack = backIt == related1.end() ? false : backIt->second;
 
-    for (int i = startingIndex; static_cast<unsigned int>(i) < objects->count();
+    for (int i = startingIndex; (unsigned int)i < objects->count();
          i++) {
         SpawnTriggerGameObject* object =
             (SpawnTriggerGameObject*)objects->objectAtIndex(i);

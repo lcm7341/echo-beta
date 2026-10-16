@@ -1,8 +1,6 @@
 #pragma once
 #include <cstdint>
 
-namespace echo::objects {
-	int* unique_id_counter();
-	std::uint64_t* variance_generator();
-	void reseed_variance();
-}
+int* unique_id_counter();
+unsigned long long* variance_generator();
+void reseed_variance();

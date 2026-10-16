@@ -16,7 +16,7 @@ OBB2D* live_oriented_box(GameObject* object);
 bool rotation_is_right_angle(GameObject* object);
 
 namespace {
-    constexpr int RED_TINT_TAG = 0xEC30;
+    constexpr int RED_TINT_TAG = 60464;
     constexpr int RECHECK_EVERY_FRAMES = 10;
 
     using Corners = std::array<CCPoint, 4>;

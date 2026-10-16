@@ -10,83 +10,81 @@
 
 using namespace geode::prelude;
 
-namespace eui {
-    namespace {
-        void smooth(CCTexture2D* texture) {
-            auto pot = [](unsigned n) {
-                return n && !(n & (n - 1));
-            };
-            if (pot(texture->getPixelsWide()) && pot(texture->getPixelsHigh())) {
-                texture->generateMipmap();
-                ccTexParams params{ GL_LINEAR_MIPMAP_LINEAR, GL_LINEAR, GL_CLAMP_TO_EDGE, GL_CLAMP_TO_EDGE };
-                texture->setTexParameters(&params);
-            }
-            else {
-                texture->setAntiAliasTexParameters();
-            }
+namespace EchoUI {
+    static void smooth(CCTexture2D* texture) {
+        auto pot = [](unsigned n) {
+            return n && !(n & (n - 1));
+        };
+        if (pot(texture->getPixelsWide()) && pot(texture->getPixelsHigh())) {
+            texture->generateMipmap();
+            ccTexParams params{ GL_LINEAR_MIPMAP_LINEAR, GL_LINEAR, GL_CLAMP_TO_EDGE, GL_CLAMP_TO_EDGE };
+            texture->setTexParameters(&params);
         }
-
-        void to_hsv(float r, float g, float b, float& h, float& s, float& v) {
-            float high = std::max({ r, g, b }), low = std::min({ r, g, b });
-            float span = high - low;
-            v = high;
-            s = high > 0.f ? span / high : 0.f;
-            if (span <= 0.f)
-                h = 0.f;
-            else if (high == r)
-                h = std::fmod((g - b) / span, 6.f);
-            else if (high == g)
-                h = (b - r) / span + 2.f;
-            else
-                h = (r - g) / span + 4.f;
-            h /= 6.f;
-            if (h < 0.f)
-                h += 1.f;
-        }
-
-        void to_rgb(float h, float s, float v, float& r, float& g, float& b) {
-            float k = h * 6.f;
-            int sector = static_cast<int>(std::floor(k)) % 6;
-            float f = k - std::floor(k);
-            float p = v * (1.f - s);
-            float q = v * (1.f - s * f);
-            float t = v * (1.f - s * (1.f - f));
-            switch (sector) {
-            case 0:
-                r = v;
-                g = t;
-                b = p;
-                break;
-            case 1:
-                r = q;
-                g = v;
-                b = p;
-                break;
-            case 2:
-                r = p;
-                g = v;
-                b = t;
-                break;
-            case 3:
-                r = p;
-                g = q;
-                b = v;
-                break;
-            case 4:
-                r = t;
-                g = p;
-                b = v;
-                break;
-            default:
-                r = v;
-                g = p;
-                b = q;
-                break;
-            }
+        else {
+            texture->setAntiAliasTexParameters();
         }
     }
 
-    CCTexture2D* logo_texture(char const* sprite) {
+    static void to_hsv(float r, float g, float b, float& h, float& s, float& v) {
+        float high = std::max({ r, g, b }), low = std::min({ r, g, b });
+        float span = high - low;
+        v = high;
+        s = high > 0.f ? span / high : 0.f;
+        if (span <= 0.f)
+            h = 0.f;
+        else if (high == r)
+            h = std::fmod((g - b) / span, 6.f);
+        else if (high == g)
+            h = (b - r) / span + 2.f;
+        else
+            h = (r - g) / span + 4.f;
+        h /= 6.f;
+        if (h < 0.f)
+            h += 1.f;
+    }
+
+    static void to_rgb(float h, float s, float v, float& r, float& g, float& b) {
+        float k = h * 6.f;
+        int sector = (int)std::floor(k) % 6;
+        float f = k - std::floor(k);
+        float p = v * (1.f - s);
+        float q = v * (1.f - s * f);
+        float t = v * (1.f - s * (1.f - f));
+        switch (sector) {
+        case 0:
+            r = v;
+            g = t;
+            b = p;
+            break;
+        case 1:
+            r = q;
+            g = v;
+            b = p;
+            break;
+        case 2:
+            r = p;
+            g = v;
+            b = t;
+            break;
+        case 3:
+            r = p;
+            g = q;
+            b = v;
+            break;
+        case 4:
+            r = t;
+            g = p;
+            b = v;
+            break;
+        default:
+            r = v;
+            g = p;
+            b = q;
+            break;
+        }
+    }
+
+    CCTexture2D* logo_texture(const char* sprite) {
         static std::unordered_map<std::string, CCTexture2D*> loaded_by;
         auto [at, fresh] = loaded_by.try_emplace(sprite, nullptr);
         if (!fresh)
@@ -100,21 +98,21 @@ namespace eui {
         return at->second;
     }
 
-    ImTextureID logo_image(char const* sprite) {
+    ImTextureID logo_image(const char* sprite) {
         auto* texture = logo_texture(sprite);
-        return texture ? static_cast<ImTextureID>(texture->getName()) : ImTextureID{};
+        return texture ? (ImTextureID)texture->getName() : ImTextureID{};
     }
 
     ImTextureID logo_tinted(float hue) {
         auto* texture = logo_tinted_texture(hue);
-        return texture ? static_cast<ImTextureID>(texture->getName()) : ImTextureID{};
+        return texture ? (ImTextureID)texture->getName() : ImTextureID{};
     }
 
     CCTexture2D* logo_tinted_texture(float hue) {
         static int kept_degree = -1;
         static CCTexture2D* kept = nullptr;
         hue -= std::floor(hue);
-        int degree = static_cast<int>(std::lround(hue * 360.f)) % 360;
+        int degree = (int)std::lround(hue * 360.f) % 360;
         if (kept && degree == kept_degree)
             return kept;
 
@@ -126,14 +124,14 @@ namespace eui {
             return logo_texture("logo.png"_spr);
         }
         int width = image->getWidth(), height = image->getHeight();
-        unsigned char const* source = image->getData();
-        bool hasAlpha = image->hasAlpha();
-        int step = hasAlpha ? 4 : 3;
-        std::vector<unsigned char> pixels(static_cast<size_t>(width) * height * 4);
-        float shift = static_cast<float>(degree) / 360.f - SOURCE_HUE;
+        const unsigned char* source = image->getData();
+        bool has_alpha = image->hasAlpha();
+        int step = has_alpha ? 4 : 3;
+        std::vector<unsigned char> pixels((size_t)width * height * 4);
+        float shift = (float)degree / 360.f - SOURCE_HUE;
         for (int i = 0; i < width * height; ++i) {
-            unsigned char const* in = source + static_cast<size_t>(i) * step;
-            float a = hasAlpha ? in[3] / 255.f : 1.f;
+            const unsigned char* in = source + (size_t)i * step;
+            float a = has_alpha ? in[3] / 255.f : 1.f;
             float r = in[0] / 255.f, g = in[1] / 255.f, b = in[2] / 255.f;
             if (image->isPremultipliedAlpha() && a > 0.f) {
                 r = std::min(1.f, r / a);
@@ -156,15 +154,15 @@ namespace eui {
                 g += (ng - g) * weight;
                 b += (nb - b) * weight;
             }
-            unsigned char* out = pixels.data() + static_cast<size_t>(i) * 4;
-            out[0] = static_cast<unsigned char>(r * 255.f + .5f);
-            out[1] = static_cast<unsigned char>(g * 255.f + .5f);
-            out[2] = static_cast<unsigned char>(b * 255.f + .5f);
-            out[3] = static_cast<unsigned char>(a * 255.f + .5f);
+            unsigned char* out = pixels.data() + (size_t)i * 4;
+            out[0] = (unsigned char)(r * 255.f + .5f);
+            out[1] = (unsigned char)(g * 255.f + .5f);
+            out[2] = (unsigned char)(b * 255.f + .5f);
+            out[3] = (unsigned char)(a * 255.f + .5f);
         }
         image->release();
         auto* texture = new CCTexture2D();
-        if (!texture->initWithData(pixels.data(), kCCTexture2DPixelFormat_RGBA8888, width, height, CCSize(static_cast<float>(width), static_cast<float>(height)))) {
+        if (!texture->initWithData(pixels.data(), kCCTexture2DPixelFormat_RGBA8888, width, height, CCSize((float)width, (float)height))) {
             texture->release();
             return logo_texture("logo.png"_spr);
         }

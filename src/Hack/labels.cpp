@@ -37,31 +37,31 @@ public:
     std::unordered_map<int, CCTextAlignment> alignments;
 };
 
-constexpr int FRAME_TAG = 0xEC01, CPS_TAG = 0xEC02, PERCENT_TAG = 0xEC03, TIME_TAG = 0xEC04;
-constexpr int RECORD_TAG = 0xEC05, DEBUG_TAG = 0xEC07, POS_TAG = 0xEC08, VELOCITY_TAG = 0xEC09;
-constexpr int ALIVE_TAG = 0xEC0A, MAX_CPS_TAG = 0xEC0B, GRAVITY_TAG = 0xEC0C, DEATH_TAG = 0xEC0D;
-constexpr int UTILITY_TAG = 0xEC0E, SAFE_MODE_TAG = 0xEC0F;
-constexpr int FPS_TAG = 0xEC20, DEBUG_STATS_TAG = 0xEC21, SPEED_TAG = 0xEC22, SSB_TAG = 0xEC23;
+constexpr int FRAME_TAG = 60417, CPS_TAG = 60418, PERCENT_TAG = 60419, TIME_TAG = 60420;
+constexpr int RECORD_TAG = 60421, DEBUG_TAG = 60423, POS_TAG = 60424, VELOCITY_TAG = 60425;
+constexpr int ALIVE_TAG = 60426, MAX_CPS_TAG = 60427, GRAVITY_TAG = 60428, DEATH_TAG = 60429;
+constexpr int UTILITY_TAG = 60430, SAFE_MODE_TAG = 60431;
+constexpr int FPS_TAG = 60448, DEBUG_STATS_TAG = 60449, SPEED_TAG = 60450, SSB_TAG = 60451;
 
 namespace {
     LabelInfo const LABELS[] = {
-        { "Show Recording Label", "recording", &Session::show_recording, &Session::recording_label, RECORD_TAG },
-        { "Show CPS", "cps", &Session::show_cps, &Session::cps_label, CPS_TAG },
-        { "Show Frame", "frame", &Session::show_frame, &Session::frame_label, FRAME_TAG },
-        { "Show Time", "time", &Session::show_time, &Session::time_label, TIME_TAG },
-        { "Show Position", "position", &Session::show_pos, &Session::pos_label, POS_TAG },
-        { "Show Velocity", "velocity", &Session::show_velocity, &Session::velocity_label, VELOCITY_TAG },
-        { "Show Alive", "alive", &Session::show_alive, &Session::alive_label, ALIVE_TAG },
-        { "Show Max CPS", "max_cps", &Session::show_max_cps, &Session::max_cps_label, MAX_CPS_TAG },
-        { "Show Gravity", "gravity", &Session::show_gravity, &Session::gravity_label, GRAVITY_TAG },
-        { "Utility Labels", "utilities", &Session::show_utilities, &Session::utility_label, UTILITY_TAG },
-        { "Safe Mode Cheats", "safe_mode", &Session::show_safe_mode, &Session::safe_mode_label, SAFE_MODE_TAG },
-        { "Death Next Frame", "death_next", &Session::show_death_next, &Session::death_label, DEATH_TAG },
-        { "Show Percent", "percent", &Session::show_percent, &Session::percent_label, PERCENT_TAG },
-        { "Show FPS", "fps", &Session::show_fps, &Session::fps_label, FPS_TAG },
-        { "Debug Stats", "debug", &Session::show_debug, &Session::debug_label, DEBUG_STATS_TAG },
-        { "Show Speed", "speed", &Session::show_speed, &Session::speed_label, SPEED_TAG },
-        { "Show SSB", "ssb", &Session::show_ssb, &Session::ssb_label, SSB_TAG },
+        { "Show Recording Label", "recording", &Logic::show_recording, &Logic::recording_label, RECORD_TAG },
+        { "Show CPS", "cps", &Logic::show_cps, &Logic::cps_label, CPS_TAG },
+        { "Show Frame", "frame", &Logic::show_frame, &Logic::frame_label, FRAME_TAG },
+        { "Show Time", "time", &Logic::show_time, &Logic::time_label, TIME_TAG },
+        { "Show Position", "position", &Logic::show_pos, &Logic::pos_label, POS_TAG },
+        { "Show Velocity", "velocity", &Logic::show_velocity, &Logic::velocity_label, VELOCITY_TAG },
+        { "Show Alive", "alive", &Logic::show_alive, &Logic::alive_label, ALIVE_TAG },
+        { "Show Max CPS", "max_cps", &Logic::show_max_cps, &Logic::max_cps_label, MAX_CPS_TAG },
+        { "Show Gravity", "gravity", &Logic::show_gravity, &Logic::gravity_label, GRAVITY_TAG },
+        { "Utility Labels", "utilities", &Logic::show_utilities, &Logic::utility_label, UTILITY_TAG },
+        { "Safe Mode Cheats", "safe_mode", &Logic::show_safe_mode, &Logic::safe_mode_label, SAFE_MODE_TAG },
+        { "Death Next Frame", "death_next", &Logic::show_death_next, &Logic::death_label, DEATH_TAG },
+        { "Show Percent", "percent", &Logic::show_percent, &Logic::percent_label, PERCENT_TAG },
+        { "Show FPS", "fps", &Logic::show_fps, &Logic::fps_label, FPS_TAG },
+        { "Debug Stats", "debug", &Logic::show_debug, &Logic::debug_label, DEBUG_STATS_TAG },
+        { "Show Speed", "speed", &Logic::show_speed, &Logic::speed_label, SPEED_TAG },
+        { "Show SSB", "ssb", &Logic::show_ssb, &Logic::ssb_label, SSB_TAG },
     };
 
     std::vector<std::string> build_font_names() {
@@ -83,7 +83,7 @@ LabelInfo const* label_info(std::string const& key) {
     return it == std::end(LABELS) ? nullptr : &*it;
 }
 
-std::vector<LabelInfo const*> ordered_labels(Session const& value) {
+std::vector<LabelInfo const*> ordered_labels(Logic const& value) {
     std::vector<LabelInfo const*> out;
     for (auto const& key : value.label_order) {
         auto* info = label_info(key);
@@ -97,13 +97,13 @@ std::vector<LabelInfo const*> ordered_labels(Session const& value) {
     return out;
 }
 
-void move_label(Session& value, LabelInfo const& label, int delta) {
+void move_label(Logic& value, LabelInfo const& label, int delta) {
     auto order = ordered_labels(value);
     auto at = std::ranges::find(order, &label) - order.begin();
     auto to = at + delta;
-    if (to < 0 || to >= static_cast<std::ptrdiff_t>(order.size()))
+    if (to < 0 || to >= (std::ptrdiff_t)order.size())
         return;
-    std::swap(order[static_cast<size_t>(at)], order[static_cast<size_t>(to)]);
+    std::swap(order[(size_t)at], order[(size_t)to]);
     value.label_order.clear();
     for (auto* info : order)
         value.label_order.emplace_back(info->key);
@@ -163,10 +163,10 @@ void Labels::sync_label(PlayLayer* play, int tag, bool visible, LabelPlacement c
         if (position.x != place.x || position.y != place.y)
             label->setPosition({ place.x, place.y });
     }
-    float scale = place.scale * logic.labelScale;
+    float scale = place.scale * logic.label_scale;
     if (label->getScaleX() != scale || label->getScaleY() != scale)
         label->setScale(scale);
-    auto opacity = static_cast<GLubyte>(std::lround(std::clamp(place.opacity, 0, 100) * 2.55f));
+    auto opacity = (GLubyte)std::lround(std::clamp(place.opacity, 0, 100) * 2.55f);
     if (label->getOpacity() != opacity)
         label->setOpacity(opacity);
     auto cur = label->getColor();
@@ -244,7 +244,7 @@ namespace {
 
     void sync_perf_labels(PlayLayer* play, bool show_labels) {
         auto const& logic = Logic::get();
-        auto const& s = echo::perf::summary();
+        auto const& s = perf_summary();
         bool fps_on = show_labels && logic.show_fps;
         bool debug_on = show_labels && logic.show_debug;
         Labels::get().sync_label(play, FPS_TAG, fps_on, logic.fps_label, logic.fps_label.prefix ? fmt::format("FPS: {:.0f}", s.fps) : fmt::format("{:.0f} fps", s.fps), { 255, 255, 255 });
@@ -264,10 +264,10 @@ namespace {
         text += fmt::format("{:.1f} fps  avg {:.2f}ms  median {:.2f}  1% {:.2f}  max {:.2f}  hitches/s {}\n", s.fps, s.avg_ms, s.median_ms, s.low1_ms, s.max_ms, s.hitches);
         if (!s.last_hitch.empty())
             text += "last hitch: " + s.last_hitch + "\n";
-        text += fmt::format("avg ms  phys {:.2f}  bstep {:.2f}  traj {:.2f}  auto {:.2f}  hbox {:.2f}  lbl {:.2f}  draw+wait {:.2f}\n", s.slot_ms[echo::perf::Physics], s.slot_ms[echo::perf::Backstep],
-            s.slot_ms[echo::perf::Trajectory], s.slot_ms[echo::perf::Autoclick], s.slot_ms[echo::perf::Hitboxes], s.slot_ms[echo::perf::Labels], s.draw_ms);
-        text += fmt::format("max ms  phys {:.2f}  bstep {:.2f}  traj {:.2f}  auto {:.2f}  hbox {:.2f}  lbl {:.2f}\n", s.slot_max_ms[echo::perf::Physics], s.slot_max_ms[echo::perf::Backstep],
-            s.slot_max_ms[echo::perf::Trajectory], s.slot_max_ms[echo::perf::Autoclick], s.slot_max_ms[echo::perf::Hitboxes], s.slot_max_ms[echo::perf::Labels]);
+        text += fmt::format("avg ms  phys {:.2f}  bstep {:.2f}  traj {:.2f}  auto {:.2f}  hbox {:.2f}  lbl {:.2f}  draw+wait {:.2f}\n", s.slot_ms[PERF_PHYSICS], s.slot_ms[PERF_BACKSTEP],
+            s.slot_ms[PERF_TRAJECTORY], s.slot_ms[PERF_AUTOCLICK], s.slot_ms[PERF_HITBOXES], s.slot_ms[PERF_LABELS], s.draw_ms);
+        text += fmt::format("max ms  phys {:.2f}  bstep {:.2f}  traj {:.2f}  auto {:.2f}  hbox {:.2f}  lbl {:.2f}\n", s.slot_max_ms[PERF_PHYSICS], s.slot_max_ms[PERF_BACKSTEP],
+            s.slot_max_ms[PERF_TRAJECTORY], s.slot_max_ms[PERF_AUTOCLICK], s.slot_max_ms[PERF_HITBOXES], s.slot_max_ms[PERF_LABELS]);
         text += fmt::format("tps {:.1f} real / {:g} set  steps/frame {:.2f}  level speed {:.3f}x (hack {:g}x)\n", s.steps_per_sec, logic.sample_rate(), s.steps_per_frame,
             s.level_speed, logic.speedhack);
         auto* director = CCDirector::sharedDirector();
@@ -281,7 +281,7 @@ namespace {
             text += fmt::format("trajectory  {:.0f} predicted steps/frame  moving objects {}\n", s.traj_steps_per_frame, logic.traj_moving_objects ? "on" : "off");
         double level_ms = play->m_gameState.m_levelTime * 1000.0;
         double music_ms = FMODAudioEngine::get() ? FMODAudioEngine::get()->getMusicTimeMS(0) : 0.0;
-        text += fmt::format("build {}  frame {}  objects {}  music - level {:.0f}ms{}", echo::build_id(), logic.step_frame, play->m_objects ? play->m_objects->count() : 0,
+        text += fmt::format("build {}  frame {}  objects {}  music - level {:.0f}ms{}", build_id(), logic.step_frame, play->m_objects ? play->m_objects->count() : 0,
             music_ms - level_ms, ram_text());
         Labels::get().sync_label(play, DEBUG_STATS_TAG, true, logic.debug_label, text, { 255, 255, 255 });
     }
@@ -292,10 +292,10 @@ static std::string named_label(LabelPlacement const& place, char const* name, st
 }
 
 void Logic::draw_overlay(PlayLayer* play) {
-    echo::perf::Scope label_time(echo::perf::Labels);
+    PerfScope label_time(PERF_LABELS);
     auto const& logic = Logic::get();
     auto& labels = Labels::get();
-    auto font = label_font_file(label_font_index(logic.labelFont));
+    auto font = label_font_file(label_font_index(logic.label_font));
     if (labels.font != font) {
         labels.font = font;
         for (auto const& info : label_infos()) {
@@ -359,7 +359,7 @@ void Logic::draw_overlay(PlayLayer* play) {
 
     // backstep is playing but ehhh no its not
     bool recording_shown = show_labels && ((logic).is_recording() || (logic.backstep_target >= 0 && logic.backstep_state != RunState::Playing && logic.backstep_state != RunState::Idle)) && logic.show_recording;
-    auto [holds, releases] = recording_shown ? Logic::get().count_holds(logic) : std::pair<int, int>{ 0, 0 };
+    auto [holds, releases] = recording_shown ? Logic::get().count_holds() : std::pair<int, int>{ 0, 0 };
     Labels::get().sync_label(
         play,
         RECORD_TAG,
@@ -467,7 +467,7 @@ void Logic::draw_overlay(PlayLayer* play) {
         add(logic.straight_fly(), "Auto Straight Fly");
         add(logic.straight_ufo(), "Auto Straight UFO");
         add(logic.speedhack != 1.f, fmt::format("Speedhack {:g}x", logic.speedhack));
-        add(logic.sample_rate() != static_cast<double>(VANILLA_TPS), fmt::format("{:g} TPS", logic.sample_rate()));
+        add(logic.sample_rate() != (double)VANILLA_TPS, fmt::format("{:g} TPS", logic.sample_rate()));
         add(logic.frame_advance, "Frame Advance");
         add(logic.backstep, "Backstep");
         add(logic.unrounded_physics(), "Velocity Unrounding");
@@ -476,11 +476,11 @@ void Logic::draw_overlay(PlayLayer* play) {
             add(true, pair(logic.hide_p1, logic.hide_p2, "Hide Player"));
         add(logic.no_mirror_portals, "No Mirror Portals");
         add(logic.seed_override, "Seed Override");
-        add(logic.safeMode, "Safe Mode");
+        add(logic.safe_mode, "Safe Mode");
     }
     Labels::get().sync_label(play, UTILITY_TAG, !utilities.empty(), logic.utility_label, utilities, { 255, 200, 80 });
     std::string blocked;
-    if (show_labels && logic.show_safe_mode && logic.safeMode) {
+    if (show_labels && logic.show_safe_mode && logic.safe_mode) {
         auto names = Logic::get().attempt_cheats();
         for (auto name : Logic::get().active_cheats()) {
             if (std::ranges::find(names, name) == names.end())
@@ -493,7 +493,7 @@ void Logic::draw_overlay(PlayLayer* play) {
     }
     Labels::get().sync_label(play, SAFE_MODE_TAG, !blocked.empty(), logic.safe_mode_label, blocked, { 255, 60, 60 });
     sync_perf_labels(play, show_labels);
-    for (int tag = 0xEC10; tag <= 0xEC1F; ++tag) {
+    for (int tag = 60432; tag <= 60447; ++tag) {
         if (auto* leftover = play->getChildByTag(tag))
             leftover->removeFromParent();
     }

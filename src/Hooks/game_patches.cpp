@@ -1,28 +1,25 @@
 // small speedups patched into gd on windows & android. the bytes, offsets & how to find them again are in game_patches.hpp
 #include <Geode/Geode.hpp>
 #include "game_patches.hpp"
-#include "Rendering/circle_signatures.hpp"
 #include <cstring>
 
 using namespace geode::prelude;
 
-namespace {
-    template <class T, size_t N>
-    bool matches(uintptr_t offset, std::array<T, N> const& expected) {
-        return std::memcmp(reinterpret_cast<void*>(geode::base::get() + offset),
-                   expected.data(), sizeof(expected)) == 0;
-    }
+template <class T, size_t N>
+static bool matches(uintptr_t offset, const std::array<T, N>& expected) {
+    return std::memcmp(reinterpret_cast<void*>(geode::base::get() + offset),
+               expected.data(), sizeof(expected)) == 0;
+}
 
-    template <class T, size_t N>
-    auto install(uintptr_t offset, std::array<T, N> const& replacement) {
-        auto* bytes = reinterpret_cast<uint8_t const*>(replacement.data());
-        return Mod::get()->patch(reinterpret_cast<void*>(geode::base::get() + offset),
-            std::vector<uint8_t>(bytes, bytes + sizeof(replacement)));
-    }
+template <class T, size_t N>
+static auto install(uintptr_t offset, const std::array<T, N>& replacement) {
+    auto* bytes = reinterpret_cast<const unsigned char*>(replacement.data());
+    return Mod::get()->patch(reinterpret_cast<void*>(geode::base::get() + offset),
+        std::vector<unsigned char>(bytes, bytes + sizeof(replacement)));
 }
 
 $execute {
-    using namespace echo::patches;
+    using namespace GamePatches;
 #ifdef GEODE_IS_ANDROID64
     // fuck it we ball
     if (matches(point_address, point_original)) {
@@ -34,9 +31,7 @@ $execute {
     }
 #endif
 #ifdef GEODE_IS_WINDOWS
-    if (matches(event_lookup_signature_address, event_lookup_original) &&
-        echo::circles::fingerprint(reinterpret_cast<uint8_t const*>(geode::base::get() + event_map_address),
-            event_map_size) == event_map_hash) {
+    if (matches(event_lookup_signature_address, event_lookup_original)) {
         (void)install(event_lookup_address, event_lookup_replacement);
     }
     if (matches(queue_address, queue_original) && matches(queue_cave_address, queue_cave_original)) {

@@ -13,6 +13,13 @@ namespace Orbs {
 		float rotation = 0.f, rotationX = 0.f, rotationY = 0.f;
 	};
 
+	// where each orb near a player is, so the trajectory can tell when one moved
+	struct Spot {
+		int id = 0;
+		float x = 0.f, y = 0.f, rotation = 0.f;
+		bool operator==(Spot const&) const = default;
+	};
+
 	bool click_orb_assist(bool player2);
 	int claim_click(GJBaseGameLayer* layer, PlayerObject* player, bool player2);
 	void begin_push(PlayerObject* player);
@@ -35,5 +42,5 @@ namespace Orbs {
 	void clear();
 	std::vector<Pose> capture(GJBaseGameLayer* play, PlayerObject* player);
 	void restore(std::vector<Pose> const& poses);
-	uint32_t pose_hash(GJBaseGameLayer* play, PlayerObject* player);
+	std::vector<Spot> orb_spots(GJBaseGameLayer* play, PlayerObject* player);
 }

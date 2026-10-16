@@ -11,58 +11,56 @@ using namespace geode::prelude;
 
 // this HAS to be visual only
 // skipping toggleFlipped broke stuff
-namespace {
-    struct ScreenFlip {
-        Ref<GameObject> object;
-        CCPoint before, after;
-    };
+struct ScreenFlip {
+    Ref<GameObject> object;
+    CCPoint before, after;
+};
 
-    std::vector<ScreenFlip>& screen_flips() {
-        static std::vector<ScreenFlip> flips;
-        return flips;
-    }
+static std::vector<ScreenFlip>& screen_flips() {
+    static std::vector<ScreenFlip> flips;
+    return flips;
+}
 
-    std::vector<Ref<GameObject>>& slid() {
-        static std::vector<Ref<GameObject>> objects;
-        return objects;
-    }
+static std::vector<Ref<GameObject>>& slid() {
+    static std::vector<Ref<GameObject>> objects;
+    return objects;
+}
 
 #if defined(GEODE_IS_WINDOWS)
 #define ECHO_NO_MIRROR_DRAW
-    constexpr std::ptrdiff_t PLAIN_DRAW = 0x31f4;
-    constexpr std::ptrdiff_t MIRROR_DIRECTION = 0x3204;
+constexpr std::ptrdiff_t PLAIN_DRAW = 0x31f4;
+constexpr std::ptrdiff_t MIRROR_DIRECTION = 0x3204;
 #elif defined(GEODE_IS_MACOS)
 #define ECHO_NO_MIRROR_DRAW
-    constexpr std::ptrdiff_t PLAIN_DRAW = 0x305c;
-    constexpr std::ptrdiff_t MIRROR_DIRECTION = 0x306c;
+constexpr std::ptrdiff_t PLAIN_DRAW = 0x305c;
+constexpr std::ptrdiff_t MIRROR_DIRECTION = 0x306c;
 #elif defined(GEODE_IS_IOS)
 #define ECHO_NO_MIRROR_DRAW
-    constexpr std::ptrdiff_t PLAIN_DRAW = 0x3084;
-    constexpr std::ptrdiff_t MIRROR_DIRECTION = 0x3094;
+constexpr std::ptrdiff_t PLAIN_DRAW = 0x3084;
+constexpr std::ptrdiff_t MIRROR_DIRECTION = 0x3094;
 #endif
 
 #ifdef ECHO_NO_MIRROR_DRAW
-    float& layer_float(GJBaseGameLayer* layer, std::ptrdiff_t offset) {
-        return *reinterpret_cast<float*>(reinterpret_cast<std::uint8_t*>(layer) + offset);
-    }
+static float& layer_float(GJBaseGameLayer* layer, std::ptrdiff_t offset) {
+    return *reinterpret_cast<float*>(reinterpret_cast<unsigned char*>(layer) + offset);
+}
 
-    float& mirror_direction(GJBaseGameLayer* layer) {
-        return layer_float(layer, MIRROR_DIRECTION);
-    }
+static float& mirror_direction(GJBaseGameLayer* layer) {
+    return layer_float(layer, MIRROR_DIRECTION);
+}
 
-    bool offsets_player(GJBaseGameLayer* layer, PlayerObject* body) {
-        if (!body)
-            return false;
+static bool offsets_player(GJBaseGameLayer* layer, PlayerObject* body) {
+    if (!body)
+        return false;
 #ifdef GEODE_IS_WINDOWS
-        if (reinterpret_cast<std::uint8_t*>(body)[0xa2a] != 0)
-            return false;                                                                      // why
-        return body == layer->m_player1 || reinterpret_cast<std::uint8_t*>(layer)[0x422] != 0; // tf
+    if (reinterpret_cast<unsigned char*>(body)[0xa2a] != 0)
+        return false;                                                                      // why
+    return body == layer->m_player1 || reinterpret_cast<unsigned char*>(layer)[0x422] != 0; // tf
 #else
-        return body == layer->m_player1 || layer->m_gameState.m_isDualMode;
-#endif
-    }
+    return body == layer->m_player1 || layer->m_gameState.m_isDualMode;
 #endif
 }
+#endif
 
 class $modify(NoMirrorLayer, GJBaseGameLayer) {
     void visit() {
@@ -114,9 +112,9 @@ class $modify(NoMirrorLayer, GJBaseGameLayer) {
         if (!(m_objectLayer->getScaleX() < 0.f))
             return;
 #endif
-        float scaleX = m_objectLayer->getScaleX();
+        float scale_x = m_objectLayer->getScaleX();
         auto position = m_objectLayer->getPosition();
-        m_objectLayer->setScaleX(-scaleX);
+        m_objectLayer->setScaleX(-scale_x);
         m_objectLayer->setPosition({ CCDirector::get()->getWinSize().width - position.x, position.y });
         updateExtraGameLayers();
     }
@@ -142,9 +140,9 @@ class $modify(NoMirrorObjects, PlayLayer) {
         if (before.empty())
             return;
         std::unordered_set<GameObject*> still;
-        for (auto const& object : slid())
+        for (const auto& object : slid())
             still.insert(object.data());
-        for (auto const& object : before) {
+        for (const auto& object : before) {
             if (!still.contains(object.data()))
                 object->setPosition(object->getRealPosition());
         }

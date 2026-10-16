@@ -1,14 +1,9 @@
-// stepping backwards while recording
-//
-// gds checkpoint misses things: held buttons, the jump buffer, orb state, per player clocks, the camera. those ride along in BackstepExtra
-// stepping back = load the newest save at or before the target frame, then replay the recorded inputs forward to the exact frame
-// only backstep_percent of a seconds worth of saves is kept, the oldest are dropped
-// a save is checked before it is loaded (state_check). a broken one is leaked on purpose bc gds destructor would crash on it
 #include "Logic/perf.hpp"
 #include "Logic/logic.hpp"
 #include "GUI/gui.hpp"
 #include "Physics/checkpoint.hpp"
 #include "Logic/state_check.hpp"
+#include "Hooks/step.hpp"
 #include "Logic/replay_algorithms.hpp"
 #include "Hooks/shown_camera.hpp"
 #include <Geode/binding/GJEffectManager.hpp>
@@ -31,10 +26,6 @@
 #include <utility>
 #include <unordered_map>
 
-namespace echo::step {
-    void trace_note(std::string const& line);
-}
-
 namespace chrono = std::chrono;
 
 using namespace geode::prelude;
@@ -53,8 +44,8 @@ std::vector<UsedMark> used_marks(PlayLayer* play) {
     auto& grid = play->m_nonEffectObjects;
     auto& sizes = play->m_nonEffectObjectsSizes;
     float factor = play->m_sectionXFactor > 0.f ? play->m_sectionXFactor : 0.01f;
-    int center = static_cast<int>(std::floor(p1->getPositionX() * factor));
-    int last = static_cast<int>(std::min(grid.size(), sizes.size())) - 1;
+    int center = (int)std::floor(p1->getPositionX() * factor);
+    int last = (int)std::min(grid.size(), sizes.size()) - 1;
     for (int x = std::max(center - 10, 0); x <= std::min(center + 10, last); ++x) {
         auto* column = grid[x];
         auto* counts = sizes[x];
@@ -64,7 +55,7 @@ std::vector<UsedMark> used_marks(PlayLayer* play) {
             auto* bucket = (*column)[y];
             if (!bucket)
                 continue;
-            int amt = std::min<int>((*counts)[y], static_cast<int>(bucket->size()));
+            int amt = std::min<int>((*counts)[y], (int)bucket->size());
             for (int i = 0; i < amt; ++i) {
                 auto* obj = (*bucket)[i];
                 if (!obj)
@@ -87,106 +78,104 @@ std::vector<UsedMark> used_marks(PlayLayer* play) {
     return out;
 }
 
-namespace {
-    struct CameraState {
-        struct Range {
-            std::size_t begin, end;
-        };
-
-        static constexpr std::array RANGES{
-            Range{ offsetof(GJGameState, m_cameraZoom), offsetof(GJGameState, m_spawnChannelRelated0) },
-            Range{ offsetof(GJGameState, m_cameraPosition), offsetof(GJGameState, m_tweenActions) },
-            Range{ offsetof(GJGameState, m_cameraEdgeValue0), offsetof(GJGameState, m_gameObjectPhysics) },
-            Range{ offsetof(GJGameState, m_unkUint10), offsetof(GJGameState, m_activatedObjectIDs) },
-            Range{ offsetof(GJGameState, m_unkUint13), offsetof(GJGameState, m_stateObjects) },
-            Range{ offsetof(GJGameState, m_dynamicRotateActions) + sizeof(GJGameState::m_dynamicRotateActions), offsetof(GJGameState, m_unkUMap8) },
-        };
-#ifdef GEODE_IS_WINDOWS
-        static_assert(offsetof(GJGameState, m_cameraPosition) == 0x268 && offsetof(GJGameState, m_cameraStepDiff) == 0x334 &&
-                      offsetof(GJGameState, m_unkUint13) == 0x358 && offsetof(GJGameState, m_unkUint17) == 0x5bc);
-#endif
-        static constexpr std::size_t TOTAL_SIZE = [] {
-            std::size_t total = 0;
-            for (auto const& range : RANGES)
-                total += range.end - range.begin;
-            return total;
-        }();
-        std::array<std::byte, TOTAL_SIZE> state{};
-        float flip = 0.f, width_offset = 0.f, height_offset = 0.f, unzoomed_height_offset = 0.f, target_height_offset = 0.f;
-        bool calculate_target_height_offset = false;
-        CCPoint layer_position;
-        float layer_scale_x = 1.f, layer_scale_y = 1.f, layer_rotation = 0.f;
-        bool present = false;
-
-        static CameraState of(PlayLayer* play) {
-            CameraState out;
-            auto const* base = reinterpret_cast<std::byte const*>(&play->m_gameState);
-            std::size_t at = 0;
-            for (auto const& range : RANGES) {
-                std::memcpy(out.state.data() + at, base + range.begin, range.end - range.begin);
-                at += range.end - range.begin;
-            }
-            out.flip = play->m_cameraFlip;
-            out.width_offset = play->m_cameraWidthOffset;
-            out.height_offset = play->m_cameraHeightOffset;
-            out.unzoomed_height_offset = play->m_cameraUnzoomedHeightOffset;
-            out.target_height_offset = play->m_targetCameraHeightOffset;
-            out.calculate_target_height_offset = play->m_calculateTargetHeightOffset;
-            if (auto* layer = play->m_objectLayer) {
-                out.layer_position = layer->getPosition();
-                out.layer_scale_x = layer->getScaleX();
-                out.layer_scale_y = layer->getScaleY();
-                out.layer_rotation = layer->getRotation();
-            }
-            out.present = true;
-            return out;
-        }
-
-        void apply(PlayLayer* play) const {
-            if (!present)
-                return;
-            auto* base = reinterpret_cast<std::byte*>(&play->m_gameState);
-            std::size_t at = 0;
-            for (auto const& range : RANGES) {
-                std::memcpy(base + range.begin, state.data() + at, range.end - range.begin);
-                at += range.end - range.begin;
-            }
-            play->m_cameraFlip = flip;
-            play->m_cameraWidthOffset = width_offset;
-            play->m_cameraHeightOffset = height_offset;
-            play->m_cameraUnzoomedHeightOffset = unzoomed_height_offset;
-            play->m_targetCameraHeightOffset = target_height_offset;
-            play->m_calculateTargetHeightOffset = calculate_target_height_offset;
-        }
+struct CameraState {
+    struct Range {
+        std::size_t begin, end;
     };
 
-    std::optional<CameraState>& pinned_camera() {
-        static std::optional<CameraState> pin;
-        return pin;
-    }
+    static constexpr std::array RANGES{
+        Range{ offsetof(GJGameState, m_cameraZoom), offsetof(GJGameState, m_spawnChannelRelated0) },
+        Range{ offsetof(GJGameState, m_cameraPosition), offsetof(GJGameState, m_tweenActions) },
+        Range{ offsetof(GJGameState, m_cameraEdgeValue0), offsetof(GJGameState, m_gameObjectPhysics) },
+        Range{ offsetof(GJGameState, m_unkUint10), offsetof(GJGameState, m_activatedObjectIDs) },
+        Range{ offsetof(GJGameState, m_unkUint13), offsetof(GJGameState, m_stateObjects) },
+        Range{ offsetof(GJGameState, m_dynamicRotateActions) + sizeof(GJGameState::m_dynamicRotateActions), offsetof(GJGameState, m_unkUMap8) },
+    };
+#ifdef GEODE_IS_WINDOWS
+    static_assert(offsetof(GJGameState, m_cameraPosition) == 0x268 && offsetof(GJGameState, m_cameraStepDiff) == 0x334 &&
+                  offsetof(GJGameState, m_unkUint13) == 0x358 && offsetof(GJGameState, m_unkUint17) == 0x5bc);
+#endif
+    static constexpr std::size_t TOTAL_SIZE = [] {
+        std::size_t total = 0;
+        for (const auto& range : RANGES)
+            total += range.end - range.begin;
+        return total;
+    }();
+    std::array<std::byte, TOTAL_SIZE> state{};
+    float flip = 0.f, width_offset = 0.f, height_offset = 0.f, unzoomed_height_offset = 0.f, target_height_offset = 0.f;
+    bool calculate_target_height_offset = false;
+    CCPoint layer_position;
+    float layer_scale_x = 1.f, layer_scale_y = 1.f, layer_rotation = 0.f;
+    bool present = false;
 
-    bool pinned_this_frame = false;
-
-    void show_camera(PlayLayer* play, CameraState const& state) {
-        state.apply(play);
-        play->updateCamera(0.f);
-        state.apply(play);
-        if (auto* layer = play->m_objectLayer) {
-            layer->setPosition(state.layer_position);
-            layer->setScaleX(state.layer_scale_x);
-            layer->setScaleY(state.layer_scale_y);
-            layer->setRotation(state.layer_rotation);
+    static CameraState of(PlayLayer* play) {
+        CameraState out;
+        const auto* base = reinterpret_cast<const std::byte*>(&play->m_gameState);
+        std::size_t at = 0;
+        for (const auto& range : RANGES) {
+            std::memcpy(out.state.data() + at, base + range.begin, range.end - range.begin);
+            at += range.end - range.begin;
         }
+        out.flip = play->m_cameraFlip;
+        out.width_offset = play->m_cameraWidthOffset;
+        out.height_offset = play->m_cameraHeightOffset;
+        out.unzoomed_height_offset = play->m_cameraUnzoomedHeightOffset;
+        out.target_height_offset = play->m_targetCameraHeightOffset;
+        out.calculate_target_height_offset = play->m_calculateTargetHeightOffset;
+        if (auto* layer = play->m_objectLayer) {
+            out.layer_position = layer->getPosition();
+            out.layer_scale_x = layer->getScaleX();
+            out.layer_scale_y = layer->getScaleY();
+            out.layer_rotation = layer->getRotation();
+        }
+        out.present = true;
+        return out;
     }
 
-    void pin_camera(PlayLayer* play) {
-        pinned_camera() = CameraState::of(play);
-        pinned_this_frame = true;
+    void apply(PlayLayer* play) const {
+        if (!present)
+            return;
+        auto* base = reinterpret_cast<std::byte*>(&play->m_gameState);
+        std::size_t at = 0;
+        for (const auto& range : RANGES) {
+            std::memcpy(base + range.begin, state.data() + at, range.end - range.begin);
+            at += range.end - range.begin;
+        }
+        play->m_cameraFlip = flip;
+        play->m_cameraWidthOffset = width_offset;
+        play->m_cameraHeightOffset = height_offset;
+        play->m_cameraUnzoomedHeightOffset = unzoomed_height_offset;
+        play->m_targetCameraHeightOffset = target_height_offset;
+        play->m_calculateTargetHeightOffset = calculate_target_height_offset;
+    }
+};
+
+static std::optional<CameraState>& pinned_camera() {
+    static std::optional<CameraState> pin;
+    return pin;
+}
+
+static bool pinned_this_frame = false;
+
+static void show_camera(PlayLayer* play, const CameraState& state) {
+    state.apply(play);
+    play->updateCamera(0.f);
+    state.apply(play);
+    if (auto* layer = play->m_objectLayer) {
+        layer->setPosition(state.layer_position);
+        layer->setScaleX(state.layer_scale_x);
+        layer->setScaleY(state.layer_scale_y);
+        layer->setRotation(state.layer_rotation);
     }
 }
 
+static void pin_camera(PlayLayer* play) {
+    pinned_camera() = CameraState::of(play);
+    pinned_this_frame = true;
+}
+
 void Logic::note_shown_camera(PlayLayer* play, bool stepped) {
-    if (!play || !Logic::get().backstep)
+    if (!play || !backstep)
         return;
     if (std::exchange(pinned_this_frame, false)) {
         if (auto& pin = pinned_camera())
@@ -212,139 +201,131 @@ struct BackstepExtra {
     std::shared_ptr<ShownCamera> shown_camera;
 };
 
-namespace {
-    struct Probe {
-        CCPoint node1, node2;
-        double yvel1 = 0.0, yvel2 = 0.0;
-        bool has_player2 = false;
-        bool operator==(Probe const&) const = default;
-    };
+struct Probe {
+    CCPoint node1, node2;
+    double yvel1 = 0.0, yvel2 = 0.0;
+    bool has_player2 = false;
+    bool operator==(const Probe&) const = default;
+};
 
-    constexpr size_t RING = 1 << 17;
-    std::vector<std::pair<int, Probe>> history;
-    bool reported = false;
-    bool check_restore = false;
-    unsigned attempt_number = 1;
+constexpr size_t RING = 1 << 17;
+static std::vector<std::pair<int, Probe>> history;
+static bool reported = false;
+static bool check_restore = false;
+static unsigned attempt_number = 1;
 
-    Probe probe(PlayLayer* play) {
-        Probe value;
-        if (auto* body = play->m_player1) {
-            value.node1 = body->getPosition();
-            value.yvel1 = body->m_yVelocity;
-        }
-        if (auto* body = play->m_player2) {
-            value.node2 = body->getPosition();
-            value.yvel2 = body->m_yVelocity;
-            value.has_player2 = true;
-        }
-        return value;
+static Probe probe(PlayLayer* play) {
+    Probe value;
+    if (auto* body = play->m_player1) {
+        value.node1 = body->getPosition();
+        value.yvel1 = body->m_yVelocity;
     }
-
-    void compare(PlayLayer* play, int frame, bool replaying) {
-        if (frame < 0)
-            return;
-        replaying = replaying || check_restore;
-        check_restore = false;
-        if (history.size() != RING)
-            history.assign(RING, { -1, Probe{} });
-        auto& slot = history[static_cast<size_t>(frame) % RING];
-        auto now = probe(play);
-        if (!replaying || slot.first != frame) {
-            slot = { frame, now };
-            return;
-        }
-        if (now == slot.second || reported)
-            return;
-        reported = true;
-        auto const& was = slot.second;
-        Logic::get().message = fmt::format("Step back replay drifted at frame {}, this part may not play back the same", frame);
-        echo::step::trace_note(fmt::format("DRIFT frame={} p1 was={:.4f},{:.4f} yvel={:.4f} now={:.4f},{:.4f} yvel={:.4f}\n", frame, was.node1.x,
-            was.node1.y, was.yvel1, now.node1.x, now.node1.y, now.yvel1));
+    if (auto* body = play->m_player2) {
+        value.node2 = body->getPosition();
+        value.yvel2 = body->m_yVelocity;
+        value.has_player2 = true;
     }
+    return value;
+}
+
+static void compare(PlayLayer* play, int frame, bool replaying) {
+    if (frame < 0)
+        return;
+    replaying = replaying || check_restore;
+    check_restore = false;
+    if (history.size() != RING)
+        history.assign(RING, { -1, Probe{} });
+    auto& slot = history[(size_t)frame % RING];
+    auto now = probe(play);
+    if (!replaying || slot.first != frame) {
+        slot = { frame, now };
+        return;
+    }
+    if (now == slot.second || reported)
+        return;
+    reported = true;
+    const auto& was = slot.second;
+    Logic::get().message = fmt::format("Step back replay drifted at frame {}, this part may not play back the same", frame);
+    trace_note(fmt::format("DRIFT frame={} p1 was={:.4f},{:.4f} yvel={:.4f} now={:.4f},{:.4f} yvel={:.4f}\n", frame, was.node1.x,
+        was.node1.y, was.yvel1, now.node1.x, now.node1.y, now.yvel1));
 }
 
 int Logic::backstep_interval() const {
     double rate = sample_rate();
     if (!std::isfinite(rate) || rate <= 60.0)
         return 1;
-    double speed = frame_advance ? 1.0 : std::clamp(static_cast<double>(speedhack), 1.0, 1000.0);
+    double speed = frame_advance ? 1.0 : std::clamp((double)speedhack, 1.0, 1000.0);
     double per_second = speed > 1.0 ? 10.0 : 60.0;
     double gap = rate / per_second * speed;
     constexpr double SAVE_BUDGET = 0.05;
     if (std::isfinite(backstep_save_sec) && backstep_save_sec > 0.0)
         gap = std::max(gap, std::min(backstep_save_sec * rate * speed / SAVE_BUDGET, rate / 2.0 * speed));
-    return std::max(1, static_cast<int>(std::lround(gap)));
+    return std::max(1, (int)std::lround(gap));
 }
 
-void Logic::release_backstep(BackstepSave& save, char const* why) {
+void Logic::release_backstep(BackstepSave& save) {
     if (!save.object)
         return;
-    auto broken = save.broken ? std::string{ "flagged earlier" } : echo::state_check::broken(save.object->m_gameState);
-    if (broken.empty()) {
+    // its broken so i leak it. gds destructor would crash
+    if (!save.broken && broken_state(save.object->m_gameState).empty())
         save.object->release();
-    }
-    else {
-        // its broken so i leak it. gds destructor would crash
-    }
     save.object = nullptr;
 }
 
 void Logic::clear_backsteps() {
     ++attempt_number;
-    auto& logic = Logic::get();
     for (auto& slot : history)
         slot.first = -1;
     reported = false;
-    for (auto& save : logic.backsteps)
-        Logic::get().release_backstep(save, "clear");
+    for (auto& save : backsteps)
+        release_backstep(save);
     pinned_camera().reset();
     pinned_this_frame = false;
-    logic.backsteps.clear();
-    Logic::get().clear_backstep_objects();
-    if (!logic.backstep_swapped)
-        logic.backstep_inputs.clear();
+    backsteps.clear();
+    clear_backstep_objects();
+    if (!backstep_swapped)
+        backstep_inputs.clear();
 }
 
 void Logic::save_backstep(PlayLayer* play) {
-    auto& logic = Logic::get();
-    if (!play || logic.predicting || logic.backstepping)
+    if (!play || predicting || backstepping)
         return;
-    bool resim = logic.backstep_target >= 0;
-    if (!logic.backstep || Logic::get().render_capturing()) {
-        if (!logic.backsteps.empty())
-            Logic::get().clear_backsteps();
+    bool resim = backstep_target >= 0;
+    if (!backstep || render_capturing()) {
+        if (!backsteps.empty())
+            clear_backsteps();
         return;
     }
-    RunState mode = resim ? logic.backstep_state : logic.state;
-    if (mode != logic.backstep_saved_state) {
-        Logic::get().clear_backsteps();
-        logic.backstep_saved_state = mode;
+    RunState mode = resim ? backstep_state : state;
+    if (mode != backstep_saved_state) {
+        clear_backsteps();
+        backstep_saved_state = mode;
     }
-    int frame = logic.step_frame;
+    int frame = step_frame;
     if (mode == RunState::Idle && !resim) {
-        for (auto const& cmd : play->m_queuedButtons)
-            logic.backstep_inputs.push_back({ frame + 1, static_cast<uint8_t>(cmd.m_button), cmd.m_isPush, cmd.m_isPlayer2 });
+        for (const auto& cmd : play->m_queuedButtons)
+            backstep_inputs.push_back({ frame + 1, (unsigned char)cmd.m_button, cmd.m_isPush, cmd.m_isPlayer2 });
     }
     compare(play, frame, resim);
-    bool shown = logic.save_shown_step;
-    logic.save_shown_step = false;
-    int close_by = std::max(1, static_cast<int>(std::lround(logic.sample_rate() / 60.0)));
+    bool shown = save_shown_step;
+    save_shown_step = false;
+    int close_by = std::max(1, (int)std::lround(sample_rate() / 60.0));
     if (resim) {
-        bool repeating = logic.holding_back && chrono::steady_clock::now() >= logic.back_hold_start + chrono::milliseconds(logic.advance_hold_ms);
+        bool repeating = holding_back && chrono::steady_clock::now() >= back_hold_start + chrono::milliseconds(advance_hold_ms);
         close_by = repeating ? 0 : std::min(close_by, 60);
     }
-    bool close = resim && close_by > 0 && logic.backstep_target - frame <= close_by;
+    bool close = resim && close_by > 0 && backstep_target - frame <= close_by;
     bool dense = close || shown;
-    int gap = Logic::get().backstep_interval();
+    int gap = backstep_interval();
     if (resim && !close)
-        gap = std::max(close_by, static_cast<int>(std::lround(logic.sample_rate())));
-    if (!dense && !logic.backsteps.empty() && frame - logic.backsteps.back().echo.frame < gap)
+        gap = std::max(close_by, (int)std::lround(sample_rate()));
+    if (!dense && !backsteps.empty() && frame - backsteps.back().echo.frame < gap)
         return;
-    if (!logic.backsteps.empty() && logic.backsteps.back().echo.frame >= frame)
+    if (!backsteps.empty() && backsteps.back().echo.frame >= frame)
         return;
     auto saving = chrono::steady_clock::now();
-    echo::perf::Scope save_time(echo::perf::Backstep);
-    echo::perf::count_backstep_save();
+    PerfScope save_time(PERF_BACKSTEP);
+    perf_count_backstep_save();
     struct Untimed {
         chrono::steady_clock::time_point from;
         ~Untimed() { Logic::get().note_untimed(chrono::duration<double>(chrono::steady_clock::now() - from).count()); }
@@ -369,126 +350,124 @@ void Logic::save_backstep(PlayLayer* play) {
     extra->used = used_marks(play);
     extra->camera = CameraState::of(play);
     extra->shown_camera = echo_save_shown_camera(play);
-    logic.backsteps.push_back({ obj, Logic::get().capture_checkpoint(play, obj, frame), std::move(extra), {} });
+    backsteps.push_back({ obj, capture_checkpoint(play, obj, frame), std::move(extra), {} });
     auto extra_done = chrono::steady_clock::now();
-    Logic::get().note_backstep_objects(play);
+    note_backstep_objects(play);
     auto objects_done = chrono::steady_clock::now();
-    double rate = logic.sample_rate();
+    double rate = sample_rate();
     if (!std::isfinite(rate) || rate <= 0.0)
         rate = 240.0;
-    size_t keep = static_cast<size_t>(std::clamp(std::llround(rate * logic.backstep_percent / 100.0), 1ll, 100000ll));
-    while (!resim && logic.backsteps.size() > keep) {
-        Logic::get().release_backstep(logic.backsteps.front(), "trim");
-        logic.backsteps.pop_front();
+    size_t keep = (size_t)std::clamp(std::llround(rate * backstep_percent / 100.0), 1ll, 100000ll);
+    while (!resim && backsteps.size() > keep) {
+        release_backstep(backsteps.front());
+        backsteps.pop_front();
     }
     auto trim_done = chrono::steady_clock::now();
     auto ms = [](auto from, auto to) {
         return chrono::duration<double, std::milli>(to - from).count();
     };
-    echo::perf::note_save_parts(ms(saving, gd_done), ms(gd_done, extra_done), ms(extra_done, objects_done), ms(objects_done, trim_done));
+    perf_note_save_parts(ms(saving, gd_done), ms(gd_done, extra_done), ms(extra_done, objects_done), ms(objects_done, trim_done));
     double took = chrono::duration<double>(chrono::steady_clock::now() - saving).count();
     if (std::isfinite(took) && took > 0.0)
-        logic.backstep_save_sec = logic.backstep_save_sec > 0.0 ? logic.backstep_save_sec + (took - logic.backstep_save_sec) * 0.2 : took;
+        backstep_save_sec = backstep_save_sec > 0.0 ? backstep_save_sec + (took - backstep_save_sec) * 0.2 : took;
 }
 
 void Logic::trim_backsteps(PlayLayer* play) {
     ++attempt_number;
     pinned_camera().reset();
     pinned_this_frame = false;
-    auto& logic = Logic::get();
-    if (logic.backsteps.empty())
+    if (backsteps.empty())
         return;
-    if (!play || !Logic::get().get_latest_checkpoint(play)) {
-        Logic::get().clear_backsteps();
+    if (!play || !get_latest_checkpoint(play)) {
+        clear_backsteps();
         return;
     }
-    while (!logic.backsteps.empty() && logic.backsteps.back().echo.frame > logic.step_frame)
-        Logic::get().pop_backstep();
-    std::erase_if(logic.backstep_inputs, [&](Frame const& input) {
-        return input.number > logic.step_frame;
+    while (!backsteps.empty() && backsteps.back().echo.frame > step_frame)
+        pop_backstep();
+    std::erase_if(backstep_inputs, [&](const Frame& input) {
+        return input.number > step_frame;
     });
 }
 
 bool Logic::step_back(PlayLayer* play, int steps) {
     if (steps <= 0)
         return false;
-    return Logic::get().step_to(play, std::max(0, Logic::get().step_frame - steps), std::numeric_limits<int>::max());
+    return step_to(play, std::max(0, step_frame - steps), std::numeric_limits<int>::max());
 }
 
 bool Logic::step_to(PlayLayer* play, int target, int keep_up_to) {
-    auto& logic = Logic::get();
     if (!play || !play->m_checkpointArray || target < 0) {
         return false;
     }
-    if (!logic.backstep || logic.backstep_target >= 0 || logic.backstepping || Logic::get().render_capturing() ||
+    if (!backstep || backstep_target >= 0 || backstepping || render_capturing() ||
         play->m_hasCompletedLevel || play->m_levelEndAnimationStarted) {
-        if (!logic.backstep)
-            logic.message = "Turn on Backstep first";
+        if (!backstep)
+            message = "Turn on Backstep first";
         return false;
     }
-    if (target <= logic.best_frame_clicked_at)
-        logic.best_hold_owned = false;
+    if (target <= best_frame_clicked_at)
+        best_hold_owned = false;
     int keep = std::min(target, keep_up_to);
-    while (!logic.backsteps.empty() && logic.backsteps.back().echo.frame > keep)
-        Logic::get().pop_backstep();
-    if (logic.backsteps.empty()) {
-        logic.message = "Nothing saved to step back to";
+    while (!backsteps.empty() && backsteps.back().echo.frame > keep)
+        pop_backstep();
+    if (backsteps.empty()) {
+        message = "Nothing saved to step back to";
         return false;
     }
     // DONT load a broken save
-    while (!logic.backsteps.empty() && (logic.backsteps.back().broken || !echo::state_check::broken(logic.backsteps.back().object->m_gameState).empty())) {
-        logic.backsteps.back().broken = true;
-        Logic::get().pop_backstep();
+    while (!backsteps.empty() && (backsteps.back().broken || !broken_state(backsteps.back().object->m_gameState).empty())) {
+        backsteps.back().broken = true;
+        pop_backstep();
     }
-    if (logic.backsteps.empty()) {
-        logic.message = "Nothing saved to step back to";
+    if (backsteps.empty()) {
+        message = "Nothing saved to step back to";
         return false;
     }
-    auto save = logic.backsteps.back();
+    auto save = backsteps.back();
     bool resim = save.echo.frame < target;
-    echo::step::trace_note(fmt::format("BACK from={} target={} save={} resim={} state={} inputs={} queued={}\n", logic.step_frame, target, save.echo.frame, resim,
-        static_cast<int>(logic.state), logic.inputs.size(), play->m_queuedButtons.size()));
-    if (logic.state == RunState::Idle && !logic.backstep_swapped) {
-        replay::compact(logic.backstep_inputs, logic.backstep_poses, logic.backstep_ids, [target](Frame const& input) {
+    trace_note(fmt::format("BACK from={} target={} save={} resim={} state={} inputs={} queued={}\n", step_frame, target, save.echo.frame, resim,
+        (int)state, inputs.size(), play->m_queuedButtons.size()));
+    if (state == RunState::Idle && !backstep_swapped) {
+        compact_inputs(backstep_inputs, backstep_poses, backstep_ids, [target](const Frame& input) {
             return input.number <= target;
         });
     }
     reported = false;
     check_restore = true;
-    logic.backstep_state = logic.state;
-    logic.backstep_play_p1 = logic.play_p1;
-    logic.backstep_play_p2 = logic.play_p2;
+    backstep_state = state;
+    backstep_play_p1 = play_p1;
+    backstep_play_p2 = play_p2;
     if (resim) {
-        logic.state = RunState::Playing;
-        logic.play_p1 = logic.play_p2 = true;
-        if (logic.backstep_state == RunState::Idle) {
-            logic.backstep_replay_pos = logic.replay_pos;
-            std::swap(logic.inputs, logic.backstep_inputs);
-            std::swap(logic.poses, logic.backstep_poses);
-            std::swap(logic.input_ids, logic.backstep_ids);
-            logic.backstep_swapped = true;
-            logic.touch_inputs();
+        state = RunState::Playing;
+        play_p1 = play_p2 = true;
+        if (backstep_state == RunState::Idle) {
+            backstep_replay_pos = replay_pos;
+            std::swap(inputs, backstep_inputs);
+            std::swap(poses, backstep_poses);
+            std::swap(input_ids, backstep_ids);
+            backstep_swapped = true;
+            touch_inputs();
         }
     }
-    logic.backstepping = true;
+    backstepping = true;
     play->m_checkpointArray->addObject(save.object);
-    logic.checkpoints.push_back(save.echo);
+    checkpoints.push_back(save.echo);
     bool music_sync = play->m_practiceMusicSync;
     play->m_practiceMusicSync = true;
     play->resetLevel();
     play->m_practiceMusicSync = music_sync;
     play->m_checkpointArray->removeObject(save.object, true);
-    Logic::get().sync_checkpoints(play);
+    sync_checkpoints(play);
     while (auto* last = play->getLastCheckpoint()) {
-        auto it = std::ranges::find(logic.checkpoints, last, &Checkpoint::object);
-        if (it == logic.checkpoints.end() || it->frame <= keep)
+        auto it = std::ranges::find(checkpoints, last, &Checkpoint::object);
+        if (it == checkpoints.end() || it->frame <= keep)
             break;
         auto amt = play->m_checkpointArray->count();
         play->removeCheckpoint(false);
         if (play->m_checkpointArray->count() >= amt)
             break;
     }
-    logic.object_capture = nullptr;
+    object_capture = nullptr;
     if (auto* extra = save.extra.get()) {
         auto put = [](PlayerObject* body, SavedPlayerCheckpoint& shot) {
             if (!body)
@@ -511,139 +490,128 @@ bool Logic::step_to(PlayLayer* play, int target, int keep_up_to) {
         put(play->m_player1, extra->player1);
         if (extra->has_player2)
             put(play->m_player2, extra->player2);
-        Logic::get().apply_player(play->m_player1, save.echo.player1);
-        Logic::get().apply_player(play->m_player2, save.echo.player2);
+        apply_player(play->m_player1, save.echo.player1);
+        apply_player(play->m_player2, save.echo.player2);
         if (play->m_effectManager)
             play->m_effectManager->m_persistentItemCountMap = extra->persistent_items;
         play->m_calcNonEffectObjects = extra->calc_non_effect;
         play->m_calcNonEffectObjectsSize = extra->calc_non_effect_size;
-        for (auto const& mark : extra->used) {
-            if (logic.trace_logging && (mark.object->m_activatedByPlayer1 != mark.p1 || mark.object->m_activatedByPlayer2 != mark.p2))
-                echo::step::trace_note(fmt::format("UNUSE save={} uid={} id={} now={}{} saved={}{}\n", save.echo.frame, mark.object->m_uniqueID, mark.object->m_objectID,
+        for (const auto& mark : extra->used) {
+            if (trace_logging && (mark.object->m_activatedByPlayer1 != mark.p1 || mark.object->m_activatedByPlayer2 != mark.p2))
+                trace_note(fmt::format("UNUSE save={} uid={} id={} now={}{} saved={}{}\n", save.echo.frame, mark.object->m_uniqueID, mark.object->m_objectID,
                     mark.object->m_activatedByPlayer1 ? 1 : 0, mark.object->m_activatedByPlayer2 ? 1 : 0, mark.p1 ? 1 : 0, mark.p2 ? 1 : 0));
             mark.object->m_activatedByPlayer1 = mark.p1;
             mark.object->m_activatedByPlayer2 = mark.p2;
         }
     }
     play->m_queuedButtons.clear();
-    Logic::get().load_backstep_objects(save.echo.frame);
+    load_backstep_objects(save.echo.frame);
     pinned_camera().reset();
     pinned_this_frame = false;
     if (auto* extra = save.extra.get(); extra && extra->camera.present) {
         auto& tweens = play->m_gameState.m_tweenActions;
-        auto const& saved = save.object->m_gameState.m_tweenActions;
+        const auto& saved = save.object->m_gameState.m_tweenActions;
         bool same = tweens.size() == saved.size();
-        for (auto const& entry : saved)
+        for (const auto& entry : saved)
             same = same && tweens.find(entry.first) != tweens.end();
         if (!same)
             tweens = saved;
         else
-            for (auto const& [key, tween] : saved)
+            for (const auto& [key, tween] : saved)
                 tweens.find(key)->second = tween;
         show_camera(play, extra->camera);
         if (!resim)
             pin_camera(play);
     }
     echo_load_shown_camera(play, save.extra ? save.extra->shown_camera.get() : nullptr);
-    logic.backstepping = false;
-    logic.frame_advance = true;
-    logic.holding_advance = false;
+    backstepping = false;
+    frame_advance = true;
+    holding_advance = false;
     if (resim) {
-        logic.backstep_target = target;
-        logic.advance_steps = target - save.echo.frame;
-        logic.advance_queued = true;
+        backstep_target = target;
+        advance_steps = target - save.echo.frame;
+        advance_queued = true;
     }
     else {
-        logic.advance_queued = false;
-        Logic::get().match_live_holds(play);
-        Logic::get().draw_overlay(play);
+        advance_queued = false;
+        match_live_holds(play);
+        draw_overlay(play);
     }
     return true;
 }
 
 void Logic::finish_backstep(PlayLayer* play) {
-    auto& logic = Logic::get();
-    if (logic.backstep_target < 0)
+    if (backstep_target < 0)
         return;
-    if (play && logic.step_frame == logic.backstep_target && !play->m_playerDied)
+    if (play && step_frame == backstep_target && !play->m_playerDied)
         pin_camera(play);
-    logic.backstep_target = -1;
-    logic.state = logic.backstep_state;
-    logic.play_p1 = logic.backstep_play_p1;
-    logic.play_p2 = logic.backstep_play_p2;
-    logic.advance_queued = false;
-    logic.advance_steps = 1;
-    int frame = logic.step_frame;
-    echo::step::trace_note(fmt::format("BACKDONE frame={} state={} inputs={} dead={}\n", frame, static_cast<int>(logic.state), logic.inputs.size(), play && play->m_playerDied));
-    if (logic.backstep_swapped) {
-        std::erase_if(logic.inputs, [frame](Frame const& input) {
+    backstep_target = -1;
+    state = backstep_state;
+    play_p1 = backstep_play_p1;
+    play_p2 = backstep_play_p2;
+    advance_queued = false;
+    advance_steps = 1;
+    int frame = step_frame;
+    trace_note(fmt::format("BACKDONE frame={} state={} inputs={} dead={}\n", frame, (int)state, inputs.size(), play && play->m_playerDied));
+    if (backstep_swapped) {
+        std::erase_if(inputs, [frame](const Frame& input) {
             return input.number > frame;
         });
-        std::swap(logic.inputs, logic.backstep_inputs);
-        std::swap(logic.poses, logic.backstep_poses);
-        std::swap(logic.input_ids, logic.backstep_ids);
-        logic.backstep_swapped = false;
-        logic.touch_inputs();
-        logic.replay_pos = logic.backstep_replay_pos;
-        Logic::get().match_live_holds(play);
+        std::swap(inputs, backstep_inputs);
+        std::swap(poses, backstep_poses);
+        std::swap(input_ids, backstep_ids);
+        backstep_swapped = false;
+        touch_inputs();
+        replay_pos = backstep_replay_pos;
+        match_live_holds(play);
         return;
     }
     if (!play)
         return;
-    if (logic.is_recording()) {
-        Logic::get().trim_recorded_inputs(logic, frame);
-        if (!logic.is_playing())
-            Logic::get().trim_rates(frame);
-        Logic::get().sort_inputs();
+    if (is_recording()) {
+        trim_recorded_inputs(frame);
+        if (!is_playing())
+            trim_rates(frame);
+        sort_inputs();
     }
-    if (logic.is_playing())
-        Logic::get().set_replay_pos(play);
+    if (is_playing())
+        set_replay_pos(play);
     else
-        logic.replay_pos = logic.inputs.size();
-    Logic::get().match_live_holds(play);
+        replay_pos = inputs.size();
+    match_live_holds(play);
 }
 
 void Logic::poll_back_hold() {
-    auto& logic = Logic::get();
     auto* play = PlayLayer::get();
-    if (logic.back_tap_queued) {
+    if (back_tap_queued) {
         if (!play)
-            logic.back_tap_queued = false;
-        else if (logic.backstep_target < 0) {
-            logic.back_tap_queued = false;
-            Logic::get().step_back(play, 1);
+            back_tap_queued = false;
+        else if (backstep_target < 0) {
+            back_tap_queued = false;
+            step_back(play, 1);
             return;
         }
     }
-    if (!logic.holding_back || !play)
+    if (!holding_back || !play)
         return;
     if (GUI::get().typing()) {
-        logic.holding_back = false;
+        holding_back = false;
         return;
     }
-    if (logic.backstep_target >= 0)
+    if (backstep_target >= 0)
         return;
     auto now = chrono::steady_clock::now();
-    auto start = logic.back_hold_start + chrono::milliseconds(logic.advance_hold_ms);
+    auto start = back_hold_start + chrono::milliseconds(advance_hold_ms);
     if (now < start) {
-        logic.back_owed = 0.0;
+        back_owed = 0.0;
         return;
     }
-    double rate = logic.sample_rate() * std::clamp(logic.advance_speed, 1.f, 200.f) / 100.0 * logic.speedhack;
-    if (!std::isfinite(rate) || !(rate > 0.0))
+    int steps = owed_hold_steps(back_owed, 1e6);
+    if (steps == 0)
         return;
-    double interval = CCDirector::sharedDirector() ? CCDirector::sharedDirector()->getAnimationInterval() : 1.0 / 60.0;
-    if (!std::isfinite(interval) || interval <= 0.0)
-        interval = 1.0 / 60.0;
-    logic.back_owed += rate * interval;
-    double wanted = std::floor(logic.back_owed);
-    if (wanted < 1.0)
-        return;
-    int steps = static_cast<int>(std::min(wanted, 1e6));
-    logic.back_owed = std::min(logic.back_owed - steps, 1.0);
-    logic.last_back_step = now;
-    if (!Logic::get().step_back(play, steps))
-        logic.holding_back = false;
+    last_back_step = now;
+    if (!step_back(play, steps))
+        holding_back = false;
 }
 
 #ifdef GEODE_IS_WINDOWS

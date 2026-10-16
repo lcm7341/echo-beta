@@ -10,19 +10,19 @@
 
 static CVDisplayLinkRef display_link = nullptr;
 static bool mac_said_no = false;
-static uint32_t screen_being_counted = 0;
+static unsigned screen_being_counted = 0;
 static std::chrono::steady_clock::time_point last_screen_check;
-static std::atomic<uint64_t> tick_counter{ 0 };
-static uint64_t ticks_last_frame = 0;
+static std::atomic<unsigned long long> tick_counter{ 0 };
+static unsigned long long ticks_last_frame = 0;
 static bool is_first_frame = true;
 
-static CVReturn on_screen_tick(CVDisplayLinkRef, CVTimeStamp const*, CVTimeStamp const*, CVOptionFlags, CVOptionFlags*, void*) {
+static CVReturn on_screen_tick(CVDisplayLinkRef, const CVTimeStamp*, const CVTimeStamp*, CVOptionFlags, CVOptionFlags*, void*) {
     tick_counter++;
     return kCVReturnSuccess;
 }
 
 static bool start_counting() {
-    screen_being_counted = echo::mac::window_display();
+    screen_being_counted = window_display();
     if (screen_being_counted == 0)
         screen_being_counted = CGMainDisplayID();
 
@@ -45,7 +45,7 @@ static void switch_screens_if_moved() {
         return;
     last_screen_check = now;
 
-    uint32_t screen_now = echo::mac::window_display();
+    unsigned screen_now = window_display();
     if (screen_now == 0 || screen_now == screen_being_counted)
         return;
     if (CVDisplayLinkSetCurrentCGDisplay(display_link, screen_now) == kCVReturnSuccess) {
@@ -54,7 +54,7 @@ static void switch_screens_if_moved() {
     }
 }
 
-static bool ask_mac_for_ticks(uint64_t& total_ticks, double& seconds_per_tick) {
+static bool ask_mac_for_ticks(unsigned long long& total_ticks, double& seconds_per_tick) {
     if (mac_said_no)
         return false;
     if (display_link == nullptr && !start_counting()) {
@@ -70,24 +70,22 @@ static bool ask_mac_for_ticks(uint64_t& total_ticks, double& seconds_per_tick) {
     return true;
 }
 
-namespace echo::mac {
-    double refresh_frame_time(double gd_time) {
-        uint64_t total_ticks;
-        double seconds_per_tick;
-        if (!ask_mac_for_ticks(total_ticks, seconds_per_tick))
-            return gd_time;
+double refresh_frame_time(double gd_time) {
+    unsigned long long total_ticks;
+    double seconds_per_tick;
+    if (!ask_mac_for_ticks(total_ticks, seconds_per_tick))
+        return gd_time;
 
-        uint64_t ticks_this_frame = total_ticks - ticks_last_frame;
-        ticks_last_frame = total_ticks;
+    unsigned long long ticks_this_frame = total_ticks - ticks_last_frame;
+    ticks_last_frame = total_ticks;
 
-        if (is_first_frame) {
-            is_first_frame = false;
-            return gd_time;
-        }
-
-        double screen_time = ticks_this_frame * seconds_per_tick;
-        if (std::abs(screen_time - gd_time) > seconds_per_tick * 2)
-            return gd_time;
-        return screen_time;
+    if (is_first_frame) {
+        is_first_frame = false;
+        return gd_time;
     }
+
+    double screen_time = ticks_this_frame * seconds_per_tick;
+    if (std::abs(screen_time - gd_time) > seconds_per_tick * 2)
+        return gd_time;
+    return screen_time;
 }

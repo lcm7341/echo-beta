@@ -191,7 +191,7 @@ bool lvl_invisible(GameObject* object) {
         return false;
     auto const& opacity = lvl_opacity();
     auto clear = [&](int channel) {
-        return channel > 0 && static_cast<std::size_t>(channel) < opacity.size() && opacity[static_cast<std::size_t>(channel)] <= 0.001f;
+        return channel > 0 && (std::size_t)channel < opacity.size() && opacity[(std::size_t)channel] <= 0.001f;
     };
     auto [base, detail] = it->second;
     return clear(base) && (detail <= 0 || clear(detail));
@@ -272,9 +272,9 @@ void LevelLayout::style_passable_glow(GameObject* object) {
 
 ccColor3B LevelLayout::rgb(float const* color) {
     return {
-        static_cast<GLubyte>(std::clamp(color[0], 0.f, 1.f) * 255.f),
-        static_cast<GLubyte>(std::clamp(color[1], 0.f, 1.f) * 255.f),
-        static_cast<GLubyte>(std::clamp(color[2], 0.f, 1.f) * 255.f),
+        (GLubyte)(std::clamp(color[0], 0.f, 1.f) * 255.f),
+        (GLubyte)(std::clamp(color[1], 0.f, 1.f) * 255.f),
+        (GLubyte)(std::clamp(color[2], 0.f, 1.f) * 255.f),
     };
 }
 
@@ -295,7 +295,7 @@ void Logic::paint_layout_colors(PlayLayer* play) {
         if (!action)
             continue;
         if (id == 1000)
-            action->m_color = LevelLayout::get().rgb(logic.backgroundColor);
+            action->m_color = LevelLayout::get().rgb(logic.background_color);
         else if (id == 1001 || id == 1009)
             action->m_color = LevelLayout::get().rgb(logic.blocks_color);
         else
@@ -307,7 +307,7 @@ void Logic::paint_layout_channels(GJEffectManager* effects) {
     if (!effects)
         return;
     auto const& logic = Logic::get();
-    auto background = LevelLayout::get().rgb(logic.backgroundColor);
+    auto background = LevelLayout::get().rgb(logic.background_color);
     auto blocks = LevelLayout::get().rgb(logic.blocks_color);
     auto& sprites = effects->m_colorActionSpriteVector;
     auto& opacity = lvl_opacity();
@@ -392,7 +392,7 @@ void Logic::apply_layout(PlayLayer* play) {
 }
 
 namespace {
-    constexpr int LAYOUT_ART_TAG = 0x4543484c; // "ECHL"
+    constexpr int LAYOUT_ART_TAG = 1162037324; // "ECHL"
 
     struct DefaultPiece {
         CCSpriteFrame* frame = nullptr;
@@ -618,7 +618,7 @@ void Logic::draw_layout_art(PlayLayer* play) {
             float turns = rotationX / 90.f;
             float nearest = std::round(turns);
             if (std::abs(turns - nearest) < 0.001f) {
-                if (static_cast<long>(nearest) % 2 != 0)
+                if ((long)nearest % 2 != 0)
                     std::swap(sx, sy);
                 rotationX = rotationY = 0.f;
                 flipX = flipY = false;
@@ -667,7 +667,7 @@ void Logic::draw_layout_art(PlayLayer* play) {
     }
     int moving = std::min<int>(play->m_calcNonEffectObjectsSize, (int)(play->m_calcNonEffectObjects.size()));
     for (int i = 0; i < moving; ++i)
-        place(play->m_calcNonEffectObjects[static_cast<std::size_t>(i)]);
+        place(play->m_calcNonEffectObjects[(std::size_t)i]);
     for (std::size_t which = 0; which < layer.pools.size(); ++which)
         for (std::size_t i = layer.used[which]; i < layer.pools[which].size(); ++i)
             layer.pools[which][i]->setVisible(false);

@@ -10,34 +10,32 @@
 
 using namespace geode::prelude;
 
-namespace {
-    // nat GROW TF UP BRO
-    short variance_index(std::uint64_t seed, GameObject* object, int group, int index) {
-        auto rotation = static_cast<std::int32_t>(static_cast<std::uint32_t>(static_cast<int>(std::fabs(object->m_startRotationX) * 6.7 + 1.0)) *
-                                                  static_cast<std::uint32_t>(index + 67));
-        std::uint64_t value = seed;
-        value *= static_cast<std::uint64_t>(static_cast<std::int64_t>(static_cast<int>(object->m_objectID + 5541)));
-        value *= static_cast<std::uint64_t>(static_cast<std::int64_t>(static_cast<int>(std::fabs(object->m_startPosition.x) + 1.0)));
-        value *= static_cast<std::uint64_t>(static_cast<std::int64_t>(static_cast<int>(std::fabs(object->m_startPosition.y) + 1.0)));
-        value *= static_cast<std::uint64_t>(static_cast<std::int64_t>(static_cast<int>(object->m_zLayer) + 2137));
-        value *= static_cast<std::uint64_t>(static_cast<std::int64_t>(object->m_groupCount + 6969));
-        value *= static_cast<std::uint64_t>(static_cast<std::int64_t>(static_cast<int>(object->m_isObjectBlack) * 420 + 14));
-        value *= static_cast<std::uint64_t>(static_cast<std::int64_t>(rotation));
-        value *= static_cast<std::uint64_t>(static_cast<std::int64_t>(group + 2137));
-        return static_cast<short>(value % 1777);
-    }
+// nat GROW TF UP BRO
+static short variance_index(unsigned long long seed, GameObject* object, int group, int index) {
+    auto rotation = (int)((unsigned)((int)(std::fabs(object->m_startRotationX) * 6.7 + 1.0)) *
+                                              (unsigned)(index + 67));
+    unsigned long long value = seed;
+    value *= (unsigned long long)((long long)((int)(object->m_objectID + 5541)));
+    value *= (unsigned long long)((long long)((int)(std::fabs(object->m_startPosition.x) + 1.0)));
+    value *= (unsigned long long)((long long)((int)(std::fabs(object->m_startPosition.y) + 1.0)));
+    value *= (unsigned long long)((long long)((int)object->m_zLayer + 2137));
+    value *= (unsigned long long)((long long)(object->m_groupCount + 6969));
+    value *= (unsigned long long)((long long)((int)object->m_isObjectBlack * 420 + 14));
+    value *= (unsigned long long)((long long)rotation);
+    value *= (unsigned long long)((long long)(group + 2137));
+    return (short)(value % 1777);
 }
 
 class $modify(SilicateVarianceLayer, GJBaseGameLayer) {
     void processMoveActionsStep(float dt, bool visibleFrame) {
-        auto const& logic = Logic::get();
+        const auto& logic = Logic::get();
         if (logic.macro_silicate_variance && (logic.is_playing() || logic.is_recording()) && !logic.predicting) {
-            std::uint64_t seed = logic.lvl_seed_known ? logic.lvl_seed : 0;
+            unsigned long long seed = logic.lvl_seed_known ? logic.lvl_seed : 0;
             auto stamp = [&](int group) {
                 auto* objects = getGroup(group);
                 if (!objects)
                     return;
-                for (int i = 0; i < static_cast<int>(objects->count()); ++i) {
+                for (int i = 0; i < (int)objects->count(); ++i) {
                     if (auto* obj = static_cast<GameObject*>(objects->objectAtIndex(i)))
                         obj->m_varianceIndex = variance_index(seed, obj, group, i);
                 }

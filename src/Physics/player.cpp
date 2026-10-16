@@ -171,7 +171,7 @@ void stopDashing(PlayerObject* player) {
         float vehicleSizeDependant =
             player->m_vehicleSize == 1.0 ? 0.433333 : 0.333333;
         float sidewaysMod = player->m_isSideways ? -1 : 1;
-        int upsideDownMod = player->m_isUpsideDown ? -0xb4 : 0xb4;
+        int upsideDownMod = player->m_isUpsideDown ? -180 : 180;
         int leftMod = player->m_isGoingLeft ? -1 : 1;
 
         player->m_rotationSpeed = (upsideDownMod * leftMod * sidewaysMod *
@@ -464,9 +464,9 @@ void updateJump(PlayerObject* player, float dt) {
         player->m_isOnGround = false;
     }
 
-    int jumpACRelated = -(player->m_isOnGround ? 1 : 0) & 0xd5;
+    int jumpACRelated = -(player->m_isOnGround ? 1 : 0) & 213;
     int randNumber = rand();
-    int jumpACSeed = (int)(((float)randNumber / 0x7fff) * 1000.0);
+    int jumpACSeed = (int)(((float)randNumber / 32767) * 1000.0);
 
     player->m_jumpRelatedAC2 = geode::SeedValueRSV(jumpACRelated, jumpACSeed);
 

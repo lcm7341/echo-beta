@@ -36,33 +36,31 @@
 
 using namespace geode::prelude;
 
-namespace echo::step {
-    void trace_note(std::string const& line);
-}
+void trace_note(std::string const& line);
 
 namespace {
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Winvalid-offsetof"
 
     struct Span {
-        std::uint16_t begin;
-        std::uint16_t size;
+        unsigned short begin;
+        unsigned short size;
     };
 
 #define ECHO_SPAN(first, last)                                                                                              \
     Span {                                                                                                                  \
-        static_cast<std::uint16_t>(offsetof(GameObject, first)),                                                            \
-            static_cast<std::uint16_t>(offsetof(GameObject, last) + sizeof(GameObject::last) - offsetof(GameObject, first)) \
+        (unsigned short)offsetof(GameObject, first),                                                            \
+            (unsigned short)(offsetof(GameObject, last) + sizeof(GameObject::last) - offsetof(GameObject, first)) \
     }
     constexpr std::array SPANS = {
         ECHO_SPAN(m_positionXOffset, m_scaleYOffset),
         ECHO_SPAN(m_isDirty, m_isOrientedBoxDirty),
         ECHO_SPAN(m_unmodifiedPositionX, m_positionY),
         ECHO_SPAN(m_startRotationX, m_customScaleY),
-        Span{ static_cast<std::uint16_t>(offsetof(GameObject, m_startFlipX)), 4 },
+        Span{ (unsigned short)offsetof(GameObject, m_startFlipX), 4 },
         ECHO_SPAN(m_scaleX, m_scaleY),
         ECHO_SPAN(m_lastPosition, m_unk4CC),
-        Span{ static_cast<std::uint16_t>(offsetof(GameObject, m_useTextureRectForSelection)), 4 },
+        Span{ (unsigned short)offsetof(GameObject, m_useTextureRectForSelection), 4 },
     };
 #undef ECHO_SPAN
 #pragma clang diagnostic pop
@@ -84,16 +82,16 @@ namespace {
         return std::size_t{ 0 };
     }();
 
-    void gather(GameObject const* object, std::uint8_t* out) {
-        auto const* raw = reinterpret_cast<std::uint8_t const*>(object);
+    void gather(GameObject const* object, unsigned char* out) {
+        auto const* raw = reinterpret_cast<unsigned char const*>(object);
         for (auto const& span : SPANS) {
             std::memcpy(out, raw + span.begin, span.size);
             out += span.size;
         }
     }
 
-    void scatter(GameObject* object, std::uint8_t const* in) {
-        auto* raw = reinterpret_cast<std::uint8_t*>(object);
+    void scatter(GameObject* object, unsigned char const* in) {
+        auto* raw = reinterpret_cast<unsigned char*>(object);
         for (auto const& span : SPANS) {
             std::memcpy(raw + span.begin, in, span.size);
             in += span.size;
@@ -115,17 +113,17 @@ namespace {
     using Counts = gd::vector<gd::vector<int>*>;
 
     Bucket* bucket_at(Grid const& grid, int x, int y) {
-        if (x < 0 || y < 0 || static_cast<std::size_t>(x) >= grid.size() || !grid[x])
+        if (x < 0 || y < 0 || (std::size_t)x >= grid.size() || !grid[x])
             return nullptr;
         auto& column = *grid[x];
-        return static_cast<std::size_t>(y) < column.size() ? column[y] : nullptr;
+        return (std::size_t)y < column.size() ? column[y] : nullptr;
     }
 
     int* count_at(Counts const& counts, int x, int y) {
-        if (x < 0 || y < 0 || static_cast<std::size_t>(x) >= counts.size() || !counts[x])
+        if (x < 0 || y < 0 || (std::size_t)x >= counts.size() || !counts[x])
             return nullptr;
         auto& column = *counts[x];
-        return static_cast<std::size_t>(y) < column.size() ? &column[y] : nullptr;
+        return (std::size_t)y < column.size() ? &column[y] : nullptr;
     }
 
     struct ListCopy {
@@ -139,7 +137,7 @@ namespace {
         if (!out.present)
             return;
         out.count = *count;
-        int used = std::clamp(*count, 0, static_cast<int>(bucket->size()));
+        int used = std::clamp(*count, 0, (int)bucket->size());
         out.items.assign(bucket->begin(), bucket->begin() + used);
     }
 
@@ -153,7 +151,7 @@ namespace {
         *count = copy.count;
         for (std::size_t i = 0; i < copy.items.size(); ++i) {
             if (copy.items[i])
-                fix(copy.items[i], static_cast<int>(i));
+                fix(copy.items[i], (int)i);
         }
     }
 
@@ -166,7 +164,7 @@ namespace {
     struct Sections {
         bool active = false;
         GJBaseGameLayer* layer = nullptr;
-        std::unordered_map<std::uint64_t, Cell> cells;
+        std::unordered_map<unsigned long long, Cell> cells;
         ListCopy calc_non_effect, calc_blocks;
         std::vector<int> deactivated;
         int moved_count = 0;
@@ -183,8 +181,8 @@ namespace {
                 indexes.try_emplace(object, Indexes{ object->m_someOtherIndex, object->m_innerSectionIndex, object->m_outerSectionIndex, object->m_middleSectionIndex });
         }
 
-        static std::uint64_t key(int x, int y) {
-            return (static_cast<std::uint64_t>(static_cast<std::uint32_t>(x)) << 32) | static_cast<std::uint32_t>(y);
+        static unsigned long long key(int x, int y) {
+            return ((unsigned long long)((unsigned)x) << 32) | (unsigned)y;
         }
 
         Grid& grid() {
@@ -224,7 +222,7 @@ namespace {
 
         bool flag_at(int x, int y, bool& present) {
             auto& flags = layer->m_nonEffectObjectsFlags;
-            present = x >= 0 && y >= 0 && static_cast<std::size_t>(x) < flags.size() && flags[x] && static_cast<std::size_t>(y) < flags[x]->size();
+            present = x >= 0 && y >= 0 && (std::size_t)x < flags.size() && flags[x] && (std::size_t)y < flags[x]->size();
             return present && (*flags[x])[y];
         }
 
@@ -316,34 +314,34 @@ namespace {
         PlayLayer* play = nullptr;
         CCArray* array = nullptr;
         unsigned array_count = 0;
-        std::uint64_t epoch = 0;
+        unsigned long long epoch = 0;
         std::vector<GameObject*> objects;
-        std::unordered_map<GameObject*, std::uint32_t> index;
+        std::unordered_map<GameObject*, unsigned> index;
 
         GJEffectManager* shadow = nullptr;
         bool valid = false;
-        std::uint64_t origin = 0;
+        unsigned long long origin = 0;
         float dt = 0.f;
         int horizon = 0;
-        std::vector<std::vector<std::pair<std::uint32_t, std::uint32_t>>> frames;
+        std::vector<std::vector<std::pair<unsigned, unsigned>>> frames;
         std::vector<CCPoint> fired_from;
-        std::uint32_t generation = 0;
-        std::vector<std::uint8_t> records;
-        std::vector<std::uint32_t> latest;
-        std::vector<std::uint8_t> quiet, has_quiet;
+        unsigned generation = 0;
+        std::vector<unsigned char> records;
+        std::vector<unsigned> latest;
+        std::vector<unsigned char> quiet, has_quiet;
 
-        std::vector<std::uint8_t> base;
+        std::vector<unsigned char> base;
         std::vector<Node> nodes;
-        std::vector<std::uint32_t> base_stamp;
-        std::uint32_t base_epoch = 1;
+        std::vector<unsigned> base_stamp;
+        unsigned base_epoch = 1;
 
         // objects that go up & down exactly w/ the player (lock to player y, a 1:1 follow). lock_y: 0 = dont know yet,
         // 1 = every step so far it moved by the players own dy, 2 = no. pre_y = where it was before the steps move
-        std::vector<std::uint8_t> lock_y;
+        std::vector<unsigned char> lock_y;
         std::vector<double> pre_y;
 
         std::vector<CCPoint> spot;
-        std::vector<std::uint32_t> spot_stamp;
+        std::vector<unsigned> spot_stamp;
 
         // follow player y. the forecast can only guess 1 path for the icon, but every line of the trajectory has its own,
         // & a follower goes where THAT lines icon goes. so each line works its followers out itself, step by step, the
@@ -354,10 +352,10 @@ namespace {
             int offset;
         };
         std::vector<std::vector<Follow>> follow_frames;
-        std::unordered_map<int, std::vector<std::uint32_t>> follow_members;
+        std::unordered_map<int, std::vector<unsigned>> follow_members;
         std::vector<double> line_y;
-        std::vector<std::uint32_t> line_stamp;
-        std::uint32_t line_epoch = 1;
+        std::vector<unsigned> line_stamp;
+        unsigned line_epoch = 1;
         // gd keeps the icons last 200 y's, 1 every 0.01s (PlayerObject::updateSpecial), & a follow w/ a delay reads back
         // into that (getOldPosition). ts is the line being drawns own copy of it, carried on from the real icons
         std::array<float, 200> ring{};
@@ -366,28 +364,28 @@ namespace {
         bool ring_ready = false;
 
         Sections sections;
-        std::vector<std::uint32_t> touched;
-        std::vector<std::uint32_t> node_stamp, touch_stamp;
-        std::uint32_t touch_epoch = 1;
+        std::vector<unsigned> touched;
+        std::vector<unsigned> node_stamp, touch_stamp;
+        unsigned touch_epoch = 1;
         bool recording = false;
-        std::vector<std::uint32_t> moved, moved_stamp;
-        std::vector<std::uint32_t> last_offset, last_stamp;
-        std::uint32_t last_epoch = 1;
-        std::vector<std::uint32_t> last_list;
-        std::uint32_t step_epoch = 1;
+        std::vector<unsigned> moved, moved_stamp;
+        std::vector<unsigned> last_offset, last_stamp;
+        unsigned last_epoch = 1;
+        std::vector<unsigned> last_list;
+        unsigned step_epoch = 1;
 
         int channel = 0;
         int cursor = 0;
         bool goingBack = false;
         std::vector<CCPoint> path;
         CCPoint path_before;
-        std::uint64_t path_start = 0;
+        unsigned long long path_start = 0;
         CCPoint player_at, player_step;
         int steps_run = 0;
 
         struct Fired {
             EffectGameObject* object;
-            std::vector<std::uint8_t> bytes;
+            std::vector<unsigned char> bytes;
         };
 
         std::vector<Fired> fired;
@@ -395,9 +393,9 @@ namespace {
         std::unordered_set<GameObject*> live_moved;
 
         bool applying = false;
-        std::vector<std::uint32_t> pending, pending_record;
-        std::vector<std::uint32_t> applied, applied_stamp;
-        std::uint32_t apply_epoch = 1;
+        std::vector<unsigned> pending, pending_record;
+        std::vector<unsigned> applied, applied_stamp;
+        unsigned apply_epoch = 1;
     };
 
     Forecast& state() {
@@ -461,8 +459,8 @@ namespace {
         return kept;
     }
 
-    std::uint64_t& live_steps() {
-        static std::uint64_t steps = 0;
+    unsigned long long& live_steps() {
+        static unsigned long long steps = 0;
         return steps;
     }
 
@@ -473,17 +471,17 @@ namespace {
 
     int last_rebuild_step = 0;
 
-    std::unordered_map<int, std::uint32_t> forecast_fired;
+    std::unordered_map<int, unsigned> forecast_fired;
 
     void refresh_objects(Forecast& f, PlayLayer* play) {
         // hopefully fixes crash
-        if (f.play == play && f.array == play->m_objects && f.epoch == echo::movement::group_epoch &&
+        if (f.play == play && f.array == play->m_objects && f.epoch == MovingObjects::group_epoch &&
             play->m_objects && f.array_count == play->m_objects->count())
             return;
         f.play = play;
         f.array = play->m_objects;
         f.array_count = play->m_objects ? play->m_objects->count() : 0;
-        f.epoch = echo::movement::group_epoch;
+        f.epoch = MovingObjects::group_epoch;
         for (auto* obj : f.objects)
             obj->release();
         f.objects.clear();
@@ -499,7 +497,7 @@ namespace {
             auto* obj = static_cast<GameObject*>(play->m_objects->objectAtIndex(i));
             if (!obj || obj->m_groupCount <= 0)
                 continue;
-            f.index.emplace(obj, static_cast<std::uint32_t>(f.objects.size()));
+            f.index.emplace(obj, (unsigned)f.objects.size());
             obj->retain();
             f.objects.push_back(obj);
         }
@@ -517,14 +515,14 @@ namespace {
         f.applied_stamp.assign(amt, 0);
         f.touch_stamp.assign(amt, 0);
         f.node_stamp.assign(amt, 0);
-        f.pending_record.assign(amt, UINT32_MAX);
-        f.latest.assign(amt, UINT32_MAX);
+        f.pending_record.assign(amt, UINT_MAX);
+        f.latest.assign(amt, UINT_MAX);
         f.has_quiet.assign(amt, 0);
         f.quiet.clear();
     }
 
-    std::uint32_t ensure_index(Forecast& f, GameObject* object) {
-        auto [it, fresh] = f.index.try_emplace(object, static_cast<std::uint32_t>(f.objects.size()));
+    unsigned ensure_index(Forecast& f, GameObject* object) {
+        auto [it, fresh] = f.index.try_emplace(object, (unsigned)f.objects.size());
         if (!fresh)
             return it->second;
         object->retain();
@@ -542,31 +540,31 @@ namespace {
         f.applied_stamp.push_back(0);
         f.touch_stamp.push_back(0);
         f.node_stamp.push_back(0);
-        f.pending_record.push_back(UINT32_MAX);
-        f.latest.push_back(UINT32_MAX);
+        f.pending_record.push_back(UINT_MAX);
+        f.latest.push_back(UINT_MAX);
         f.has_quiet.push_back(0);
         return it->second;
     }
 
-    void cache_live(Forecast& f, std::uint32_t i) {
+    void cache_live(Forecast& f, unsigned i) {
         f.base_stamp[i] = 1;
-        gather(f.objects[i], f.base.data() + static_cast<std::size_t>(i) * STRIDE);
+        gather(f.objects[i], f.base.data() + (std::size_t)i * STRIDE);
         f.nodes[i] = node_of(f.objects[i]);
     }
 
-    void keep_base(Forecast& f, std::uint32_t i) {
+    void keep_base(Forecast& f, unsigned i) {
         if (!f.base_stamp[i])
             cache_live(f, i);
     }
 
-    void keep_spot(Forecast& f, std::uint32_t i) {
+    void keep_spot(Forecast& f, unsigned i) {
         if (f.spot_stamp[i] == f.touch_epoch)
             return;
         f.spot_stamp[i] = f.touch_epoch;
         f.spot[i] = f.objects[i]->CCNode::getPosition();
     }
 
-    void put_base(Forecast& f, std::uint32_t i, bool node) {
+    void put_base(Forecast& f, unsigned i, bool node) {
         auto* obj = f.objects[i];
         if (node && f.node_stamp[i] == f.touch_epoch) {
             auto const& saved = f.nodes[i];
@@ -581,7 +579,7 @@ namespace {
             if (obj->getOpacity() != saved.opacity)
                 obj->setOpacity(saved.opacity);
         }
-        scatter(obj, f.base.data() + static_cast<std::size_t>(i) * STRIDE);
+        scatter(obj, f.base.data() + (std::size_t)i * STRIDE);
         // the fields are back, but the hitbox the look ahead worked out for the place IT had the object is still sitting
         // in the objects rect & oriented box (the box is its own thing, not in the spans). the dirty flags just went back
         // to whatever they were, which can be "clean". so they are always set here: the next thing that asks gets a
@@ -601,7 +599,7 @@ namespace {
         }
     }
 
-    void touch(Forecast& f, std::uint32_t i) {
+    void touch(Forecast& f, unsigned i) {
         if (f.touch_stamp[i] == f.touch_epoch)
             return;
         f.touch_stamp[i] = f.touch_epoch;
@@ -609,8 +607,8 @@ namespace {
         keep_spot(f, i);
     }
 
-    std::uint32_t record(Forecast& f, std::uint32_t i) {
-        auto offset = static_cast<std::uint32_t>(f.records.size());
+    unsigned record(Forecast& f, unsigned i) {
+        auto offset = (unsigned)f.records.size();
         f.records.resize(f.records.size() + STRIDE);
         gather(f.objects[i], f.records.data() + offset);
         f.latest[i] = offset;
@@ -638,7 +636,7 @@ namespace {
             return;
         auto& fired = f.fired.emplace_back();
         fired.object = object;
-        auto const* raw = reinterpret_cast<std::uint8_t const*>(object);
+        auto const* raw = reinterpret_cast<unsigned char const*>(object);
         fired.bytes.assign(raw + sizeof(CCSprite), raw + sizeof(EffectGameObject));
     }
 
@@ -648,8 +646,8 @@ namespace {
             return;
         auto* body = play->m_player1;
         bool sideways = body && body->m_isSideways;
-        while (static_cast<unsigned>(f.cursor) < list->count()) {
-            auto* obj = static_cast<EffectGameObject*>(list->objectAtIndex(static_cast<unsigned>(f.cursor)));
+        while ((unsigned)f.cursor < list->count()) {
+            auto* obj = static_cast<EffectGameObject*>(list->objectAtIndex((unsigned)f.cursor));
             if (!obj) {
                 ++f.cursor;
                 continue;
@@ -673,11 +671,11 @@ namespace {
             used += frame.size();
         if (f.records.size() < (used + f.objects.size()) * STRIDE * 2 + (1u << 20))
             return;
-        std::vector<std::uint8_t> kept;
+        std::vector<unsigned char> kept;
         kept.reserve((used + f.objects.size()) * STRIDE);
-        std::unordered_map<std::uint32_t, std::uint32_t> moved;
-        auto keep = [&](std::uint32_t offset) {
-            auto [it, fresh] = moved.try_emplace(offset, static_cast<std::uint32_t>(kept.size()));
+        std::unordered_map<unsigned, unsigned> moved;
+        auto keep = [&](unsigned offset) {
+            auto [it, fresh] = moved.try_emplace(offset, (unsigned)kept.size());
             if (fresh)
                 kept.insert(kept.end(), f.records.begin() + offset, f.records.begin() + offset + STRIDE);
             return it->second;
@@ -687,7 +685,7 @@ namespace {
                 entry.second = keep(entry.second);
         }
         for (auto& offset : f.latest) {
-            if (offset != UINT32_MAX)
+            if (offset != UINT_MAX)
                 offset = keep(offset);
         }
         f.records = std::move(kept);
@@ -695,32 +693,32 @@ namespace {
 
     constexpr std::size_t RECORD_LIMIT = std::size_t{ 192 } << 20;
 
-    CCPoint player_after(Forecast const& f, std::uint64_t absolute, CCPoint node, CCPoint live_step, std::uint64_t live_now) {
+    CCPoint player_after(Forecast const& f, unsigned long long absolute, CCPoint node, CCPoint live_step, unsigned long long live_now) {
         if (!f.path.empty()) {
             if (absolute + 1 == f.path_start)
                 return f.path_before;
             if (absolute >= f.path_start) {
                 auto idx = absolute - f.path_start;
                 if (idx < f.path.size())
-                    return f.path[static_cast<std::size_t>(idx)];
+                    return f.path[(std::size_t)idx];
                 auto last = f.path.back();
                 auto step = f.path.size() >= 2 ? last - f.path[f.path.size() - 2] : last - f.path_before;
-                return last + step * static_cast<float>(idx - (f.path.size() - 1));
+                return last + step * (float)(idx - (f.path.size() - 1));
             }
         }
-        return node + live_step * (static_cast<float>(absolute) - static_cast<float>(live_now));
+        return node + live_step * ((float)absolute - (float)live_now);
     }
 
     void extend(Forecast& f, PlayLayer* play, int count) {
         auto& logic = Logic::get();
         auto* live = play->m_effectManager;
-        echo::SavedGameState saved_state(play->m_gameState);
+        SavedGameState saved_state(play->m_gameState);
         auto random_state = GameToolbox::getfast_srand();
         bool predicting = logic.predicting;
         logic.predicting = true;
         ++f.touch_epoch;
         f.touched.clear();
-        for (std::uint32_t i = 0; i < f.objects.size(); ++i)
+        for (unsigned i = 0; i < f.objects.size(); ++i)
             keep_base(f, i);
         // safety net: keep objs pos before run
         // anything the run moved w/out being seen is discovered & put back
@@ -728,16 +726,16 @@ namespace {
         bool netted = f.objects.size() <= 60000;
         if (netted) {
             before.resize(f.objects.size());
-            for (std::uint32_t i = 0; i < f.objects.size(); ++i)
+            for (unsigned i = 0; i < f.objects.size(); ++i)
                 before[i] = { f.objects[i]->m_positionX, f.objects[i]->m_positionY };
         }
         f.sections.begin(play);
-        for (std::uint32_t i = 0; i < f.objects.size(); ++i) {
-            bool quiet = f.has_quiet[i] && f.quiet.size() >= (static_cast<std::size_t>(i) + 1) * STRIDE;
-            if (f.latest[i] == UINT32_MAX && !quiet)
+        for (unsigned i = 0; i < f.objects.size(); ++i) {
+            bool quiet = f.has_quiet[i] && f.quiet.size() >= ((std::size_t)i + 1) * STRIDE;
+            if (f.latest[i] == UINT_MAX && !quiet)
                 continue;
             touch(f, i);
-            scatter(f.objects[i], quiet ? f.quiet.data() + static_cast<std::size_t>(i) * STRIDE : f.records.data() + f.latest[i]);
+            scatter(f.objects[i], quiet ? f.quiet.data() + (std::size_t)i * STRIDE : f.records.data() + f.latest[i]);
             play->updateObjectSection(f.objects[i]);
         }
         auto tuples = play->m_spawnTuples;
@@ -763,7 +761,7 @@ namespace {
             play->m_gameState.m_commandIndex += 1;
             ++f.steps_run;
             {
-                std::uint64_t absolute = f.origin + static_cast<std::uint64_t>(f.steps_run);
+                unsigned long long absolute = f.origin + (unsigned long long)f.steps_run;
                 auto at = player_after(f, absolute - 1, node1, live_step, live_now);
                 auto before = player_after(f, absolute - 2, node1, live_step, live_now);
                 fire_from = at;
@@ -774,7 +772,7 @@ namespace {
                     p2->CCNode::setPosition(node2 + (at - node1));
                 f.shadow->m_unk780 = at.x - before.x;
                 f.shadow->m_unk784 = at.y - before.y;
-                player_dy = static_cast<double>(at.y) - static_cast<double>(before.y);
+                player_dy = (double)at.y - (double)before.y;
                 auto ahead = at - node1;
                 auto shift = sideways ? CCPoint{ 0.f, ahead.y } : CCPoint{ ahead.x, 0.f };
                 play->m_gameState.m_cameraPosition = camera + shift;
@@ -787,13 +785,13 @@ namespace {
             for (auto* follow : f.shadow->m_unkVector6f0) {
                 if (!follow)
                     continue;
-                auto id = static_cast<std::size_t>(std::clamp(follow->getTag(), 0, 9999));
+                auto id = (std::size_t)std::clamp(follow->getTag(), 0, 9999);
                 auto* members = id < play->m_groups.size() ? play->m_groups[id] : nullptr;
                 if (!members)
                     continue;
-                follows.push_back({ static_cast<int>(id), static_cast<float>(follow->m_unk0a8), static_cast<float>(follow->m_unk0c0),
-                    static_cast<float>(follow->m_unk0b0), follow->m_unk0b8 });
-                auto [listed, fresh] = f.follow_members.try_emplace(static_cast<int>(id));
+                follows.push_back({ (int)id, (float)follow->m_unk0a8, (float)follow->m_unk0c0,
+                    (float)follow->m_unk0b0, follow->m_unk0b8 });
+                auto [listed, fresh] = f.follow_members.try_emplace((int)id);
                 for (unsigned n = 0; n < members->count(); ++n) {
                     auto* obj = static_cast<GameObject*>(members->objectAtIndex(n));
                     if (!obj)
@@ -826,7 +824,7 @@ namespace {
                 if (f.objects[i]->m_objectType == GameObjectType::Decoration) {
                     if (f.quiet.size() < f.objects.size() * STRIDE)
                         f.quiet.resize(f.objects.size() * STRIDE);
-                    gather(f.objects[i], f.quiet.data() + static_cast<std::size_t>(i) * STRIDE);
+                    gather(f.objects[i], f.quiet.data() + (std::size_t)i * STRIDE);
                     f.has_quiet[i] = 1;
                     continue;
                 }
@@ -842,12 +840,12 @@ namespace {
         if (p2)
             p2->CCNode::setPosition(node2);
         for (auto it = f.fired.rbegin(); it != f.fired.rend(); ++it)
-            std::memcpy(reinterpret_cast<std::uint8_t*>(it->object) + sizeof(CCSprite), it->bytes.data(), it->bytes.size());
+            std::memcpy(reinterpret_cast<unsigned char*>(it->object) + sizeof(CCSprite), it->bytes.data(), it->bytes.size());
         f.fired.clear();
         for (auto i : f.touched)
             put_base(f, i, true);
         if (netted) {
-            for (std::uint32_t i = 0; i < before.size() && i < f.objects.size(); ++i) {
+            for (unsigned i = 0; i < before.size() && i < f.objects.size(); ++i) {
                 auto* obj = f.objects[i];
                 if (obj->m_positionX == before[i].first && obj->m_positionY == before[i].second)
                     continue;
@@ -862,7 +860,7 @@ namespace {
         saved_state.restore(play->m_gameState);
         GameToolbox::fast_srand(random_state);
         logic.predicting = predicting;
-        f.horizon = static_cast<int>(f.frames.size());
+        f.horizon = (int)f.frames.size();
     }
 
     void rebuild(Forecast& f, PlayLayer* play, int steps) {
@@ -871,7 +869,7 @@ namespace {
         f.follow_frames.clear();
         f.follow_members.clear();
         f.records.clear();
-        std::fill(f.latest.begin(), f.latest.end(), UINT32_MAX);
+        std::fill(f.latest.begin(), f.latest.end(), UINT_MAX);
         std::fill(f.has_quiet.begin(), f.has_quiet.end(), 0);
         std::fill(f.base_stamp.begin(), f.base_stamp.end(), 0);
         std::fill(f.lock_y.begin(), f.lock_y.end(), 0);
@@ -905,7 +903,7 @@ namespace {
         }
         bool ahead = false;
         if (auto* list = static_cast<CCArray*>(play->m_spawnObjects ? play->m_spawnObjects->objectForKey(f.channel) : nullptr)) {
-            for (unsigned i = static_cast<unsigned>(std::max(f.cursor, 0)); i < list->count() && !ahead; ++i) {
+            for (unsigned i = (unsigned)std::max(f.cursor, 0); i < list->count() && !ahead; ++i) {
                 auto* obj = static_cast<EffectGameObject*>(list->objectAtIndex(i));
                 ahead = obj && (motion_trigger(obj->m_objectID) || obj->m_objectID == 1268);
             }
@@ -914,7 +912,7 @@ namespace {
             if (f.shadow)
                 f.shadow->release();
             f.shadow = nullptr;
-            f.frames.resize(static_cast<std::size_t>(steps));
+            f.frames.resize((std::size_t)steps);
             f.follow_frames.resize(f.frames.size());
             f.fired_from.resize(f.frames.size(), CCPoint{ NAN, NAN });
             f.horizon = steps;
@@ -1002,7 +1000,7 @@ namespace forecast {
         auto& f = state();
         if (!play || steps <= 0 || f.applying)
             return;
-        steps = std::max(steps, std::max(32, static_cast<int>(Logic::get().sample_rate() / 15.0)));
+        steps = std::max(steps, std::max(32, (int)(Logic::get().sample_rate() / 15.0)));
         if (Logic::get().backstep_target >= 0 || Logic::get().backstepping) {
             f.valid = false;
             f.live_moved.clear();
@@ -1012,12 +1010,12 @@ namespace forecast {
         if (f.dt != dt)
             stale() = true;
         f.dt = dt;
-        std::uint64_t elapsed = live_steps() - f.origin;
+        unsigned long long elapsed = live_steps() - f.origin;
         if (f.valid && play->m_player1) {
-            auto expected = f.player_at + f.player_step * static_cast<float>(elapsed);
+            auto expected = f.player_at + f.player_step * (float)elapsed;
             bool onPath = live_steps() >= f.path_start && live_steps() - f.path_start < f.path.size();
             if (onPath)
-                expected = f.path[static_cast<std::size_t>(live_steps() - f.path_start)];
+                expected = f.path[(std::size_t)(live_steps() - f.path_start)];
             auto live = play->m_player1->getPosition();
             auto step = live - play->m_player1->m_lastPosition;
             bool sideways = play->m_player1->m_isSideways;
@@ -1027,14 +1025,14 @@ namespace forecast {
             if (play->m_isPlatformer ? off > 30.f : off > 0.5f || speed > 0.001f)
                 stale() = true;
         }
-        if (f.valid && !stale() && elapsed > 0 && elapsed <= static_cast<std::uint64_t>(f.frames.size())) {
+        if (f.valid && !stale() && elapsed > 0 && elapsed <= (unsigned long long)f.frames.size()) {
             if (f.last_stamp.size() < f.objects.size()) {
                 f.last_stamp.resize(f.objects.size(), 0);
                 f.last_offset.resize(f.objects.size(), 0);
             }
             ++f.last_epoch;
             f.last_list.clear();
-            for (std::uint64_t k = 0; k < elapsed; ++k)
+            for (unsigned long long k = 0; k < elapsed; ++k)
                 for (auto [i, offset] : f.frames[k]) {
                     if (f.last_stamp[i] != f.last_epoch) {
                         f.last_stamp[i] = f.last_epoch;
@@ -1073,8 +1071,8 @@ namespace forecast {
                 cache_live(f, it->second);
         }
         f.live_moved.clear();
-        for (std::uint32_t i = 0; i < f.latest.size(); ++i) {
-            if ((f.latest[i] != UINT32_MAX || f.has_quiet[i]) && f.base_stamp[i])
+        for (unsigned i = 0; i < f.latest.size(); ++i) {
+            if ((f.latest[i] != UINT_MAX || f.has_quiet[i]) && f.base_stamp[i])
                 cache_live(f, i);
         }
         // followers too. gd moves them w/out telling anyone, so where they really are has to be read again every time
@@ -1087,14 +1085,14 @@ namespace forecast {
             bool sideways = play->m_player1->m_isSideways;
             bool exact = player_exact(f, play);
             std::size_t built = std::min(f.fired_from.size(), f.frames.size());
-            for (std::size_t k = static_cast<std::size_t>(std::min<std::uint64_t>(elapsed, built)); k < built; ++k) {
+            for (std::size_t k = (std::size_t)(std::min<unsigned long long>(elapsed, built)); k < built; ++k) {
                 auto was = f.fired_from[k];
                 if (std::isnan(was.x))
                     continue;
-                std::uint64_t absolute = f.origin + k;
+                unsigned long long absolute = f.origin + k;
                 if (absolute + 1 < f.path_start || absolute >= f.path_start + f.path.size())
                     continue;
-                auto now = absolute + 1 == f.path_start ? f.path_before : f.path[static_cast<std::size_t>(absolute - f.path_start)];
+                auto now = absolute + 1 == f.path_start ? f.path_before : f.path[(std::size_t)(absolute - f.path_start)];
                 float travel = sideways ? std::abs(now.y - was.y) : std::abs(now.x - was.x);
                 bool differs = exact ? std::max(std::abs(now.x - was.x), std::abs(now.y - was.y)) > 0.01f
                                      : travel > 0.01f && trigger_between(f, play, sideways ? std::min(now.y, was.y) : std::min(now.x, was.x), sideways ? std::max(now.y, was.y) : std::max(now.x, was.x), sideways);
@@ -1104,24 +1102,24 @@ namespace forecast {
                 break;
             }
         }
-        bool old = Logic::get().step_frame - last_rebuild_step > static_cast<int>(Logic::get().sample_rate() * 30.0);
-        if (stale() || !f.valid || old || elapsed > static_cast<std::uint64_t>(f.horizon)) {
+        bool old = Logic::get().step_frame - last_rebuild_step > (int)(Logic::get().sample_rate() * 30.0);
+        if (stale() || !f.valid || old || elapsed > (unsigned long long)f.horizon) {
             rebuild(f, play, steps);
             return;
         }
         if (elapsed > 0) {
-            f.frames.erase(f.frames.begin(), f.frames.begin() + static_cast<std::ptrdiff_t>(elapsed));
-            f.follow_frames.erase(f.follow_frames.begin(), f.follow_frames.begin() + static_cast<std::ptrdiff_t>(std::min<std::uint64_t>(elapsed, f.follow_frames.size())));
-            f.fired_from.erase(f.fired_from.begin(), f.fired_from.begin() + static_cast<std::ptrdiff_t>(std::min<std::uint64_t>(elapsed, f.fired_from.size())));
-            f.player_at = f.player_at + f.player_step * static_cast<float>(elapsed);
-            f.steps_run -= static_cast<int>(elapsed);
+            f.frames.erase(f.frames.begin(), f.frames.begin() + (std::ptrdiff_t)elapsed);
+            f.follow_frames.erase(f.follow_frames.begin(), f.follow_frames.begin() + (std::ptrdiff_t)(std::min<unsigned long long>(elapsed, f.follow_frames.size())));
+            f.fired_from.erase(f.fired_from.begin(), f.fired_from.begin() + (std::ptrdiff_t)(std::min<unsigned long long>(elapsed, f.fired_from.size())));
+            f.player_at = f.player_at + f.player_step * (float)elapsed;
+            f.steps_run -= (int)elapsed;
             f.origin = live_steps();
-            f.horizon = static_cast<int>(f.frames.size());
+            f.horizon = (int)f.frames.size();
             compact(f);
         }
         if (f.horizon < steps) {
             if (!f.shadow || f.frames.empty() && f.records.empty()) {
-                f.frames.resize(static_cast<std::size_t>(steps));
+                f.frames.resize((std::size_t)steps);
                 f.follow_frames.resize(f.frames.size());
                 f.fired_from.resize(f.frames.size(), CCPoint{ NAN, NAN });
                 f.horizon = steps;
@@ -1129,8 +1127,8 @@ namespace forecast {
             }
             int target = steps;
             if (!f.path.empty() && f.path_start + f.path.size() > f.origin) {
-                int covered = static_cast<int>(f.path_start + f.path.size() - f.origin);
-                int lead = std::max(16, static_cast<int>(Logic::get().sample_rate() / 30.0));
+                int covered = (int)(f.path_start + f.path.size() - f.origin);
+                int lead = std::max(16, (int)(Logic::get().sample_rate() / 30.0));
                 target = std::min(steps, std::max(covered + (player_exact(f, play) ? 0 : 8), lead));
             }
             if (f.horizon < target)
@@ -1139,11 +1137,11 @@ namespace forecast {
     }
 
     namespace {
-        bool record_inside(Forecast const& f, std::uint32_t offset, CCRect const& area) {
+        bool record_inside(Forecast const& f, unsigned offset, CCRect const& area) {
             double px = 0, py = 0;
             std::memcpy(&px, f.records.data() + offset + RECORD_POS, sizeof(double));
             std::memcpy(&py, f.records.data() + offset + RECORD_POS + sizeof(double), sizeof(double));
-            return area.containsPoint({ static_cast<float>(px), static_cast<float>(py) });
+            return area.containsPoint({ (float)px, (float)py });
         }
     }
 
@@ -1184,9 +1182,9 @@ namespace forecast {
                     f.ring_time += -0.01f;
                     ++f.ring_at;
                 }
-                f.ring[static_cast<std::size_t>(slot())] = player_y;
+                f.ring[(std::size_t)slot()] = player_y;
             }
-            auto const& follows = f.follow_frames[std::min(static_cast<std::size_t>(step - 1), f.follow_frames.size() - 1)];
+            auto const& follows = f.follow_frames[std::min((std::size_t)(step - 1), f.follow_frames.size() - 1)];
             float tick = f.dt * 60.f;
             for (auto const& follow : follows) {
                 auto members = f.follow_members.find(follow.group);
@@ -1196,25 +1194,25 @@ namespace forecast {
                 float most = follow.max * tick;
                 float icon = player_y;
                 if (follow.delay > 0.f) {
-                    int back = std::clamp(static_cast<int>(std::floor(follow.delay / 0.01f)), 0, 199);
+                    int back = std::clamp((int)std::floor(follow.delay / 0.01f), 0, 199);
                     int at = slot() - back;
-                    icon = f.ring[static_cast<std::size_t>(at < 0 ? at + 200 : at)];
+                    icon = f.ring[(std::size_t)(at < 0 ? at + 200 : at)];
                 }
                 if (icon == 0.f)
                     continue;
-                float target = icon + static_cast<float>(follow.offset);
+                float target = icon + (float)follow.offset;
                 begin();
                 for (auto i : members->second) {
                     keep_base(f, i);
                     if (f.line_stamp[i] != f.line_epoch) {
-                        std::memcpy(&f.line_y[i], f.base.data() + static_cast<std::size_t>(i) * STRIDE + RECORD_POS + sizeof(double), sizeof(double));
+                        std::memcpy(&f.line_y[i], f.base.data() + (std::size_t)i * STRIDE + RECORD_POS + sizeof(double), sizeof(double));
                         f.line_stamp[i] = f.line_epoch;
                     }
-                    float move = pull * (target - static_cast<float>(f.line_y[i]));
+                    float move = pull * (target - (float)f.line_y[i]);
                     if (move != 0.f) {
                         if (most > 0.f)
                             move = std::clamp(move, -most, most);
-                        f.line_y[i] += static_cast<double>(move);
+                        f.line_y[i] += (double)move;
                     }
                     if (f.applied_stamp[i] != f.apply_epoch) {
                         f.applied_stamp[i] = f.apply_epoch;
@@ -1231,19 +1229,19 @@ namespace forecast {
         }
         if (step > f.horizon)
             return;
-        auto const& frame = f.frames[static_cast<std::size_t>(step - 1)];
+        auto const& frame = f.frames[(std::size_t)(step - 1)];
         double lift = 0.0;
-        if (std::isfinite(player_y) && static_cast<std::size_t>(step - 1) < f.fired_from.size()) {
-            float assumed = f.fired_from[static_cast<std::size_t>(step - 1)].y;
+        if (std::isfinite(player_y) && (std::size_t)(step - 1) < f.fired_from.size()) {
+            float assumed = f.fired_from[(std::size_t)(step - 1)].y;
             if (std::isfinite(assumed))
-                lift = static_cast<double>(player_y) - static_cast<double>(assumed);
+                lift = (double)player_y - (double)assumed;
         }
         if (!f.applying) {
             if (frame.empty())
                 return;
             begin();
         }
-        auto put = [&](std::uint32_t i, std::uint32_t offset) {
+        auto put = [&](unsigned i, unsigned offset) {
             keep_base(f, i);
             if (f.applied_stamp[i] != f.apply_epoch) {
                 f.applied_stamp[i] = f.apply_epoch;
@@ -1259,12 +1257,12 @@ namespace forecast {
         };
         for (auto [i, offset] : frame) {
             auto* obj = f.objects[i];
-            if (record_inside(f, offset, area) || area.containsPoint({ static_cast<float>(obj->m_positionX), static_cast<float>(obj->m_positionY) })) {
+            if (record_inside(f, offset, area) || area.containsPoint({ (float)obj->m_positionX, (float)obj->m_positionY })) {
                 put(i, offset);
-                f.pending_record[i] = UINT32_MAX;
+                f.pending_record[i] = UINT_MAX;
             }
             else {
-                if (f.pending_record[i] == UINT32_MAX)
+                if (f.pending_record[i] == UINT_MAX)
                     f.pending.push_back(i);
                 f.pending_record[i] = offset;
             }
@@ -1272,13 +1270,13 @@ namespace forecast {
         for (std::size_t n = 0; n < f.pending.size();) {
             auto i = f.pending[n];
             auto offset = f.pending_record[i];
-            if (offset != UINT32_MAX && !record_inside(f, offset, area)) {
+            if (offset != UINT_MAX && !record_inside(f, offset, area)) {
                 ++n;
                 continue;
             }
-            if (offset != UINT32_MAX)
+            if (offset != UINT_MAX)
                 put(i, offset);
-            f.pending_record[i] = UINT32_MAX;
+            f.pending_record[i] = UINT_MAX;
             f.pending[n] = f.pending.back();
             f.pending.pop_back();
         }
@@ -1297,7 +1295,7 @@ namespace forecast {
             return;
         f.applying = false;
         for (auto i : f.pending)
-            f.pending_record[i] = UINT32_MAX;
+            f.pending_record[i] = UINT_MAX;
         f.pending.clear();
         for (auto i : f.applied)
             put_base(f, i, false);
@@ -1418,7 +1416,7 @@ class $modify(ForecastToggles, GJBaseGameLayer) {
         if (state().recording)
             return;
         if (Logic::get().trace_logging && !Logic::get().predicting)
-            echo::step::trace_note(fmt::format("TG frame={} group={} on={} trigger={} state={}\n", Logic::get().step_frame, group, activate, triggerID, static_cast<int>(Logic::get().state)));
+            trace_note(fmt::format("TG frame={} group={} on={} trigger={} state={}\n", Logic::get().step_frame, group, activate, triggerID, (int)Logic::get().state));
         GJBaseGameLayer::toggleGroupTriggered(group, activate, remapKeys, triggerID, controlID);
     }
 
@@ -1453,17 +1451,17 @@ class $modify(ForecastAreas, GJBaseGameLayer) {
         }
         auto& grid = *reinterpret_cast<Grid*>(&m_sections);
         auto& counts = *reinterpret_cast<Counts*>(&m_sectionSizes);
-        int last_x = std::min(outerMax, static_cast<int>(grid.size()) - 1);
+        int last_x = std::min(outerMax, (int)grid.size() - 1);
         for (int x = std::max(outerMin, 0); x <= last_x; ++x) {
             if (!grid[x])
                 continue;
-            int last_y = std::min(middleMax, static_cast<int>(grid[x]->size()) - 1);
+            int last_y = std::min(middleMax, (int)grid[x]->size() - 1);
             for (int y = std::max(middleMin, 0); y <= last_y; ++y) {
                 auto* bucket = bucket_at(grid, x, y);
                 auto* amt = count_at(counts, x, y);
                 if (!bucket || !amt)
                     continue;
-                int used = std::clamp(*amt, 0, static_cast<int>(bucket->size()));
+                int used = std::clamp(*amt, 0, (int)bucket->size());
                 for (int i = 0; i < used; ++i)
                     keep((*bucket)[i]);
             }

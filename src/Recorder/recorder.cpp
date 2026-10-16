@@ -1,11 +1,3 @@
-// renders a macro to a video
-//
-// gd draws into a texture at the videos size, 1 fixed step per frame, so the video is smooth no matter how slow the pc is
-// windows & mac pipe the frames to an ffmpeg process. android uses the ffmpeg api mod. ios uses apples encoder (ios_encoder)
-// the window keeps its real size while gd is told it has the videos size, & the shader layer is resized to match (silicate)
-// audio is tapped off gds own mixer (AudioTap): frozen between frames & moved on by exactly 1 frame of sound each time,
-//   so it cant drift from the picture. it is muxed into the video in a 2nd pass
-// gd streams songs off disk in pieces, too slow for a render that runs faster than real time. render_song loads the whole song
 #include "Logic/build_info.hpp"
 #include "GUI/gui.hpp"
 #include "Recorder/stereo_audio.hpp"
@@ -77,115 +69,111 @@ extern char** environ;
 #endif
 
 #if defined(GEODE_IS_ANDROID) && defined(ECHO_FFMPEG_API)
-namespace {
-    struct AVCodecContext;
-    struct AVCodec;
-    struct AVDictionary;
-    struct SwsContext;
-    struct SwsFilter;
-    using OpenCodec = int (*)(AVCodecContext*, AVCodec const*, AVDictionary**);
-    using SetDictionary = int (*)(AVDictionary**, char const*, char const*, int);
-    using FreeDictionary = void (*)(AVDictionary**);
-    using GetSws = SwsContext* (*)(int, int, int, int, int, int, int, SwsFilter*, SwsFilter*, double const*);
-    using SetSwsColors = int (*)(SwsContext*, int const*, int, int const*, int, int, int, int);
-    using GetSwsCoefficients = int const* (*)(int);
-    OpenCodec s_openCodec = nullptr;
-    SetDictionary s_setDictionary = nullptr;
-    FreeDictionary s_freeDictionary = nullptr;
-    thread_local char const* s_echoPreset = nullptr;
-    // api forgets a flag mp4 needs :/
-    thread_local bool s_echoGlobalHeader = false;
-    // color fix on android. the api's colorspace filter cant take nv12 (what mediacodec gets) so it never worked,
-    // instead the rgba -> yuv conversion itself uses bt709 & the video gets tagged bt709, same as mac ends up w/
-    thread_local bool s_echoColorFix = false;
-    GetSws s_getSws = nullptr;
-    SetSwsColors s_setSwsColors = nullptr;
-    GetSwsCoefficients s_getSwsCoefficients = nullptr;
+struct AVCodecContext;
+struct AVCodec;
+struct AVDictionary;
+struct SwsContext;
+struct SwsFilter;
+using OpenCodec = int (*)(AVCodecContext*, const AVCodec*, AVDictionary**);
+using SetDictionary = int (*)(AVDictionary**, const char*, const char*, int);
+using FreeDictionary = void (*)(AVDictionary**);
+using GetSws = SwsContext* (*)(int, int, int, int, int, int, int, SwsFilter*, SwsFilter*, const double*);
+using SetSwsColors = int (*)(SwsContext*, const int*, int, const int*, int, int, int, int);
+using GetSwsCoefficients = const int* (*)(int);
+static OpenCodec g_open_codec = nullptr;
+static SetDictionary g_set_dictionary = nullptr;
+static FreeDictionary g_free_dictionary = nullptr;
+static thread_local const char* g_echo_preset = nullptr;
+// api forgets a flag mp4 needs :/
+static thread_local bool g_echo_global_header = false;
+// color fix on android. the api's colorspace filter cant take nv12 (what mediacodec gets) so it never worked,
+// instead the rgba -> yuv conversion itself uses bt709 & the video gets tagged bt709, same as mac ends up w/
+static thread_local bool g_echo_color_fix = false;
+static GetSws g_get_sws = nullptr;
+static SetSwsColors g_set_sws_colors = nullptr;
+static GetSwsCoefficients g_get_sws_coefficients = nullptr;
 
-    SwsContext* echo_get_sws(int srcW, int srcH, int srcFormat, int dstW, int dstH, int dstFormat, int flags, SwsFilter* srcFilter,
-        SwsFilter* dstFilter, double const* param) {
-        auto* context = s_getSws(srcW, srcH, srcFormat, dstW, dstH, dstFormat, flags, srcFilter, dstFilter, param);
-        if (context && s_echoColorFix && s_setSwsColors && s_getSwsCoefficients) {
-            constexpr int ITU709 = 1;
-            auto const* bt709 = s_getSwsCoefficients(ITU709);
-            s_setSwsColors(context, bt709, 1, bt709, 0, 0, 1 << 16, 1 << 16);
-        }
-        return context;
+static SwsContext* echo_get_sws(int srcW, int srcH, int srcFormat, int dstW, int dstH, int dstFormat, int flags, SwsFilter* srcFilter,
+    SwsFilter* dstFilter, const double* param) {
+    auto* context = g_get_sws(srcW, srcH, srcFormat, dstW, dstH, dstFormat, flags, srcFilter, dstFilter, param);
+    if (context && g_echo_color_fix && g_set_sws_colors && g_get_sws_coefficients) {
+        constexpr int ITU709 = 1;
+        const auto* bt709 = g_get_sws_coefficients(ITU709);
+        g_set_sws_colors(context, bt709, 1, bt709, 0, 0, 1 << 16, 1 << 16);
     }
+    return context;
+}
 
-    int echo_open_codec(AVCodecContext* context, AVCodec const* codec, AVDictionary** options) {
-        AVDictionary* local = nullptr;
-        AVDictionary** chosen = options ? options : &local;
-        if (s_echoPreset)
-            s_setDictionary(chosen, "preset", s_echoPreset, 0);
-        if (s_echoGlobalHeader)
-            s_setDictionary(chosen, "flags", "+global_header", 0);
-        if (s_echoColorFix) {
-            s_setDictionary(chosen, "colorspace", "bt709", 0);
-            s_setDictionary(chosen, "color_primaries", "bt709", 0);
-            s_setDictionary(chosen, "color_trc", "bt709", 0);
-            s_setDictionary(chosen, "color_range", "tv", 0);
-        }
-        int res = s_openCodec(context, codec, chosen);
-        if (local)
-            s_freeDictionary(&local);
-        return res;
+static int echo_open_codec(AVCodecContext* context, const AVCodec* codec, AVDictionary** options) {
+    AVDictionary* local = nullptr;
+    AVDictionary** chosen = options ? options : &local;
+    if (g_echo_preset)
+        g_set_dictionary(chosen, "preset", g_echo_preset, 0);
+    if (g_echo_global_header)
+        g_set_dictionary(chosen, "flags", "+global_header", 0);
+    if (g_echo_color_fix) {
+        g_set_dictionary(chosen, "colorspace", "bt709", 0);
+        g_set_dictionary(chosen, "color_primaries", "bt709", 0);
+        g_set_dictionary(chosen, "color_trc", "bt709", 0);
+        g_set_dictionary(chosen, "color_range", "tv", 0);
     }
+    int res = g_open_codec(context, codec, chosen);
+    if (local)
+        g_free_dictionary(&local);
+    return res;
+}
 
-    void install_encoder_options() {
-        static bool installed = false;
-        if (installed)
-            return;
-        auto* dependency = Loader::get()->getLoadedMod("eclipse.ffmpeg-api");
-        if (!dependency)
-            return;
-        void* binary = dlopen(dependency->getBinaryPath().c_str(), RTLD_NOW | RTLD_NOLOAD);
-        if (!binary)
-            return;
-        s_openCodec = reinterpret_cast<OpenCodec>(dlsym(binary, "avcodec_open2"));
-        s_setDictionary = reinterpret_cast<SetDictionary>(dlsym(binary, "av_dict_set"));
-        s_freeDictionary = reinterpret_cast<FreeDictionary>(dlsym(binary, "av_dict_free"));
-        if (s_openCodec && s_setDictionary && s_freeDictionary) {
-            auto hook = Mod::get()->hook(reinterpret_cast<void*>(s_openCodec), &echo_open_codec, "Echo encoder preset");
-            installed = hook.isOk();
-        }
-        s_getSws = reinterpret_cast<GetSws>(dlsym(binary, "sws_getContext"));
-        s_setSwsColors = reinterpret_cast<SetSwsColors>(dlsym(binary, "sws_setColorspaceDetails"));
-        s_getSwsCoefficients = reinterpret_cast<GetSwsCoefficients>(dlsym(binary, "sws_getCoefficients"));
-        static bool colors_hooked = false;
-        if (!colors_hooked && s_getSws && s_setSwsColors && s_getSwsCoefficients)
-            colors_hooked = Mod::get()->hook(reinterpret_cast<void*>(s_getSws), &echo_get_sws, "Echo color fix").isOk();
-        dlclose(binary);
+static void install_encoder_options() {
+    static bool installed = false;
+    if (installed)
+        return;
+    auto* dependency = Loader::get()->getLoadedMod("eclipse.ffmpeg-api");
+    if (!dependency)
+        return;
+    void* binary = dlopen(dependency->getBinaryPath().c_str(), RTLD_NOW | RTLD_NOLOAD);
+    if (!binary)
+        return;
+    g_open_codec = reinterpret_cast<OpenCodec>(dlsym(binary, "avcodec_open2"));
+    g_set_dictionary = reinterpret_cast<SetDictionary>(dlsym(binary, "av_dict_set"));
+    g_free_dictionary = reinterpret_cast<FreeDictionary>(dlsym(binary, "av_dict_free"));
+    if (g_open_codec && g_set_dictionary && g_free_dictionary) {
+        auto hook = Mod::get()->hook(reinterpret_cast<void*>(g_open_codec), &echo_open_codec, "Echo encoder preset");
+        installed = hook.isOk();
     }
+    g_get_sws = reinterpret_cast<GetSws>(dlsym(binary, "sws_getContext"));
+    g_set_sws_colors = reinterpret_cast<SetSwsColors>(dlsym(binary, "sws_setColorspaceDetails"));
+    g_get_sws_coefficients = reinterpret_cast<GetSwsCoefficients>(dlsym(binary, "sws_getCoefficients"));
+    static bool colors_hooked = false;
+    if (!colors_hooked && g_get_sws && g_set_sws_colors && g_get_sws_coefficients)
+        colors_hooked = Mod::get()->hook(reinterpret_cast<void*>(g_get_sws), &echo_get_sws, "Echo color fix").isOk();
+    dlclose(binary);
 }
 #endif
 
-namespace {
-    struct RenderTiming {
-        std::atomic<long long> read_ns{ 0 }, wait_ns{ 0 }, encode_ns{ 0 };
-        chrono::steady_clock::time_point began{};
+struct RenderTiming {
+    std::atomic<long long> read_ns{ 0 }, wait_ns{ 0 }, encode_ns{ 0 };
+    chrono::steady_clock::time_point began{};
 
-        void reset() {
-            read_ns = 0;
-            wait_ns = 0;
-            encode_ns = 0;
-            Logic::get().render_physics = 0.0;
-            began = chrono::steady_clock::now();
-        }
-    };
+    void reset() {
+        read_ns = 0;
+        wait_ns = 0;
+        encode_ns = 0;
+        Logic::get().render_physics = 0.0;
+        began = chrono::steady_clock::now();
+    }
+};
 
-    RenderTiming g_timing;
-    std::string g_render_notes;
+static RenderTiming g_timing;
+static std::string g_render_notes;
 
-    struct Timed {
-        std::atomic<long long>& into;
-        chrono::steady_clock::time_point from = chrono::steady_clock::now();
+struct Timed {
+    std::atomic<long long>& into;
+    chrono::steady_clock::time_point from = chrono::steady_clock::now();
 
-        ~Timed() {
-            into += chrono::duration_cast<chrono::nanoseconds>(chrono::steady_clock::now() - from).count();
-        }
-    };
-}
+    ~Timed() {
+        into += chrono::duration_cast<chrono::nanoseconds>(chrono::steady_clock::now() - from).count();
+    }
+};
 
 class AudioTap {
 public:
@@ -194,7 +182,7 @@ public:
         return value;
     }
 
-    bool attach(float music, float sfx, fs::path const& file);
+    bool attach(float music, float sfx, const fs::path& file);
     void detach();
     void advance(float dt, float fade);
     void hold_effects();
@@ -205,9 +193,9 @@ public:
     bool mixing = false;
     int rate = 0;
     int channels = 0;
-    uint64_t written = 0;
+    unsigned long long written = 0;
     unsigned song_at_start = 0;
-    uint64_t stray_blocks = 0;
+    unsigned long long stray_blocks = 0;
 
 private:
     FMOD::DSP* dsp = nullptr;
@@ -222,7 +210,7 @@ private:
     float old_music = 1.f, old_sfx = 1.f;
     float effects = 1.f;
     double song_lead = 0.0;
-    uint64_t song_mixed = 0;
+    unsigned long long song_mixed = 0;
     bool song_tracked = false;
     std::unordered_set<std::string> undecodable;
     void bind_bus();
@@ -244,10 +232,10 @@ public:
 #ifdef GEODE_IS_WINDOWS
     void close_handle(HANDLE& handle);
     bool connect_pipe(HANDLE pipe);
-    bool write_all(HANDLE pipe, void const* data, size_t size);
+    bool write_all(HANDLE pipe, const void* data, size_t size);
     fs::path game_directory();
     std::string ffmpeg_path();
-    std::string run_hidden(std::string command, fs::path const& log_path);
+    std::string run_hidden(std::string command, const fs::path& log_path);
     bool setup_nv12();
     void close_nv12();
     void convert_nv12();
@@ -256,7 +244,7 @@ public:
 #endif
 #ifdef GEODE_IS_MACOS
     static fs::path ffmpeg_path();
-    bool write_all(int fd, void const* data, size_t size);
+    bool write_all(int fd, const void* data, size_t size);
     bool mux_audio();
 #endif
 #ifdef ECHO_FFMPEG_API
@@ -266,7 +254,7 @@ public:
     static bool prefer_api();
     bool idle() const;
     void go_live();
-    bool write_out(std::vector<uint8_t> const& frame);
+    bool write_out(const std::vector<unsigned char>& frame);
     void save_api_render();
     void silent_change_size(CCSize size);
     void resize_shader_layer(CCSize size);
@@ -284,8 +272,8 @@ public:
     bool direct_failed = false;
 #endif
     void draw_progress();
-    void queue_frame(std::vector<uint8_t> frame);
-    std::vector<uint8_t> acquire_frame();
+    void queue_frame(std::vector<unsigned char> frame);
+    std::vector<unsigned char> acquire_frame();
     void encode_loop();
     void finish_video();
 #if defined(GEODE_IS_WINDOWS) || defined(GEODE_IS_MACOS)
@@ -385,14 +373,14 @@ public:
     std::thread worker;
     std::mutex lock;
     std::condition_variable wake;
-    std::deque<std::vector<uint8_t>> queue;
-    std::vector<std::vector<uint8_t>> spare_frames;
+    std::deque<std::vector<unsigned char>> queue;
+    std::vector<std::vector<unsigned char>> spare_frames;
     bool closing = false;
 };
 
 FMOD_RESULT F_CALLBACK AudioTap::read(FMOD_DSP_STATE*, float* in, float* out, unsigned int length, int in_channels, int* out_channels) {
     auto& tap = AudioTap::get();
-    size_t amt = static_cast<size_t>(length) * static_cast<size_t>(in_channels);
+    size_t amt = (size_t)length * (size_t)in_channels;
     std::memcpy(out, in, amt * sizeof(float));
     if (out_channels)
         *out_channels = in_channels;
@@ -453,7 +441,7 @@ void AudioTap::hold_effects() {
         engine->m_reverbChannel->setPaused(false);
 }
 
-bool AudioTap::attach(float music, float sfx, fs::path const& file) {
+bool AudioTap::attach(float music, float sfx, const fs::path& file) {
     auto* engine = FMODAudioEngine::get();
     if (attached || !engine || !engine->m_system)
         return false;
@@ -498,14 +486,14 @@ bool AudioTap::attach(float music, float sfx, fs::path const& file) {
             it->second.m_sound->getMode(&mode);
             if (mode & FMOD_CREATESTREAM) {
                 FMOD::Sound* sample = nullptr;
-                FMOD_MODE wanted = (mode & ~static_cast<FMOD_MODE>(FMOD_CREATESTREAM | FMOD_NONBLOCKING)) | FMOD_CREATESAMPLE;
+                FMOD_MODE wanted = (mode & ~(FMOD_MODE)(FMOD_CREATESTREAM | FMOD_NONBLOCKING)) | FMOD_CREATESAMPLE;
                 auto res = system->createSound(it->second.m_filePath.c_str(), wanted, nullptr, &sample);
                 // DONT free ts gd might still use it
                 if (res == FMOD_OK && sample)
                     it->second.m_sound = sample;
             }
         }
-        engine->queueStartMusic(song, 1.f, 0.f, std::clamp(music, 0.f, 1.f), false, static_cast<int>(song_ms), 0, 0, 0, 0, false, 0, false, false);
+        engine->queueStartMusic(song, 1.f, 0.f, std::clamp(music, 0.f, 1.f), false, (int)song_ms, 0, 0, 0, 0, false, 0, false, false);
         engine->updateQueuedMusic();
         for (int tries = 0; tries < 600 && !engine->getActiveMusicChannel(0); ++tries) {
             std::this_thread::sleep_for(chrono::milliseconds(5));
@@ -575,7 +563,7 @@ void AudioTap::detach() {
     master = nullptr;
     engine->setBackgroundMusicVolume(old_music);
     engine->setEffectsVolume(old_sfx);
-    for (auto const& [group, parent] : moved_groups)
+    for (const auto& [group, parent] : moved_groups)
         parent->addGroup(group, true, nullptr);
     moved_groups.clear();
     engine->m_system->setOutput(FMOD_OUTPUTTYPE_AUTODETECT);
@@ -644,7 +632,7 @@ void AudioTap::sample_streams(FMODAudioEngine* engine) {
         if (path.empty() || undecodable.contains(path))
             continue;
         FMOD::Sound* sample = nullptr;
-        FMOD_MODE wanted = (mode & ~static_cast<FMOD_MODE>(FMOD_CREATESTREAM | FMOD_NONBLOCKING)) | FMOD_CREATESAMPLE;
+        FMOD_MODE wanted = (mode & ~(FMOD_MODE)(FMOD_CREATESTREAM | FMOD_NONBLOCKING)) | FMOD_CREATESAMPLE;
         auto res = system->createSound(path.c_str(), wanted, nullptr, &sample);
         if (res != FMOD_OK || !sample) {
             undecodable.insert(path);
@@ -726,9 +714,9 @@ void AudioTap::keep_song_on_time(FMODAudioEngine* engine) {
     size_t buffered = 0;
     {
         std::lock_guard guard(lock);
-        buffered = channels > 0 ? pending.size() / static_cast<size_t>(channels) : 0;
+        buffered = channels > 0 ? pending.size() / (size_t)channels : 0;
     }
-    uint64_t mixed = written + buffered;
+    unsigned long long mixed = written + buffered;
     double now = (double)(position);
     float frequency = 0.f;
     if (song_tracked && rate > 0 && channel->getFrequency(&frequency) == FMOD_OK && frequency > 0.f) {
@@ -738,7 +726,7 @@ void AudioTap::keep_song_on_time(FMODAudioEngine* engine) {
         double expected = song_lead + seconds * (double)(frequency) * (double)(pitch);
         double moved = std::abs(now - expected);
         if (moved > 2.0 && moved < 0.15 * (double)(frequency) && expected >= 0.0 &&
-            channel->setPosition(static_cast<unsigned>(std::llround(expected)), FMOD_TIMEUNIT_PCM) == FMOD_OK)
+            channel->setPosition((unsigned)std::llround(expected), FMOD_TIMEUNIT_PCM) == FMOD_OK)
             now = expected;
     }
     song_lead = now;
@@ -756,12 +744,12 @@ void AudioTap::advance(float dt, float fade) {
         if (engine->m_backgroundMusicChannel)
             engine->m_backgroundMusicChannel->setPaused(true);
         clock += (double)(dt);
-        uint64_t target = static_cast<uint64_t>(std::llround(clock * (double)(rate)));
+        unsigned long long target = (unsigned long long)std::llround(clock * (double)(rate));
         int ch = channels > 0 ? channels : 2;
         if (written < target) {
-            size_t frames = static_cast<size_t>(target - written);
-            std::vector<float> silence(frames * static_cast<size_t>(ch), 0.f);
-            out.write(reinterpret_cast<char const*>(silence.data()), static_cast<std::streamsize>(silence.size() * sizeof(float)));
+            size_t frames = (size_t)(target - written);
+            std::vector<float> silence(frames * (size_t)ch, 0.f);
+            out.write(reinterpret_cast<const char*>(silence.data()), (std::streamsize)(silence.size() * sizeof(float)));
             written = target;
         }
         return;
@@ -773,10 +761,10 @@ void AudioTap::advance(float dt, float fade) {
     hold_effects();
     sample_streams(engine);
     keep_song_on_time(engine);
-    uint64_t target = static_cast<uint64_t>(std::llround(clock * (double)(rate)));
+    unsigned long long target = (unsigned long long)std::llround(clock * (double)(rate));
     auto buffered = [this] {
         std::lock_guard guard(lock);
-        return channels > 0 ? pending.size() / static_cast<size_t>(channels) : 0;
+        return channels > 0 ? pending.size() / (size_t)channels : 0;
     };
     mixing = true;
     freeze(false);
@@ -791,20 +779,20 @@ void AudioTap::advance(float dt, float fade) {
     std::lock_guard guard(lock);
     if (channels <= 0)
         return;
-    size_t take = static_cast<size_t>(std::min<uint64_t>(target - std::min(target, written), pending.size() / static_cast<size_t>(channels)));
-    size_t amt = take * static_cast<size_t>(channels);
+    size_t take = (size_t)(std::min<unsigned long long>(target - std::min(target, written), pending.size() / (size_t)channels));
+    size_t amt = take * (size_t)channels;
     float gain = std::clamp(fade, 0.f, 1.f);
     for (size_t i = 0; i < amt; ++i)
         pending[i] = std::clamp(pending[i] * gain, -1.f, 1.f);
     for (size_t i = 0; i < amt; ++i)
         loudest = std::max(loudest, std::abs(pending[i]));
-    if (written / static_cast<uint64_t>(rate) != (written + take) / static_cast<uint64_t>(rate)) {
+    if (written / (unsigned long long)rate != (written + take) / (unsigned long long)rate) {
         if (heard.size() < 24)
             heard += fmt::format("{:.2f} ", loudest);
         loudest = 0.f;
     }
-    out.write(reinterpret_cast<char const*>(pending.data()), static_cast<std::streamsize>(amt * sizeof(float)));
-    pending.erase(pending.begin(), pending.begin() + static_cast<std::ptrdiff_t>(amt));
+    out.write(reinterpret_cast<const char*>(pending.data()), (std::streamsize)(amt * sizeof(float)));
+    pending.erase(pending.begin(), pending.begin() + (std::ptrdiff_t)amt);
     written += take;
 }
 
@@ -832,10 +820,10 @@ bool Recorder::connect_pipe(HANDLE pipe) {
     return ok == TRUE;
 }
 
-bool Recorder::write_all(HANDLE pipe, void const* data, size_t size) {
+bool Recorder::write_all(HANDLE pipe, const void* data, size_t size) {
     if (pipe == nullptr || pipe == INVALID_HANDLE_VALUE)
         return false;
-    auto const* bytes = static_cast<uint8_t const*>(data);
+    const auto* bytes = static_cast<const unsigned char*>(data);
     HANDLE event = CreateEventA(nullptr, TRUE, FALSE, nullptr);
     if (!event)
         return false;
@@ -845,7 +833,7 @@ bool Recorder::write_all(HANDLE pipe, void const* data, size_t size) {
         wait.hEvent = event;
         ResetEvent(event);
         DWORD wrote = 0;
-        DWORD chunk = static_cast<DWORD>(std::min(size - sent, static_cast<size_t>(1 << 20)));
+        DWORD chunk = (DWORD)std::min(size - sent, (size_t)(1 << 20));
         BOOL ok = WriteFile(pipe, bytes + sent, chunk, &wrote, &wait);
         if (!ok && GetLastError() == ERROR_IO_PENDING) {
             if (WaitForSingleObject(event, 5000) != WAIT_OBJECT_0) {
@@ -882,7 +870,7 @@ std::string Recorder::ffmpeg_path() {
     return "ffmpeg.exe";
 }
 
-std::string Recorder::run_hidden(std::string command, fs::path const& log_path) {
+std::string Recorder::run_hidden(std::string command, const fs::path& log_path) {
     SECURITY_ATTRIBUTES security{};
     security.nLength = sizeof(security);
     security.bInheritHandle = TRUE;
@@ -931,188 +919,186 @@ std::string Recorder::run_hidden(std::string command, fs::path const& log_path) 
     return last;
 }
 
-namespace {
-    std::string quote_arg(fs::path const& path) {
-        return "\"" + path.string() + "\"";
-    }
+static std::string quote_arg(const fs::path& path) {
+    return "\"" + path.string() + "\"";
+}
 
-    fs::path probe_binary() {
-        auto beside = fs::path(Recorder::get().ffmpeg_path()).replace_filename("ffprobe.exe");
-        if (fs::exists(beside))
-            return beside;
-        return "ffprobe.exe";
-    }
+static fs::path probe_binary() {
+    auto beside = fs::path(Recorder::get().ffmpeg_path()).replace_filename("ffprobe.exe");
+    if (fs::exists(beside))
+        return beside;
+    return "ffprobe.exe";
+}
 
-    std::string run_logged(std::string command, fs::path const& log_path, fs::path const& capture) {
-        SECURITY_ATTRIBUTES security{};
-        security.nLength = sizeof(security);
-        security.bInheritHandle = TRUE;
-        HANDLE log = CreateFileA(log_path.string().c_str(), GENERIC_WRITE, FILE_SHARE_READ, &security, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-        HANDLE input = CreateFileA("NUL", GENERIC_READ, FILE_SHARE_READ, &security, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
-        HANDLE out = capture.empty()
-                         ? log
-                         : CreateFileA(capture.string().c_str(), GENERIC_WRITE, FILE_SHARE_READ, &security, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-        if (log == INVALID_HANDLE_VALUE || out == INVALID_HANDLE_VALUE) {
-            if (log != INVALID_HANDLE_VALUE)
-                CloseHandle(log);
-            if (out != INVALID_HANDLE_VALUE && out != log)
-                CloseHandle(out);
-            if (input != INVALID_HANDLE_VALUE)
-                CloseHandle(input);
-            return "could not open the ffmpeg log";
-        }
-        STARTUPINFOA startup{};
-        startup.cb = sizeof(startup);
-        startup.dwFlags = STARTF_USESHOWWINDOW | STARTF_USESTDHANDLES;
-        startup.wShowWindow = SW_HIDE;
-        startup.hStdInput = input == INVALID_HANDLE_VALUE ? nullptr : input;
-        startup.hStdOutput = out;
-        startup.hStdError = log;
-        PROCESS_INFORMATION process{};
-        std::vector<char> mutable_command(command.begin(), command.end());
-        mutable_command.push_back('\0');
-        if (!CreateProcessA(nullptr, mutable_command.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW | BELOW_NORMAL_PRIORITY_CLASS, nullptr, nullptr, &startup, &process)) {
+static std::string run_logged(std::string command, const fs::path& log_path, const fs::path& capture) {
+    SECURITY_ATTRIBUTES security{};
+    security.nLength = sizeof(security);
+    security.bInheritHandle = TRUE;
+    HANDLE log = CreateFileA(log_path.string().c_str(), GENERIC_WRITE, FILE_SHARE_READ, &security, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    HANDLE input = CreateFileA("NUL", GENERIC_READ, FILE_SHARE_READ, &security, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    HANDLE out = capture.empty()
+                     ? log
+                     : CreateFileA(capture.string().c_str(), GENERIC_WRITE, FILE_SHARE_READ, &security, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (log == INVALID_HANDLE_VALUE || out == INVALID_HANDLE_VALUE) {
+        if (log != INVALID_HANDLE_VALUE)
             CloseHandle(log);
-            if (out != log)
-                CloseHandle(out);
-            if (input != INVALID_HANDLE_VALUE)
-                CloseHandle(input);
-            return "could not start ffmpeg";
-        }
-        CloseHandle(process.hThread);
+        if (out != INVALID_HANDLE_VALUE && out != log)
+            CloseHandle(out);
+        if (input != INVALID_HANDLE_VALUE)
+            CloseHandle(input);
+        return "could not open the ffmpeg log";
+    }
+    STARTUPINFOA startup{};
+    startup.cb = sizeof(startup);
+    startup.dwFlags = STARTF_USESHOWWINDOW | STARTF_USESTDHANDLES;
+    startup.wShowWindow = SW_HIDE;
+    startup.hStdInput = input == INVALID_HANDLE_VALUE ? nullptr : input;
+    startup.hStdOutput = out;
+    startup.hStdError = log;
+    PROCESS_INFORMATION process{};
+    std::vector<char> mutable_command(command.begin(), command.end());
+    mutable_command.push_back('\0');
+    if (!CreateProcessA(nullptr, mutable_command.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW | BELOW_NORMAL_PRIORITY_CLASS, nullptr, nullptr, &startup, &process)) {
         CloseHandle(log);
         if (out != log)
             CloseHandle(out);
         if (input != INVALID_HANDLE_VALUE)
             CloseHandle(input);
-        WaitForSingleObject(process.hProcess, INFINITE);
-        DWORD code = 1;
-        GetExitCodeProcess(process.hProcess, &code);
-        CloseHandle(process.hProcess);
-        if (code == 0)
-            return {};
-        std::ifstream in(log_path);
-        std::string line;
-        std::string last;
-        while (std::getline(in, line)) {
-            if (!line.empty())
-                last = line;
-        }
-        if (last.empty())
-            last = "ffmpeg failed";
-        if (last.size() > 180)
-            last = last.substr(last.size() - 180);
-        return last;
+        return "could not start ffmpeg";
     }
-
-    std::optional<double> probe_seconds(fs::path const& file, fs::path const& scratch, std::string& error) {
-        auto command = quote_arg(probe_binary()) + " -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 " + quote_arg(file);
-        auto capture = scratch / "echo-probe.txt";
-        auto log = scratch / "echo-probe.log";
-        error = run_logged(command, log, capture);
-        if (!error.empty())
-            return std::nullopt;
-        std::ifstream in(capture);
-        std::string text;
-        std::getline(in, text);
-        try {
-            size_t used = 0;
-            double seconds = std::stod(text, &used);
-            if (seconds > 0.0)
-                return seconds;
-        }
-        catch (...) {
-        }
-        error = "Could not read the video length";
-        return std::nullopt;
+    CloseHandle(process.hThread);
+    CloseHandle(log);
+    if (out != log)
+        CloseHandle(out);
+    if (input != INVALID_HANDLE_VALUE)
+        CloseHandle(input);
+    WaitForSingleObject(process.hProcess, INFINITE);
+    DWORD code = 1;
+    GetExitCodeProcess(process.hProcess, &code);
+    CloseHandle(process.hProcess);
+    if (code == 0)
+        return {};
+    std::ifstream in(log_path);
+    std::string line;
+    std::string last;
+    while (std::getline(in, line)) {
+        if (!line.empty())
+            last = line;
     }
-
-    bool probe_audio(fs::path const& file, fs::path const& scratch) {
-        auto command = quote_arg(probe_binary()) + " -v error -select_streams a:0 -show_entries stream=index -of csv=p=0 " + quote_arg(file);
-        auto capture = scratch / "echo-probe-audio.txt";
-        auto log = scratch / "echo-probe.log";
-        if (!run_logged(command, log, capture).empty())
-            return false;
-        std::ifstream in(capture);
-        std::string text;
-        std::getline(in, text);
-        return !text.empty();
-    }
-
-    std::string join_films_in(fs::path const& first, fs::path const& second, fs::path const& dest, std::string const& encode);
-    std::string video_rate(std::string const& codec, int bitrate, std::string const& extra);
-
-    std::string join_films(fs::path const& first, fs::path const& second, fs::path const& dest, std::string const& encode) {
-        auto res = join_films_in(first, second, dest, encode);
-        auto scratch = dest.parent_path();
-        std::error_code error;
-        for (char const* name : { "echo-probe.txt", "echo-probe-audio.txt", "echo-probe.log", "echo-merge.log", "echo-merge-progress.txt" })
-            fs::remove(scratch / name, error);
-        return res;
-    }
-
-    std::string merge_encode() {
-        auto& logic = Logic::get();
-        std::string codec = logic.render_codec.empty() ? "libx264" : logic.render_codec;
-        // -vf NOT allowed next to filter_complex
-        bool clash = logic.render_args.find("-vf") != std::string::npos || logic.render_args.find("-filter") != std::string::npos;
-        std::string extra = clash ? std::string() : logic.render_args;
-        bool hardware = codec.find("nvenc") != std::string::npos || codec.find("amf") != std::string::npos || codec.find("qsv") != std::string::npos;
-        std::string flags = " -c:v " + codec + video_rate(codec, logic.render_bitrate, extra);
-        if (extra.find("-pix_fmt") == std::string::npos)
-            flags += logic.render_bitrate <= 0 && !hardware ? " -pix_fmt yuv444p" : " -pix_fmt yuv420p";
-        if (!extra.empty())
-            flags += " " + extra;
-        return flags;
-    }
-
-    std::string join_films_in(fs::path const& first, fs::path const& second, fs::path const& dest, std::string const& encode) {
-        auto scratch = dest.parent_path();
-        std::string probe_error;
-        auto first_length = probe_seconds(first, scratch, probe_error);
-        if (!first_length) {
-            std::error_code error;
-            auto beside = fs::path(Recorder::get().ffmpeg_path()).replace_filename("ffprobe.exe");
-            if (!fs::exists(beside, error))
-                return "Merging needs ffprobe.exe next to ffmpeg.exe (" + probe_error + ")";
-            return probe_error;
-        }
-        auto second_length = probe_seconds(second, scratch, probe_error);
-        if (!second_length)
-            return probe_error;
-        double fade = std::min(1.0, std::min(*first_length, *second_length) * 0.45);
-        if (!(fade > 0.05))
-            return "The videos are too short to crossfade";
-        double offset = *first_length - fade;
-        Logic::get().merge_seconds = (float)(*first_length + *second_length - fade);
-        bool audio = probe_audio(first, scratch) && probe_audio(second, scratch);
-        std::string filter = fmt::format(
-            "[1:v][0:v]scale2ref[v1][v0];[v0][v1]xfade=transition=fadeblack:duration={:.3f}:offset={:.3f}[v]",
-            fade,
-            offset);
-        std::string maps = "-map [v]";
-        std::string audio_codec;
-        if (audio) {
-            filter += fmt::format(";[0:a][1:a]acrossfade=d={:.3f}[a]", fade);
-            maps += " -map [a]";
-            audio_codec = "-c:a aac -b:a 320k";
-        }
-        auto command = fmt::format(
-            "{} -y -nostdin -progress {} -i {} -i {} -filter_complex {} {}{} {} {}",
-            quote_arg(Recorder::get().ffmpeg_path()),
-            quote_arg(scratch / "echo-merge-progress.txt"),
-            quote_arg(first),
-            quote_arg(second),
-            filter,
-            maps,
-            encode,
-            audio_codec,
-            quote_arg(dest));
-        return run_logged(command, scratch / "echo-merge.log", {});
-    }
+    if (last.empty())
+        last = "ffmpeg failed";
+    if (last.size() > 180)
+        last = last.substr(last.size() - 180);
+    return last;
 }
 
-void Logic::merge_renders(fs::path const& first_path, fs::path const& second_path) {
+static std::optional<double> probe_seconds(const fs::path& file, const fs::path& scratch, std::string& error) {
+    auto command = quote_arg(probe_binary()) + " -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 " + quote_arg(file);
+    auto capture = scratch / "echo-probe.txt";
+    auto log = scratch / "echo-probe.log";
+    error = run_logged(command, log, capture);
+    if (!error.empty())
+        return std::nullopt;
+    std::ifstream in(capture);
+    std::string text;
+    std::getline(in, text);
+    try {
+        size_t used = 0;
+        double seconds = std::stod(text, &used);
+        if (seconds > 0.0)
+            return seconds;
+    }
+    catch (...) {
+    }
+    error = "Could not read the video length";
+    return std::nullopt;
+}
+
+static bool probe_audio(const fs::path& file, const fs::path& scratch) {
+    auto command = quote_arg(probe_binary()) + " -v error -select_streams a:0 -show_entries stream=index -of csv=p=0 " + quote_arg(file);
+    auto capture = scratch / "echo-probe-audio.txt";
+    auto log = scratch / "echo-probe.log";
+    if (!run_logged(command, log, capture).empty())
+        return false;
+    std::ifstream in(capture);
+    std::string text;
+    std::getline(in, text);
+    return !text.empty();
+}
+
+static std::string join_films_in(const fs::path& first, const fs::path& second, const fs::path& dest, const std::string& encode);
+static std::string video_rate(const std::string& codec, int bitrate, const std::string& extra);
+
+static std::string join_films(const fs::path& first, const fs::path& second, const fs::path& dest, const std::string& encode) {
+    auto res = join_films_in(first, second, dest, encode);
+    auto scratch = dest.parent_path();
+    std::error_code error;
+    for (const char* name : { "echo-probe.txt", "echo-probe-audio.txt", "echo-probe.log", "echo-merge.log", "echo-merge-progress.txt" })
+        fs::remove(scratch / name, error);
+    return res;
+}
+
+static std::string merge_encode() {
+    auto& logic = Logic::get();
+    std::string codec = logic.render_codec.empty() ? "libx264" : logic.render_codec;
+    // -vf NOT allowed next to filter_complex
+    bool clash = logic.render_args.find("-vf") != std::string::npos || logic.render_args.find("-filter") != std::string::npos;
+    std::string extra = clash ? std::string() : logic.render_args;
+    bool hardware = codec.find("nvenc") != std::string::npos || codec.find("amf") != std::string::npos || codec.find("qsv") != std::string::npos;
+    std::string flags = " -c:v " + codec + video_rate(codec, logic.render_bitrate, extra);
+    if (extra.find("-pix_fmt") == std::string::npos)
+        flags += logic.render_bitrate <= 0 && !hardware ? " -pix_fmt yuv444p" : " -pix_fmt yuv420p";
+    if (!extra.empty())
+        flags += " " + extra;
+    return flags;
+}
+
+static std::string join_films_in(const fs::path& first, const fs::path& second, const fs::path& dest, const std::string& encode) {
+    auto scratch = dest.parent_path();
+    std::string probe_error;
+    auto first_length = probe_seconds(first, scratch, probe_error);
+    if (!first_length) {
+        std::error_code error;
+        auto beside = fs::path(Recorder::get().ffmpeg_path()).replace_filename("ffprobe.exe");
+        if (!fs::exists(beside, error))
+            return "Merging needs ffprobe.exe next to ffmpeg.exe (" + probe_error + ")";
+        return probe_error;
+    }
+    auto second_length = probe_seconds(second, scratch, probe_error);
+    if (!second_length)
+        return probe_error;
+    double fade = std::min(1.0, std::min(*first_length, *second_length) * 0.45);
+    if (!(fade > 0.05))
+        return "The videos are too short to crossfade";
+    double offset = *first_length - fade;
+    Logic::get().merge_seconds = (float)(*first_length + *second_length - fade);
+    bool audio = probe_audio(first, scratch) && probe_audio(second, scratch);
+    std::string filter = fmt::format(
+        "[1:v][0:v]scale2ref[v1][v0];[v0][v1]xfade=transition=fadeblack:duration={:.3f}:offset={:.3f}[v]",
+        fade,
+        offset);
+    std::string maps = "-map [v]";
+    std::string audio_codec;
+    if (audio) {
+        filter += fmt::format(";[0:a][1:a]acrossfade=d={:.3f}[a]", fade);
+        maps += " -map [a]";
+        audio_codec = "-c:a aac -b:a 320k";
+    }
+    auto command = fmt::format(
+        "{} -y -nostdin -progress {} -i {} -i {} -filter_complex {} {}{} {} {}",
+        quote_arg(Recorder::get().ffmpeg_path()),
+        quote_arg(scratch / "echo-merge-progress.txt"),
+        quote_arg(first),
+        quote_arg(second),
+        filter,
+        maps,
+        encode,
+        audio_codec,
+        quote_arg(dest));
+    return run_logged(command, scratch / "echo-merge.log", {});
+}
+
+void Logic::merge_renders(const fs::path& first_path, const fs::path& second_path) {
     if (merge_busy)
         return;
     auto folder = save_root() / "renders";
@@ -1130,7 +1116,7 @@ void Logic::merge_renders(fs::path const& first_path, fs::path const& second_pat
             dest = ReplayIO::unique_file(folder, ReplayIO::sanitize(first_path.stem().string() + "_" + second_path.stem().string()), ".mp4");
             failure = join_films(first_path, second_path, dest, encode);
         }
-        catch (std::exception const& ex) {
+        catch (const std::exception& ex) {
             failure = ex.what();
         }
         Loader::get()->queueInMainThread([this, failure, dest] {
@@ -1143,258 +1129,256 @@ void Logic::merge_renders(fs::path const& first_path, fs::path const& second_pat
     }).detach();
 }
 #elif defined(GEODE_IS_MACOS)
-namespace {
-    fs::path find_tool(char const* name) {
-        std::vector<fs::path> places{ Logic::get().save_root() / name };
-        for (char const* dir : { "/opt/homebrew/bin", "/usr/local/bin", "/opt/local/bin" })
-            places.push_back(fs::path(dir) / name);
-        if (char const* path = std::getenv("PATH")) {
-            std::string_view rest(path);
-            while (!rest.empty()) {
-                auto colon = rest.find(':');
-                auto dir = rest.substr(0, colon);
-                if (!dir.empty())
-                    places.push_back(fs::path(std::string(dir)) / name);
-                if (colon == std::string_view::npos)
-                    break;
-                rest.remove_prefix(colon + 1);
-            }
+static fs::path find_tool(const char* name) {
+    std::vector<fs::path> places{ Logic::get().save_root() / name };
+    for (const char* dir : { "/opt/homebrew/bin", "/usr/local/bin", "/opt/local/bin" })
+        places.push_back(fs::path(dir) / name);
+    if (const char* path = std::getenv("PATH")) {
+        std::string_view rest(path);
+        while (!rest.empty()) {
+            auto colon = rest.find(':');
+            auto dir = rest.substr(0, colon);
+            if (!dir.empty())
+                places.push_back(fs::path(std::string(dir)) / name);
+            if (colon == std::string_view::npos)
+                break;
+            rest.remove_prefix(colon + 1);
         }
-        for (auto const& place : places) {
-            if (access(place.c_str(), X_OK) == 0)
-                return place;
-        }
-        return {};
     }
-
-    pid_t spawn_tool(std::vector<std::string> const& args, int input, fs::path const& out, fs::path const& err) {
-        posix_spawn_file_actions_t actions;
-        posix_spawnattr_t attributes;
-        posix_spawn_file_actions_init(&actions);
-        posix_spawnattr_init(&attributes);
-        posix_spawnattr_setflags(&attributes, POSIX_SPAWN_CLOEXEC_DEFAULT);
-        if (input >= 0)
-            posix_spawn_file_actions_adddup2(&actions, input, 0);
-        else
-            posix_spawn_file_actions_addopen(&actions, 0, "/dev/null", O_RDONLY, 0);
-        auto direct = [&](int fd, fs::path const& file) {
-            if (file.empty())
-                posix_spawn_file_actions_addopen(&actions, fd, "/dev/null", O_WRONLY, 0);
-            else
-                posix_spawn_file_actions_addopen(&actions, fd, file.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
-        };
-        direct(2, err);
-        if (!out.empty() && out == err)
-            posix_spawn_file_actions_adddup2(&actions, 2, 1);
-        else
-            direct(1, out);
-        std::vector<char*> argv;
-        for (auto const& arg : args)
-            argv.push_back(const_cast<char*>(arg.c_str()));
-        argv.push_back(nullptr);
-        pid_t pid = 0;
-        int failed = posix_spawn(&pid, args.front().c_str(), &actions, &attributes, argv.data(), environ);
-        posix_spawn_file_actions_destroy(&actions);
-        posix_spawnattr_destroy(&attributes);
-        return failed ? 0 : pid;
+    for (const auto& place : places) {
+        if (access(place.c_str(), X_OK) == 0)
+            return place;
     }
+    return {};
+}
 
-    int wait_tool(pid_t pid, double seconds) {
-        auto started = chrono::steady_clock::now();
-        while (true) {
-            int status = 0;
-            pid_t done = waitpid(pid, &status, seconds > 0.0 ? WNOHANG : 0);
-            if (done == pid)
-                return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
-            if (done < 0 && errno == ECHILD)
-                return 0;
-            if (done < 0 && errno != EINTR)
+static pid_t spawn_tool(const std::vector<std::string>& args, int input, const fs::path& out, const fs::path& err) {
+    posix_spawn_file_actions_t actions;
+    posix_spawnattr_t attributes;
+    posix_spawn_file_actions_init(&actions);
+    posix_spawnattr_init(&attributes);
+    posix_spawnattr_setflags(&attributes, POSIX_SPAWN_CLOEXEC_DEFAULT);
+    if (input >= 0)
+        posix_spawn_file_actions_adddup2(&actions, input, 0);
+    else
+        posix_spawn_file_actions_addopen(&actions, 0, "/dev/null", O_RDONLY, 0);
+    auto direct = [&](int fd, const fs::path& file) {
+        if (file.empty())
+            posix_spawn_file_actions_addopen(&actions, fd, "/dev/null", O_WRONLY, 0);
+        else
+            posix_spawn_file_actions_addopen(&actions, fd, file.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    };
+    direct(2, err);
+    if (!out.empty() && out == err)
+        posix_spawn_file_actions_adddup2(&actions, 2, 1);
+    else
+        direct(1, out);
+    std::vector<char*> argv;
+    for (const auto& arg : args)
+        argv.push_back(const_cast<char*>(arg.c_str()));
+    argv.push_back(nullptr);
+    pid_t pid = 0;
+    int failed = posix_spawn(&pid, args.front().c_str(), &actions, &attributes, argv.data(), environ);
+    posix_spawn_file_actions_destroy(&actions);
+    posix_spawnattr_destroy(&attributes);
+    return failed ? 0 : pid;
+}
+
+static int wait_tool(pid_t pid, double seconds) {
+    auto started = chrono::steady_clock::now();
+    while (true) {
+        int status = 0;
+        pid_t done = waitpid(pid, &status, seconds > 0.0 ? WNOHANG : 0);
+        if (done == pid)
+            return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+        if (done < 0 && errno == ECHILD)
+            return 0;
+        if (done < 0 && errno != EINTR)
+            return -1;
+        if (seconds > 0.0) {
+            if (chrono::duration<double>(chrono::steady_clock::now() - started).count() > seconds) {
+                kill(pid, SIGKILL);
+                waitpid(pid, &status, 0);
                 return -1;
-            if (seconds > 0.0) {
-                if (chrono::duration<double>(chrono::steady_clock::now() - started).count() > seconds) {
-                    kill(pid, SIGKILL);
-                    waitpid(pid, &status, 0);
-                    return -1;
-                }
-                std::this_thread::sleep_for(chrono::milliseconds(10));
             }
+            std::this_thread::sleep_for(chrono::milliseconds(10));
         }
     }
+}
 
-    std::string last_line(fs::path const& log, size_t limit) {
-        std::ifstream in(log);
-        std::string line;
-        std::string last;
-        while (std::getline(in, line)) {
-            if (!line.empty())
-                last = line;
-        }
-        if (last.size() > limit)
-            last = last.substr(last.size() - limit);
-        return last;
+static std::string last_line(const fs::path& log, size_t limit) {
+    std::ifstream in(log);
+    std::string line;
+    std::string last;
+    while (std::getline(in, line)) {
+        if (!line.empty())
+            last = line;
     }
+    if (last.size() > limit)
+        last = last.substr(last.size() - limit);
+    return last;
+}
 
-    std::string run_tool(std::vector<std::string> const& args, fs::path const& log, fs::path const& capture, double seconds = 0.0) {
-        pid_t pid = spawn_tool(args, -1, capture.empty() ? log : capture, log);
-        if (!pid)
-            return "could not start " + fs::path(args.front()).filename().string();
-        if (wait_tool(pid, seconds) == 0)
-            return {};
-        auto last = last_line(log, 180);
-        return last.empty() ? std::string("ffmpeg failed") : last;
-    }
+static std::string run_tool(const std::vector<std::string>& args, const fs::path& log, const fs::path& capture, double seconds = 0.0) {
+    pid_t pid = spawn_tool(args, -1, capture.empty() ? log : capture, log);
+    if (!pid)
+        return "could not start " + fs::path(args.front()).filename().string();
+    if (wait_tool(pid, seconds) == 0)
+        return {};
+    auto last = last_line(log, 180);
+    return last.empty() ? std::string("ffmpeg failed") : last;
+}
 
-    std::vector<std::string> split_args(std::string const& text) {
-        std::vector<std::string> words;
-        std::string word;
-        bool any = false;
-        char quote = 0;
-        for (char c : text) {
-            if (quote) {
-                if (c == quote)
-                    quote = 0;
-                else
-                    word += c;
-            }
-            else if (c == '"' || c == '\'') {
-                quote = c;
-                any = true;
-            }
-            else if (c == ' ' || c == '\t' || c == '\n') {
-                if (any)
-                    words.push_back(std::move(word));
-                word.clear();
-                any = false;
-            }
-            else {
+static std::vector<std::string> split_args(const std::string& text) {
+    std::vector<std::string> words;
+    std::string word;
+    bool any = false;
+    char quote = 0;
+    for (char c : text) {
+        if (quote) {
+            if (c == quote)
+                quote = 0;
+            else
                 word += c;
-                any = true;
-            }
         }
-        if (any)
-            words.push_back(std::move(word));
-        return words;
+        else if (c == '"' || c == '\'') {
+            quote = c;
+            any = true;
+        }
+        else if (c == ' ' || c == '\t' || c == '\n') {
+            if (any)
+                words.push_back(std::move(word));
+            word.clear();
+            any = false;
+        }
+        else {
+            word += c;
+            any = true;
+        }
     }
+    if (any)
+        words.push_back(std::move(word));
+    return words;
+}
 
-    std::vector<std::string> video_rate(std::string const& codec, int bitrate, std::string const& extra, int64_t pixel_rate) {
-        auto has = [&](char const* key) {
-            return extra.find(key) != std::string::npos;
-        };
-        std::vector<std::string> flags;
-        if ((codec == "libx264" || codec == "libx265") && !has("-preset"))
-            flags.insert(flags.end(), { "-preset", Logic::get().render_preset });
-        bool own_rate = has("-crf") || has("-qp") || has("-b:v") || has("-q:v") || has("-cq") || has("-global_quality") || has("-qscale") || has("-rc ");
-        if (own_rate)
-            return flags;
-        if (bitrate > 0)
-            flags.insert(flags.end(), { "-b:v", std::to_string(bitrate) });
-        else if (codec.find("videotoolbox") != std::string::npos)
-            flags.insert(flags.end(), { "-b:v", std::to_string(std::max<int64_t>(pixel_rate / 4, 8'000'000)) });
-        else
-            flags.insert(flags.end(), { "-qp", "0" });
+static std::vector<std::string> video_rate(const std::string& codec, int bitrate, const std::string& extra, long long pixel_rate) {
+    auto has = [&](const char* key) {
+        return extra.find(key) != std::string::npos;
+    };
+    std::vector<std::string> flags;
+    if ((codec == "libx264" || codec == "libx265") && !has("-preset"))
+        flags.insert(flags.end(), { "-preset", Logic::get().render_preset });
+    bool own_rate = has("-crf") || has("-qp") || has("-b:v") || has("-q:v") || has("-cq") || has("-global_quality") || has("-qscale") || has("-rc ");
+    if (own_rate)
         return flags;
-    }
+    if (bitrate > 0)
+        flags.insert(flags.end(), { "-b:v", std::to_string(bitrate) });
+    else if (codec.find("videotoolbox") != std::string::npos)
+        flags.insert(flags.end(), { "-b:v", std::to_string(std::max<long long>(pixel_rate / 4, 8'000'000)) });
+    else
+        flags.insert(flags.end(), { "-qp", "0" });
+    return flags;
+}
 
-    std::optional<double> probe_seconds(fs::path const& probe, fs::path const& file, fs::path const& scratch, std::string& error) {
-        auto capture = scratch / "echo-probe.txt";
-        error = run_tool({ probe.string(), "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", file.string() }, scratch / "echo-probe.log", capture);
-        if (!error.empty())
-            return std::nullopt;
-        std::ifstream in(capture);
-        std::string text;
-        std::getline(in, text);
-        try {
-            double seconds = std::stod(text);
-            if (seconds > 0.0)
-                return seconds;
-        }
-        catch (...) {
-        }
-        error = "Could not read the video length";
+static std::optional<double> probe_seconds(const fs::path& probe, const fs::path& file, const fs::path& scratch, std::string& error) {
+    auto capture = scratch / "echo-probe.txt";
+    error = run_tool({ probe.string(), "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", file.string() }, scratch / "echo-probe.log", capture);
+    if (!error.empty())
         return std::nullopt;
+    std::ifstream in(capture);
+    std::string text;
+    std::getline(in, text);
+    try {
+        double seconds = std::stod(text);
+        if (seconds > 0.0)
+            return seconds;
     }
+    catch (...) {
+    }
+    error = "Could not read the video length";
+    return std::nullopt;
+}
 
-    bool probe_audio(fs::path const& probe, fs::path const& file, fs::path const& scratch) {
-        auto capture = scratch / "echo-probe-audio.txt";
-        if (!run_tool({ probe.string(), "-v", "error", "-select_streams", "a:0", "-show_entries", "stream=index", "-of", "csv=p=0", file.string() }, scratch / "echo-probe.log", capture).empty())
-            return false;
-        std::ifstream in(capture);
-        std::string text;
-        std::getline(in, text);
-        return !text.empty();
-    }
+static bool probe_audio(const fs::path& probe, const fs::path& file, const fs::path& scratch) {
+    auto capture = scratch / "echo-probe-audio.txt";
+    if (!run_tool({ probe.string(), "-v", "error", "-select_streams", "a:0", "-show_entries", "stream=index", "-of", "csv=p=0", file.string() }, scratch / "echo-probe.log", capture).empty())
+        return false;
+    std::ifstream in(capture);
+    std::string text;
+    std::getline(in, text);
+    return !text.empty();
+}
 
-    std::vector<std::string> merge_encode() {
-        auto& logic = Logic::get();
-        std::string codec = logic.render_codec.empty() ? "libx264" : logic.render_codec;
-        // -vf NOT allowed next to filter_complex
-        bool clash = logic.render_args.find("-vf") != std::string::npos || logic.render_args.find("-filter") != std::string::npos;
-        std::string extra = clash ? std::string() : logic.render_args;
-        bool hardware = codec.find("videotoolbox") != std::string::npos;
-        std::vector<std::string> flags{ "-c:v", codec };
-        auto rate = video_rate(codec, logic.render_bitrate, extra, static_cast<int64_t>(1920) * 1080 * 60);
-        flags.insert(flags.end(), rate.begin(), rate.end());
-        if (extra.find("-pix_fmt") == std::string::npos)
-            flags.insert(flags.end(), { "-pix_fmt", logic.render_bitrate <= 0 && !hardware ? "yuv444p" : "yuv420p" });
-        auto words = split_args(extra);
-        flags.insert(flags.end(), words.begin(), words.end());
-        return flags;
-    }
+static std::vector<std::string> merge_encode() {
+    auto& logic = Logic::get();
+    std::string codec = logic.render_codec.empty() ? "libx264" : logic.render_codec;
+    // -vf NOT allowed next to filter_complex
+    bool clash = logic.render_args.find("-vf") != std::string::npos || logic.render_args.find("-filter") != std::string::npos;
+    std::string extra = clash ? std::string() : logic.render_args;
+    bool hardware = codec.find("videotoolbox") != std::string::npos;
+    std::vector<std::string> flags{ "-c:v", codec };
+    auto rate = video_rate(codec, logic.render_bitrate, extra, (long long)1920 * 1080 * 60);
+    flags.insert(flags.end(), rate.begin(), rate.end());
+    if (extra.find("-pix_fmt") == std::string::npos)
+        flags.insert(flags.end(), { "-pix_fmt", logic.render_bitrate <= 0 && !hardware ? "yuv444p" : "yuv420p" });
+    auto words = split_args(extra);
+    flags.insert(flags.end(), words.begin(), words.end());
+    return flags;
+}
 
-    std::string join_films_in(fs::path const& first, fs::path const& second, fs::path const& dest, std::vector<std::string> const& encode) {
-        auto ffmpeg = Recorder::ffmpeg_path();
-        if (ffmpeg.empty())
-            return "ffmpeg was not found";
-        auto probe = ffmpeg.parent_path() / "ffprobe";
-        if (access(probe.c_str(), X_OK) != 0)
-            probe = find_tool("ffprobe");
-        if (probe.empty())
-            return "Merging needs ffprobe, which comes with ffmpeg";
-        auto scratch = dest.parent_path();
-        std::string probe_error;
-        auto first_length = probe_seconds(probe, first, scratch, probe_error);
-        if (!first_length)
-            return probe_error;
-        auto second_length = probe_seconds(probe, second, scratch, probe_error);
-        if (!second_length)
-            return probe_error;
-        double fade = std::min(1.0, std::min(*first_length, *second_length) * 0.45);
-        if (!(fade > 0.05))
-            return "The videos are too short to crossfade";
-        double offset = *first_length - fade;
-        Logic::get().merge_seconds = (float)(*first_length + *second_length - fade);
-        bool audio = probe_audio(probe, first, scratch) && probe_audio(probe, second, scratch);
-        std::string filter = fmt::format("[1:v][0:v]scale2ref[v1][v0];[v0][v1]xfade=transition=fadeblack:duration={:.3f}:offset={:.3f}[v]", fade, offset);
-        std::vector<std::string> args{ ffmpeg.string(), "-y", "-nostdin", "-progress", (scratch / "echo-merge-progress.txt").string(), "-i", first.string(), "-i", second.string() };
-        if (audio)
-            filter += fmt::format(";[0:a][1:a]acrossfade=d={:.3f}[a]", fade);
-        args.insert(args.end(), { "-filter_complex", filter, "-map", "[v]" });
-        if (audio)
-            args.insert(args.end(), { "-map", "[a]" });
-        args.insert(args.end(), encode.begin(), encode.end());
-        if (audio)
-            args.insert(args.end(), { "-c:a", "aac", "-b:a", "320k" });
-        args.push_back(dest.string());
-        return run_tool(args, scratch / "echo-merge.log", {});
-    }
+static std::string join_films_in(const fs::path& first, const fs::path& second, const fs::path& dest, const std::vector<std::string>& encode) {
+    auto ffmpeg = Recorder::ffmpeg_path();
+    if (ffmpeg.empty())
+        return "ffmpeg was not found";
+    auto probe = ffmpeg.parent_path() / "ffprobe";
+    if (access(probe.c_str(), X_OK) != 0)
+        probe = find_tool("ffprobe");
+    if (probe.empty())
+        return "Merging needs ffprobe, which comes with ffmpeg";
+    auto scratch = dest.parent_path();
+    std::string probe_error;
+    auto first_length = probe_seconds(probe, first, scratch, probe_error);
+    if (!first_length)
+        return probe_error;
+    auto second_length = probe_seconds(probe, second, scratch, probe_error);
+    if (!second_length)
+        return probe_error;
+    double fade = std::min(1.0, std::min(*first_length, *second_length) * 0.45);
+    if (!(fade > 0.05))
+        return "The videos are too short to crossfade";
+    double offset = *first_length - fade;
+    Logic::get().merge_seconds = (float)(*first_length + *second_length - fade);
+    bool audio = probe_audio(probe, first, scratch) && probe_audio(probe, second, scratch);
+    std::string filter = fmt::format("[1:v][0:v]scale2ref[v1][v0];[v0][v1]xfade=transition=fadeblack:duration={:.3f}:offset={:.3f}[v]", fade, offset);
+    std::vector<std::string> args{ ffmpeg.string(), "-y", "-nostdin", "-progress", (scratch / "echo-merge-progress.txt").string(), "-i", first.string(), "-i", second.string() };
+    if (audio)
+        filter += fmt::format(";[0:a][1:a]acrossfade=d={:.3f}[a]", fade);
+    args.insert(args.end(), { "-filter_complex", filter, "-map", "[v]" });
+    if (audio)
+        args.insert(args.end(), { "-map", "[a]" });
+    args.insert(args.end(), encode.begin(), encode.end());
+    if (audio)
+        args.insert(args.end(), { "-c:a", "aac", "-b:a", "320k" });
+    args.push_back(dest.string());
+    return run_tool(args, scratch / "echo-merge.log", {});
+}
 
-    std::string join_films(fs::path const& first, fs::path const& second, fs::path const& dest, std::vector<std::string> const& encode) {
-        auto res = join_films_in(first, second, dest, encode);
-        std::error_code error;
-        for (char const* name : { "echo-probe.txt", "echo-probe-audio.txt", "echo-probe.log", "echo-merge.log", "echo-merge-progress.txt" })
-            fs::remove(dest.parent_path() / name, error);
-        return res;
-    }
+static std::string join_films(const fs::path& first, const fs::path& second, const fs::path& dest, const std::vector<std::string>& encode) {
+    auto res = join_films_in(first, second, dest, encode);
+    std::error_code error;
+    for (const char* name : { "echo-probe.txt", "echo-probe-audio.txt", "echo-probe.log", "echo-merge.log", "echo-merge-progress.txt" })
+        fs::remove(dest.parent_path() / name, error);
+    return res;
 }
 
 fs::path Recorder::ffmpeg_path() {
     return find_tool("ffmpeg");
 }
 
-bool Recorder::write_all(int fd, void const* data, size_t size) {
+bool Recorder::write_all(int fd, const void* data, size_t size) {
     if (fd < 0)
         return false;
-    auto const* bytes = static_cast<uint8_t const*>(data);
+    const auto* bytes = static_cast<const unsigned char*>(data);
     while (size > 0) {
         ssize_t wrote = ::write(fd, bytes, size);
         if (wrote < 0) {
@@ -1403,12 +1387,12 @@ bool Recorder::write_all(int fd, void const* data, size_t size) {
             return false;
         }
         bytes += wrote;
-        size -= static_cast<size_t>(wrote);
+        size -= (size_t)wrote;
     }
     return true;
 }
 
-void Logic::merge_renders(fs::path const& first_path, fs::path const& second_path) {
+void Logic::merge_renders(const fs::path& first_path, const fs::path& second_path) {
     if (merge_busy)
         return;
     auto folder = save_root() / "renders";
@@ -1426,7 +1410,7 @@ void Logic::merge_renders(fs::path const& first_path, fs::path const& second_pat
             dest = ReplayIO::unique_file(folder, ReplayIO::sanitize(first_path.stem().string() + "_" + second_path.stem().string()), ".mp4");
             failure = join_films(first_path, second_path, dest, encode);
         }
-        catch (std::exception const& ex) {
+        catch (const std::exception& ex) {
             failure = ex.what();
         }
         Loader::get()->queueInMainThread([this, failure, dest] {
@@ -1440,7 +1424,7 @@ void Logic::merge_renders(fs::path const& first_path, fs::path const& second_pat
 }
 
 #else
-void Logic::merge_renders(fs::path const&, fs::path const&) {
+void Logic::merge_renders(const fs::path&, const fs::path&) {
     notify("Merging renders needs ffmpeg.exe on Windows", false);
 }
 #endif
@@ -1458,9 +1442,9 @@ float Logic::merge_progress() {
     std::ifstream in(merge_folder / "echo-merge-progress.txt", std::ios::binary | std::ios::ate);
     if (!in || total <= 0.f)
         return shown = -1.f;
-    auto size = static_cast<std::streamoff>(in.tellg());
+    auto size = (std::streamoff)in.tellg();
     std::streamoff len = std::min<std::streamoff>(size, 600);
-    std::string tail(static_cast<size_t>(len), '\0');
+    std::string tail((size_t)len, '\0');
     in.seekg(size - len);
     in.read(tail.data(), len);
     auto at = tail.rfind("out_time_us=");
@@ -1631,128 +1615,126 @@ void Recorder::release_view() {
 }
 
 size_t Recorder::frame_bytes() const {
-    size_t pixels = static_cast<size_t>(width) * static_cast<size_t>(height);
+    size_t pixels = (size_t)width * (size_t)height;
     return nv12 ? pixels + pixels / 2 : pixels * 4;
 }
 
 #ifdef GEODE_IS_WINDOWS
-namespace {
-    GLuint compileShader(GLenum kind, char const* source) {
-        GLuint shader = glCreateShader(kind);
-        if (!shader)
-            return 0;
-        glShaderSource(shader, 1, &source, nullptr);
-        glCompileShader(shader);
-        GLint ok = 0;
-        glGetShaderiv(shader, GL_COMPILE_STATUS, &ok);
-        if (ok)
-            return shader;
-        glDeleteShader(shader);
+static GLuint compileShader(GLenum kind, const char* source) {
+    GLuint shader = glCreateShader(kind);
+    if (!shader)
         return 0;
-    }
-
-    GLuint link_program(char const* vertex, char const* fragment) {
-        GLuint vs = compileShader(GL_VERTEX_SHADER, vertex);
-        GLuint frag = compileShader(GL_FRAGMENT_SHADER, fragment);
-        if (!vs || !frag) {
-            if (vs)
-                glDeleteShader(vs);
-            if (frag)
-                glDeleteShader(frag);
-            return 0;
-        }
-        GLuint program = glCreateProgram();
-        glAttachShader(program, vs);
-        glAttachShader(program, frag);
-        glLinkProgram(program);
-        glDeleteShader(vs);
-        glDeleteShader(frag);
-        GLint ok = 0;
-        glGetProgramiv(program, GL_LINK_STATUS, &ok);
-        if (ok)
-            return program;
-        glDeleteProgram(program);
-        return 0;
-    }
-
-    GLuint make_color_target(GLint internal, GLenum format, int width, int height) {
-        GLuint texture = 0;
-        glGenTextures(1, &texture);
-        glBindTexture(GL_TEXTURE_2D, texture);
-        glTexImage2D(GL_TEXTURE_2D, 0, internal, width, height, 0, format, GL_UNSIGNED_BYTE, nullptr);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-        return texture;
-    }
-
-    GLuint make_framebuffer(GLuint texture) {
-        GLuint buf = 0;
-        glGenFramebuffers(1, &buf);
-        glBindFramebuffer(GL_FRAMEBUFFER, buf);
-        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, 0);
-        if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
-            glDeleteFramebuffers(1, &buf);
-            return 0;
-        }
-        return buf;
-    }
-
-    std::string encoder_flags(std::string const& codec, std::string const& extra, bool with_rate) {
-        auto has = [&](char const* key) {
-            return extra.find(key) != std::string::npos;
-        };
-        std::string flags;
-        if (!has("-preset") && !has("-quality")) {
-            if (codec.find("nvenc") != std::string::npos)
-                flags += " -preset p1";
-            else if (codec.find("amf") != std::string::npos)
-                flags += " -quality speed";
-            else if (codec.find("qsv") != std::string::npos)
-                flags += " -preset veryfast";
-            else if (codec == "libx264" || codec == "libx265")
-                flags += " -preset " + Logic::get().render_preset;
-        }
-        if (with_rate && codec.find("nvenc") != std::string::npos && !has("-rc "))
-            flags += " -rc vbr";
-        return flags;
-    }
-
-    std::string video_rate(std::string const& codec, int bitrate, std::string const& extra) {
-        auto has = [&](char const* key) {
-            return extra.find(key) != std::string::npos;
-        };
-        bool own_rate = has("-crf") || has("-qp") || has("-b:v") || has("-q:v") || has("-cq") || has("-global_quality") || has("-qscale") || has("-rc ");
-        if (own_rate)
-            return encoder_flags(codec, extra, false);
-        if (bitrate > 0)
-            return encoder_flags(codec, extra, true) + fmt::format(" -b:v {}", bitrate);
-        std::string flags;
-        if (!has("-preset") && !has("-quality")) {
-            if (codec.find("nvenc") != std::string::npos)
-                flags += " -preset p1";
-            else if (codec.find("amf") != std::string::npos)
-                flags += " -quality speed";
-            else if (codec.find("qsv") != std::string::npos)
-                flags += " -preset veryfast";
-            else if (codec == "libx264" || codec == "libx265")
-                flags += " -preset " + Logic::get().render_preset;
-        }
-        if (codec.find("nvenc") != std::string::npos)
-            flags += " -rc constqp -qp 0";
-        else if (codec.find("amf") != std::string::npos)
-            flags += " -rc cqp -qp_i 0 -qp_p 0";
-        else if (codec.find("qsv") != std::string::npos)
-            flags += " -global_quality 1";
-        else
-            flags += " -qp 0";
-        return flags;
-    }
-
-    using SwapIntervalFn = BOOL(WINAPI*)(int);
-    using GetSwapIntervalFn = int(WINAPI*)();
+    glShaderSource(shader, 1, &source, nullptr);
+    glCompileShader(shader);
+    GLint ok = 0;
+    glGetShaderiv(shader, GL_COMPILE_STATUS, &ok);
+    if (ok)
+        return shader;
+    glDeleteShader(shader);
+    return 0;
 }
+
+static GLuint link_program(const char* vertex, const char* fragment) {
+    GLuint vs = compileShader(GL_VERTEX_SHADER, vertex);
+    GLuint frag = compileShader(GL_FRAGMENT_SHADER, fragment);
+    if (!vs || !frag) {
+        if (vs)
+            glDeleteShader(vs);
+        if (frag)
+            glDeleteShader(frag);
+        return 0;
+    }
+    GLuint program = glCreateProgram();
+    glAttachShader(program, vs);
+    glAttachShader(program, frag);
+    glLinkProgram(program);
+    glDeleteShader(vs);
+    glDeleteShader(frag);
+    GLint ok = 0;
+    glGetProgramiv(program, GL_LINK_STATUS, &ok);
+    if (ok)
+        return program;
+    glDeleteProgram(program);
+    return 0;
+}
+
+static GLuint make_color_target(GLint internal, GLenum format, int width, int height) {
+    GLuint texture = 0;
+    glGenTextures(1, &texture);
+    glBindTexture(GL_TEXTURE_2D, texture);
+    glTexImage2D(GL_TEXTURE_2D, 0, internal, width, height, 0, format, GL_UNSIGNED_BYTE, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    return texture;
+}
+
+static GLuint make_framebuffer(GLuint texture) {
+    GLuint buf = 0;
+    glGenFramebuffers(1, &buf);
+    glBindFramebuffer(GL_FRAMEBUFFER, buf);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, 0);
+    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+        glDeleteFramebuffers(1, &buf);
+        return 0;
+    }
+    return buf;
+}
+
+static std::string encoder_flags(const std::string& codec, const std::string& extra, bool with_rate) {
+    auto has = [&](const char* key) {
+        return extra.find(key) != std::string::npos;
+    };
+    std::string flags;
+    if (!has("-preset") && !has("-quality")) {
+        if (codec.find("nvenc") != std::string::npos)
+            flags += " -preset p1";
+        else if (codec.find("amf") != std::string::npos)
+            flags += " -quality speed";
+        else if (codec.find("qsv") != std::string::npos)
+            flags += " -preset veryfast";
+        else if (codec == "libx264" || codec == "libx265")
+            flags += " -preset " + Logic::get().render_preset;
+    }
+    if (with_rate && codec.find("nvenc") != std::string::npos && !has("-rc "))
+        flags += " -rc vbr";
+    return flags;
+}
+
+static std::string video_rate(const std::string& codec, int bitrate, const std::string& extra) {
+    auto has = [&](const char* key) {
+        return extra.find(key) != std::string::npos;
+    };
+    bool own_rate = has("-crf") || has("-qp") || has("-b:v") || has("-q:v") || has("-cq") || has("-global_quality") || has("-qscale") || has("-rc ");
+    if (own_rate)
+        return encoder_flags(codec, extra, false);
+    if (bitrate > 0)
+        return encoder_flags(codec, extra, true) + fmt::format(" -b:v {}", bitrate);
+    std::string flags;
+    if (!has("-preset") && !has("-quality")) {
+        if (codec.find("nvenc") != std::string::npos)
+            flags += " -preset p1";
+        else if (codec.find("amf") != std::string::npos)
+            flags += " -quality speed";
+        else if (codec.find("qsv") != std::string::npos)
+            flags += " -preset veryfast";
+        else if (codec == "libx264" || codec == "libx265")
+            flags += " -preset " + Logic::get().render_preset;
+    }
+    if (codec.find("nvenc") != std::string::npos)
+        flags += " -rc constqp -qp 0";
+    else if (codec.find("amf") != std::string::npos)
+        flags += " -rc cqp -qp_i 0 -qp_p 0";
+    else if (codec.find("qsv") != std::string::npos)
+        flags += " -global_quality 1";
+    else
+        flags += " -qp 0";
+    return flags;
+}
+
+using SwapIntervalFn = BOOL(WINAPI*)(int);
+using GetSwapIntervalFn = int(WINAPI*)();
 
 void Recorder::draw_full_quad() {
     glBegin(GL_QUADS);
@@ -1768,14 +1750,14 @@ void Recorder::draw_full_quad() {
 }
 
 bool Recorder::setup_nv12() {
-    static char const* vertex = R"(
+    static const char* vertex = R"(
 #version 120
 void main() {
 	gl_Position = gl_Vertex;
 	gl_TexCoord[0].xy = vec2(gl_MultiTexCoord0.x, 1.0 - gl_MultiTexCoord0.y);
 }
 )";
-    static char const* luma = R"(
+    static const char* luma = R"(
 #version 120
 uniform sampler2D u_texture;
 void main() {
@@ -1785,7 +1767,7 @@ void main() {
 	gl_FragColor = vec4(y, 0.0, 0.0, 1.0);
 }
 )";
-    static char const* chroma = R"(
+    static const char* chroma = R"(
 #version 120
 uniform sampler2D u_texture;
 void main() {
@@ -1942,7 +1924,7 @@ bool Recorder::open_target() {
     nv12 = !use_api && Recorder::get().setup_nv12();
     if (!nv12)
         Recorder::get().close_nv12();
-    auto bytes = static_cast<GLsizeiptr>(Recorder::get().frame_bytes());
+    auto bytes = (GLsizeiptr)Recorder::get().frame_bytes();
     glGenBuffers(RING, pbo.data());
     for (auto buf : pbo) {
         glBindBuffer(GL_PIXEL_PACK_BUFFER, buf);
@@ -1958,7 +1940,7 @@ bool Recorder::open_target() {
     buffered_capture = !use_api;
     if (buffered_capture) {
         glGenBuffers(RING, pbo.data());
-        auto bytes = static_cast<GLsizeiptr>(frame_bytes());
+        auto bytes = (GLsizeiptr)frame_bytes();
         bool allocated = true;
         for (auto buffer : pbo) {
             glBindBuffer(GL_PIXEL_PACK_BUFFER, buffer);
@@ -2051,7 +2033,7 @@ void Recorder::close_target() {
 bool Recorder::capture_bgra_buffered() {
     if (!buffered_capture)
         return false;
-    while (static_cast<int>(in_flight.size()) >= RING && harvest(true)) {
+    while ((int)in_flight.size() >= RING && harvest(true)) {
     }
     glBindBuffer(GL_PIXEL_PACK_BUFFER, pbo[next_slot]);
     glPixelStorei(GL_PACK_ALIGNMENT, 1);
@@ -2079,7 +2061,7 @@ void Recorder::drawFrame() {
         scene->visit();
     if (fade < 1.f && shade) {
         shade->setContentSize(director->getWinSize());
-        shade->setOpacity(static_cast<GLubyte>(std::lround((1.f - fade) * 255.f)));
+        shade->setOpacity((GLubyte)std::lround((1.f - fade) * 255.f));
         shade->visit();
     }
     kmGLPopMatrix();
@@ -2102,7 +2084,7 @@ void Recorder::drawFrame() {
         glBindFramebuffer(GL_FRAMEBUFFER, y_fbo);
         glReadPixels(0, 0, width, height, GL_RED, GL_UNSIGNED_BYTE, nullptr);
         glBindFramebuffer(GL_FRAMEBUFFER, uv_fbo);
-        auto offset = static_cast<uintptr_t>(width) * static_cast<uintptr_t>(height);
+        auto offset = (uintptr_t)width * (uintptr_t)height;
         glReadPixels(0, 0, width / 2, height / 2, GL_RG, GL_UNSIGNED_BYTE, reinterpret_cast<void*>(offset));
     }
     else {
@@ -2157,8 +2139,8 @@ void Recorder::show_overlay() {
     if (scissor)
         glDisable(GL_SCISSOR_TEST);
 
-    glBindFramebuffer(GL_FRAMEBUFFER, static_cast<GLuint>(screen_fbo));
-    glViewport(0, 0, static_cast<GLsizei>(pixels.width), static_cast<GLsizei>(pixels.height));
+    glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)screen_fbo);
+    glViewport(0, 0, (GLsizei)pixels.width, (GLsizei)pixels.height);
     glClearColor(0.f, 0.f, 0.f, 1.f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
@@ -2187,52 +2169,50 @@ void Recorder::show_overlay() {
     glClearColor(clear[0], clear[1], clear[2], clear[3]);
     if (scissor)
         glEnable(GL_SCISSOR_TEST);
-    glViewport(0, 0, static_cast<GLsizei>(pixels.width), static_cast<GLsizei>(pixels.height));
+    glViewport(0, 0, (GLsizei)pixels.width, (GLsizei)pixels.height);
 }
 
 #ifdef GEODE_IS_IOS
-namespace {
-    GLuint flip_program() {
-        static GLuint program = 0;
-        static bool tried = false;
-        if (tried)
-            return program;
-        tried = true;
-        auto compile = [](GLenum type, char const* source) {
-            GLuint shader = glCreateShader(type);
-            glShaderSource(shader, 1, &source, nullptr);
-            glCompileShader(shader);
-            GLint ok = GL_FALSE;
-            glGetShaderiv(shader, GL_COMPILE_STATUS, &ok);
-            if (ok != GL_TRUE) {
-                glDeleteShader(shader);
-                return GLuint{ 0 };
-            }
-            return shader;
-        };
-        GLuint vertex = compile(GL_VERTEX_SHADER, "attribute vec2 a_position; attribute vec2 a_texCoord; varying vec2 v_texCoord; void main() { v_texCoord = a_texCoord; gl_Position = vec4(a_position, 0.0, 1.0); }");
-        GLuint fragment = compile(GL_FRAGMENT_SHADER, "precision mediump float; varying vec2 v_texCoord; uniform sampler2D u_texture; void main() { gl_FragColor = texture2D(u_texture, v_texCoord); }");
-        if (!vertex || !fragment)
-            return 0;
-        GLuint made = glCreateProgram();
-        glAttachShader(made, vertex);
-        glAttachShader(made, fragment);
-        glBindAttribLocation(made, kCCVertexAttrib_Position, "a_position");
-        glBindAttribLocation(made, kCCVertexAttrib_TexCoords, "a_texCoord");
-        glLinkProgram(made);
-        glDeleteShader(vertex);
-        glDeleteShader(fragment);
-        GLint ok = GL_FALSE;
-        glGetProgramiv(made, GL_LINK_STATUS, &ok);
-        if (ok != GL_TRUE) {
-            glDeleteProgram(made);
-            return 0;
-        }
-        ccGLUseProgram(made);
-        glUniform1i(glGetUniformLocation(made, "u_texture"), 0);
-        program = made;
+static GLuint flip_program() {
+    static GLuint program = 0;
+    static bool tried = false;
+    if (tried)
         return program;
+    tried = true;
+    auto compile = [](GLenum type, const char* source) {
+        GLuint shader = glCreateShader(type);
+        glShaderSource(shader, 1, &source, nullptr);
+        glCompileShader(shader);
+        GLint ok = GL_FALSE;
+        glGetShaderiv(shader, GL_COMPILE_STATUS, &ok);
+        if (ok != GL_TRUE) {
+            glDeleteShader(shader);
+            return GLuint{ 0 };
+        }
+        return shader;
+    };
+    GLuint vertex = compile(GL_VERTEX_SHADER, "attribute vec2 a_position; attribute vec2 a_texCoord; varying vec2 v_texCoord; void main() { v_texCoord = a_texCoord; gl_Position = vec4(a_position, 0.0, 1.0); }");
+    GLuint fragment = compile(GL_FRAGMENT_SHADER, "precision mediump float; varying vec2 v_texCoord; uniform sampler2D u_texture; void main() { gl_FragColor = texture2D(u_texture, v_texCoord); }");
+    if (!vertex || !fragment)
+        return 0;
+    GLuint made = glCreateProgram();
+    glAttachShader(made, vertex);
+    glAttachShader(made, fragment);
+    glBindAttribLocation(made, kCCVertexAttrib_Position, "a_position");
+    glBindAttribLocation(made, kCCVertexAttrib_TexCoords, "a_texCoord");
+    glLinkProgram(made);
+    glDeleteShader(vertex);
+    glDeleteShader(fragment);
+    GLint ok = GL_FALSE;
+    glGetProgramiv(made, GL_LINK_STATUS, &ok);
+    if (ok != GL_TRUE) {
+        glDeleteProgram(made);
+        return 0;
     }
+    ccGLUseProgram(made);
+    glUniform1i(glGetUniformLocation(made, "u_texture"), 0);
+    program = made;
+    return program;
 }
 
 bool Recorder::draw_direct() {
@@ -2253,8 +2233,8 @@ bool Recorder::draw_direct() {
     bool complete = glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
     if (complete) {
         glViewport(0, 0, width, height);
-        GLfloat const corners[] = { -1.f, -1.f, 1.f, -1.f, -1.f, 1.f, 1.f, 1.f };
-        GLfloat const coords[] = { 0.f, 1.f, 1.f, 1.f, 0.f, 0.f, 1.f, 0.f };
+        const GLfloat corners[] = { -1.f, -1.f, 1.f, -1.f, -1.f, 1.f, 1.f, 1.f };
+        const GLfloat coords[] = { 0.f, 1.f, 1.f, 1.f, 0.f, 0.f, 1.f, 0.f };
         ccGLUseProgram(program);
         ccGLBindTexture2D(color);
         ccGLBlendFunc(GL_ONE, GL_ZERO);
@@ -2292,8 +2272,8 @@ void Recorder::draw_preview(CCSize pixels) {
     float up = video >= screen ? screen / video : 1.f;
     float x0 = win.width * (1.f - across) * .5f, y0 = win.height * (1.f - up) * .5f, x1 = win.width - x0;
     float y1 = win.height - y0;
-    GLfloat const corners[] = { x0, y0, x1, y0, x0, y1, x1, y1 };
-    GLfloat const coords[] = { 0.f, 0.f, 1.f, 0.f, 0.f, 1.f, 1.f, 1.f };
+    const GLfloat corners[] = { x0, y0, x1, y0, x0, y1, x1, y1 };
+    const GLfloat coords[] = { 0.f, 0.f, 1.f, 0.f, 0.f, 1.f, 1.f, 1.f };
     program->use();
     program->setUniformsForBuiltins();
     ccGLBindTexture2D(color);
@@ -2351,13 +2331,13 @@ bool Recorder::harvest(bool wait) {
     glDeleteSync(fences[slot]);
     fences[slot] = nullptr;
 #else
-    if (!wait && static_cast<int>(in_flight.size()) < RING - 1)
+    if (!wait && (int)in_flight.size() < RING - 1)
         return false;
     Timed timed{ g_timing.read_ns };
 #endif
     in_flight.pop_front();
     glBindBuffer(GL_PIXEL_PACK_BUFFER, pbo[slot]);
-    if (auto const* data = static_cast<uint8_t const*>(glMapBuffer(GL_PIXEL_PACK_BUFFER, GL_READ_ONLY))) {
+    if (const auto* data = static_cast<const unsigned char*>(glMapBuffer(GL_PIXEL_PACK_BUFFER, GL_READ_ONLY))) {
         auto frame = Recorder::get().acquire_frame();
         std::memcpy(frame.data(), data, frame.size());
         if (glUnmapBuffer(GL_PIXEL_PACK_BUFFER)) {
@@ -2377,8 +2357,8 @@ bool Recorder::harvest(bool wait) {
 }
 #endif
 
-std::vector<uint8_t> Recorder::acquire_frame() {
-    std::vector<uint8_t> frame;
+std::vector<unsigned char> Recorder::acquire_frame() {
+    std::vector<unsigned char> frame;
     {
         std::lock_guard guard(lock);
         if (!spare_frames.empty()) {
@@ -2390,7 +2370,7 @@ std::vector<uint8_t> Recorder::acquire_frame() {
     return frame;
 }
 
-void Recorder::queue_frame(std::vector<uint8_t> frame) {
+void Recorder::queue_frame(std::vector<unsigned char> frame) {
     std::unique_lock guard(lock);
     {
         Timed timed{ g_timing.wait_ns };
@@ -2406,7 +2386,7 @@ void Recorder::queue_frame(std::vector<uint8_t> frame) {
 
 void Recorder::encode_loop() {
     while (true) {
-        std::vector<uint8_t> frame;
+        std::vector<unsigned char> frame;
         {
             std::unique_lock guard(lock);
             wake.wait(guard, [this] {
@@ -2515,7 +2495,7 @@ bool Recorder::idle() const {
 #endif
 }
 
-bool Recorder::write_out(std::vector<uint8_t> const& frame) {
+bool Recorder::write_out(const std::vector<unsigned char>& frame) {
     Timed timed{ g_timing.encode_ns };
 #ifdef ECHO_FFMPEG_API
     if (api) {
@@ -2568,14 +2548,14 @@ std::string Recorder::open_api(int fps) {
 #ifdef GEODE_IS_ANDROID
     install_encoder_options();
 #endif
-    auto const& logic = Logic::get();
+    const auto& logic = Logic::get();
     if (!Recorder::api_available())
         return "FFmpeg API is not installed";
     auto encoder = std::make_unique<ffmpeg::events::Recorder>();
     if (!encoder->isValid())
         return "FFmpeg API did not respond";
     auto codecs = ffmpeg::events::Recorder::getAvailableCodecs();
-    auto offered = [&](std::string const& name) {
+    auto offered = [&](const std::string& name) {
         return codecs.empty() || std::ranges::find(codecs, name) != codecs.end();
     };
     std::vector<std::string> wanted;
@@ -2586,7 +2566,7 @@ std::string Recorder::open_api(int fps) {
     std::vector<std::string> fallbacks{ logic.render_codec, "libx264", "h264_videotoolbox", "h264_mediacodec", "libopenh264", "mpeg4" };
     wanted.insert(wanted.end(), fallbacks.begin(), fallbacks.end());
     std::vector<std::string> picks;
-    std::ranges::copy_if(wanted, std::back_inserter(picks), [&](std::string const& name) {
+    std::ranges::copy_if(wanted, std::back_inserter(picks), [&](const std::string& name) {
         return !name.empty() && offered(name) && std::ranges::find(picks, name) == picks.end();
     });
 #ifdef GEODE_IS_ANDROID
@@ -2595,16 +2575,16 @@ std::string Recorder::open_api(int fps) {
     auto color_modes = logic.render_color_fix ? std::vector<bool>{ true, false } : std::vector<bool>{ false };
 #endif
     std::vector<std::pair<std::string, bool>> attempts;
-    std::ranges::for_each(picks, [&](std::string const& codec) {
+    std::ranges::for_each(picks, [&](const std::string& codec) {
         std::ranges::transform(color_modes, std::back_inserter(attempts), [&](bool color_fix) {
             return std::pair{ codec, color_fix };
         });
     });
-    int64_t pixels = static_cast<int64_t>(width) * static_cast<int64_t>(height);
-    int64_t bitrate = logic.render_bitrate > 0 ? logic.render_bitrate : std::max<int64_t>(pixels * fps / 4, 8'000'000);
+    long long pixels = (long long)width * (long long)height;
+    long long bitrate = logic.render_bitrate > 0 ? logic.render_bitrate : std::max<long long>(pixels * fps / 4, 8'000'000);
     std::string error = "No usable video codec";
-    auto opened = std::ranges::find_if(attempts, [&](auto const& attempt) {
-        auto const& [codec, color_fix] = attempt;
+    auto opened = std::ranges::find_if(attempts, [&](const auto& attempt) {
+        const auto& [codec, color_fix] = attempt;
         ffmpeg::RenderSettings settings;
 #ifdef GEODE_IS_WINDOWS
         settings.m_pixelFormat = ffmpeg::PixelFormat::BGRA;
@@ -2613,19 +2593,19 @@ std::string Recorder::open_api(int fps) {
 #endif
         settings.m_codec = codec;
         settings.m_bitrate = bitrate;
-        settings.m_width = static_cast<uint32_t>(width);
-        settings.m_height = static_cast<uint32_t>(height);
-        settings.m_fps = static_cast<uint16_t>(std::clamp(fps, 1, 65535));
+        settings.m_width = (unsigned)width;
+        settings.m_height = (unsigned)height;
+        settings.m_fps = (unsigned short)std::clamp(fps, 1, 65535);
         settings.m_outputFile = output;
         settings.m_doVerticalFlip = true;
         settings.m_colorspaceFilters = color_fix ? "all=bt709:iall=bt470bg:fast=1" : "";
 #ifdef GEODE_IS_ANDROID
-        s_echoPreset = codec == "libx264" ? logic.render_preset.c_str() : nullptr;
-        s_echoColorFix = logic.render_color_fix;
+        g_echo_preset = codec == "libx264" ? logic.render_preset.c_str() : nullptr;
+        g_echo_color_fix = logic.render_color_fix;
         struct PresetScope {
             ~PresetScope() {
-                s_echoPreset = nullptr;
-                s_echoColorFix = false;
+                g_echo_preset = nullptr;
+                g_echo_color_fix = false;
             }
         } reset_preset;
 #endif
@@ -2645,52 +2625,50 @@ std::string Recorder::open_api(int fps) {
 }
 #endif
 
-namespace {
-    bool write_wav(fs::path const& raw, fs::path const& wav, int rate, int channels) {
-        std::ifstream in(raw, std::ios::binary);
-        std::ofstream out(wav, std::ios::binary | std::ios::trunc);
-        if (!in || !out || rate <= 0 || channels <= 0)
-            return false;
-        auto put = [&](auto value) {
-            out.write(reinterpret_cast<char const*>(&value), sizeof(value));
-        };
-        out.write("RIFF", 4);
-        put(uint32_t{ 0 });
-        out.write("WAVEfmt ", 8);
-        put(uint32_t{ 16 });
-        put(uint16_t{ 1 });
-        put(uint16_t{ 2 });
-        put(static_cast<uint32_t>(rate));
-        put(static_cast<uint32_t>(rate) * 4u);
-        put(uint16_t{ 4 });
-        put(uint16_t{ 16 });
-        out.write("data", 4);
-        put(uint32_t{ 0 });
-        auto sample = [](float value) {
-            return static_cast<int16_t>(std::lround((std::isfinite(value) ? std::clamp(value, -1.f, 1.f) : 0.f) * 32767.f));
-        };
-        size_t width = static_cast<size_t>(channels);
-        std::vector<float> block(width * 65536);
-        uint64_t bytes = 0;
-        while (in) {
-            in.read(reinterpret_cast<char*>(block.data()), static_cast<std::streamsize>(block.size() * sizeof(float)));
-            size_t amt = static_cast<size_t>(in.gcount()) / (sizeof(float) * width);
-            if (amt == 0)
-                break;
-            auto pcm = std::views::iota(size_t{ 0 }, amt) | std::views::transform([&](size_t i) {
-                float const* frame = block.data() + i * width;
-                return std::array<int16_t, 2>{ sample(frame[0]), sample(width > 1 ? frame[1] : frame[0]) };
-            }) | std::ranges::to<std::vector>();
-            out.write(reinterpret_cast<char const*>(pcm.data()), static_cast<std::streamsize>(pcm.size() * sizeof(pcm[0])));
-            bytes += amt * 4;
-        }
-        auto size = static_cast<uint32_t>(std::min<uint64_t>(bytes, 0xFFFFFFFFull - 36));
-        out.seekp(4);
-        put(36u + size);
-        out.seekp(40);
-        put(size);
-        return bytes > 0 && out.good();
+static bool write_wav(const fs::path& raw, const fs::path& wav, int rate, int channels) {
+    std::ifstream in(raw, std::ios::binary);
+    std::ofstream out(wav, std::ios::binary | std::ios::trunc);
+    if (!in || !out || rate <= 0 || channels <= 0)
+        return false;
+    auto put = [&](auto value) {
+        out.write(reinterpret_cast<const char*>(&value), sizeof(value));
+    };
+    out.write("RIFF", 4);
+    put(0u);
+    out.write("WAVEfmt ", 8);
+    put(16u);
+    put((unsigned short)1);
+    put((unsigned short)2);
+    put((unsigned)rate);
+    put((unsigned)rate * 4u);
+    put((unsigned short)4);
+    put((unsigned short)16);
+    out.write("data", 4);
+    put(0u);
+    auto sample = [](float value) {
+        return (short)std::lround((std::isfinite(value) ? std::clamp(value, -1.f, 1.f) : 0.f) * 32767.f);
+    };
+    size_t width = (size_t)channels;
+    std::vector<float> block(width * 65536);
+    unsigned long long bytes = 0;
+    while (in) {
+        in.read(reinterpret_cast<char*>(block.data()), (std::streamsize)(block.size() * sizeof(float)));
+        size_t amt = (size_t)in.gcount() / (sizeof(float) * width);
+        if (amt == 0)
+            break;
+        auto pcm = std::views::iota(size_t{ 0 }, amt) | std::views::transform([&](size_t i) {
+            const float* frame = block.data() + i * width;
+            return std::array<short, 2>{ sample(frame[0]), sample(width > 1 ? frame[1] : frame[0]) };
+        }) | std::ranges::to<std::vector>();
+        out.write(reinterpret_cast<const char*>(pcm.data()), (std::streamsize)(pcm.size() * sizeof(pcm[0])));
+        bytes += amt * 4;
     }
+    auto size = (unsigned)(std::min<unsigned long long>(bytes, 4294967295ull - 36));
+    out.seekp(4);
+    put(36u + size);
+    out.seekp(40);
+    put(size);
+    return bytes > 0 && out.good();
 }
 
 void Recorder::save_api_render() {
@@ -2698,7 +2676,7 @@ void Recorder::save_api_render() {
     auto& tap = AudioTap::get();
     std::error_code error;
     bool has_audio = !audio.empty() && frames > 0 && tap.written > 0 && tap.rate > 0 && tap.channels > 0 && fs::exists(output, error);
-    auto finish = [](fs::path const& video, std::string const& failed) {
+    auto finish = [](const fs::path& video, const std::string& failed) {
         Recorder::get().saving = false;
         auto& logic = Logic::get();
         if (failed.empty()) {
@@ -2720,7 +2698,7 @@ void Recorder::save_api_render() {
         return;
     }
     saving = true;
-    int kept_rate = static_cast<int>(std::max(1ll, std::llround((double)(tap.rate) * std::max(audio_speed, 0.01f))));
+    int kept_rate = (int)std::max(1ll, std::llround((double)(tap.rate) * std::max(audio_speed, 0.01f)));
     std::thread([finish, video = output, raw = audio, rate = kept_rate, channels = tap.channels] {
         auto folder = video.parent_path();
         auto wav = folder / (video.stem().string() + ".audio.wav");
@@ -2729,18 +2707,18 @@ void Recorder::save_api_render() {
         std::error_code error;
         std::vector<float> stereo;
         try {
-            stereo = echo::audio::read_stereo(raw, channels);
+            stereo = read_stereo(raw, channels);
         }
-        catch (std::exception const& error) {
+        catch (const std::exception& error) {
             failed = error.what();
         }
 #ifdef ECHO_FFMPEG_API
         if (failed.empty()) {
 #ifdef GEODE_IS_ANDROID
-            s_echoGlobalHeader = true;
+            g_echo_global_header = true;
             struct HeaderScope {
                 ~HeaderScope() {
-                    s_echoGlobalHeader = false;
+                    g_echo_global_header = false;
                 }
             } reset_header;
 #endif
@@ -2763,7 +2741,7 @@ void Recorder::save_api_render() {
                 }
 #endif
             }
-            catch (std::exception const& error) {
+            catch (const std::exception& error) {
                 failed = error.what();
             }
         }
@@ -2820,7 +2798,7 @@ bool Recorder::mux_audio() {
     bool lossless = Logic::get().render_bitrate <= 0;
     auto extension = output.extension().string();
     std::transform(extension.begin(), extension.end(), extension.begin(), [](unsigned char c) {
-        return static_cast<char>(std::tolower(c));
+        return (char)std::tolower(c);
     });
     std::string audio_codec = extension == ".webm" ? "-c:a libopus -b:a 320k" : lossless ? "-c:a flac"
                                                                                          : "-c:a aac -b:a 320k";
@@ -2848,7 +2826,7 @@ bool Recorder::mux_audio() {
     }
     fs::remove(temp, error);
     auto wav = output.parent_path() / (output.stem().string() + ".wav");
-    if (write_wav(audio, wav, static_cast<int>(source_rate), tap.channels)) {
+    if (write_wav(audio, wav, (int)source_rate, tap.channels)) {
         fs::remove(audio, error);
         failed += "; audio kept in " + wav.filename().string();
     }
@@ -2877,7 +2855,7 @@ bool Recorder::mux_audio() {
     bool lossless = Logic::get().render_bitrate <= 0;
     auto extension = output.extension().string();
     std::transform(extension.begin(), extension.end(), extension.begin(), [](unsigned char c) {
-        return static_cast<char>(std::tolower(c));
+        return (char)std::tolower(c);
     });
     std::vector<std::string> audio_codec = extension == ".webm" ? std::vector<std::string>{ "-c:a", "libopus", "-b:a", "320k" }
                                            : lossless           ? std::vector<std::string>{ "-c:a", "flac" }
@@ -2903,7 +2881,7 @@ bool Recorder::mux_audio() {
     }
     fs::remove(temp, error);
     auto wav = output.parent_path() / (output.stem().string() + ".wav");
-    if (write_wav(audio, wav, static_cast<int>(source_rate), tap.channels)) {
+    if (write_wav(audio, wav, (int)source_rate, tap.channels)) {
         fs::remove(audio, error);
         failed += "; audio kept in " + wav.filename().string();
     }
@@ -2915,27 +2893,25 @@ bool Recorder::mux_audio() {
 }
 #endif
 
-namespace {
-    float lvl_fraction(PlayLayer* play, int last_input_frame) {
-        if (!play)
-            return -1.f;
-        if (!play->m_isPlatformer && play->m_player1 && play->m_endPortal) {
-            float end_x = play->m_endPortal->getPositionX();
-            if (end_x > 0.f)
-                return std::clamp(play->m_player1->getPositionX() / end_x, 0.f, 1.f);
-        }
-        if (Logic::get().is_playing() && last_input_frame > 0) {
-            return std::clamp((float)(Logic::get().step_frame) / (float)(last_input_frame), 0.f, 1.f);
-        }
+static float lvl_fraction(PlayLayer* play, int last_input_frame) {
+    if (!play)
         return -1.f;
+    if (!play->m_isPlatformer && play->m_player1 && play->m_endPortal) {
+        float end_x = play->m_endPortal->getPositionX();
+        if (end_x > 0.f)
+            return std::clamp(play->m_player1->getPositionX() / end_x, 0.f, 1.f);
     }
+    if (Logic::get().is_playing() && last_input_frame > 0) {
+        return std::clamp((float)(Logic::get().step_frame) / (float)(last_input_frame), 0.f, 1.f);
+    }
+    return -1.f;
+}
 
-    std::string clock_text(double seconds) {
-        int total = static_cast<int>(std::max(seconds, 0.0) + 0.5);
-        if (total >= 3600)
-            return fmt::format("{}:{:02}:{:02}", total / 3600, total / 60 % 60, total % 60);
-        return fmt::format("{}:{:02}", total / 60, total % 60);
-    }
+static std::string clock_text(double seconds) {
+    int total = (int)(std::max(seconds, 0.0) + 0.5);
+    if (total >= 3600)
+        return fmt::format("{}:{:02}:{:02}", total / 3600, total / 60 % 60, total % 60);
+    return fmt::format("{}:{:02}", total / 60, total % 60);
 }
 
 RenderStatus Logic::render_status() {
@@ -2949,7 +2925,7 @@ RenderStatus Logic::render_status() {
         return status;
     }
     auto* play = PlayLayer::get();
-    double video = (double)(film.frames) * (double)(Logic::get().render_step());
+    double video = (double)(film.frames) * (double)(render_step());
     if (film.busy_seconds > 0.05)
         status.speed = (float)(video / film.busy_seconds);
     auto& marks = film.pace_marks;
@@ -2982,8 +2958,8 @@ RenderStatus Logic::render_status() {
         if (std::isfinite(end) && std::isfinite(here) && end > 0.0)
             left_game = std::max(end - here, 0.0);
     }
-    double game_speed = std::max((double)(Logic::get().render_speed()), 0.01);
-    double tail = (double)(Logic::get().render_after_end);
+    double game_speed = std::max((double)(render_speed()), 0.01);
+    double tail = (double)(render_after_end);
     if (left_game >= 0.0) {
         double left_video = left_game / game_speed + tail;
         double whole = video + left_video;
@@ -3063,7 +3039,7 @@ int Logic::render_width_for(int width, int height) {
         return width;
     float wide = std::max(frame.width, frame.height);
     float tall = std::min(frame.width, frame.height);
-    return std::max(static_cast<int>(std::lround((float)(height) * wide / tall)), 2) & ~1;
+    return std::max((int)std::lround((float)(height) * wide / tall), 2) & ~1;
 }
 
 bool Logic::render_active() {
@@ -3092,11 +3068,11 @@ bool Logic::render_blocks_mixer() {
 
 bool Logic::render_should_skip() {
     auto* play = PlayLayer::get();
-    if (!play || Logic::get().render_paused())
+    if (!play || render_paused())
         return true;
-    if (Logic::get().pause_menu_open())
+    if (pause_menu_open())
         return true;
-    bool started = play->m_started || (Logic::get().render_record_pause && Recorder::get().seen_frames >= 2);
+    bool started = play->m_started || (render_record_pause && Recorder::get().seen_frames >= 2);
     if (!started)
         return true;
     if (play->m_isPaused)
@@ -3116,7 +3092,7 @@ bool Logic::begin_render_frame() {
     glGetIntegerv(GL_FRAMEBUFFER_BINDING, &film.screen_fbo);
     ++film.seen_frames;
     film.hold_view();
-    bool capture = !Logic::get().render_should_skip();
+    bool capture = !render_should_skip();
     if (capture) {
         film.busy_seconds += std::clamp(gap, 0.0, 30.0);
         AudioTap::get().hold_effects();
@@ -3137,13 +3113,12 @@ bool Logic::capture_frame() {
     auto* play = PlayLayer::get();
     if (!film.active || !play)
         return false;
-    auto const& logic = Logic::get();
-    float dt = Logic::get().render_step();
+    float dt = render_step();
     if (play->m_hasCompletedLevel) {
         film.endTime += dt;
-        if (film.endTime >= logic.render_after_end) {
-            bool leave = logic.render_auto_exit;
-            Logic::get().stop_render();
+        if (film.endTime >= render_after_end) {
+            bool leave = render_auto_exit;
+            stop_render();
             if (leave) {
                 Loader::get()->queueInMainThread([] {
                     if (auto* layer = PlayLayer::get())
@@ -3153,26 +3128,26 @@ bool Logic::capture_frame() {
             return false;
         }
     }
-    float fadeIn = logic.render_fade_in <= 0.f ? 1.f : std::clamp((float)(film.frames) * dt / logic.render_fade_in, 0.f, 1.f);
+    float fadeIn = render_fade_in <= 0.f ? 1.f : std::clamp((float)(film.frames) * dt / render_fade_in, 0.f, 1.f);
     float fadeOut = 1.f;
-    if (play->m_hasCompletedLevel && logic.render_fade_out > 0.f) {
-        fadeOut = std::clamp((logic.render_after_end - film.endTime) / logic.render_fade_out, 0.f, 1.f);
+    if (play->m_hasCompletedLevel && render_fade_out > 0.f) {
+        fadeOut = std::clamp((render_after_end - film.endTime) / render_fade_out, 0.f, 1.f);
     }
     film.fade = std::min(fadeIn, fadeOut);
     if (film.start_fraction < 0.f)
         film.start_fraction = lvl_fraction(play, film.last_input_frame);
     AudioTap::get().advance(dt * film.audio_speed, film.fade);
     film.drawFrame();
-    if (film.frames % (std::max(logic.render_fps, 1) * 5) == 0 && g_render_notes.size() < 60000) {
+    if (film.frames % (std::max(render_fps, 1) * 5) == 0 && g_render_notes.size() < 60000) {
         auto* engine = FMODAudioEngine::get();
         auto& tap = AudioTap::get();
         unsigned raw_song = 0;
         if (auto* channel = engine ? engine->getActiveMusicChannel(0) : nullptr)
             channel->getPosition(&raw_song, FMOD_TIMEUNIT_MS);
         g_render_notes += fmt::format("at video={:.3f}s level_time={:.4f}s song={}ms raw_song={}ms audio_written={:.3f}s x={:.3f} tps={:g} step_frame={}\n",
-            static_cast<double>(film.frames) * dt, play->m_gameState.m_levelTime, engine ? engine->getMusicTimeMS(0) : 0, raw_song,
-            tap.rate > 0 ? static_cast<double>(tap.written) / tap.rate : 0.0, play->m_player1 ? play->m_player1->getPositionX() : 0.f,
-            logic.sample_rate(), logic.step_frame);
+            (double)film.frames * dt, play->m_gameState.m_levelTime, engine ? engine->getMusicTimeMS(0) : 0, raw_song,
+            tap.rate > 0 ? (double)tap.written / tap.rate : 0.0, play->m_player1 ? play->m_player1->getPositionX() : 0.f,
+            sample_rate(), step_frame);
     }
     ++film.frames;
     if (film.broken) {
@@ -3181,8 +3156,8 @@ bool Logic::capture_frame() {
         if (!film.use_api && !film.failure.empty())
             reason = "Encoding failed: " + film.failure;
 #endif
-        Logic::get().stop_render();
-        Logic::get().notify(reason, false);
+        stop_render();
+        notify(reason, false);
     }
     return true;
 }
@@ -3193,7 +3168,7 @@ bool Logic::render_batch_more(chrono::steady_clock::time_point started) {
 #else
     // showing the window costs 10-20ms so batches are long, short w/ the menu open
     auto longest = chrono::milliseconds(GUI::get().menu_shown() ? 25 : 200);
-    return Recorder::get().active && !Logic::get().render_should_skip() && chrono::steady_clock::now() - started < longest;
+    return Recorder::get().active && !render_should_skip() && chrono::steady_clock::now() - started < longest;
 #endif
 }
 
@@ -3219,7 +3194,7 @@ void Logic::stop_render() {
     if (film.active && film.frames > 0) {
         double frames = (double)(film.frames);
         double wall = chrono::duration<double>(chrono::steady_clock::now() - g_timing.began).count();
-        auto each = [frames](std::atomic<long long> const& ns) {
+        auto each = [frames](const std::atomic<long long>& ns) {
             return (double)(ns.load()) / 1e6 / frames;
         };
         auto& logic = Logic::get();
@@ -3227,7 +3202,7 @@ void Logic::stop_render() {
         std::error_code error;
         fs::create_directories(logic.save_root() / "logs", error);
         std::ofstream out(logic.save_root() / "logs" / "render.txt", std::ios::trunc);
-        out << fmt::format("echo {} build {}\n", Mod::get()->getVersion().toVString(), echo::build_id());
+        out << fmt::format("echo {} build {}\n", Mod::get()->getVersion().toVString(), build_id());
         out << fmt::format("render {}x{} @{}fps codec={} platform={} capture={}\n", film.width, film.height, logic.render_fps, logic.render_codec,
             GEODE_PLATFORM_NAME, film.use_api ? "api" : film.nv12 ? "nv12 ring" : film.buffered_capture ? "bgra ring" : "bgra direct");
         out << fmt::format("frames={} video={:.3f}s wall={:.3f}s speed={:.2f} fps ({:.2f}x real time)\n", film.frames, frames / std::max(logic.render_fps, 1), wall,
@@ -3240,7 +3215,7 @@ void Logic::stop_render() {
             logic.render_factor_high, logic.render_factor_count > 0 ? logic.render_factor_sum / logic.render_factor_count : 1.0, logic.render_factor_count,
             logic.sample_rate(), film.audio_speed);
         out << fmt::format("audio rate={} channels={} written={} ({:.3f}s) stray_blocks={}\n", tap.rate, tap.channels, tap.written,
-            tap.rate > 0 ? static_cast<double>(tap.written) / tap.rate : 0.0, tap.stray_blocks);
+            tap.rate > 0 ? (double)tap.written / tap.rate : 0.0, tap.stray_blocks);
         {
             auto* play = PlayLayer::get();
             auto* engine = FMODAudioEngine::get();
@@ -3256,7 +3231,7 @@ void Logic::stop_render() {
         film.cancel = true;
         if (film.video != INVALID_HANDLE_VALUE)
             CancelIoEx(film.video, nullptr);
-        Logic::get().message = "Render canceled";
+        message = "Render canceled";
         return;
     }
 #endif
@@ -3265,7 +3240,7 @@ void Logic::stop_render() {
     film.starting = false;
     film.cancel = false;
     film.active = false;
-    Logic::get().render_speed_locked = 0.f;
+    render_speed_locked = 0.f;
     film.restore_pace();
     AudioTap::get().detach();
     film.finish_video();
@@ -3278,17 +3253,17 @@ void Logic::stop_render() {
 #ifdef GEODE_IS_WINDOWS
     bool muxed = film.mux_audio();
     if (muxed)
-        Logic::get().message = "Render stopped";
+        message = "Render stopped";
 #endif
 #ifdef GEODE_IS_MACOS
     if (!film.encode_error.empty()) {
-        Logic::get().message = "Render failed: " + film.encode_error;
-        Logic::get().notify(Logic::get().message, false);
+        message = "Render failed: " + film.encode_error;
+        notify(message, false);
     }
     else if (film.mux_audio()) {
-        Logic::get().message = "Render stopped";
+        message = "Render stopped";
         if (film.frames > 0)
-            Logic::get().notify(fmt::format("Saved {}", film.output.filename().string()), true);
+            notify(fmt::format("Saved {}", film.output.filename().string()), true);
     }
 #endif
 }
@@ -3298,52 +3273,51 @@ void Logic::start_render() {
     if (film.active || film.starting)
         return;
     if (film.saving) {
-        Logic::get().notify("Still saving the last render", false);
+        notify("Still saving the last render", false);
         return;
     }
     auto* play = PlayLayer::get();
     auto* director = CCDirector::sharedDirector();
     auto* view = director ? director->getOpenGLView() : nullptr;
     if (!play || !view) {
-        Logic::get().render_queued = true;
-        Logic::get().notify("Rendering starts when you enter a level", true);
+        render_queued = true;
+        notify("Rendering starts when you enter a level", true);
         return;
     }
-    auto& logic = Logic::get();
-    int height = std::max(logic.render_height, 2) & ~1;
-    int width = std::max(Logic::get().render_width_for(logic.render_width, height), 2) & ~1;
+    int height = std::max(render_height, 2) & ~1;
+    int width = std::max(render_width_for(render_width, height), 2) & ~1;
     if (width > 7680 || height > 4320) {
-        Logic::get().notify("Render size is too large. Use 7680x4320 or smaller.", false);
+        notify("Render size is too large. Use 7680x4320 or smaller.", false);
         return;
     }
-    int fps = std::max(logic.render_fps, 1);
-    std::string ext = logic.render_extension.empty() ? "mp4" : logic.render_extension;
+    int fps = std::max(render_fps, 1);
+    std::string ext = render_extension.empty() ? "mp4" : render_extension;
     if (ext.front() == '.')
         ext.erase(ext.begin());
-    logic.render_speed_locked = 0.f;
-    film.audio_speed = Logic::get().render_speed();
-    auto folder = Logic::get().save_root() / "renders";
+    render_speed_locked = 0.f;
+    film.audio_speed = render_speed();
+    auto folder = save_root() / "renders";
     std::error_code folder_error;
     fs::create_directories(folder, folder_error);
     if (folder_error || !fs::is_directory(folder, folder_error)) {
-        Logic::get().notify("Could not create the renders folder", false);
+        notify("Could not create the renders folder", false);
         return;
     }
-    auto output = ReplayIO::unique_file(folder, ReplayIO::sanitize(Logic::get().render_file_stem()), "." + ext);
+    auto output = ReplayIO::unique_file(folder, ReplayIO::sanitize(render_file_stem()), "." + ext);
     film.width = width;
     film.height = height;
     film.use_api = Recorder::prefer_api();
 #ifdef ECHO_FFMPEG_API
     if (film.use_api && !Recorder::api_available()) {
-        logic.ffmpeg_missing = true;
-        logic.message = "FFmpeg API is not installed";
-        Logic::get().notify("Rendering needs the FFmpeg API mod. Install it from the Geode mod index.", false);
+        ffmpeg_missing = true;
+        message = "FFmpeg API is not installed";
+        notify("Rendering needs the FFmpeg API mod. Install it from the Geode mod index.", false);
         return;
     }
 #endif
     if (!film.open_target()) {
         film.close_target();
-        Logic::get().notify("Could not create the render target", false);
+        notify("Could not create the render target", false);
         return;
     }
     auto arm = [&] {
@@ -3356,11 +3330,10 @@ void Logic::start_render() {
         film.pace = 0.0;
         film.pace_marks.clear();
         {
-            auto& logic = Logic::get();
-            logic.render_game_seconds = 0.0;
-            logic.render_factor_sum = 0.0;
-            logic.render_factor_low = logic.render_factor_high = 1.f;
-            logic.render_factor_count = 0;
+            render_game_seconds = 0.0;
+            render_factor_sum = 0.0;
+            render_factor_low = render_factor_high = 1.f;
+            render_factor_count = 0;
         }
         film.seen_frames = 0;
         film.endTime = 0.f;
@@ -3372,20 +3345,20 @@ void Logic::start_render() {
         film.wall_delta = 0.f;
         film.busy_seconds = 0.0;
         film.start_fraction = -1.f;
-        film.last_input_frame = logic.inputs.empty() ? 0 : std::ranges::max(logic.inputs, {}, &Frame::number).number;
-        logic.ffmpeg_missing = false;
-        logic.render_queued = false;
-        logic.frame_advance = false;
-        logic.holding_advance = false;
-        logic.advance_queued = false;
+        film.last_input_frame = inputs.empty() ? 0 : std::ranges::max(inputs, {}, &Frame::number).number;
+        ffmpeg_missing = false;
+        render_queued = false;
+        frame_advance = false;
+        holding_advance = false;
+        advance_queued = false;
     };
 #ifdef ECHO_FFMPEG_API
     if (film.use_api) {
         film.output = output;
         if (auto failed = film.open_api(fps); !failed.empty()) {
             film.close_target();
-            logic.message = "FFmpeg API failed: " + failed;
-            Logic::get().notify(logic.message, false);
+            message = "FFmpeg API failed: " + failed;
+            notify(message, false);
             return;
         }
         arm();
@@ -3398,26 +3371,26 @@ void Logic::start_render() {
     std::string video_name = fmt::format("\\\\.\\pipe\\echo-film-v-{}", id);
     DWORD pipe_mode = PIPE_ACCESS_OUTBOUND | FILE_FLAG_OVERLAPPED;
     size_t frame_bytes = film.frame_bytes();
-    DWORD video_cap = static_cast<DWORD>(std::min(std::max(frame_bytes * 4, frame_bytes), static_cast<size_t>(256u << 20)));
+    DWORD video_cap = (DWORD)std::min(std::max(frame_bytes * 4, frame_bytes), (size_t)(256u << 20));
     film.video = CreateNamedPipeA(video_name.c_str(), pipe_mode, PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT, 1, video_cap, 0, 0, nullptr);
     if (film.video == INVALID_HANDLE_VALUE) {
         film.close_target();
-        Logic::get().notify("Could not open the render pipe", false);
+        notify("Could not open the render pipe", false);
         return;
     }
-    std::string codec = logic.render_codec.empty() ? "libx264" : logic.render_codec;
+    std::string codec = render_codec.empty() ? "libx264" : render_codec;
     bool hardware = codec.find("nvenc") != std::string::npos || codec.find("amf") != std::string::npos || codec.find("qsv") != std::string::npos;
-    char const* out_pix = logic.render_bitrate <= 0 && !hardware ? "yuv444p" : "yuv420p";
+    const char* out_pix = render_bitrate <= 0 && !hardware ? "yuv444p" : "yuv420p";
     // shader already did bt709 DONT do it twice
-    std::string color_fix = logic.render_color_fix && !film.nv12 ? "-vf colorspace=all=bt709:iall=bt470bg:fast=1 " : "";
-    auto has_arg = [&](char const* key) {
-        return logic.render_args.find(key) != std::string::npos;
+    std::string color_fix = render_color_fix && !film.nv12 ? "-vf colorspace=all=bt709:iall=bt470bg:fast=1 " : "";
+    auto has_arg = [&](const char* key) {
+        return render_args.find(key) != std::string::npos;
     };
     std::string pix = has_arg("-pix_fmt") ? std::string() : fmt::format(" -pix_fmt {}", out_pix);
     std::string color = has_arg("-colorspace") || has_arg("-color_primaries") || has_arg("-color_trc") || has_arg("-color_range")
                             ? std::string()
                             : " -colorspace bt709 -color_primaries bt709 -color_trc bt709 -color_range tv";
-    std::string extra = logic.render_args.empty() ? std::string() : " " + logic.render_args;
+    std::string extra = render_args.empty() ? std::string() : " " + render_args;
     std::string command = fmt::format(
         "\"{}\" -y -nostdin -loglevel error -f rawvideo -pix_fmt {} -s {}x{} -r {} -probesize 32 -analyzeduration 0 -fflags nobuffer -i {} -an "
         "{}-c:v {}{}{}{}{} \"{}\"",
@@ -3429,7 +3402,7 @@ void Logic::start_render() {
         video_name,
         color_fix,
         codec,
-        video_rate(codec, logic.render_bitrate, logic.render_args),
+        video_rate(codec, render_bitrate, render_args),
         pix,
         color,
         extra,
@@ -3444,9 +3417,9 @@ void Logic::start_render() {
     if (!CreateProcessA(nullptr, mutable_command.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, nullptr, &startup, &process)) {
         film.close_target();
         Recorder::get().close_handle(film.video);
-        Logic::get().ffmpeg_missing = true;
-        Logic::get().message = "ffmpeg.exe was not found";
-        Logic::get().notify("ffmpeg.exe was not found. Use the download link on the Render tab, then place ffmpeg.exe next to Geometry Dash.", false);
+        ffmpeg_missing = true;
+        message = "ffmpeg.exe was not found";
+        notify("ffmpeg.exe was not found. Use the download link on the Render tab, then place ffmpeg.exe next to Geometry Dash.", false);
         GUI::get().reveal_menu();
         return;
     }
@@ -3454,7 +3427,7 @@ void Logic::start_render() {
     film.process = process.hProcess;
     arm();
     film.starting = true;
-    logic.message = "Starting render...";
+    message = "Starting render...";
     std::thread([] {
         bool ok = Recorder::get().connect_pipe(Recorder::get().video);
         Loader::get()->queueInMainThread([ok] {
@@ -3482,38 +3455,38 @@ void Logic::start_render() {
     auto ffmpeg = Recorder::ffmpeg_path();
     if (ffmpeg.empty()) {
         film.close_target();
-        logic.ffmpeg_missing = true;
-        logic.message = "ffmpeg was not found";
-        Logic::get().notify("ffmpeg was not found. Install it with Homebrew (brew install ffmpeg), then render again.", false);
+        ffmpeg_missing = true;
+        message = "ffmpeg was not found";
+        notify("ffmpeg was not found. Install it with Homebrew (brew install ffmpeg), then render again.", false);
         GUI::get().reveal_menu();
         return;
     }
-    std::string codec = logic.render_codec.empty() ? "libx264" : logic.render_codec;
+    std::string codec = render_codec.empty() ? "libx264" : render_codec;
     bool hardware = codec.find("videotoolbox") != std::string::npos;
-    auto has_arg = [&](char const* key) {
-        return logic.render_args.find(key) != std::string::npos;
+    auto has_arg = [&](const char* key) {
+        return render_args.find(key) != std::string::npos;
     };
     std::string filters = "vflip";
-    if (logic.render_color_fix)
+    if (render_color_fix)
         filters += ",colorspace=all=bt709:iall=bt470bg:fast=1";
     std::vector<std::string> args{
         ffmpeg.string(), "-y", "-loglevel", "error", "-f", "rawvideo", "-pix_fmt", "bgra",
         "-s", fmt::format("{}x{}", width, height), "-r", std::to_string(fps), "-i", "pipe:0", "-an",
         "-vf", filters, "-c:v", codec
     };
-    auto rate = video_rate(codec, logic.render_bitrate, logic.render_args, static_cast<int64_t>(width) * height * fps);
+    auto rate = video_rate(codec, render_bitrate, render_args, (long long)width * height * fps);
     args.insert(args.end(), rate.begin(), rate.end());
     if (!has_arg("-pix_fmt"))
-        args.insert(args.end(), { "-pix_fmt", logic.render_bitrate <= 0 && !hardware ? "yuv444p" : "yuv420p" });
+        args.insert(args.end(), { "-pix_fmt", render_bitrate <= 0 && !hardware ? "yuv444p" : "yuv420p" });
     if (!has_arg("-colorspace") && !has_arg("-color_primaries") && !has_arg("-color_trc") && !has_arg("-color_range"))
         args.insert(args.end(), { "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709", "-color_range", "tv" });
-    auto extra = split_args(logic.render_args);
+    auto extra = split_args(render_args);
     args.insert(args.end(), extra.begin(), extra.end());
     args.push_back(output.string());
     int ends[2] = { -1, -1 };
     if (pipe(ends) != 0) {
         film.close_target();
-        Logic::get().notify("Could not open the render pipe", false);
+        notify("Could not open the render pipe", false);
         return;
     }
     fcntl(ends[0], F_SETFD, FD_CLOEXEC);
@@ -3525,7 +3498,7 @@ void Logic::start_render() {
     if (!pid) {
         close(ends[1]);
         film.close_target();
-        Logic::get().notify("Could not start ffmpeg", false);
+        notify("Could not start ffmpeg", false);
         return;
     }
     film.process = pid;

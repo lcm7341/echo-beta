@@ -5,6 +5,7 @@
 #include <functional>
 
 #include <Geode/Geode.hpp>
+#include "Hack/orbs.hpp"
 
 #include <unordered_set>
 #include <vector>
@@ -100,7 +101,7 @@ private:
 		unsigned pause_ms = 0;
 		bool hide_p1 = false, hide_p2 = false;
 		float seconds = 0.f;
-		uint32_t orbs = 0;
+		std::vector<Orbs::Spot> orbs;
 		float width = 0.f;
 		float zoom = 0.f;
 		float color[4] = {}, swift_color[4] = {}, release_color[4] = {};

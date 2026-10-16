@@ -9,7 +9,7 @@ namespace echo::trajectory {
 		double count = std::ceil(seconds * rate / std::clamp(warp, 0.01f, 1.f));
 		if (!std::isfinite(count))
 			return 1;
-		return static_cast<int>(std::clamp(count, 1., double(std::numeric_limits<int>::max() - 1)));
+		return (int)std::clamp(count, 1., double(std::numeric_limits<int>::max() - 1));
 	}
 
 	template <class Point, class Emit>

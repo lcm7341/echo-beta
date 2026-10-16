@@ -18,7 +18,7 @@ namespace {
     }
 
     float less_turns(float degrees) {
-        return degrees - static_cast<float>(static_cast<int>(degrees / 360.f) * 360);
+        return degrees - (float)((int)(degrees / 360.f) * 360);
     }
 
     std::string exact(float value) {
