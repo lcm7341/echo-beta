@@ -1,6 +1,8 @@
 // Taken directly from Silicate (https://git.silicate.dev/silicate/silicate), GPL-3.0.
 #include "Physics/player.hpp"
 #include "Hack/orbs.hpp"
+#include "Hack/trajectory.hpp"
+#include "Physics/collisions.hpp"
 
 #include <Geode/Geode.hpp>
 
@@ -220,6 +222,7 @@ void ringJump(PlayerObject* player, RingObject* ring) {
     player->m_ringJumpRelated = true;
 
     player->m_ringRelatedSet.insert(ring->m_uniqueID);
+    if (Trajectory::get().isFake(player)) activateForTrajectory(ring, player);
 
     if (ring->m_objectType == GameObjectType::CustomRing) {
         player->m_touchedCustomRing = true;

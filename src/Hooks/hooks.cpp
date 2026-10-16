@@ -6,6 +6,7 @@
 #include "Hooks/opt.hpp"
 #include "Hooks/shown_camera.hpp"
 #include <bit>
+#include <functional>
 #include <map>
 #include <optional>
 #include <unordered_map>
@@ -28,6 +29,18 @@
 #include <Geode/binding/EffectGameObject.hpp>
 #include <Geode/binding/UILayer.hpp>
 #include <Geode/modify/GJBaseGameLayer.hpp>
+#include <Geode/modify/SpawnTriggerGameObject.hpp>
+#include <Geode/modify/SequenceTriggerGameObject.hpp>
+#include <Geode/modify/CountTriggerGameObject.hpp>
+#include <Geode/modify/ItemTriggerGameObject.hpp>
+#include <Geode/modify/TimerTriggerGameObject.hpp>
+#include <Geode/modify/TransformTriggerGameObject.hpp>
+#include <Geode/modify/CameraTriggerGameObject.hpp>
+#include <Geode/modify/EventLinkTrigger.hpp>
+#include <Geode/modify/TriggerControlGameObject.hpp>
+#include <Geode/modify/EndTriggerGameObject.hpp>
+#include <Geode/modify/CheckpointGameObject.hpp>
+#include <Geode/modify/ArtTriggerGameObject.hpp>
 #include <Geode/modify/GameToolbox.hpp>
 #include <Geode/modify/UILayer.hpp>
 #include <algorithm>
@@ -576,6 +589,15 @@ static void forget_explosions() {
     if (g_explosion_stacks.empty()) disable_explosion_visit_hook();
 }
 
+static void release_every_explosion() {
+    for (auto const& [sprite, stack] : g_explosion_stacks)
+        sprite->release();
+    g_explosion_stacks.clear();
+    g_first_orb_explosion.clear();
+    g_first_dash_explosion.clear();
+    disable_explosion_visit_hook();
+}
+
 static void age_waves_born_this_frame() {
     if (g_waves_born_this_frame.empty()) return;
     int last_step = Logic::get().step_frame - 1;
@@ -1028,7 +1050,7 @@ class $modify(EchoPlayLayer, PlayLayer) {
         }
         // predicting must NEVER kill the real attempt
         if (Logic::get().predicting) {
-            Trajectory::get().mark_predict_death(player);
+            Trajectory::get().mark_predict_death(player, object);
             return;
         }
         if (Trajectory::get().mark_dead(player) || m_player1->m_isDead || m_player2->m_isDead)
@@ -1037,6 +1059,17 @@ class $modify(EchoPlayLayer, PlayLayer) {
             if (player == m_player1) Logic::get().noclip_dead_p1 = true;
             else if (player == m_player2) Logic::get().noclip_dead_p2 = true;
             return;
+        }
+        if (Logic::get().trace_logging) {
+            std::string killer = "none (fell out or crushed)";
+            if (object) {
+                CCRect rect = object->getObjectRect();
+                killer = fmt::format("uid={} id={} type={} pos=({:.3f},{:.3f}) rect=({:.2f},{:.2f},{:.2f},{:.2f}) scale=({:.4f},{:.4f}) rotation={:.2f} group_off={}", object->m_uniqueID, object->m_objectID, (int)object->m_objectType,
+                    object->m_positionX, object->m_positionY, rect.origin.x, rect.origin.y, rect.size.width, rect.size.height, object->getScaleX(), object->getScaleY(), object->getRotation(),
+                    object->m_isGroupDisabled);
+            }
+            Trajectory::log_line(fmt::format("LIVEDEATH frame={} percent={} who={} player=({:.3f},{:.3f}) vel={:.4f} ud={} dash={} ground={} killer: {}", Logic::get().step_frame, getCurrentPercentInt(),
+                player == m_player2 ? "p2" : "p1", player->getPositionX(), player->getPositionY(), player->m_yVelocity, player->m_isUpsideDown, player->m_isDashing, player->m_isOnGround, killer));
         }
         PlayLayer::destroyPlayer(player, object);
         if (m_playerDied) Logic::get().sync_time_scale();
@@ -1129,6 +1162,9 @@ class $modify(EchoPlayLayer, PlayLayer) {
         trace_flush();
         Logic::get().on_quit(this);
         Trajectory::get().detach();
+        forget_effects();
+        drop_dud_waves();
+        release_every_explosion();
         PlayLayer::onQuit();
     }
 };
@@ -1216,6 +1252,7 @@ GJBaseGameLayer* step_begin(GJBaseGameLayer* self) {
     GJBaseGameLayer* layer = play;
     if (!layer && editor && logic.editor_testing) layer = editor;
     if (layer && !logic.predicting) Logic::get().note_step();
+    if (play && !logic.predicting && logic.trace_logging) Trajectory::get().check_live_step(play);
     if (play && !logic.predicting) {
         Logic::get().keep_variance(play);
         logic.noclip_dead_p1 = false;
@@ -2070,10 +2107,23 @@ class $modify(EchoPlayerObject, PlayerObject) {
 
     void ringJump(RingObject* ring, bool skipCheck) {
         if (Orbs::blockHoldRing(this, ring)) return;
-        if (Trajectory::get().isFake(this)) {
+        bool fake = Trajectory::get().isFake(this);
+        bool used_before = ring && m_ringRelatedSet.count(ring->m_uniqueID) != 0;
+        bool was_dashing = m_isDashing, was_buffered = m_stateJumpBuffered, was_ring_jump = m_stateRingJump2, was_touched = m_touchedRing, was_custom = m_touchedCustomRing;
+        auto log_jump = [&] {
+            if (!Logic::get().trace_logging || !ring) return;
+            if (!fake && Logic::get().predicting) return;
+            Trajectory::get().log_ring_jump(this, ring, fake, used_before, m_ringRelatedSet.count(ring->m_uniqueID) != 0, was_dashing, was_buffered, was_ring_jump, was_touched, was_custom);
+        };
+        if (fake) {
             phys::ringJump(this, ring);
+            log_jump();
             return;
         }
+        struct JumpLog {
+            std::function<void()> run;
+            ~JumpLog() { run(); }
+        } jump_log{ log_jump };
         struct RingNote {
             PlayerObject* player; RingObject* ring; bool on, dashing, flipped; double vel;
             RingNote(PlayerObject* p, RingObject* r) : player(p), ring(r), on(tracing()), dashing(p->m_isDashing), flipped(p->m_isUpsideDown), vel(p->m_yVelocity) {}
@@ -2250,10 +2300,15 @@ class $modify(EchoPlayerObject, PlayerObject) {
             if (tracing()) {
                 auto* layer = GJBaseGameLayer::get();
                 const auto& value = Logic::get();
-                trace_event(fmt::format("P frame={} p2={} button={} upside_down={} buffered={} maintaining={} playback={} restoring={} injecting={} physical={} rings={} suppress_rings={} predicting={}\n",
+                std::string rings;
+                for (unsigned r = 0; m_touchingRings && r < m_touchingRings->count(); ++r) {
+                    auto* ring = static_cast<EnhancedGameObject*>(m_touchingRings->objectAtIndex(r));
+                    rings += fmt::format("{}{}/{}{}{}", r ? "," : "", ring->m_uniqueID, ring->m_isMultiActivate, ring->m_activatedByPlayer1, ring->m_activatedByPlayer2);
+                }
+                trace_event(fmt::format("P frame={} p2={} button={} upside_down={} buffered={} maintaining={} playback={} restoring={} injecting={} physical={} rings={} ring_list=[{}] suppress_rings={} predicting={}\n",
                     value.step_frame + 1, layer && this == layer->m_player2, (int)button, m_isUpsideDown, m_jumpBuffered, value.maintaining_gravity,
                     value.applying_playback, value.restoring_holds, value.injecting, layer ? Logic::get().physical_hold(layer, layer && this == layer->m_player2) : false,
-                    m_touchingRings ? (int)m_touchingRings->count() : -1, value.suppress_rings, value.predicting));
+                    m_touchingRings ? (int)m_touchingRings->count() : -1, rings, value.suppress_rings, value.predicting));
             }
         if (logic.suppress_auto_hold && button == PlayerButton::Jump && !Trajectory::get().isFake(this) && !logic.maintaining_gravity && !logic.applying_playback && !logic.injecting) {
             return false;
@@ -2610,6 +2665,101 @@ class $modify(EchoActionManager, GJActionManager) {
 };
 #endif
 
+static bool allow_trigger(EffectGameObject* object) {
+    auto& world = PredictedWorld::get();
+    if (Logic::get().predicting && !world.firing()) return false;
+    world.note_trigger(object);
+    if (Logic::get().trace_logging) {
+        if (world.firing()) Trajectory::log_line(fmt::format("WFIRE step={} uid={} id={} x={:.2f}", world.horizon(), object->m_uniqueID, object->m_objectID, object->m_positionX));
+        else if (!Logic::get().predicting) Trajectory::log_line(fmt::format("LFIRE frame={} uid={} id={} x={:.2f}", Logic::get().step_frame, object->m_uniqueID, object->m_objectID, object->m_positionX));
+    }
+    return true;
+}
+
+class $modify(EchoSpawnTriggerGameObject, SpawnTriggerGameObject) {
+    void triggerObject(GJBaseGameLayer* layer, int uniqueID, const gd::vector<int>* remapKeys) {
+        if (!allow_trigger(this)) return;
+        SpawnTriggerGameObject::triggerObject(layer, uniqueID, remapKeys);
+    }
+};
+
+class $modify(EchoSequenceTriggerGameObject, SequenceTriggerGameObject) {
+    void triggerObject(GJBaseGameLayer* layer, int uniqueID, const gd::vector<int>* remapKeys) {
+        if (!allow_trigger(this)) return;
+        SequenceTriggerGameObject::triggerObject(layer, uniqueID, remapKeys);
+    }
+};
+
+class $modify(EchoCountTriggerGameObject, CountTriggerGameObject) {
+    void triggerObject(GJBaseGameLayer* layer, int uniqueID, const gd::vector<int>* remapKeys) {
+        if (!allow_trigger(this)) return;
+        CountTriggerGameObject::triggerObject(layer, uniqueID, remapKeys);
+    }
+};
+
+class $modify(EchoItemTriggerGameObject, ItemTriggerGameObject) {
+    void triggerObject(GJBaseGameLayer* layer, int uniqueID, const gd::vector<int>* remapKeys) {
+        if (!allow_trigger(this)) return;
+        ItemTriggerGameObject::triggerObject(layer, uniqueID, remapKeys);
+    }
+};
+
+class $modify(EchoTimerTriggerGameObject, TimerTriggerGameObject) {
+    void triggerObject(GJBaseGameLayer* layer, int uniqueID, const gd::vector<int>* remapKeys) {
+        if (!allow_trigger(this)) return;
+        TimerTriggerGameObject::triggerObject(layer, uniqueID, remapKeys);
+    }
+};
+
+class $modify(EchoTransformTriggerGameObject, TransformTriggerGameObject) {
+    void triggerObject(GJBaseGameLayer* layer, int uniqueID, const gd::vector<int>* remapKeys) {
+        if (!allow_trigger(this)) return;
+        TransformTriggerGameObject::triggerObject(layer, uniqueID, remapKeys);
+    }
+};
+
+class $modify(EchoCameraTriggerGameObject, CameraTriggerGameObject) {
+    void triggerObject(GJBaseGameLayer* layer, int uniqueID, const gd::vector<int>* remapKeys) {
+        if (!allow_trigger(this)) return;
+        CameraTriggerGameObject::triggerObject(layer, uniqueID, remapKeys);
+    }
+};
+
+class $modify(EchoEventLinkTrigger, EventLinkTrigger) {
+    void triggerObject(GJBaseGameLayer* layer, int uniqueID, const gd::vector<int>* remapKeys) {
+        if (!allow_trigger(this)) return;
+        EventLinkTrigger::triggerObject(layer, uniqueID, remapKeys);
+    }
+};
+
+class $modify(EchoTriggerControlGameObject, TriggerControlGameObject) {
+    void triggerObject(GJBaseGameLayer* layer, int uniqueID, const gd::vector<int>* remapKeys) {
+        if (!allow_trigger(this)) return;
+        TriggerControlGameObject::triggerObject(layer, uniqueID, remapKeys);
+    }
+};
+
+class $modify(EchoEndTriggerGameObject, EndTriggerGameObject) {
+    void triggerObject(GJBaseGameLayer* layer, int uniqueID, const gd::vector<int>* remapKeys) {
+        if (!allow_trigger(this)) return;
+        EndTriggerGameObject::triggerObject(layer, uniqueID, remapKeys);
+    }
+};
+
+class $modify(EchoCheckpointGameObject, CheckpointGameObject) {
+    void triggerObject(GJBaseGameLayer* layer, int uniqueID, const gd::vector<int>* remapKeys) {
+        if (!allow_trigger(this)) return;
+        CheckpointGameObject::triggerObject(layer, uniqueID, remapKeys);
+    }
+};
+
+class $modify(EchoArtTriggerGameObject, ArtTriggerGameObject) {
+    void triggerObject(GJBaseGameLayer* layer, int uniqueID, const gd::vector<int>* remapKeys) {
+        if (!allow_trigger(this)) return;
+        ArtTriggerGameObject::triggerObject(layer, uniqueID, remapKeys);
+    }
+};
+
 class $modify(EchoEffectObject, EffectGameObject) {
     void playTriggerEffect() {
         if (g_dud_orb_active) return;
@@ -2617,13 +2767,7 @@ class $modify(EchoEffectObject, EffectGameObject) {
     }
 
     void triggerObject(GJBaseGameLayer* layer, int uniqueID, const gd::vector<int>* remapKeys) {
-        auto& world = PredictedWorld::get();
-        if (Logic::get().predicting && !world.firing()) return;
-        world.note_trigger(this);
-        if (Logic::get().trace_logging) {
-            if (world.firing()) Trajectory::log_line(fmt::format("WFIRE step={} uid={} id={} x={:.2f}", world.horizon(), m_uniqueID, m_objectID, m_positionX));
-            else if (!Logic::get().predicting) Trajectory::log_line(fmt::format("LFIRE frame={} uid={} id={} x={:.2f}", Logic::get().step_frame, m_uniqueID, m_objectID, m_positionX));
-        }
+        if (!allow_trigger(this)) return;
         EffectGameObject::triggerObject(layer, uniqueID, remapKeys);
     }
 

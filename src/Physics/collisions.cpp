@@ -345,6 +345,9 @@ void collisionCheckObjects(GJBaseGameLayer* pl, PlayerObject* player,
             if (obj && (Trajectory::get().fakeActivated(player, obj) ||
                         Trajectory::get().realActivated(player, obj)))
                 continue;
+            if (Trajectory::get().isFake(player) && player->m_ringRelatedSet.count(object->m_uniqueID) &&
+                !phys::activatedPlatformer(obj, player->m_isPlatformer))
+                continue;
         }
 
         cocos2d::CCRect rect;

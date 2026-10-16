@@ -63,6 +63,8 @@ public:
 
 	void refresh(PlayLayer* play);
 	void note_live_step(PlayLayer* play);
+	void check_live_step(PlayLayer* play);
+	void log_ring_jump(PlayerObject* player, RingObject* ring, bool fake, bool before_set, bool after_set, bool was_dashing, bool was_buffered, bool was_ring_jump, bool was_touched, bool was_custom);
 	void lookahead(PlayLayer* play);
 	void autoclick(PlayLayer* play);
 	int flip_survival(PlayLayer* play, bool player1, int& full, std::vector<CCPoint>* path = nullptr, int limit = 0);
@@ -94,7 +96,7 @@ public:
 	}
 
 	bool mark_dead(PlayerObject* player);
-	bool mark_predict_death(PlayerObject* player);
+	bool mark_predict_death(PlayerObject* player, GameObject* killer = nullptr);
 	bool fakeActivated(PlayerObject* player, EnhancedGameObject* object) const;
 	bool realActivated(PlayerObject* player, EnhancedGameObject* object) const;
 	void rememberActivation(EnhancedGameObject* object, PlayerObject* player);
@@ -139,6 +141,7 @@ private:
 		std::vector<CCPoint> path, partner_path;
 		std::vector<Sample> samples, partner_samples;
 		bool has_death = false, partner_has_death = false;
+		std::string death_text, partner_death_text;
 		CCRect death_outer, death_inner, partner_death_outer, partner_death_inner;
 		bool started_held = false, uses_autoclicker = false, macro_plays = false;
 		AutoClick autoclick;
@@ -152,6 +155,7 @@ private:
 	};
 
 	enum class Phase {
+		Catchup,
 		Extend,
 		Lines
 	};
@@ -185,9 +189,13 @@ private:
 		std::chrono::steady_clock::time_point started, extend_started, slice_start;
 		int horizon_at_start = 0;
 		unsigned slice_counter = 0;
+		bool extend_only = false;
+		double phase_ms[3] = {};
+		int phase_steps[3] = {};
 	};
 
 	PlayerObject* fakes[FAKE_PAIRS * 2] = {};
+	GameObject* killers[FAKE_PAIRS * 2] = {};
 	std::vector<EnhancedGameObject*> activated[FAKE_PAIRS * 2];
 	bool fake_dead[FAKE_PAIRS * 2] = {};
 	CCDrawNode* draw_node = nullptr;
@@ -200,10 +208,12 @@ private:
 	int clicked_frame = -1;
 	Job job;
 	struct Watch {
-		bool valid = false, reported = false, player1 = true;
-		int start_step = 0;
-		std::vector<Sample> samples;
+		bool valid = false, reported = false, player1 = true, kept = false;
+		int start_step = 0, made_at = 0, death_step = -1, partner_death_step = -1, partner_start_step = 0;
+		std::vector<Sample> samples, partner_samples;
+		std::string death_text, partner_death_text;
 	};
+	int last_live_step = -1;
 	Watch watch;
 	std::ofstream log_file;
 	PlayLayer* log_play = nullptr;
@@ -231,7 +241,8 @@ private:
 	Line make_line(PlayLayer* play, bool player1, ClickType click, bool with_partner, bool draw, int measure, int pair);
 	void add_click_lines(PlayLayer* play, std::vector<Line>& lines, bool player1, bool with_partner, bool draw, bool rendering);
 	bool begin_job(PlayLayer* play, std::vector<Line> lines, int limit, bool draw, bool sliced);
-	bool kept_matches(PlayLayer* play, bool linked, std::string& reason);
+	bool kept_matches(PlayLayer* play, bool linked, std::string& reason, bool& diverged);
+	void begin_extend();
 	void start_line(Line& line);
 	void press_fake(PlayerObject* fake, ClickType click, bool icon2);
 	void enter_prediction();
@@ -241,12 +252,14 @@ private:
 	void run_slice();
 	void run_steps(double budget_seconds);
 	bool step_once();
+	bool step_phase();
 	void advance_time();
 	void step_line(Line& line, int step);
 	bool step_fake(Line& line, PlayerObject* body, bool is_partner, int step);
 	void walk_spawn_triggers(Line& line, PlayerObject* body, bool is_partner);
 	void apply_dual_portal_changes(Line& line);
 	CCRect lines_window() const;
+	CCRect window_around(PlayerObject* body) const;
 	void finish_job();
 	void draw_lines();
 	void store_results();

@@ -25,6 +25,10 @@ public:
 	std::string near_report(CCPoint at, float reach) const;
 	std::string follow_report(PlayLayer* play) const;
 	int watch_uid = -1;
+	double part_ms[8] = {};
+	long long moved_objects = 0, section_changes = 0, cell_saves = 0, toggles = 0, live_misses = 0;
+	std::string timing_report() const;
+	void reset_timing();
 	std::string mismatch;
 	void rebuild(PlayLayer* play, float step_delta, int now);
 	void trim(int now);
@@ -36,6 +40,10 @@ public:
 
 	int expected_step() const {
 		return start_step;
+	}
+
+	bool is_tracked(GameObject* object) {
+		return slot(object) != UINT_MAX;
 	}
 
 	size_t tracked_count() const {
@@ -52,6 +60,7 @@ public:
 	void after_players(PlayLayer* play);
 	void apply_records(PlayLayer* play, int step, const CCRect& window);
 	void reapply_records(PlayLayer* play);
+	void reset_applied();
 	void pause_session(PlayLayer* play);
 	void end_session(PlayLayer* play);
 
@@ -67,6 +76,7 @@ public:
 	void note_random_roll(unsigned long long* state);
 	void note_moved(GJBaseGameLayer* layer, CCArray* objects);
 	void note_toggle(GJBaseGameLayer* layer, int group);
+	void log_toggle(GJBaseGameLayer* layer, int group, bool activate);
 	void note_area(GJBaseGameLayer* layer, CCArray* objects, int outer_min, int outer_max, int middle_min, int middle_max, bool target_groups);
 	void before_section_change(GJBaseGameLayer* layer, GameObject* object);
 	void before_section_add(GJBaseGameLayer* layer, GameObject* object);
@@ -135,6 +145,14 @@ private:
 	unsigned slots_count = 0;
 	unsigned round = 1, session_round = 1;
 	std::vector<Tracked> tracked;
+	std::vector<unsigned> changed_slots, changed_round;
+	unsigned change_round = 1;
+	void mark_changed(unsigned at);
+	void mark_group_changed(GJBaseGameLayer* layer, int group);
+	void mark_live_dirty(unsigned at);
+	void mark_group_live_dirty(GJBaseGameLayer* layer, int group);
+	std::vector<unsigned char> live_dirty;
+	std::vector<unsigned> live_dirty_slots;
 	std::vector<unsigned> session_list, candidates, applied, pending;
 	std::vector<unsigned char> live_fields, horizon_fields, latest_fields, expected_fields;
 	std::vector<unsigned char> record_bytes;

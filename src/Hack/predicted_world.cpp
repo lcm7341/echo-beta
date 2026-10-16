@@ -12,6 +12,7 @@
 #include <Geode/binding/PlayerObject.hpp>
 #include <Geode/modify/GJBaseGameLayer.hpp>
 #include <algorithm>
+#include <chrono>
 #include <array>
 #include <cmath>
 #include <cstddef>
@@ -248,6 +249,7 @@ unsigned PredictedWorld::touch(GameObject* object) {
 		save_compact_fields(object, expected_fields.data() + (std::size_t)at * COMPACT_SIZE);
 	}
 	touch_session(at);
+	mark_changed(at);
 	return at;
 }
 
@@ -286,26 +288,64 @@ void PredictedWorld::save_group(GJBaseGameLayer* layer, int group) {
 	}
 }
 
+void PredictedWorld::mark_changed(unsigned at) {
+	if (changed_round.size() < tracked.size()) changed_round.resize(tracked.size(), 0);
+	if (changed_round[at] == change_round) return;
+	changed_round[at] = change_round;
+	changed_slots.push_back(at);
+}
+
+void PredictedWorld::mark_group_changed(GJBaseGameLayer* layer, int group) {
+	if (group <= 0 || (std::size_t)group >= layer->m_groups.size()) return;
+	save_group(layer, group);
+	auto* members = layer->m_groups[(std::size_t)group];
+	for (unsigned i = 0; members && i < members->count(); ++i) {
+		auto* object = static_cast<GameObject*>(members->objectAtIndex(i));
+		if (!object) continue;
+		unsigned at = slot(object);
+		if (at != UINT_MAX) mark_changed(at);
+	}
+}
+
+void PredictedWorld::mark_live_dirty(unsigned at) {
+	if (live_dirty.size() < tracked.size()) live_dirty.resize(tracked.size(), 0);
+	if (live_dirty[at]) return;
+	live_dirty[at] = 1;
+	live_dirty_slots.push_back(at);
+}
+
+void PredictedWorld::mark_group_live_dirty(GJBaseGameLayer* layer, int group) {
+	if (group <= 0 || (std::size_t)group >= layer->m_groups.size()) return;
+	auto* members = layer->m_groups[(std::size_t)group];
+	for (unsigned i = 0; members && i < members->count(); ++i) {
+		auto* object = static_cast<GameObject*>(members->objectAtIndex(i));
+		if (!object) continue;
+		unsigned at = slot(object);
+		if (at != UINT_MAX) mark_live_dirty(at);
+	}
+}
+
 void PredictedWorld::save_command_groups(GJBaseGameLayer* layer) {
 	for (const auto& command : shadow->m_unkVector560) {
-		save_group(layer, command.m_targetGroupID);
-		save_group(layer, command.m_centerGroupID);
+		mark_group_changed(layer, command.m_targetGroupID);
+		mark_group_changed(layer, command.m_centerGroupID);
 	}
 	for (auto* follow : shadow->m_unkVector6f0)
-		if (follow) save_group(layer, follow->getTag());
+		if (follow) mark_group_changed(layer, follow->getTag());
 	const auto& state = layer->m_gameState;
 	for (const auto& action : state.m_dynamicMoveActions) {
-		save_group(layer, action.m_targetGroupID);
-		save_group(layer, action.m_centerGroupID);
+		mark_group_changed(layer, action.m_targetGroupID);
+		mark_group_changed(layer, action.m_centerGroupID);
 	}
 	for (const auto& action : state.m_dynamicRotateActions) {
-		save_group(layer, action.m_targetGroupID);
-		save_group(layer, action.m_centerGroupID);
+		mark_group_changed(layer, action.m_targetGroupID);
+		mark_group_changed(layer, action.m_centerGroupID);
 	}
 }
 
 PredictedWorld::SavedCell* PredictedWorld::save_cell(GJBaseGameLayer* layer, int x, int y) {
 	if (x < 0 || y < 0) return nullptr;
+	++cell_saves;
 	auto [it, fresh] = cells.try_emplace(cell_key(x, y));
 	if (!fresh) return nullptr;
 	auto& cell = it->second;
@@ -406,7 +446,7 @@ bool PredictedWorld::matches_live(PlayLayer* play, int now) {
 	}
 	for (std::size_t at = 0; at < tracked.size(); ++at) {
 		auto* object = tracked[at].object;
-		if (object->m_isDecoration2) continue;
+		if (object->m_isDecoration2 || object->m_objectType == GameObjectType::Decoration || object == play->m_player1CollisionBlock || object == play->m_player2CollisionBlock) continue;
 		CCPoint expected = compact_position(expected_fields.data() + at * COMPACT_SIZE);
 		if (std::fabs((double)expected.x - object->m_positionX) > POSITION_TOLERANCE || std::fabs((double)expected.y - object->m_positionY) > POSITION_TOLERANCE) {
 			watch_uid = object->m_uniqueID;
@@ -416,6 +456,16 @@ bool PredictedWorld::matches_live(PlayLayer* play, int now) {
 		}
 	}
 	return true;
+}
+
+void PredictedWorld::reset_timing() {
+	for (auto& value : part_ms) value = 0.0;
+	moved_objects = section_changes = cell_saves = toggles = live_misses = 0;
+}
+
+std::string PredictedWorld::timing_report() const {
+	return fmt::format("save_groups={:.2f} spawn_timers={:.2f} prepare={:.2f} process={:.2f} post_blocks={:.2f} record={:.2f} spawn_check={:.2f} apply={:.2f} moved={} section={} cells={} toggles={} xcheck_misses={}",
+		part_ms[0], part_ms[1], part_ms[2], part_ms[3], part_ms[4], part_ms[5], part_ms[6], part_ms[7], moved_objects, section_changes, cell_saves, toggles, live_misses);
 }
 
 std::string PredictedWorld::follow_report(PlayLayer* play) const {
@@ -429,7 +479,8 @@ std::string PredictedWorld::follow_report(PlayLayer* play) const {
 		}
 		out += "]";
 		for (const auto& command : manager->m_unkVector560)
-			out += fmt::format(" cmd(type={} target={} center={} lockY={} elapsed={:.3f} dur={:.3f})", command.m_commandType, command.m_targetGroupID, command.m_centerGroupID, command.m_lockToPlayerY, command.m_deltaTime, command.m_duration);
+			out += fmt::format(" cmd(type={} target={} center={} lockX={} lockY={} camX={} camY={} modX={} modY={} player={} elapsed={:.3f} dur={:.3f} offset=({:.3f},{:.3f}))", command.m_commandType, command.m_targetGroupID, command.m_centerGroupID,
+				command.m_lockToPlayerX, command.m_lockToPlayerY, command.m_lockToCameraX, command.m_lockToCameraY, command.m_moveModX, command.m_moveModY, command.m_targetPlayer, command.m_deltaTime, command.m_duration, command.m_currentXOffset, command.m_currentYOffset);
 	};
 	describe("live", play->m_effectManager);
 	describe("shadow", shadow);
@@ -445,7 +496,9 @@ std::string PredictedWorld::near_report(CCPoint at, float reach) const {
 		bool close = std::fabs(expected.x - at.x) <= reach && std::fabs(expected.y - at.y) <= reach;
 		if (!close) close = std::fabs(live_x - at.x) <= reach && std::fabs(live_y - at.y) <= reach;
 		if (!close) continue;
-		out += fmt::format(" [uid={} id={} exp=({:.2f},{:.2f}) live=({:.2f},{:.2f})]", object->m_uniqueID, object->m_objectID, expected.x, expected.y, live_x, live_y);
+		std::string groups;
+		for (int g = 0; object->m_groups && g < object->m_groupCount && g < 10; ++g) groups += fmt::format("{}{}", g ? "," : "", (*object->m_groups)[(std::size_t)g]);
+		out += fmt::format(" [uid={} id={} groups={} exp=({:.2f},{:.2f}) live=({:.2f},{:.2f})]", object->m_uniqueID, object->m_objectID, groups, expected.x, expected.y, live_x, live_y);
 		if (out.size() > 1500) break;
 	}
 	return out;
@@ -487,6 +540,10 @@ void PredictedWorld::rebuild(PlayLayer* play, float delta, int now) {
 	start_step = horizon_step = now;
 	++round;
 	tracked.clear();
+	live_dirty.clear();
+	live_dirty_slots.clear();
+	changed_slots.clear();
+	changed_round.clear();
 	live_fields.clear();
 	horizon_fields.clear();
 	latest_fields.clear();
@@ -546,7 +603,7 @@ void PredictedWorld::begin_session(PlayLayer* play) {
 	for (auto& roll : rolls)
 		roll.live = *roll.state;
 	grouped_positions.clear();
-	auto* objects = play->m_objects;
+	auto* objects = Logic::get().trace_logging ? play->m_objects : nullptr;
 	for (unsigned i = 0; objects && i < objects->count(); ++i) {
 		auto* object = static_cast<GameObject*>(objects->objectAtIndex(i));
 		if (object && object->m_groupCount > 0) grouped_positions.push_back({ object, { (float)object->m_positionX, (float)object->m_positionY } });
@@ -556,15 +613,30 @@ void PredictedWorld::begin_session(PlayLayer* play) {
 void PredictedWorld::resume_horizon(PlayLayer* play) {
 	if (!session_open || horizon_loaded || play != this->play) return;
 	horizon_loaded = true;
+	unsigned char current[512];
+	int missed_logs = 0;
 	for (unsigned at = 0; at < tracked.size(); ++at) {
-		touch_session(at);
 		auto& entry = tracked[at];
-		load_object_fields(entry.object, horizon_fields.data() + (std::size_t)at * RECORD_SIZE);
+		const auto* horizon = horizon_fields.data() + (std::size_t)at * RECORD_SIZE;
+		save_object_fields(entry.object, current);
+		bool same = std::memcmp(current, horizon, RECORD_SIZE) == 0 && entry.object->m_enabledGroupsCounter == entry.horizon_counter &&
+			entry.object->m_isGroupDisabled == entry.horizon_group_disabled && entry.object->m_isGroupDisabledTemp == entry.horizon_group_disabled_temp;
+		if (same) continue;
+		if (at >= live_dirty.size() || !live_dirty[at]) {
+			++live_misses;
+			if (Logic::get().trace_logging && ++missed_logs <= 8)
+				Trajectory::log_line(fmt::format("XCHECK frame={} uid={} id={} live=({:.3f},{:.3f}) differs from the horizon with no live write seen by the hooks", Logic::get().step_frame, entry.object->m_uniqueID,
+					entry.object->m_objectID, entry.object->m_positionX, entry.object->m_positionY));
+		}
+		touch_session(at);
+		load_object_fields(entry.object, horizon);
 		entry.object->m_enabledGroupsCounter = entry.horizon_counter;
 		entry.object->m_isGroupDisabled = entry.horizon_group_disabled;
 		entry.object->m_isGroupDisabledTemp = entry.horizon_group_disabled_temp;
 		if (!far_away(entry.object)) play->updateObjectSection(entry.object);
 	}
+	for (unsigned at : live_dirty_slots) live_dirty[at] = 0;
+	live_dirty_slots.clear();
 	for (auto& trigger : fired)
 		std::memcpy(reinterpret_cast<unsigned char*>(trigger.object) + sizeof(GameObject), trigger.horizon_bytes.data(), trigger.horizon_bytes.size());
 	for (auto& roll : rolls)
@@ -605,8 +677,11 @@ void PredictedWorld::record_moved() {
 	records.step = horizon_step;
 	records.begin = (unsigned)record_bytes.size();
 	unsigned char compact[256];
-	for (unsigned at = 0; at < tracked.size(); ++at) {
-		save_compact_fields(tracked[at].object, compact);
+	std::sort(changed_slots.begin(), changed_slots.end());
+	for (unsigned at : changed_slots) {
+		auto* changed = tracked[at].object;
+		if (changed->m_isDecoration2 || changed->m_objectType == GameObjectType::Decoration) continue;
+		save_compact_fields(changed, compact);
 		auto* latest = latest_fields.data() + (std::size_t)at * COMPACT_SIZE;
 		if (std::memcmp(compact, latest, COMPACT_SIZE) == 0) continue;
 		std::memcpy(latest, compact, COMPACT_SIZE);
@@ -621,6 +696,8 @@ void PredictedWorld::record_moved() {
 		++records.count;
 	}
 	step_records.push_back(records);
+	changed_slots.clear();
+	++change_round;
 }
 
 void PredictedWorld::step(PlayLayer* play, PlayerObject* driver1, PlayerObject* driver2, bool last_step) {
@@ -647,18 +724,32 @@ void PredictedWorld::step(PlayLayer* play, PlayerObject* driver1, PlayerObject* 
 	CCPoint shift = driver1->m_isSideways ? CCPoint{ 0.f, ahead.y } : CCPoint{ ahead.x, 0.f };
 	state.m_cameraPosition = camera_start + shift;
 	state.m_cameraPosition2 = camera2_start + shift;
-	shadow->updateSpawnTriggers(step_delta);
-	shadow->updateTimers(step_delta, state.m_timeWarp);
-	shadow->prepareMoveActions(step_delta, !last_step);
-	play->processMoveActionsStep(step_delta, last_step);
+	float seconds = step_delta / 60.f;
+	auto mark = std::chrono::steady_clock::now();
+	auto lap = [&](int part) {
+		auto now = std::chrono::steady_clock::now();
+		part_ms[part] += std::chrono::duration<double, std::milli>(now - mark).count();
+		mark = now;
+	};
+	lap(0);
+	shadow->updateSpawnTriggers(seconds);
+	shadow->updateTimers(seconds, state.m_timeWarp);
+	lap(1);
+	shadow->prepareMoveActions(seconds, !last_step);
+	lap(2);
+	play->processMoveActionsStep(seconds, last_step);
+	lap(3);
 	shadow->postMoveActions();
 	play->updateCollisionBlocks();
+	lap(4);
 	inside_step = false;
 	play->m_player1 = real1;
 	play->m_player2 = real2;
 	play->m_effectManager = live_manager;
 	++horizon_step;
+	auto record_began = std::chrono::steady_clock::now();
 	record_moved();
+	part_ms[5] += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - record_began).count();
 	if (Logic::get().trace_logging && watch_uid >= 0 && horizon_step - start_step <= 12 && (std::size_t)watch_uid < slot_of_uid.size() && slot_round[(std::size_t)watch_uid] == round) {
 		auto* object = tracked[slot_of_uid[(std::size_t)watch_uid]].object;
 		Trajectory::log_line(fmt::format("WSTEP step={} uid={} pos=({:.3f},{:.3f}) driver=({:.3f},{:.3f}) dy={:.4f} commands={} follows={}", horizon_step, watch_uid, object->m_positionX, object->m_positionY,
@@ -675,7 +766,9 @@ void PredictedWorld::fire_spawn_triggers(PlayLayer* play, PlayerObject* driver1,
 	play->m_player1 = driver1;
 	if (driver2) play->m_player2 = driver2;
 	inside_step = true;
+	auto spawn_began = std::chrono::steady_clock::now();
 	play->checkSpawnObjects();
+	part_ms[6] += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - spawn_began).count();
 	inside_step = false;
 	play->m_player1 = real1;
 	play->m_player2 = real2;
@@ -703,6 +796,12 @@ void PredictedWorld::apply_record(PlayLayer* play, unsigned at, unsigned offset)
 
 void PredictedWorld::apply_records(PlayLayer* play, int step, const CCRect& window) {
 	if (!session_open || horizon_loaded || play != this->play) return;
+	auto apply_began = std::chrono::steady_clock::now();
+	struct ApplyTimer {
+		double& total;
+		std::chrono::steady_clock::time_point began;
+		~ApplyTimer() { total += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - began).count(); }
+	} apply_timer{ part_ms[7], apply_began };
 	auto close = [&](unsigned at, unsigned offset) {
 		float x = 0.f, y = 0.f;
 		std::memcpy(&x, record_bytes.data() + offset + sizeof(unsigned), sizeof(float));
@@ -749,6 +848,13 @@ void PredictedWorld::reapply_records(PlayLayer* play) {
 		if (tracked[at].applied_offset != UINT_MAX) apply_record(play, at, tracked[at].applied_offset);
 }
 
+void PredictedWorld::reset_applied() {
+	for (unsigned at : applied) tracked[at].applied_offset = UINT_MAX;
+	for (unsigned at : pending) tracked[at].pending_offset = UINT_MAX;
+	applied.clear();
+	pending.clear();
+}
+
 void PredictedWorld::pause_session(PlayLayer* play) {
 	if (!session_open || play != this->play) return;
 	if (horizon_loaded) pause_horizon(play);
@@ -763,6 +869,9 @@ void PredictedWorld::end_session(PlayLayer* play) {
 			if ((float)object->m_positionX == position.x && (float)object->m_positionY == position.y) continue;
 			unsigned at = slot(object);
 			if (at != UINT_MAX && tracked[at].session == session_round) continue;
+			if (Logic::get().trace_logging)
+				Trajectory::log_line(fmt::format("LEAK frame={} uid={} id={} moved from ({:.3f},{:.3f}) to ({:.3f},{:.3f}) outside the journal", Logic::get().step_frame, object->m_uniqueID, object->m_objectID,
+					position.x, position.y, object->m_positionX, object->m_positionY));
 			object->m_positionX = position.x;
 			object->m_positionY = position.y;
 			object->m_isObjectRectDirty = true;
@@ -808,13 +917,16 @@ void PredictedWorld::note_moved(GJBaseGameLayer* layer, CCArray* objects) {
 		for (unsigned i = 0; i < objects->count(); ++i) {
 			auto* object = static_cast<GameObject*>(objects->objectAtIndex(i));
 			if (!object) break;
-			if (slot(object) == UINT_MAX) {
+			unsigned at = slot(object);
+			if (at == UINT_MAX) {
 				live_unknown = true;
 				return;
 			}
+			mark_live_dirty(at);
 		}
 		return;
 	}
+	moved_objects += objects->count();
 	for (unsigned i = 0; i < objects->count(); ++i) {
 		auto* object = static_cast<GameObject*>(objects->objectAtIndex(i));
 		if (!object) break;
@@ -823,13 +935,32 @@ void PredictedWorld::note_moved(GJBaseGameLayer* layer, CCArray* objects) {
 }
 
 void PredictedWorld::note_toggle(GJBaseGameLayer* layer, int group) {
-	if (!session_open || layer != play) return;
+	if (layer != play) return;
+	if (!session_open) {
+		if (valid) mark_group_live_dirty(layer, group);
+		return;
+	}
+	++toggles;
 	if (group <= 0 || (std::size_t)group >= layer->m_groups.size()) return;
 	auto* members = layer->m_groups[(std::size_t)group];
 	for (unsigned i = 0; members && i < members->count(); ++i) {
 		auto* object = static_cast<GameObject*>(members->objectAtIndex(i));
 		if (object) touch(object);
 	}
+}
+
+void PredictedWorld::log_toggle(GJBaseGameLayer* layer, int group, bool activate) {
+	auto* manager = layer->m_effectManager;
+	int bit = manager && group >= 0 && (std::size_t)group < manager->m_unkVector438.size() ? (int)manager->m_unkVector438[(std::size_t)group] : -1;
+	int members = group > 0 && (std::size_t)group < layer->m_groups.size() && layer->m_groups[(std::size_t)group] ? (int)layer->m_groups[(std::size_t)group]->count() : 0;
+	int first_counter = 0, first_uid = 0;
+	if (members > 0) {
+		auto* first = static_cast<GameObject*>(layer->m_groups[(std::size_t)group]->objectAtIndex(0));
+		first_counter = first->m_enabledGroupsCounter;
+		first_uid = first->m_uniqueID;
+	}
+	Trajectory::log_line(fmt::format("TOGGLE frame={} step={} group={} on={} bit={} shadow={} predicting={} firing={} session={} members={} first_uid={} first_counter={}", Logic::get().step_frame, horizon_step, group, activate, bit,
+		manager == shadow, Logic::get().predicting, inside_step, session_open, members, first_uid, first_counter));
 }
 
 void PredictedWorld::note_area(GJBaseGameLayer* layer, CCArray* objects, int outer_min, int outer_max, int middle_min, int middle_max, bool target_groups) {
@@ -856,6 +987,7 @@ void PredictedWorld::note_area(GJBaseGameLayer* layer, CCArray* objects, int out
 }
 
 void PredictedWorld::before_section_change(GJBaseGameLayer* layer, GameObject* object) {
+	++section_changes;
 	if (!session_open || layer != play || !object || Logic::get().is_traj_player(object)) return;
 	unsigned at = touch(object);
 	auto& entry = tracked[at];
@@ -904,7 +1036,7 @@ class $modify(WorldSections, GJBaseGameLayer) {
 		add_world_hook(self, "GJBaseGameLayer::updateObjectSection");
 		add_world_hook(self, "GJBaseGameLayer::moveObjects");
 		add_world_hook(self, "GJBaseGameLayer::rotateObjects");
-		add_world_hook(self, "GJBaseGameLayer::toggleGroupTriggered");
+		add_world_hook(self, "GJBaseGameLayer::toggleGroup");
 		add_world_hook(self, "GJBaseGameLayer::processAdvancedFollowActions");
 		add_world_hook(self, "GJBaseGameLayer::processAreaEffects");
 		add_world_hook(self, "GJBaseGameLayer::processAreaMoveGroupAction");
@@ -946,9 +1078,10 @@ class $modify(WorldSections, GJBaseGameLayer) {
 		GJBaseGameLayer::rotateObjects(objects, rotation, position, offset, finished, unused);
 	}
 
-	void toggleGroupTriggered(int group, bool activate, gd::vector<int> const& remapKeys, int triggerID, int controlID) {
+	void toggleGroup(int group, bool activate) {
 		PredictedWorld::get().note_toggle(this, group);
-		GJBaseGameLayer::toggleGroupTriggered(group, activate, remapKeys, triggerID, controlID);
+		if (Logic::get().trace_logging) PredictedWorld::get().log_toggle(this, group, activate);
+		GJBaseGameLayer::toggleGroup(group, activate);
 	}
 
 	void processAdvancedFollowActions(float dt) {
