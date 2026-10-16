@@ -487,6 +487,10 @@ void Logic::pull_settings() {
                 logic.hitbox_circle = flag.unwrap();
             if (auto flag = json["hitbox_solid"].asBool())
                 logic.hitbox_solid = flag.unwrap();
+            if (auto flag = json["hitbox_passable"].asBool())
+                logic.hitbox_passable = flag.unwrap();
+            if (auto flag = json["macrobuff_tint"].asBool())
+                logic.macrobuff_tint = flag.unwrap();
             if (auto flag = json["hitbox_slope"].asBool())
                 logic.hitbox_slope = flag.unwrap();
             if (auto flag = json["hitbox_hazard"].asBool())
@@ -596,6 +600,7 @@ void Logic::pull_settings() {
             read_color("hitbox_inner_color", logic.hitbox_inner_color, 4);
             read_color("hitbox_circle_color", logic.hitbox_circle_color, 4);
             read_color("hitbox_solid_color", logic.hitbox_solid_color, 4);
+            read_color("hitbox_passable_color", logic.hitbox_passable_color, 4);
             read_color("hitbox_slope_color", logic.hitbox_slope_color, 4);
             read_color("hitbox_hazard_color", logic.hitbox_hazard_color, 4);
             read_color("hitbox_trail_color", logic.hitbox_trail_color, 4);
@@ -1013,6 +1018,8 @@ void Logic::save_settings_file() {
     json["hitbox_inner"] = logic.hitbox_inner;
     json["hitbox_circle"] = logic.hitbox_circle;
     json["hitbox_solid"] = logic.hitbox_solid;
+    json["hitbox_passable"] = logic.hitbox_passable;
+    json["macrobuff_tint"] = logic.macrobuff_tint;
     json["hitbox_slope"] = logic.hitbox_slope;
     json["hitbox_hazard"] = logic.hitbox_hazard;
     json["hitbox_interact"] = logic.hitbox_interact;
@@ -1065,6 +1072,7 @@ void Logic::save_settings_file() {
     write_color("hitbox_inner_color", logic.hitbox_inner_color, 4);
     write_color("hitbox_circle_color", logic.hitbox_circle_color, 4);
     write_color("hitbox_solid_color", logic.hitbox_solid_color, 4);
+    write_color("hitbox_passable_color", logic.hitbox_passable_color, 4);
     write_color("hitbox_slope_color", logic.hitbox_slope_color, 4);
     write_color("hitbox_hazard_color", logic.hitbox_hazard_color, 4);
     write_color("hitbox_trail_color", logic.hitbox_trail_color, 4);

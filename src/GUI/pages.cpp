@@ -84,6 +84,8 @@ namespace {
         eui::RowHalf();
         toggle("At visual FPS", logic.hitbox_trail_visual);
         tip("Displays one trail hitbox per displayed frame");
+        toggle("Macrobuff Tint", logic.macrobuff_tint);
+        tip("In the editor: the screen turns red when an object you place or move would kill you on the last playtest's path.");
         eui::Row("Length", "How many frames the trail and the click and release boxes stay on screen");
         int trail = logic.trail_length;
         if (eui::DragInt("##trail-length", &trail, 1.f, 0, (int)(logic.fps) * 10, trail <= 0 ? "TPS" : "%d"))
@@ -110,6 +112,7 @@ namespace {
         eui::RowHalf();
         shape("Player circle", logic.hitbox_circle, logic.hitbox_circle_color);
         shape("Solids", logic.hitbox_solid, logic.hitbox_solid_color);
+        shape("Passable", logic.hitbox_passable, logic.hitbox_passable_color);
         eui::RowHalf();
         shape("Slopes", logic.hitbox_slope, logic.hitbox_slope_color);
         shape("Hazards", logic.hitbox_hazard, logic.hitbox_hazard_color);

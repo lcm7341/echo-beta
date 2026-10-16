@@ -46,6 +46,8 @@ public:
 };
 
 constexpr int HITBOX_TAG = 0xEC06;
+constexpr int FROZEN_TRAIL_NODE_TAG = 0xEC07;
+std::vector<float> g_frozen_trail_key;
 
 namespace {
     CCDrawNode* g_hitbox_node = nullptr;
@@ -169,7 +171,7 @@ float hazard_radius(GameObject* object) {
     return collision_radius(object);
 }
 
-// drawing a hitbox fucks with cached
+// drawing a hitbox fucks with frozen_trail_node
 class HitboxStateGuard {
     static constexpr size_t SPAN_FROM = 0x2e0, SPAN_TO = 0x370, BOX_FROM = 0x140, BOX_TO = 0x1b8;
     GameObject* m_object;
@@ -221,13 +223,17 @@ OBB2D* live_oriented_box(GameObject* object) {
     return object->getOrientedBox();
 }
 
+bool rotation_is_right_angle(GameObject* object) {
+    return std::fmod(object->getRotationX(), 90.f) == 0.f && std::fmod(object->getRotationY(), 90.f) == 0.f;
+}
+
 void refresh_object_hitbox(GameObject* object) {
     if (!object)
         return;
     // objs with a box offset (teleport portals) keep the box gd already has, a redo moves it & that is NOT what the player hits
     if (object->m_customBoxOffset.x != 0.f || object->m_customBoxOffset.y != 0.f)
         return;
-    // move triggers leave the old box cached :/
+    // move triggers leave the old box frozen_trail_node :/
     object->m_isOrientedBoxDirty = true;
     object->m_isObjectRectDirty = true;
 }
@@ -370,8 +376,7 @@ void Hitboxes::draw_player_hitbox(CCDrawNode* node, GJBaseGameLayer* play, Playe
     }
     float radius = std::abs(rect.size.width) * 0.5f;
     float zoom = std::max(play->m_gameState.m_cameraZoom, 0.05f);
-    bool fix_radius = play->m_levelSettings && play->m_levelSettings->m_fixRadiusCollision;
-    if ((logic.hitbox_circle || fix_radius) && radius > 0.f) {
+    if (logic.hitbox_circle && radius > 0.f) {
         unsigned segments = static_cast<unsigned>(std::max(radius, 8.f) * 2.f * std::sqrt(zoom));
         node->drawCircle(center, radius, { 0.f, 0.f, 0.f, 0.f }, width, HitboxColor::line_of(circle_color), std::max(segments, 8u));
     }
@@ -379,7 +384,10 @@ void Hitboxes::draw_player_hitbox(CCDrawNode* node, GJBaseGameLayer* play, Playe
 
 namespace {
     struct OutlineShape {
-        std::vector<CCPoint> points;
+        std::uint32_t first = 0, count = 0;
+        bool axis = false, circle = false;
+        CCPoint center;
+        float radius = 0.f;
         ccColor4F fill;
         ccColor4F line;
         CCRect bounds;
@@ -390,6 +398,13 @@ namespace {
         bool collecting = false;
         int kind = 0;
         std::vector<OutlineShape> shapes;
+        std::vector<CCPoint> points;
+        std::vector<std::pair<std::uint64_t, std::uint32_t>> cells;
+        std::vector<std::uint32_t> seen, nearby;
+        std::vector<float> cuts;
+        std::vector<CCPoint> ring;
+        std::vector<std::pair<float, float>> covered;
+        std::vector<std::uint32_t> around;
     };
 
     OutlineSink& outlines() {
@@ -400,29 +415,38 @@ namespace {
     void collect_shape(CCPoint const* points, unsigned count, ccColor4F const& fill, ccColor4F const& line) {
         if (count < 3)
             return;
-
+        auto& sink = outlines();
         OutlineShape shape;
-        shape.points.assign(points, points + count);
+        shape.first = static_cast<std::uint32_t>(sink.points.size());
+        shape.count = count;
+        sink.points.insert(sink.points.end(), points, points + count);
+        CCPoint* pts = sink.points.data() + shape.first;
         float area = 0.f;
-        for (unsigned i = 0; i < count; ++i) {
-            auto const& a = shape.points[i];
-            auto const& b = shape.points[(i + 1) % count];
-            area += a.x * b.y - b.x * a.y;
-        }
-        if (area < 0.f)
-            std::reverse(shape.points.begin(), shape.points.end());
         float minX = INFINITY, minY = INFINITY, maxX = -INFINITY, maxY = -INFINITY;
-        for (auto const& p : shape.points) {
+        for (unsigned i = 0; i < count; ++i) {
+            auto const& p = pts[i];
+            auto const& q = pts[(i + 1) % count];
+            area += p.x * q.y - q.x * p.y;
             minX = std::min(minX, p.x);
             minY = std::min(minY, p.y);
             maxX = std::max(maxX, p.x);
             maxY = std::max(maxY, p.y);
         }
+        if (area < 0.f)
+            std::reverse(pts, pts + count);
         shape.bounds = { minX, minY, maxX - minX, maxY - minY };
+        if (count == 4) {
+            shape.axis = true;
+            for (unsigned i = 0; i < 4 && shape.axis; ++i) {
+                auto const& p = pts[i];
+                auto const& q = pts[(i + 1) % 4];
+                shape.axis = p.x == q.x || p.y == q.y;
+            }
+        }
         shape.fill = fill;
         shape.line = line;
-        shape.kind = outlines().kind;
-        outlines().shapes.push_back(std::move(shape));
+        shape.kind = sink.kind;
+        sink.shapes.push_back(shape);
     }
 
     void emit_polygon(CCDrawNode* node, CCPoint* points, unsigned count, ccColor4F const& fill, float width, ccColor4F const& line) {
@@ -441,12 +465,20 @@ namespace {
 
     void emit_circle(CCDrawNode* node, CCPoint const& center, float radius, ccColor4F const& fill, float width, ccColor4F const& line, unsigned segments) {
         if (outlines().collecting) {
-            std::vector<CCPoint> ring(std::max(segments, 8u));
+            auto& ring = outlines().ring;
+            ring.resize(std::max(segments, 8u));
             for (std::size_t i = 0; i < ring.size(); ++i) {
                 float angle = (float)(i) * 2.f * (float)(M_PI) / (float)(ring.size());
                 ring[i] = center + CCPoint{ std::cos(angle), std::sin(angle) } * radius;
             }
-            return collect_shape(ring.data(), static_cast<unsigned>(ring.size()), fill, line);
+            collect_shape(ring.data(), static_cast<unsigned>(ring.size()), fill, line);
+            if (!outlines().shapes.empty()) {
+                auto& shape = outlines().shapes.back();
+                shape.circle = true;
+                shape.center = center;
+                shape.radius = radius;
+            }
+            return;
         }
         node->drawCircle(center, radius, fill, width, line, segments);
     }
@@ -454,10 +486,10 @@ namespace {
     bool inside_shape(OutlineShape const& shape, CCPoint p) {
         if (!shape.bounds.containsPoint(p))
             return false;
-        auto const& pts = shape.points;
-        for (std::size_t i = 0; i < pts.size(); ++i) {
+        CCPoint const* pts = outlines().points.data() + shape.first;
+        for (std::uint32_t i = 0; i < shape.count; ++i) {
             auto const& a = pts[i];
-            auto const& b = pts[(i + 1) % pts.size()];
+            auto const& b = pts[(i + 1) % shape.count];
             if ((b.x - a.x) * (p.y - a.y) - (b.y - a.y) * (p.x - a.x) < -1e-4f)
                 return false;
         }
@@ -468,34 +500,127 @@ namespace {
         auto& sink = outlines();
         sink.collecting = false;
         auto& shapes = sink.shapes;
-        if (shapes.empty())
+        if (shapes.empty()) {
+            sink.points.clear();
             return;
+        }
+        static ccColor4F const none{ 0.f, 0.f, 0.f, 0.f };
         for (auto& shape : shapes) {
             if (shape.fill.a > 0.f)
-                node->drawPolygon(shape.points.data(), static_cast<unsigned>(shape.points.size()), shape.fill, 0.f, { 0.f, 0.f, 0.f, 0.f });
+                node->drawPolygon(sink.points.data() + shape.first, shape.count, shape.fill, 0.f, none);
         }
         constexpr float CELL = 60.f;
-        std::unordered_map<std::uint64_t, std::vector<std::uint32_t>> cells;
-        auto cell_key = [](int x, int y) {
-            return (static_cast<std::uint64_t>(static_cast<std::uint32_t>(x)) << 32) | static_cast<std::uint32_t>(y);
+        auto outline_cell_key = [](int kind, int x, int y) {
+            return (static_cast<std::uint64_t>(static_cast<std::uint32_t>(kind) & 0xff) << 56) |
+                   (static_cast<std::uint64_t>(static_cast<std::uint32_t>(x) & 0xfffffff) << 28) | (static_cast<std::uint32_t>(y) & 0xfffffff);
         };
+        auto& cells = sink.cells;
+        cells.clear();
         for (std::uint32_t i = 0; i < shapes.size(); ++i) {
             auto const& b = shapes[i].bounds;
-            for (int x = (int)(std::floor(b.getMinX() / CELL)); x <= (int)(std::floor(b.getMaxX() / CELL)); ++x)
-                for (int y = (int)(std::floor(b.getMinY() / CELL)); y <= (int)(std::floor(b.getMaxY() / CELL)); ++y)
-                    cells[cell_key(x, y)].push_back(i);
+            int x0 = (int)(std::floor(b.getMinX() / CELL)), x1 = (int)(std::floor(b.getMaxX() / CELL));
+            int y0 = (int)(std::floor(b.getMinY() / CELL)), y1 = (int)(std::floor(b.getMaxY() / CELL));
+            for (int x = x0; x <= x1; ++x)
+                for (int y = y0; y <= y1; ++y)
+                    cells.emplace_back(outline_cell_key(shapes[i].kind, x, y), i);
         }
-        std::vector<std::uint32_t> nearby;
-        std::vector<std::uint32_t> seen(shapes.size(), UINT32_MAX);
-        std::vector<float> cuts;
+        std::sort(cells.begin(), cells.end());
+        auto& nearby = sink.nearby;
+        auto& around = sink.around;
+        auto& seen = sink.seen;
+        seen.assign(shapes.size(), UINT32_MAX);
+        auto& cuts = sink.cuts;
         float depth = width;
         float probe = std::max(0.05f, width * 0.25f);
         for (std::uint32_t i = 0; i < shapes.size(); ++i) {
             auto const& shape = shapes[i];
-            auto const& pts = shape.points;
-            for (std::size_t e = 0; e < pts.size(); ++e) {
+            around.clear();
+            {
+                auto const& sb = shape.bounds;
+                float minX = sb.getMinX() - probe, maxX = sb.getMaxX() + probe, minY = sb.getMinY() - probe, maxY = sb.getMaxY() + probe;
+                for (int x = (int)(std::floor(minX / CELL)); x <= (int)(std::floor(maxX / CELL)); ++x)
+                    for (int y = (int)(std::floor(minY / CELL)); y <= (int)(std::floor(maxY / CELL)); ++y) {
+                        auto key = outline_cell_key(shape.kind, x, y);
+                        auto it = std::lower_bound(cells.begin(), cells.end(), std::pair<std::uint64_t, std::uint32_t>{ key, 0 });
+                        for (; it != cells.end() && it->first == key; ++it) {
+                            auto j = it->second;
+                            if (j == i || seen[j] == i)
+                                continue;
+                            seen[j] = i;
+                            auto const& o = shapes[j].bounds;
+                            if (o.getMaxX() < minX || o.getMinX() > maxX || o.getMaxY() < minY || o.getMinY() > maxY)
+                                continue;
+                            around.push_back(j);
+                        }
+                    }
+            }
+            if (shape.circle && std::ranges::all_of(around, [&](std::uint32_t j) { return shapes[j].circle; })) {
+                constexpr float TAU = 6.28318530718f;
+                auto& covered = sink.covered;
+                covered.clear();
+                bool hidden = false;
+                for (auto j : around) {
+                    auto const& o = shapes[j];
+                    float dx = o.center.x - shape.center.x, dy = o.center.y - shape.center.y;
+                    float dist = std::hypot(dx, dy);
+                    if (dist + shape.radius <= o.radius) {
+                        hidden = true;
+                        break;
+                    }
+                    if (dist >= shape.radius + o.radius || dist + o.radius <= shape.radius || dist < 1e-5f)
+                        continue;
+                    float c = (shape.radius * shape.radius + dist * dist - o.radius * o.radius) / (2.f * shape.radius * dist);
+                    float half = std::acos(std::clamp(c, -1.f, 1.f));
+                    float mid = std::atan2(dy, dx);
+                    float from = mid - half, to = mid + half;
+                    while (from < 0.f) {
+                        from += TAU;
+                        to += TAU;
+                    }
+                    while (from >= TAU) {
+                        from -= TAU;
+                        to -= TAU;
+                    }
+                    if (to > TAU) {
+                        covered.emplace_back(from, TAU);
+                        covered.emplace_back(0.f, to - TAU);
+                    }
+                    else
+                        covered.emplace_back(from, to);
+                }
+                if (hidden)
+                    continue;
+                std::sort(covered.begin(), covered.end());
+                float step = TAU / static_cast<float>(std::max<std::uint32_t>(shape.count, 8));
+                float ring = std::max(shape.radius - depth, 0.f);
+                auto draw_uncovered_arc = [&](float from, float to) {
+                    if (to - from < 1e-4f)
+                        return;
+                    int parts = std::max(1, static_cast<int>(std::ceil((to - from) / step)));
+                    CCPoint last = shape.center + CCPoint{ std::cos(from), std::sin(from) } * ring;
+                    for (int k = 1; k <= parts; ++k) {
+                        float angle = from + (to - from) * static_cast<float>(k) / static_cast<float>(parts);
+                        CCPoint next = shape.center + CCPoint{ std::cos(angle), std::sin(angle) } * ring;
+                        node->drawSegment(last, next, depth, shape.line);
+                        last = next;
+                    }
+                };
+                float cursor = 0.f;
+                for (auto const& [from, to] : covered) {
+                    if (from > cursor)
+                        draw_uncovered_arc(cursor, from);
+                    cursor = std::max(cursor, to);
+                    if (cursor >= TAU)
+                        break;
+                }
+                if (cursor < TAU)
+                    draw_uncovered_arc(cursor, TAU);
+                continue;
+            }
+            CCPoint const* pts = sink.points.data() + shape.first;
+            for (std::uint32_t e = 0; e < shape.count; ++e) {
                 auto a = pts[e];
-                auto b = pts[(e + 1) % pts.size()];
+                auto b = pts[(e + 1) % shape.count];
                 auto d = b - a;
                 float len = std::hypot(d.x, d.y);
                 if (len < 1e-4f)
@@ -504,27 +629,75 @@ namespace {
                 nearby.clear();
                 float minX = std::min(a.x, b.x) - probe, maxX = std::max(a.x, b.x) + probe;
                 float minY = std::min(a.y, b.y) - probe, maxY = std::max(a.y, b.y) + probe;
-                for (int x = (int)(std::floor(minX / CELL)); x <= (int)(std::floor(maxX / CELL)); ++x)
-                    for (int y = (int)(std::floor(minY / CELL)); y <= (int)(std::floor(maxY / CELL)); ++y) {
-                        auto it = cells.find(cell_key(x, y));
-                        if (it == cells.end())
-                            continue;
-                        for (auto j : it->second) {
-                            if (j == i || seen[j] == i * 1024u + e || shapes[j].kind != shape.kind)
+                for (auto j : around) {
+                    auto const& o = shapes[j].bounds;
+                    if (o.getMaxX() < minX || o.getMinX() > maxX || o.getMaxY() < minY || o.getMinY() > maxY)
+                        continue;
+                    nearby.push_back(j);
+                }
+                bool axis_edge = shape.axis && std::ranges::all_of(nearby, [&](std::uint32_t j) {
+                    return shapes[j].axis;
+                });
+                if (axis_edge) {
+                    bool horizontal = a.y == b.y;
+                    float lo = horizontal ? std::min(a.x, b.x) : std::min(a.y, b.y);
+                    float hi = horizontal ? std::max(a.x, b.x) : std::max(a.y, b.y);
+                    CCPoint test = a + outward * probe;
+                    auto& covered = sink.covered;
+                    covered.clear();
+                    for (auto j : nearby) {
+                        auto const& o = shapes[j].bounds;
+                        if (horizontal) {
+                            if (test.y < o.getMinY() || test.y > o.getMaxY())
                                 continue;
-                            seen[j] = static_cast<std::uint32_t>(i * 1024u + e);
-                            auto const& o = shapes[j].bounds;
-                            if (o.getMaxX() < minX || o.getMinX() > maxX || o.getMaxY() < minY || o.getMinY() > maxY)
+                            float from = std::max(lo, o.getMinX()), to = std::min(hi, o.getMaxX());
+                            if (to > from)
+                                covered.emplace_back(from, to);
+                        }
+                        else {
+                            if (test.x < o.getMinX() || test.x > o.getMaxX())
                                 continue;
-                            nearby.push_back(j);
+                            float from = std::max(lo, o.getMinY()), to = std::min(hi, o.getMaxY());
+                            if (to > from)
+                                covered.emplace_back(from, to);
                         }
                     }
-                cuts.assign({ 0.f, 1.f });
+                    std::sort(covered.begin(), covered.end());
+                    float span = hi - lo;
+                    auto edge_fraction = [&](float v) {
+                        float t = (v - lo) / span;
+                        return (horizontal ? (b.x >= a.x) : (b.y >= a.y)) ? t : 1.f - t;
+                    };
+                    auto draw_uncovered_edge_piece = [&](float from, float to) {
+                        if (to - from < 0.01f)
+                            return;
+                        float t0 = edge_fraction(from), t1 = edge_fraction(to);
+                        if (t0 > t1)
+                            std::swap(t0, t1);
+                        float trim = std::min(depth / len, (t1 - t0) * 0.5f);
+                        node->drawSegment(a + d * (t0 + trim) + outward * -depth, a + d * (t1 - trim) + outward * -depth, depth, shape.line);
+                    };
+                    float cursor = lo;
+                    for (auto const& [from, to] : covered) {
+                        if (from > cursor)
+                            draw_uncovered_edge_piece(cursor, from);
+                        cursor = std::max(cursor, to);
+                        if (cursor >= hi)
+                            break;
+                    }
+                    if (cursor < hi)
+                        draw_uncovered_edge_piece(cursor, hi);
+                    continue;
+                }
+                cuts.clear();
+                cuts.push_back(0.f);
+                cuts.push_back(1.f);
                 for (auto j : nearby) {
-                    auto const& other = shapes[j].points;
-                    for (std::size_t k = 0; k < other.size(); ++k) {
+                    CCPoint const* other = sink.points.data() + shapes[j].first;
+                    std::uint32_t n = shapes[j].count;
+                    for (std::uint32_t k = 0; k < n; ++k) {
                         auto c = other[k];
-                        auto f = other[(k + 1) % other.size()] - c;
+                        auto f = other[(k + 1) % n] - c;
                         float denom = d.x * f.y - d.y * f.x;
                         if (std::abs(denom) < 1e-6f)
                             continue;
@@ -535,25 +708,28 @@ namespace {
                             cuts.push_back(t);
                     }
                 }
-                std::sort(cuts.begin(), cuts.end());
+                if (cuts.size() > 2)
+                    std::sort(cuts.begin(), cuts.end());
                 CCPoint inward = outward * -depth;
                 for (std::size_t c = 0; c + 1 < cuts.size(); ++c) {
                     float t0 = cuts[c], t1 = cuts[c + 1];
                     if ((t1 - t0) * len < 0.01f)
                         continue;
-                    auto mid = a + d * ((t0 + t1) * 0.5f);
-                    auto test = mid + outward * probe;
-                    bool covered = std::ranges::any_of(nearby, [&](std::uint32_t j) {
-                        return inside_shape(shapes[j], test);
-                    });
-                    if (covered)
-                        continue;
+                    if (!nearby.empty()) {
+                        auto test = a + d * ((t0 + t1) * 0.5f) + outward * probe;
+                        bool covered = std::ranges::any_of(nearby, [&](std::uint32_t j) {
+                            return inside_shape(shapes[j], test);
+                        });
+                        if (covered)
+                            continue;
+                    }
                     float trim = std::min(depth / len, (t1 - t0) * 0.5f);
                     node->drawSegment(a + d * (t0 + trim) + inward, a + d * (t1 - trim) + inward, depth, shape.line);
                 }
             }
         }
         shapes.clear();
+        sink.points.clear();
     }
 }
 
@@ -572,6 +748,7 @@ void Hitboxes::draw_object_hitbox(CCDrawNode* node, GJBaseGameLayer* play, GameO
     auto const& logic = Logic::get();
     HitboxStateGuard preserve(object);
     refresh_object_hitbox(object);
+    bool use_plain_rect = !Logic::as_play(play) && rotation_is_right_angle(object);
 
     switch (object->m_objectType) {
     case GameObjectType::Solid:
@@ -584,15 +761,26 @@ void Hitboxes::draw_object_hitbox(CCDrawNode* node, GJBaseGameLayer* play, GameO
         outlines().kind = 1;
         break;
     }
+    if (object->m_objectType == GameObjectType::Solid && object->m_isPassable)
+        outlines().kind = 2;
+    struct RestoreCollecting {
+        bool was = outlines().collecting;
+        ~RestoreCollecting() { outlines().collecting = was; }
+    } restore_collecting;
+    if (outlines().kind == 1)
+        outlines().collecting = false;
     auto paint_rect = [&](float const* color) {
         emit_rect(node, object->getObjectRect(), HitboxColor::with_fill(color, fill, logic.hitbox_fill_opacity), width, HitboxColor::line_of(color));
     };
 
     switch (object->m_objectType) {
     case GameObjectType::Solid: {
-        if (!logic.hitbox_solid)
+        if (object->m_isPassable) {
+            if (logic.hitbox_passable)
+                paint_rect(logic.hitbox_passable_color);
             break;
-        if (object->m_isPassable)
+        }
+        if (!logic.hitbox_solid)
             break;
         paint_rect(logic.hitbox_solid_color);
         break;
@@ -675,7 +863,7 @@ void Hitboxes::draw_object_hitbox(CCDrawNode* node, GJBaseGameLayer* play, GameO
             unsigned segments = static_cast<unsigned>(std::max(radius, 8.f) * 2.f * std::sqrt(zoom));
             emit_circle(node, object->getPosition(), radius, HitboxColor::with_fill(logic.hitbox_hazard_color, fill, logic.hitbox_fill_opacity), width, HitboxColor::line_of(logic.hitbox_hazard_color), std::max(segments, 8u));
         }
-        else if (auto* box = live_oriented_box(object)) {
+        else if (auto* box = use_plain_rect ? nullptr : live_oriented_box(object)) {
             std::array<CCPoint, 4> corners = box->m_corners;
             emit_polygon(node, corners.data(), 4, HitboxColor::with_fill(logic.hitbox_hazard_color, fill, logic.hitbox_fill_opacity), width, HitboxColor::line_of(logic.hitbox_hazard_color));
         }
@@ -706,7 +894,7 @@ void Hitboxes::draw_object_hitbox(CCDrawNode* node, GJBaseGameLayer* play, GameO
             emit_circle(node, object->getPosition(), radius, HitboxColor::with_fill(logic.hitbox_interact_color, fill, logic.hitbox_fill_opacity), width, HitboxColor::line_of(logic.hitbox_interact_color), std::max(segments, 8u));
         }
         if (use_box) {
-            if (auto* box = live_oriented_box(object)) {
+            if (auto* box = use_plain_rect ? nullptr : live_oriented_box(object)) {
                 std::array<CCPoint, 4> corners = box->m_corners;
                 emit_polygon(node, corners.data(), 4, HitboxColor::with_fill(logic.hitbox_interact_color, fill, logic.hitbox_fill_opacity), width, HitboxColor::line_of(logic.hitbox_interact_color));
             }
@@ -962,9 +1150,13 @@ void Logic::draw_hitboxes(GJBaseGameLayer* play) {
     auto quantize_circle = [&](CCPoint center, float radius) {
         return Spot{ grid(center.x), grid(center.y), grid(radius), 0 };
     };
-    std::unordered_set<Spot, SpotHash> drawn_boxes;
-    std::unordered_set<Corners, CornersHash> drawn_rotated;
-    std::unordered_set<Spot, SpotHash> drawn_inner, drawn_circles;
+    static std::unordered_set<Spot, SpotHash> drawn_boxes;
+    static std::unordered_set<Corners, CornersHash> drawn_rotated;
+    static std::unordered_set<Spot, SpotHash> drawn_inner, drawn_circles;
+    drawn_boxes.clear();
+    drawn_rotated.clear();
+    drawn_inner.clear();
+    drawn_circles.clear();
     auto claim_live = [&](PlayerObject* body) {
         if (!body || Logic::get().is_traj_player(body))
             return;
@@ -1000,42 +1192,128 @@ void Logic::draw_hitboxes(GJBaseGameLayer* play) {
         draw(value.trail_p1);
         draw(value.trail_p2);
     };
-    if (value.hitbox_player) {
-        each_trail([&](std::deque<HitboxTrailPoint> const& trail) {
-            for (auto const& old : trail) {
-                if (!drawn_boxes.insert(quantize(old.rect)).second)
-                    continue;
-                node->drawRect(old.rect, trail_fill(value.hitbox_outer_color), width, trail_line(value.hitbox_outer_color), BorderAlignment::Inside);
-            }
-        });
+    outlines().collecting = value.hitbox_outline_only;
+    outlines().shapes.clear();
+    struct LastTrailShape {
+        CCPoint a, b;
+        bool has = false;
+    } last_shape;
+    auto repeats_last_shape = [&](CCPoint a, CCPoint b) {
+        if (!outlines().collecting)
+            return false;
+        bool same = last_shape.has && std::abs(a.x - last_shape.a.x) < width && std::abs(a.y - last_shape.a.y) < width && std::abs(b.x - last_shape.b.x) < width &&
+                    std::abs(b.y - last_shape.b.y) < width;
+        if (same)
+            return true;
+        last_shape = { a, b, true };
+        return false;
+    };
+    CCRect trail_cull_rect = visible_layer_rect(layer);
+    bool cull_trail_to_view = !level && std::isfinite(trail_cull_rect.origin.x) && std::isfinite(trail_cull_rect.origin.y) && trail_cull_rect.size.width > 1.f;
+    if (cull_trail_to_view) {
+        trail_cull_rect.origin.x -= 150.f;
+        trail_cull_rect.origin.y -= 150.f;
+        trail_cull_rect.size.width += 300.f;
+        trail_cull_rect.size.height += 300.f;
     }
-    if (value.hitbox_rotated) {
-        each_trail([&](std::deque<HitboxTrailPoint> const& trail) {
-            for (auto const& old : trail) {
-                if (!old.rotated || !drawn_rotated.insert(quantize_corners(old.corners)).second)
-                    continue;
-                auto corners = old.corners;
-                node->drawPolygon(corners.data(), 4, trail_fill(value.hitbox_rotated_color), width, trail_line(value.hitbox_rotated_color), BorderAlignment::Inside);
+    auto add_trail_shapes = [&](bool cull) {
+        auto near_screen = [&](CCRect const& rect) {
+            return !cull || trail_cull_rect.intersectsRect(rect);
+        };
+        if (value.hitbox_player) {
+            outlines().kind = 10;
+            each_trail([&](std::deque<HitboxTrailPoint> const& trail) {
+                last_shape.has = false;
+                for (auto const& old : trail) {
+                    if (!near_screen(old.rect))
+                        continue;
+                    if (repeats_last_shape(old.rect.origin, ccp(old.rect.getMaxX(), old.rect.getMaxY())) || !drawn_boxes.insert(quantize(old.rect)).second)
+                        continue;
+                    emit_rect(node, old.rect, trail_fill(value.hitbox_outer_color), width, trail_line(value.hitbox_outer_color));
+                }
+            });
+        }
+        if (value.hitbox_rotated) {
+            outlines().kind = 11;
+            each_trail([&](std::deque<HitboxTrailPoint> const& trail) {
+                last_shape.has = false;
+                for (auto const& old : trail) {
+                    if (!near_screen(old.rect))
+                        continue;
+                    if (!old.rotated || repeats_last_shape(old.corners[0], old.corners[2]) || !drawn_rotated.insert(quantize_corners(old.corners)).second)
+                        continue;
+                    auto corners = old.corners;
+                    emit_polygon(node, corners.data(), 4, trail_fill(value.hitbox_rotated_color), width, trail_line(value.hitbox_rotated_color));
+                }
+            });
+        }
+        if (value.hitbox_circle) {
+            outlines().kind = 12;
+            each_trail([&](std::deque<HitboxTrailPoint> const& trail) {
+                last_shape.has = false;
+                for (auto const& old : trail) {
+                    if (!near_screen(old.rect))
+                        continue;
+                    if (!(old.radius > 0.f) || repeats_last_shape(old.center, ccp(old.radius, 0.f)) || !drawn_circles.insert(quantize_circle(old.center, old.radius)).second)
+                        continue;
+                    emit_circle(node, old.center, old.radius, trail_fill(value.hitbox_circle_color), width, trail_line(value.hitbox_circle_color), 16);
+                }
+            });
+        }
+        if (value.hitbox_inner) {
+            outlines().kind = 13;
+            each_trail([&](std::deque<HitboxTrailPoint> const& trail) {
+                last_shape.has = false;
+                for (auto const& old : trail) {
+                    if (!near_screen(old.rect))
+                        continue;
+                    if (repeats_last_shape(old.inner.origin, ccp(old.inner.getMaxX(), old.inner.getMaxY())) || !drawn_inner.insert(quantize(old.inner)).second)
+                        continue;
+                    emit_rect(node, old.inner, trail_fill(value.hitbox_inner_color), width, trail_line(value.hitbox_inner_color));
+                }
+            });
+        }
+    };
+    bool trail_is_static = !level && !Logic::get().editor_testing && value.hitbox_outline_only && value.hitbox_trail;
+    auto* frozen_trail_node = static_cast<CCDrawNode*>(node->getChildByTag(FROZEN_TRAIL_NODE_TAG));
+    if (trail_is_static) {
+        if (!frozen_trail_node) {
+            frozen_trail_node = CCDrawNode::create();
+            frozen_trail_node->setTag(FROZEN_TRAIL_NODE_TAG);
+            frozen_trail_node->setBlendFunc({ GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA });
+            node->addChild(frozen_trail_node, -1);
+            g_frozen_trail_key.clear();
+        }
+        frozen_trail_node->setVisible(true);
+        std::vector<float> key{ width, (float)(value.hitbox_player), (float)(value.hitbox_rotated), (float)(value.hitbox_circle), (float)(value.hitbox_inner),
+            (float)(value.fill_hitboxes), value.hitbox_trail_opacity, value.hitbox_fill_opacity };
+        for (auto const* color : { value.hitbox_outer_color, value.hitbox_rotated_color, value.hitbox_circle_color, value.hitbox_inner_color })
+            key.insert(key.end(), color, color + 4);
+        for (auto const* trail : { &value.trail_p1, &value.trail_p2 }) {
+            key.push_back((float)(trail->size()));
+            if (!trail->empty()) {
+                key.insert(key.end(), { (float)(trail->front().frame), trail->front().rect.origin.x, trail->front().rect.origin.y });
+                key.insert(key.end(), { (float)(trail->back().frame), trail->back().rect.origin.x, trail->back().rect.origin.y });
             }
-        });
+        }
+        if (key != g_frozen_trail_key) {
+            g_frozen_trail_key = std::move(key);
+            frozen_trail_node->clear();
+            outlines().shapes.clear();
+            outlines().collecting = true;
+            add_trail_shapes(false);
+            flush_outlines(frozen_trail_node, width);
+            outlines().collecting = value.hitbox_outline_only;
+            outlines().shapes.clear();
+        }
     }
-    if (value.hitbox_circle) {
-        each_trail([&](std::deque<HitboxTrailPoint> const& trail) {
-            for (auto const& old : trail) {
-                if (!(old.radius > 0.f) || !drawn_circles.insert(quantize_circle(old.center, old.radius)).second)
-                    continue;
-                node->drawCircle(old.center, old.radius, trail_fill(value.hitbox_circle_color), width, trail_line(value.hitbox_circle_color), 16);
-            }
-        });
-    }
-    if (value.hitbox_inner) {
-        each_trail([&](std::deque<HitboxTrailPoint> const& trail) {
-            for (auto const& old : trail) {
-                if (!drawn_inner.insert(quantize(old.inner)).second)
-                    continue;
-                node->drawRect(old.inner, trail_fill(value.hitbox_inner_color), width, trail_line(value.hitbox_inner_color), BorderAlignment::Inside);
-            }
-        });
+    else {
+        if (frozen_trail_node && frozen_trail_node->isVisible()) {
+            frozen_trail_node->setVisible(false);
+            frozen_trail_node->clear();
+            g_frozen_trail_key.clear();
+        }
+        add_trail_shapes(cull_trail_to_view);
     }
     float view_x = player ? player->getPositionX() : 0.f;
     float reach = 500.f;
@@ -1051,8 +1329,6 @@ void Logic::draw_hitboxes(GJBaseGameLayer* play) {
         view_x = (-layer->getPositionX() + win.width * 0.5f) / view_scale;
         reach = win.width / view_scale;
     }
-    outlines().collecting = value.hitbox_outline_only;
-    outlines().shapes.clear();
     if (Logic::as_play(play)) {
         auto& grid = play->m_nonEffectObjects;
         auto& sizes = play->m_nonEffectObjectsSizes;
@@ -1095,13 +1371,20 @@ void Logic::draw_hitboxes(GJBaseGameLayer* play) {
         }
     }
     else if (play->m_objects) {
+        float minY = use_view ? view.getMinY() - 200.f : -1e9f;
+        float maxY = use_view ? view.getMaxY() + 200.f : 1e9f;
         for (auto* obj : CCArrayExt<GameObject*>(play->m_objects)) {
             if (!obj)
                 continue;
             if (obj->m_isDisabled)
                 continue;
-            if (std::fabs(obj->getPositionX() - view_x) > reach)
+            if (std::fabs(obj->getPositionX() - view_x) > reach || obj->getPositionY() < minY || obj->getPositionY() > maxY)
                 continue;
+            if (obj->m_isTrigger) {
+                auto* effect = typeinfo_cast<EffectGameObject*>(obj);
+                if (!effect || !effect->m_isTouchTriggered)
+                    continue;
+            }
             Hitboxes::get().draw_object_hitbox(node, play, obj, width, value.fill_hitboxes);
         }
     }

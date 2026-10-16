@@ -322,7 +322,7 @@ void Logic::run_frame(GJBaseGameLayer* play, float dt, std::function<void(float)
     auto& logic = Logic::get();
     // a lvl that is on its way out (finished it, then edit level) is still what PlayLayer::get() hands back for a bit.
     // its not on screen anymore & stepping it myself crashed in updateVisibility (android). gd runs whatever is left of it
-    if (!play || !play->isRunning()) {
+    if (!play || !play->isRunning() || (Logic::as_play(play) && play->getParent() != CCDirector::sharedDirector()->getRunningScene())) {
         tick(dt);
         return;
     }

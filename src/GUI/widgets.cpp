@@ -34,6 +34,29 @@ namespace eui {
             return value;
         }
 
+        void circle_filled_cached(ImDrawList* draw, ImVec2 const& center, float radius, ImU32 col, int segments = 0) {
+            if (segments <= 0 || segments > 64) {
+                draw->AddCircleFilled(center, radius, col, segments);
+                return;
+            }
+            if ((col & IM_COL32_A_MASK) == 0 || radius < 0.5f)
+                return;
+            segments = std::max(segments, 3);
+            static std::array<std::vector<ImVec2>, 65> tables;
+            auto& unit = tables[static_cast<std::size_t>(segments)];
+            if (unit.empty()) {
+                float a_max = (IM_PI * 2.0f) * ((float)segments - 1.0f) / (float)segments;
+                for (int i = 0; i < segments; ++i) {
+                    float a = a_max * (float)i / (float)(segments - 1);
+                    unit.push_back(ImVec2(ImCos(a), ImSin(a)));
+                }
+            }
+            draw->PathClear();
+            for (auto const& v : unit)
+                draw->PathLineTo(ImVec2(center.x + v.x * radius, center.y + v.y * radius));
+            draw->PathFillConvex(col);
+        }
+
         // ImHashData is a crc, which is linear: hashing 0, 1, 2.. put every "random" star & petal on a few straight lines
         std::uint32_t scramble(std::uint32_t x) {
             x ^= x >> 16;
@@ -573,7 +596,7 @@ namespace eui {
                 ImVec4 tint = mix(cool, hot, r2);
                 float radius = back.unit * (.05f + .07f * r4);
                 soft_disc(back.draw, at, radius * 3.2f, faded(tint, .3f * lit), 1.f, 8);
-                back.draw->AddCircleFilled(at, radius, ImGui::ColorConvertFloat4ToU32(faded(tint, .8f * lit)), 6);
+                circle_filled_cached(back.draw, at, radius, ImGui::ColorConvertFloat4ToU32(faded(tint, .8f * lit)), 6);
             }
         }
 
@@ -645,7 +668,7 @@ namespace eui {
                 ImVec2 at(back.a.x + back.width * r1 + (r2 - .5f) * back.unit * 10.f * life, back.b.y - back.tall * life * (.7f + .3f * r3));
                 float lit = std::sin(3.1415927f * life) * (.55f + .45f * std::sin(back.time * 13.f + r1 * 30.f)) * back.alpha;
                 soft_disc(back.draw, at, back.unit * .5f, ImVec4(1.f, .4f, .05f, .5f * lit), 1.f, 8);
-                back.draw->AddCircleFilled(at, back.unit * .1f, ImGui::ColorConvertFloat4ToU32(ImVec4(1.f, .85f, .4f, lit)), 6);
+                circle_filled_cached(back.draw, at, back.unit * .1f, ImGui::ColorConvertFloat4ToU32(ImVec4(1.f, .85f, .4f, lit)), 6);
             }
             back.draw->PopClipRect();
         }
@@ -765,7 +788,7 @@ namespace eui {
                 float twinkle = 1.f - (.3f + .45f * (1.f - bright)) * wave * wave;
                 float lit = (.3f + .7f * bright) * twinkle * back.alpha;
                 float size = back.unit * (.035f + .08f * bright) * (.75f + .25f * (float)(layer));
-                back.draw->AddCircleFilled(at, std::max(size, .7f), ImGui::ColorConvertFloat4ToU32(faded(tint, lit)), 6);
+                circle_filled_cached(back.draw, at, std::max(size, .7f), ImGui::ColorConvertFloat4ToU32(faded(tint, lit)), 6);
                 if (bright > .75f)
                     spikes(at, size * (5.f + 6.f * twinkle), std::max(.5f, size * .3f), faded(tint, .6f * lit));
             }
@@ -781,7 +804,7 @@ namespace eui {
                     float x = rightward ? back.a.x + back.width * run : back.b.x - back.width * run;
                     ImVec2 at(x, y0 + (y1 - y0) * run);
                     float blink = std::fmod(back.time, 1.1f) < .12f ? 1.f : .45f;
-                    back.draw->AddCircleFilled(at, std::max(.8f, back.unit * .06f), ImGui::ColorConvertFloat4ToU32(ImVec4(1.f, .95f, .9f, blink * back.alpha)), 6);
+                    circle_filled_cached(back.draw, at, std::max(.8f, back.unit * .06f), ImGui::ColorConvertFloat4ToU32(ImVec4(1.f, .95f, .9f, blink * back.alpha)), 6);
                 }
             }
             for (int lane = 0; lane < 2; ++lane) {
@@ -813,7 +836,7 @@ namespace eui {
                 back.draw->PrimWriteIdx(static_cast<ImDrawIdx>(base));
                 back.draw->PrimWriteIdx(static_cast<ImDrawIdx>(base + 1));
                 back.draw->PrimWriteIdx(static_cast<ImDrawIdx>(base + 2));
-                back.draw->AddCircleFilled(head, thick * 1.2f, bright, 6);
+                circle_filled_cached(back.draw, head, thick * 1.2f, bright, 6);
             }
             back.draw->PopClipRect();
         }
@@ -855,7 +878,7 @@ namespace eui {
                 ImVec2 at(back.a.x + back.width * chance(back, i, 1) + std::sin(back.time * (1.2f + r) + r * 20.f) * back.unit * .4f, back.b.y + radius - rise * (back.tall + radius * 2.f));
                 float lit = std::min(1.f, (1.f - rise) * 4.f) * back.alpha;
                 back.draw->AddCircle(at, radius, ImGui::ColorConvertFloat4ToU32(ImVec4(.75f, 1.f, 1.f, .42f * lit)), 14, std::max(1.f, back.unit * .05f));
-                back.draw->AddCircleFilled(ImVec2(at.x - radius * .35f, at.y - radius * .35f), radius * .2f, ImGui::ColorConvertFloat4ToU32(ImVec4(1.f, 1.f, 1.f, .5f * lit)), 6);
+                circle_filled_cached(back.draw, ImVec2(at.x - radius * .35f, at.y - radius * .35f), radius * .2f, ImGui::ColorConvertFloat4ToU32(ImVec4(1.f, 1.f, 1.f, .5f * lit)), 6);
             }
             back.draw->PopClipRect();
         }
@@ -1082,7 +1105,7 @@ namespace eui {
                         inside(at.x, top, bottom);
                         if (at.y - radius < top || at.y + radius > bottom)
                             continue;
-                        draw->AddCircleFilled(at, radius, ImGui::ColorConvertFloat4ToU32(faded(turned(liquid.drop, accent_turn), alpha)), 10);
+                        circle_filled_cached(draw, at, radius, ImGui::ColorConvertFloat4ToU32(faded(turned(liquid.drop, accent_turn), alpha)), 10);
                     }
                 }
             };
@@ -1102,7 +1125,7 @@ namespace eui {
                     ImU32 bat = ImGui::ColorConvertFloat4ToU32(ImVec4(.06f, .02f, .1f, .9f * alpha));
                     draw->AddTriangleFilled(at, ImVec2(at.x - span, at.y - flap), ImVec2(at.x - span * .45f, at.y + span * .25f), bat);
                     draw->AddTriangleFilled(at, ImVec2(at.x + span, at.y - flap), ImVec2(at.x + span * .45f, at.y + span * .25f), bat);
-                    draw->AddCircleFilled(at, span * .2f, bat, 8);
+                    circle_filled_cached(draw, at, span * .2f, bat, 8);
                 }
                 break;
             }
@@ -1115,7 +1138,7 @@ namespace eui {
                     ImVec4 ember = mix(ImVec4(1.f, .85f, .3f, 1.f), ImVec4(1.f, .35f, .05f, 1.f), life);
                     ember = turned(ember, accent_turn);
                     ember.w = (1.f - life) * alpha;
-                    draw->AddCircleFilled(at, std::max(.8f, tall * .045f * (1.f - life * .5f)), ImGui::ColorConvertFloat4ToU32(ember), 6);
+                    circle_filled_cached(draw, at, std::max(.8f, tall * .045f * (1.f - life * .5f)), ImGui::ColorConvertFloat4ToU32(ember), 6);
                 }
                 break;
             }
@@ -1156,7 +1179,7 @@ namespace eui {
                     x -= std::floor(x / wide) * wide;
                     ImVec2 at(body.Min.x + x, body.Min.y + tall * (.12f + .76f * own(30 + i)));
                     float size = std::max(.7f, tall * (.025f + .05f * r * r));
-                    draw->AddCircleFilled(at, size, ImGui::ColorConvertFloat4ToU32(ImVec4(.9f, .93f, 1.f, (.35f + .6f * r) * (.35f + .65f * wave) * alpha)), 6);
+                    circle_filled_cached(draw, at, size, ImGui::ColorConvertFloat4ToU32(ImVec4(.9f, .93f, 1.f, (.35f + .6f * r) * (.35f + .65f * wave) * alpha)), 6);
                     if (r > .9f)
                         sparkle(at, size * (1.5f + 1.f * wave), ImVec4(.9f, .93f, 1.f, .6f * wave * alpha));
                 }
@@ -1168,7 +1191,7 @@ namespace eui {
                     ImVec2 tail(head.x - tall * 1.2f, head.y - tall * .6f);
                     float fade = std::sin(3.1415927f * run) * alpha;
                     draw->AddLine(tail, head, ImGui::ColorConvertFloat4ToU32(ImVec4(.9f, .95f, 1.f, .25f * fade)), std::max(1.f, tall * .05f));
-                    draw->AddCircleFilled(head, std::max(.9f, tall * .045f), ImGui::ColorConvertFloat4ToU32(ImVec4(1.f, 1.f, 1.f, .9f * fade)), 6);
+                    circle_filled_cached(draw, head, std::max(.9f, tall * .045f), ImGui::ColorConvertFloat4ToU32(ImVec4(1.f, 1.f, 1.f, .9f * fade)), 6);
                 }
                 break;
             }
@@ -1415,7 +1438,7 @@ namespace eui {
                 draw->AddTriangleFilled(at(-.3f, -.4f), at(.44f, 0.f), at(-.3f, .4f), ink);
                 break;
             case Icon::Record:
-                draw->AddCircleFilled(c, s * .34f, ink, 24);
+                circle_filled_cached(draw, c, s * .34f, ink, 24);
                 break;
             case Icon::Stop:
                 draw->AddRectFilled(at(-.3f, -.3f), at(.3f, .3f), ink, s * .1f);
@@ -1430,7 +1453,7 @@ namespace eui {
                 for (int i = 0; i < 3; ++i) {
                     float y = ((float)(i) - 1.f) * .28f;
                     draw->AddLine(at(-.44f, y), at(.44f, y), ink, t * .8f);
-                    draw->AddCircleFilled(at(knobs[i], y), s * .11f, ink, 12);
+                    circle_filled_cached(draw, at(knobs[i], y), s * .11f, ink, 12);
                 }
                 break;
             }
@@ -1483,12 +1506,12 @@ namespace eui {
             }
             case Icon::Visuals:
                 draw->AddEllipse(c, ImVec2(s * .38f, s * .24f), ink, 0.f, 24, t);
-                draw->AddCircleFilled(c, s * .12f, ink, 12);
+                circle_filled_cached(draw, c, s * .12f, ink, 12);
                 break;
             case Icon::Sequence:
                 for (int i = 0; i < 3; ++i) {
                     float y = ((float)(i) - 1.f) * .28f;
-                    draw->AddCircleFilled(at(-.36f, y), s * .07f, ink, 10);
+                    circle_filled_cached(draw, at(-.36f, y), s * .07f, ink, 10);
                     draw->AddLine(at(-.16f, y), at(.42f, y), ink, t * .8f);
                 }
                 break;
@@ -1852,8 +1875,8 @@ namespace eui {
         ImVec2 mid(pos.x + font * .31f, pos.y + font * .52f);
         ImVec4 shown = tint;
         shown.w *= ImGui::GetStyle().Alpha;
-        draw->AddCircleFilled(mid, font * .32f, ImGui::ColorConvertFloat4ToU32(faded(shown, .22f)), 20);
-        draw->AddCircleFilled(mid, font * .19f, ImGui::ColorConvertFloat4ToU32(shown), 16);
+        circle_filled_cached(draw, mid, font * .32f, ImGui::ColorConvertFloat4ToU32(faded(shown, .22f)), 20);
+        circle_filled_cached(draw, mid, font * .19f, ImGui::ColorConvertFloat4ToU32(shown), 16);
     }
 
     float em(float n) {
@@ -1882,7 +1905,7 @@ namespace eui {
             ImDrawList* draw = window->DrawList;
             ImVec2 mid = bb.GetCenter();
             float side = bb.GetWidth();
-            draw->AddCircleFilled(mid, side * .5f, ImGui::GetColorU32(faded(color(ImGuiCol_FrameBgHovered), hot)), 24);
+            circle_filled_cached(draw, mid, side * .5f, ImGui::GetColorU32(faded(color(ImGuiCol_FrameBgHovered), hot)), 24);
             float arm = side * .2f;
             ImU32 ink = ImGui::GetColorU32(mix(color(ImGuiCol_TextDisabled), color(ImGuiCol_Text), hot));
             float thick = std::max(1.5f, side * .09f);
@@ -2221,7 +2244,7 @@ namespace eui {
             }
             if (state.pinned) {
                 ImVec2 dot(cross_box.Min.x - bar * .45f, start_screen.y + bar * .5f);
-                window->DrawList->AddCircleFilled(dot, bar * .14f, ImGui::GetColorU32(ImGuiCol_CheckMark), 12);
+                circle_filled_cached(window->DrawList, dot, bar * .14f, ImGui::GetColorU32(ImGuiCol_CheckMark), 12);
             }
             ImGui::SetCursorPos(after);
             return true;
@@ -2474,12 +2497,12 @@ namespace eui {
             float radius = side * (.38f + .03f * hot);
             ImVec4 shown(rgba[0], rgba[1], rgba[2], alpha ? rgba[3] : 1.f);
             if (shown.w < .995f) {
-                draw->AddCircleFilled(mid, radius, IM_COL32(60, 60, 60, (int)(255 * style.Alpha)), 24);
+                circle_filled_cached(draw, mid, radius, IM_COL32(60, 60, 60, (int)(255 * style.Alpha)), 24);
                 draw->PathArcTo(mid, radius, -1.5707963f, 1.5707963f, 12);
                 draw->PathFillConvex(IM_COL32(200, 200, 200, (int)(255 * style.Alpha)));
             }
             shown.w *= style.Alpha;
-            draw->AddCircleFilled(mid, radius, ImGui::ColorConvertFloat4ToU32(shown), 24);
+            circle_filled_cached(draw, mid, radius, ImGui::ColorConvertFloat4ToU32(shown), 24);
             draw->AddCircle(mid, radius, ImGui::GetColorU32(mix(color(ImGuiCol_Border), color(ImGuiCol_CheckMark), hot)), 24, std::max(1.f, side * .06f));
             if (labelSize.x > 0.f)
                 ImGui::RenderText(ImVec2(pos.x + side + style.ItemInnerSpacing.x, pos.y + style.FramePadding.y), label);
@@ -2619,7 +2642,7 @@ namespace eui {
             ImGui::ColorConvertHSVtoRGB(t >= 1.f ? 0.f : t, .7f, 1.f, knob_fill.x, knob_fill.y, knob_fill.z);
             knob_fill.w = 1.f;
         }
-        draw->AddCircleFilled(at, knob * (1.f + .15f * hot), ImGui::GetColorU32(knob_fill), 24);
+        circle_filled_cached(draw, at, knob * (1.f + .15f * hot), ImGui::GetColorU32(knob_fill), 24);
         draw->AddCircle(at, knob * (1.f + .15f * hot), ImGui::GetColorU32(mix(color(ImGuiCol_WindowBg), color(ImGuiCol_CheckMark), hot)), 24, std::max(1.5f, height * .07f));
         if (held && format && *format)
             ImGui::SetTooltip(format, *value);

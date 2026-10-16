@@ -670,7 +670,7 @@ void GUI::draw_window() {
     ImGui::BeginGroup();
     eui::last_card_row() = 0;
     bool measuring = false;
-#ifdef GEODE_IS_MOBILE
+    ImVec2 page_start = ImGui::GetCursorScreenPos();
     if (!settings_measured) {
         settings_measured = true;
         measuring = true;
@@ -697,13 +697,14 @@ void GUI::draw_window() {
             eui::card_row_extra(row) = spare > 1.f ? spare : 0.f;
         }
     }
-#endif
     if (!measuring) {
         if (auto* page = GUI::get().active_page(pages)) {
             GUI::get().page = page->name;
             GUI::get().fade_page(page->name, page->draw);
         }
     }
+    if (auto* window = ImGui::GetCurrentWindow(); page_width > 0.f)
+        window->DC.CursorMaxPos.x = std::max(window->DC.CursorMaxPos.x, page_start.x + page_width);
     ImGui::EndGroup();
     ImGuiID last_row = measuring || eui::single_column() ? 0 : eui::last_card_row();
     float natural = measuring ? page_height : ImGui::GetItemRectSize().y - (last_row ? eui::card_row_extra(last_row) : 0.f);

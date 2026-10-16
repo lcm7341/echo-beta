@@ -13,6 +13,7 @@
 #include <cstddef>
 #include <cstring>
 #include <map>
+#include <thread>
 
 using namespace geode::prelude;
 
@@ -359,44 +360,75 @@ void Logic::note_backstep_objects(PlayLayer* play) {
         return;
     auto& undo = logic.backsteps[logic.backsteps.size() - 2].object_undo;
     undo.clear();
-    line.scratch.resize(STRIDE);
     bool verify = !line.full && !line.always_full && (++line.saves % 32) == 0;
     bool everything = line.full || line.always_full || verify || !g_touch_tracking;
-    int missed = 0;
-    std::string missed_sample;
-    auto visit = [&](std::size_t i) {
+    auto diff_object_into_undo = [&](std::size_t i, std::vector<std::uint8_t>& out, std::uint8_t* scratch, int& missed) {
         auto* slot = line.baseline.data() + i * STRIDE;
-        gather(line.objects[i], line.scratch.data());
-        if (std::memcmp(slot, line.scratch.data(), STRIDE) == 0)
-            return;
-        std::uint32_t idx = static_cast<std::uint32_t>(i);
-        std::size_t at = undo.size();
-        undo.resize(at + sizeof(idx) + 1);
-        std::memcpy(undo.data() + at, &idx, sizeof(idx));
-        std::uint8_t mask = 0;
+        auto const* raw = reinterpret_cast<std::uint8_t const*>(line.objects[i]);
+        bool same = true;
         std::size_t offset = 0;
+        for (auto const& span : SPANS) {
+            if (std::memcmp(raw + span.begin, slot + offset, span.size) != 0) {
+                same = false;
+                break;
+            }
+            offset += span.size;
+        }
+        if (same)
+            return;
+        gather(line.objects[i], scratch);
+        std::uint32_t idx = static_cast<std::uint32_t>(i);
+        std::size_t at = out.size();
+        out.resize(at + sizeof(idx) + 1);
+        std::memcpy(out.data() + at, &idx, sizeof(idx));
+        std::uint8_t mask = 0;
+        offset = 0;
         for (std::size_t s = 0; s < SPANS.size(); ++s) {
             auto size = SPANS[s].size;
-            if (std::memcmp(slot + offset, line.scratch.data() + offset, size) != 0) {
+            if (std::memcmp(slot + offset, scratch + offset, size) != 0) {
                 mask |= static_cast<std::uint8_t>(1u << s);
-                undo.insert(undo.end(), slot + offset, slot + offset + size);
+                out.insert(out.end(), slot + offset, slot + offset + size);
             }
             offset += size;
         }
-        undo[at + sizeof(idx)] = mask;
-        std::memcpy(slot, line.scratch.data(), STRIDE);
-        if (verify && (mask & 0x1f) && line.touched_stamp[i] != line.epoch) {
-            if (missed++ < 4)
-                missed_sample += fmt::format(" id {} uid {} spans {:#x}", line.objects[i]->m_objectID, line.objects[i]->m_uniqueID, mask);
-        }
+        out[at + sizeof(idx)] = mask;
+        std::memcpy(slot, scratch, STRIDE);
+        if (verify && (mask & 0x1f) && line.touched_stamp[i] != line.epoch)
+            ++missed;
     };
-    if (everything) {
-        for (std::size_t i = 0; i < line.objects.size(); ++i)
-            visit(i);
+    int missed = 0;
+    std::array<std::uint8_t, STRIDE> scratch;
+    std::size_t total = line.objects.size();
+    unsigned workers = std::clamp(std::thread::hardware_concurrency(), 1u, 8u);
+    if (everything && total >= 16384 && workers > 1) {
+        std::size_t per = (total + workers - 1) / workers;
+        std::vector<std::vector<std::uint8_t>> worker_undo(workers);
+        std::vector<int> worker_misses(workers, 0);
+        std::vector<std::thread> threads;
+        for (unsigned w = 1; w < workers; ++w) {
+            threads.emplace_back([&, w] {
+                std::array<std::uint8_t, STRIDE> local;
+                for (std::size_t i = w * per; i < std::min(total, (w + 1) * per); ++i)
+                    diff_object_into_undo(i, worker_undo[w], local.data(), worker_misses[w]);
+            });
+        }
+        for (std::size_t i = 0; i < std::min(total, per); ++i)
+            diff_object_into_undo(i, undo, scratch.data(), worker_misses[0]);
+        for (auto& thread : threads)
+            thread.join();
+        for (unsigned w = 0; w < workers; ++w) {
+            missed += worker_misses[w];
+            if (w > 0)
+                undo.insert(undo.end(), worker_undo[w].begin(), worker_undo[w].end());
+        }
+    }
+    else if (everything) {
+        for (std::size_t i = 0; i < total; ++i)
+            diff_object_into_undo(i, undo, scratch.data(), missed);
     }
     else {
         for (auto i : line.touched)
-            visit(i);
+            diff_object_into_undo(i, undo, scratch.data(), missed);
     }
     if (missed) {
         line.always_full = true;

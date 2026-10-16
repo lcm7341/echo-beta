@@ -57,6 +57,7 @@
 #include <Geode/modify/EnhancedGameObject.hpp>
 #include <Geode/modify/RingObject.hpp>
 #include <Geode/modify/CCCircleWave.hpp>
+#include <Geode/modify/CCActionManager.hpp>
 #include <Geode/modify/GJActionManager.hpp>
 #include <Geode/Geode.hpp>
 #include <Geode/binding/GJBaseGameLayer.hpp>
@@ -221,19 +222,59 @@ class $modify(EchoStackNode, CCNode) {
     }
 };
 
+namespace {
+    CCNode* g_waveBeingCreated = nullptr;
+    CCAction* g_newWaveTween = nullptr;
+    struct WaveBornThisFrame {
+        CCCircleWave* wave;
+        int step;
+    };
+    std::vector<WaveBornThisFrame> g_wavesBornThisFrame;
+
+    struct ActionElapsedSetter : CCActionInterval {
+        static void set_elapsed(CCActionInterval* action, float elapsed) {
+            auto* clock = static_cast<ActionElapsedSetter*>(action);
+            clock->m_bFirstTick = false;
+            clock->m_elapsed = elapsed;
+        }
+    };
+
+    float physics_step_seconds() {
+        return static_cast<float>(1.0 / std::max(Logic::get().sample_rate(), 1.0));
+    }
+
+    float action_progress_at(CCActionInterval* timed, float elapsed) {
+        return std::clamp(elapsed / std::max(timed->getDuration(), FLT_EPSILON), 0.f, 0.9999f);
+    }
+}
+
+class $modify(EchoCaptureWaveTween, CCActionManager) {
+    void addAction(CCAction* action, CCNode* target, bool paused) {
+        if (g_waveBeingCreated && target == g_waveBeingCreated && !g_newWaveTween)
+            g_newWaveTween = action;
+        CCActionManager::addAction(action, target, paused);
+    }
+};
+
 class $modify(EchoCircleWave, CCCircleWave) {
+    struct MergedHit {
+        int step = 0;
+        CCPoint offset;
+        int weight = 1;
+    };
+
     struct Fields {
         int hits = 1;
         int born = 0, last = 0;
-        float span = 0.f;
-        bool stacked = false, drawn = false;
-        float seen_radius = 0.f, seen_opacity = 0.f, was_radius = 0.f, was_opacity = 0.f;
-        // where each merged hit would have put its wave (an orb moving w/ the player)
-        std::vector<CCPoint> trail;
+        bool stacked = false, ages_by_step = false;
+        CCAction* tween_action = nullptr;
+        std::vector<MergedHit> merged_hits;
 
         ~Fields() {
             if (stacked)
                 --g_stackedWaves;
+            if (tween_action)
+                tween_action->release();
         }
     };
 
@@ -243,89 +284,110 @@ class $modify(EchoCircleWave, CCCircleWave) {
             g_dudWaves.push_back(this);
             return true;
         }
-        if (!CCCircleWave::init(startRadius, endRadius, duration, fadeIn, easeOut))
+        g_waveBeingCreated = this;
+        g_newWaveTween = nullptr;
+        bool ok = CCCircleWave::init(startRadius, endRadius, duration, fadeIn, easeOut);
+        g_waveBeingCreated = nullptr;
+        auto* captured = g_newWaveTween;
+        g_newWaveTween = nullptr;
+        if (!ok)
             return false;
+        auto* fields = m_fields.self();
+        int step = Logic::get().step_frame;
+        fields->born = fields->last = step;
+        if (typeinfo_cast<CCActionInterval*>(captured)) {
+            captured->retain();
+            fields->tween_action = captured;
+            fields->ages_by_step = Logic::get().render_capturing();
+            if (fields->ages_by_step && g_effectFrame.on) {
+                this->retain();
+                g_wavesBornThisFrame.push_back({ this, step });
+            }
+        }
         if (auto* seen = g_effectFrame.open; seen && seen->wave_amt < static_cast<int>(seen->waves.size())) {
             this->retain();
             seen->waves[seen->wave_amt++] = this;
-            m_fields->born = m_fields->last = Logic::get().step_frame;
         }
         return true;
     }
 
-    void add_hit(CCPoint const* offset) {
+    void advance_tween_by(float extra) {
+        auto* timed = typeinfo_cast<CCActionInterval*>(m_fields->tween_action);
+        if (!timed || timed->isDone() || !getParent())
+            return;
+        float elapsed = std::min(extra, timed->getDuration() * 0.9999f);
+        ActionElapsedSetter::set_elapsed(timed, elapsed);
+        timed->update(action_progress_at(timed, elapsed));
+    }
+
+    void record_merged_hit(CCPoint const* offset) {
         auto* fields = m_fields.self();
-        fields->last = Logic::get().step_frame;
-        if (offset) {
-            CCPoint last = fields->trail.empty() ? CCPointZero : fields->trail.back();
-            if (ccpDistance(*offset, last) >= 0.5f && fields->trail.size() < 512)
-                fields->trail.push_back(*offset);
-        }
+        int step = Logic::get().step_frame;
+        fields->last = step;
+        CCPoint at = offset ? *offset : CCPointZero;
+        bool same = !fields->merged_hits.empty() && (!fields->ages_by_step || fields->merged_hits.back().step == step) && ccpDistance(at, fields->merged_hits.back().offset) < 0.5f;
+        if (same || fields->merged_hits.size() >= 512)
+            ++fields->merged_hits.back().weight;
+        else
+            fields->merged_hits.push_back({ step, at, 1 });
         if (++fields->hits == 2) {
             fields->stacked = true;
             ++g_stackedWaves;
         }
     }
 
-    void end_frame(int steps) {
-        auto* fields = m_fields.self();
-        if (fields->hits > 1)
-            fields->span = std::clamp(static_cast<float>(fields->last - fields->born) / static_cast<float>(std::max(steps, 1)), 0.f, 1.f);
+    void draw_as_stacked_copies(int weight, CCPoint const& offset) {
+        float alpha = m_opacity * m_opacityMod;
+        float stacked = m_blendAdditive ? std::min(alpha * static_cast<float>(weight), 1.f) : 1.f - std::pow(1.f - std::clamp(alpha, 0.f, 1.f), static_cast<float>(weight));
+        if (m_opacityMod > 0.f)
+            m_opacity = stacked / m_opacityMod;
+        bool moved = offset.x != 0.f || offset.y != 0.f;
+        if (moved) {
+            kmGLPushMatrix();
+            kmGLTranslatef(offset.x, offset.y, 0.f);
+        }
+        CCCircleWave::draw();
+        if (moved)
+            kmGLPopMatrix();
     }
 
     void draw() {
-        if (g_stackedWaves <= 0) {
-            CCCircleWave::draw();
-            return;
-        }
         auto* fields = m_fields.self();
-        if (fields->hits <= 1) {
+        if (g_stackedWaves <= 0 || fields->hits <= 1) {
             CCCircleWave::draw();
             return;
-        }
-        if (!fields->drawn) {
-            fields->drawn = true;
-            fields->seen_radius = fields->was_radius = m_radius;
-            fields->seen_opacity = fields->was_opacity = m_opacity;
-        }
-        else if (m_radius != fields->seen_radius || m_opacity != fields->seen_opacity) {
-            fields->was_radius = fields->seen_radius;
-            fields->was_opacity = fields->seen_opacity;
-            fields->seen_radius = m_radius;
-            fields->seen_opacity = m_opacity;
         }
         float old_radius = m_radius, old_opacity = m_opacity;
-        float young_radius = old_radius + (fields->was_radius - old_radius) * fields->span;
-        float young_opacity = old_opacity + (fields->was_opacity - old_opacity) * fields->span;
-        if (!fields->trail.empty()) {
-            int copies = static_cast<int>(fields->trail.size()) + 1;
-            float each = std::max(1.f, static_cast<float>(fields->hits) / static_cast<float>(copies));
-            for (int at = 0; at < copies; ++at) {
-                float along = static_cast<float>(at) / static_cast<float>(copies - 1);
-                m_radius = old_radius + (young_radius - old_radius) * along;
-                m_opacity = std::min((old_opacity + (young_opacity - old_opacity) * along) * each, 255.f);
-                if (at == 0) {
-                    CCCircleWave::draw();
-                    continue;
-                }
-                auto const& offset = fields->trail[static_cast<size_t>(at - 1)];
-                kmGLPushMatrix();
-                kmGLTranslatef(offset.x, offset.y, 0.f);
-                CCCircleWave::draw();
-                kmGLPopMatrix();
+        auto* timed = fields->ages_by_step ? typeinfo_cast<CCActionInterval*>(fields->tween_action) : nullptr;
+        if (timed && timed->isDone())
+            timed = nullptr;
+        float elapsed = timed ? timed->getElapsed() : 0.f;
+        float step_time = physics_step_seconds();
+        auto pose_at_step = [&](int step) {
+            if (!timed)
+                return;
+            timed->update(action_progress_at(timed, elapsed - static_cast<float>(step - fields->born) * step_time));
+        };
+        constexpr std::size_t MOST = 64;
+        std::size_t total = fields->merged_hits.size() + 1;
+        std::size_t groups = std::min(total, MOST);
+        for (std::size_t g = 0; g < groups; ++g) {
+            std::size_t from = g * total / groups, to = (g + 1) * total / groups;
+            int weight = 0;
+            for (std::size_t i = from; i < to; ++i)
+                weight += i == 0 ? 1 : fields->merged_hits[i - 1].weight;
+            std::size_t mid = (from + to - 1) / 2;
+            int step = mid == 0 ? fields->born : fields->merged_hits[mid - 1].step;
+            CCPoint offset = mid == 0 ? CCPointZero : fields->merged_hits[mid - 1].offset;
+            pose_at_step(step);
+            if (!timed) {
+                m_radius = old_radius;
+                m_opacity = old_opacity;
             }
-            m_radius = old_radius;
-            m_opacity = old_opacity;
-            return;
+            draw_as_stacked_copies(weight, offset);
         }
-        int amt = std::clamp(1 + static_cast<int>(std::fabs(old_radius - young_radius) / 0.15f), 1, std::min(fields->hits, 48));
-        float each = static_cast<float>(fields->hits) / static_cast<float>(amt);
-        for (int at = 0; at < amt; ++at) {
-            float along = amt > 1 ? static_cast<float>(at) / static_cast<float>(amt - 1) : 0.f;
-            m_radius = old_radius + (young_radius - old_radius) * along;
-            m_opacity = std::min((old_opacity + (young_opacity - old_opacity) * along) * each, 255.f);
-            CCCircleWave::draw();
-        }
+        if (timed)
+            timed->update(action_progress_at(timed, elapsed));
         m_radius = old_radius;
         m_opacity = old_opacity;
     }
@@ -357,7 +419,7 @@ namespace {
             moved = &offset;
         }
         for (int wave = 0; wave < seen->wave_amt; ++wave)
-            static_cast<EchoCircleWave*>(static_cast<CCCircleWave*>(seen->waves[wave]))->add_hit(moved);
+            static_cast<EchoCircleWave*>(static_cast<CCCircleWave*>(seen->waves[wave]))->record_merged_hit(moved);
     }
 
     // true = already played ts shown frame. the 1st time needs an EffectScope around the call
@@ -476,16 +538,24 @@ namespace {
             (void)g_stackVisitHook->disable();
     }
 
+    void age_waves_born_this_frame() {
+        if (g_wavesBornThisFrame.empty())
+            return;
+        int last = Logic::get().step_frame - 1;
+        float step_time = physics_step_seconds();
+        for (auto const& [wave, born] : g_wavesBornThisFrame) {
+            static_cast<EchoCircleWave*>(wave)->advance_tween_by(static_cast<float>(std::max(last - born, 0)) * step_time);
+            wave->release();
+        }
+        g_wavesBornThisFrame.clear();
+    }
+
     void forget_effects() {
         forget_booms();
-        int steps = Logic::get().step_frame - g_effectFrame.began;
         for (std::size_t at = 0; at < g_effectFrame.amt; ++at) {
             auto& seen = g_effectFrame.seen[at];
-            for (int wave = 0; wave < seen.wave_amt; ++wave) {
-                auto* it = static_cast<EchoCircleWave*>(static_cast<CCCircleWave*>(seen.waves[wave]));
-                it->end_frame(steps);
-                it->release();
-            }
+            for (int wave = 0; wave < seen.wave_amt; ++wave)
+                static_cast<CCCircleWave*>(seen.waves[wave])->release();
             seen.wave_amt = 0;
         }
         g_effectFrame.amt = 0;
@@ -499,6 +569,7 @@ namespace {
     }
 
     void end_effects() {
+        age_waves_born_this_frame();
         forget_effects();
         g_effectFrame.on = false;
     }
@@ -1229,6 +1300,8 @@ namespace echo::step {
             if (!logic.hitbox_trail_visual)
                 Logic::get().sample_hitbox_trail(layer);
         }
+        if (logic.macrobuff_tint && !play)
+            Logic::get().record_macrobuff_player_hitboxes(layer, self->m_playerDied);
         if (play)
             trace(self);
         if (logic.ignore_record_frames > 0)
@@ -2654,6 +2727,7 @@ class $modify(EchoScheduler, CCScheduler) {
         else if (auto* editor = LevelEditorLayer::get(); editor && logic.show_hitboxes) {
             Logic::get().draw_hitboxes(editor);
         }
+        Logic::get().update_macrobuff_tint(layer ? nullptr : LevelEditorLayer::get());
         if (logic.refresh_queued)
             Logic::get().flush_visual_refresh();
         Logic::get().flush_clicks();

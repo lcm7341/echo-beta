@@ -417,7 +417,8 @@ struct Session {
 	bool sort_automatically = true;
 	int trail_length = 50;
 	bool hitbox_player = true, hitbox_rotated = true, hitbox_inner = true, hitbox_circle = true;
-	bool hitbox_solid = true, hitbox_slope = true, hitbox_hazard = true, hitbox_interact = true;
+	bool hitbox_solid = true, hitbox_slope = true, hitbox_hazard = true, hitbox_interact = true, hitbox_passable = true;
+	bool macrobuff_tint = false;
 	bool hide_activated_objects = false;
 	bool hitbox_click = true;
 	float hitbox_fill_opacity = 0.22f, hitbox_trail_opacity = 0.35f;
@@ -426,6 +427,7 @@ struct Session {
 	float hitbox_inner_color[4] = { 0.35f, 1.f, 0.45f, 1.f };
 	float hitbox_circle_color[4] = { 0.45f, 0.75f, 1.f, 1.f };
 	float hitbox_solid_color[4] = { 0.15f, 0.35f, 1.f, 1.f };
+	float hitbox_passable_color[4] = { 0.f, 0.85f, 0.85f, 1.f };
 	float hitbox_slope_color[4] = { 0.45f, 0.55f, 1.f, 1.f };
 	float hitbox_hazard_color[4] = { 1.f, 0.15f, 0.15f, 1.f };
 	float hitbox_trail_color[4] = { 1.f, 1.f, 1.f, 0.35f };
@@ -929,6 +931,10 @@ public:
 	static CCRect object_hitbox(GameObject* object);
 	void clear_layout_hidden();
 	void refresh_default_art();
+	void capture_macrobuff_baseline(GJBaseGameLayer* layer);
+	void update_macrobuff_tint(LevelEditorLayer* editor);
+	void record_macrobuff_player_hitboxes(GJBaseGameLayer* layer, bool died);
+	void clear_macrobuff_samples();
 	bool layout_active();
 	void paint_layout_colors(PlayLayer* play);
 	void paint_layout_channels(GJEffectManager* effects);
@@ -1030,7 +1036,7 @@ public:
 	void refresh_live_hold();
 	void record_input(GJBaseGameLayer* play, bool down, bool player1, int button = static_cast<int>(PlayerButton::Jump), bool force = false);
 	static constexpr bool record_every_input() {
-#ifdef GEODE_IS_WINDOWS
+#if defined(GEODE_IS_WINDOWS) || defined(GEODE_IS_MACOS)
 		return true;
 #else
 		return false;

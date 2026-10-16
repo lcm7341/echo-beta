@@ -797,6 +797,7 @@ void Logic::begin_editor_playtest() {
     logic.editor_paused = false;
     logic.trail_p1.clear();
     logic.trail_p2.clear();
+    Logic::get().clear_macrobuff_samples();
     logic.step_frame = 0;
     logic.progress_base_set = false;
     logic.carry = 0.f;
@@ -813,9 +814,9 @@ void Logic::begin_editor_playtest() {
 }
 
 void Logic::end_editor_playtest(GJBaseGameLayer* editor) {
-    (void)editor;
     auto& logic = Logic::get();
     logic.editor_testing = false;
+    Logic::get().capture_macrobuff_baseline(editor);
     logic.editor_paused = false;
     logic.carry = 0.f;
     logic.steps_left = 0;
