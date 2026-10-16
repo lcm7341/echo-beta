@@ -16,8 +16,8 @@ using namespace geode::prelude;
 // static = same bytes every launch so it cant hold an address of mine
 // the count sits in the empty space after the last __DATA section instead (__common ends at 0x8b1778, the segment at 0x8b4000)
 // nothing else uses that slot. it got blamed for a crash once & it wasnt it
-constexpr std::uintptr_t STEP_SITE = 0x1fe730, STEP_SLOT = 0x8b3ff0;
-constexpr std::array<unsigned, 8> STEP_ORIGINAL = {
+const std::uintptr_t STEP_SITE = 0x1fe730, STEP_SLOT = 0x8b3ff0;
+const std::array<unsigned, 8> STEP_ORIGINAL = {
     0x1e22c000, // fcvt d0, s0
     0x1e601920, // fdiv d0, d9, d0
     0x1e621002, // fmov d2, #4.0
@@ -27,7 +27,7 @@ constexpr std::array<unsigned, 8> STEP_ORIGINAL = {
     0x1e216800, // fmaxnm s0, s0, s1
     0x1e380015, // fcvtzs w21, s0
 };
-constexpr std::array<unsigned, 8> STEP_REPLACEMENT = {
+const std::array<unsigned, 8> STEP_REPLACEMENT = {
     0xb00035a8, // adrp x8, 0x8b3000
     0xb94ff115, // ldr w21, [x8, #0xff0]
     0x710006bf, // cmp w21, #1
@@ -105,8 +105,7 @@ class $modify(EchoIosStepCount, GJBaseGameLayer) {
     }
 
     void update(float dt) {
-        if (g_step_patched)
-            *step_slot() = Logic::get().steps_this_tick;
+        if (g_step_patched) *step_slot() = Logic::get().steps_this_tick;
         GJBaseGameLayer::update(dt);
     }
 };

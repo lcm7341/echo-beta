@@ -17,6 +17,12 @@
 namespace chrono = std::chrono;
 
 namespace MovingObjects {
+	const size_t OBJECT_OUTER_SECTION = 0x278, OBJECT_MIDDLE_SECTION = 0x27c, OBJECT_TEMP_OFFSET_X = 0x2c8;
+	const size_t OBJECT_POSITION_DIRTY = 0x351, OBJECT_UNMODIFIED_POSITION_DIRTY = 0x352, OBJECT_RECT_DIRTY = 0x368, OBJECT_ORIENTED_BOX_DIRTY = 0x369;
+	const size_t OBJECT_POSITION_X = 0x3b8, OBJECT_POSITION_Y = 0x3c0;
+	const size_t OBJECT_LAST_POSITION_X = 0x4d0, OBJECT_LAST_POSITION_Y = 0x4d4, OBJECT_LAST_POSITION_COMMAND = 0x4dc, OBJECT_IS_DECORATION_2 = 0x512;
+	const size_t LAYER_COMMAND_INDEX = 0x3e0, LAYER_SECTION_X_FACTOR = 0x36a0, LAYER_SECTION_Y_FACTOR = 0x36a4, LAYER_MOVED_COUNT = 0x3724;
+
 	void prepare();
 
 	template <class T>
@@ -31,9 +37,8 @@ namespace MovingObjects {
 		std::memcpy(static_cast<char*>(object) + offset, &value, sizeof(T));
 	}
 
-	inline bool section(double position, float factor, int& result) {
-		if (!std::isfinite(position) || !std::isfinite(factor))
-			return false;
+	inline bool section_index(double position, float factor, int& result) {
+		if (!std::isfinite(position) || !std::isfinite(factor)) return false;
 		double scaled = position <= 0. ? 0. : position >= 10000000. ? double(factor * 10000000.f)
 																	: double(factor) * position;
 		if (!std::isfinite(scaled) || scaled < std::numeric_limits<int>::min() || scaled > std::numeric_limits<int>::max())
@@ -42,222 +47,173 @@ namespace MovingObjects {
 		return true;
 	}
 
-	inline bool section_unchanged(const void* layer, const void* object, double px, double py) {
-		int old_x = read<int>(object, 0x278);
-		if (old_x < 0)
-			return true;
-#if defined(__SSE2__) || defined(_M_X64)
-		__m128d position = _mm_set_pd(py, px);
-		__m128d factors = _mm_cvtps_pd(_mm_castsi128_ps(_mm_cvtsi64_si128(read<long long>(layer, 0x36a0))));
-		__m128d valid_pos = _mm_and_pd(_mm_cmpge_pd(position, _mm_set1_pd(-std::numeric_limits<double>::max())),
-			_mm_cmplt_pd(position, _mm_set1_pd(10000000.)));
-		__m128d valid_factor = _mm_and_pd(_mm_cmpge_pd(factors, _mm_setzero_pd()),
-			_mm_cmple_pd(factors, _mm_set1_pd(200.)));
-		if (_mm_movemask_pd(_mm_and_pd(valid_pos, valid_factor)) == 3) {
-			__m128i cell = _mm_cvttpd_epi32(_mm_mul_pd(_mm_max_pd(position, _mm_setzero_pd()), factors));
-			__m128i old_cell = _mm_cvtsi64_si128(read<long long>(object, 0x278));
-			return (_mm_movemask_epi8(_mm_cmpeq_epi32(cell, old_cell)) & 255) == 255;
+	inline bool same_section(const void* layer, const void* object, double x, double y) {
+		int old_section_x = read<int>(object, OBJECT_OUTER_SECTION);
+		if (old_section_x < 0) return true;
+		float factor_x = read<float>(layer, LAYER_SECTION_X_FACTOR), factor_y = read<float>(layer, LAYER_SECTION_Y_FACTOR);
+		if (x >= 0. && x < 10000000. && y >= 0. && y < 10000000. &&
+			factor_x >= 0.f && factor_x <= 200.f && factor_y >= 0.f && factor_y <= 200.f) {
+			return (int)(double(factor_x) * x) == old_section_x &&
+				   (int)(double(factor_y) * y) == read<int>(object, OBJECT_MIDDLE_SECTION);
 		}
-#else
-		float fx = read<float>(layer, 0x36a0), fy = read<float>(layer, 0x36a4);
-		if (px >= 0. && px < 10000000. && py >= 0. && py < 10000000. &&
-			fx >= 0.f && fx <= 200.f && fy >= 0.f && fy <= 200.f) {
-			return (int)(double(fx) * px) == old_x &&
-				   (int)(double(fy) * py) == read<int>(object, 0x27c);
+		int section_x, section_y;
+		return section_index(x, read<float>(layer, LAYER_SECTION_X_FACTOR), section_x) &&
+			   section_index(y, read<float>(layer, LAYER_SECTION_Y_FACTOR), section_y) &&
+			   section_x == old_section_x && section_y == read<int>(object, OBJECT_MIDDLE_SECTION);
+	}
+
+	inline bool same_section(const void* layer, const void* object) {
+		return same_section(layer, object, read<double>(object, OBJECT_POSITION_X), read<double>(object, OBJECT_POSITION_Y));
+	}
+
+	inline bool move_object(void* layer, void* object, double dx, double dy, bool move_x, bool move_y) {
+		double x = read<double>(object, OBJECT_POSITION_X), y = read<double>(object, OBJECT_POSITION_Y);
+		if (!read<bool>(object, OBJECT_IS_DECORATION_2) && read<int>(object, OBJECT_LAST_POSITION_COMMAND) != read<int>(layer, LAYER_COMMAND_INDEX)) {
+			write(object, OBJECT_LAST_POSITION_X, (float)x);
+			write(object, OBJECT_LAST_POSITION_Y, (float)y);
+			write(object, OBJECT_LAST_POSITION_COMMAND, read<int>(layer, LAYER_COMMAND_INDEX));
+			write(object, OBJECT_RECT_DIRTY, true);
+			write(object, OBJECT_ORIENTED_BOX_DIRTY, true);
 		}
-#endif
-		int x, y;
-		return section(px, read<float>(layer, 0x36a0), x) &&
-			   section(py, read<float>(layer, 0x36a4), y) &&
-			   x == old_x && y == read<int>(object, 0x27c);
+		if (move_x && !read<bool>(object, OBJECT_TEMP_OFFSET_X)) write(object, OBJECT_POSITION_X, x += dx);
+		if (move_y) write(object, OBJECT_POSITION_Y, y += dy);
+		write(object, OBJECT_POSITION_DIRTY, true);
+		write(object, OBJECT_UNMODIFIED_POSITION_DIRTY, true);
+		return !same_section(layer, object, x, y);
 	}
 
-	inline bool section_unchanged(const void* layer, const void* object) {
-		return section_unchanged(layer, object, read<double>(object, 0x3b8), read<double>(object, 0x3c0));
-	}
-
-	inline void prefetch_object(const void* object) {
-#if defined(__SSE2__) || defined(_M_X64)
-		auto* p = static_cast<const char*>(object);
-		for (size_t offset : { 0x278, 0x27f, 0x2c8, 0x351, 0x369, 0x3b8, 0x3c7, 0x4d0, 0x4df, 0x512 })
-			_mm_prefetch(p + offset, _MM_HINT_T0);
-#else
-		(void)object;
-#endif
-	}
-
-	constexpr unsigned PREFETCH_AHEAD = 8;
-
-	inline bool moveOne(void* layer, void* object, double dx, double dy, bool move_x, bool move_y) {
-		double x = read<double>(object, 0x3b8), y = read<double>(object, 0x3c0);
-		if (!read<bool>(object, 0x512) && read<int>(object, 0x4dc) != read<int>(layer, 0x3e0)) {
-			write(object, 0x4d0, (float)x);
-			write(object, 0x4d4, (float)y);
-			write(object, 0x4dc, read<int>(layer, 0x3e0));
-			write(object, 0x368, true);
-			write(object, 0x369, true);
-		}
-		if (move_x && !read<bool>(object, 0x2c8))
-			write(object, 0x3b8, x += dx);
-		if (move_y)
-			write(object, 0x3c0, y += dy);
-		write(object, 0x351, true);
-		write(object, 0x352, true);
-		return !section_unchanged(layer, object, x, y);
-	}
-
-	inline unsigned long long group_epoch = 1;
+	inline unsigned long long group_version = 1;
 
 #if defined(__SSE2__) || defined(_M_X64)
-#define ECHO_PARALLEL_MOVE 1
+#define ECHO_THREADED_MOVE 1
 
 	// threads for huge groups
 	// NEVER destroyed bc joining on unload deadlocks
-	class MovePool {
+	class MoveThreads {
 	public:
-		static constexpr unsigned HELPER_COUNT = 5;
+		static const unsigned HELPERS = 5;
 
-		static MovePool& get() {
-			static MovePool* pool = new MovePool();
-			return *pool;
-		}
-
-		unsigned parts() const {
-			return HELPER_COUNT + 1;
+		static MoveThreads& get() {
+			static MoveThreads* threads = new MoveThreads();
+			return *threads;
 		}
 
 		template <class Job>
 		void run(Job& job) {
-			fn = [](void* context, unsigned part) {
-				(*static_cast<Job*>(context))(part);
+			task = [](void* task_data, unsigned part) {
+				(*static_cast<Job*>(task_data))(part);
 			};
-			context = &job;
-			csr = _mm_getcsr();
-			pending.store(HELPER_COUNT, std::memory_order_relaxed);
-			generation.fetch_add(1, std::memory_order_seq_cst);
-			if (sleepers.load(std::memory_order_seq_cst) > 0)
-				generation.notify_all();
+			task_data = &job;
+			float_mode = _mm_getcsr();
+			helpers_working.store(HELPERS, std::memory_order_relaxed);
+			round.fetch_add(1, std::memory_order_seq_cst);
+			if (helpers_sleeping.load(std::memory_order_seq_cst) > 0) round.notify_all();
 			job(0u);
-			while (pending.load(std::memory_order_acquire) != 0)
+			while (helpers_working.load(std::memory_order_acquire) != 0)
 				_mm_pause();
 		}
 
 	private:
-		MovePool() {
-			for (unsigned i = 0; i < HELPER_COUNT; ++i)
+		MoveThreads() {
+			for (unsigned i = 0; i < HELPERS; ++i)
 				std::thread([this, i] {
-					work(i + 1);
+					helper_loop(i + 1);
 				}).detach();
 		}
 
-		void work(unsigned part) {
-			unsigned seen = 0;
+		void helper_loop(unsigned part) {
+			unsigned last_round = 0;
 			for (;;) {
-				auto spin_start = chrono::steady_clock::now();
-				for (unsigned spins = 0; generation.load(std::memory_order_acquire) == seen; ++spins) {
+				auto waiting_since = chrono::steady_clock::now();
+				for (unsigned spins = 0; round.load(std::memory_order_acquire) == last_round; ++spins) {
 					_mm_pause();
-					if ((spins & 255) != 255)
+					if ((spins & 255) != 255) continue;
+					if (chrono::steady_clock::now() - waiting_since < chrono::milliseconds(2))
 						continue;
-					if (chrono::steady_clock::now() - spin_start < chrono::milliseconds(2))
-						continue;
-					sleepers.fetch_add(1, std::memory_order_seq_cst);
-					if (generation.load(std::memory_order_seq_cst) == seen)
-						generation.wait(seen, std::memory_order_seq_cst);
-					sleepers.fetch_sub(1, std::memory_order_seq_cst);
-					spin_start = chrono::steady_clock::now();
+					helpers_sleeping.fetch_add(1, std::memory_order_seq_cst);
+					if (round.load(std::memory_order_seq_cst) == last_round)
+						round.wait(last_round, std::memory_order_seq_cst);
+					helpers_sleeping.fetch_sub(1, std::memory_order_seq_cst);
+					waiting_since = chrono::steady_clock::now();
 				}
-				seen = generation.load(std::memory_order_acquire);
-				if (_mm_getcsr() != csr)
-					_mm_setcsr(csr);
-				fn(context, part);
-				pending.fetch_sub(1, std::memory_order_release);
+				last_round = round.load(std::memory_order_acquire);
+				if (_mm_getcsr() != float_mode) _mm_setcsr(float_mode);
+				task(task_data, part);
+				helpers_working.fetch_sub(1, std::memory_order_release);
 			}
 		}
 
-		void (*fn)(void*, unsigned) = nullptr;
-		void* context = nullptr;
-		unsigned csr = 0;
-		std::atomic<unsigned> generation{ 0 };
-		std::atomic<unsigned> pending{ 0 };
-		std::atomic<unsigned> sleepers{ 0 };
+		void (*task)(void*, unsigned) = nullptr;
+		void* task_data = nullptr;
+		unsigned float_mode = 0;
+		std::atomic<unsigned> round{ 0 };
+		std::atomic<unsigned> helpers_working{ 0 };
+		std::atomic<unsigned> helpers_sleeping{ 0 };
 	};
 
-	struct GroupCheck {
+	struct CheckedGroup {
 		void* array;
-		unsigned long long epoch;
+		unsigned long long version;
 		unsigned size;
-		bool clean;
+		bool unique;
 	};
 
-	inline GroupCheck group_checks[64]{};
+	inline CheckedGroup checked_groups[64]{};
 
-	inline unsigned verified_members(void* array, void* const* objects, unsigned size) {
-		auto& entry = group_checks[(reinterpret_cast<uintptr_t>(array) >> 4) & 63];
-		if (entry.array == array && entry.epoch == group_epoch && size <= entry.size)
-			return entry.clean ? size : 0;
-		unsigned live = 0;
-		while (live < size && objects[live])
-			++live;
-		std::vector<void*> sorted(objects, objects + live);
+	inline unsigned movable_count(void* array, void* const* objects, unsigned size) {
+		auto& checked = checked_groups[(reinterpret_cast<uintptr_t>(array) >> 4) & 63];
+		if (checked.array == array && checked.version == group_version && size <= checked.size)
+			return checked.unique ? size : 0;
+		unsigned count = 0;
+		while (count < size && objects[count])
+			++count;
+		std::vector<void*> sorted(objects, objects + count);
 		std::sort(sorted.begin(), sorted.end());
 		bool unique = std::adjacent_find(sorted.begin(), sorted.end()) == sorted.end();
-		entry = { array, group_epoch, size, unique && live == size };
-		return unique ? live : 0;
+		checked = { array, group_version, size, unique && count == size };
+		return unique ? count : 0;
 	}
 
 #endif
 
-	inline unsigned parallel_minimum = 512;
+	inline unsigned threaded_minimum = 512;
 
 	template <class Count, class Data, class UpdateSection, class Finish>
 	void move(void* layer, void* array, double dx, double dy,
 		Count count, Data data, UpdateSection update_section, Finish finish) {
-		unsigned total = count(array);
-		write(layer, 0x3724, read<unsigned>(layer, 0x3724) + total);
+		unsigned array_count = count(array);
+		write(layer, LAYER_MOVED_COUNT, read<unsigned>(layer, LAYER_MOVED_COUNT) + array_count);
 		auto [objects, size] = data(array);
 		bool move_x = dx != 0., move_y = dy != 0.;
-#ifdef ECHO_PARALLEL_MOVE
-		if (unsigned live = size >= parallel_minimum ? verified_members(array, reinterpret_cast<void* const*>(objects), size) : 0;
-			live >= parallel_minimum) {
-			static std::vector<unsigned char> changed;
-			changed.resize(live);
-			auto& pool = MovePool::get();
-			constexpr unsigned CHUNK = 128;
-			std::atomic<unsigned> cursor{ 0 };
-			auto slice = [&](unsigned) {
+#ifdef ECHO_THREADED_MOVE
+		if (unsigned object_count = size >= threaded_minimum ? movable_count(array, reinterpret_cast<void* const*>(objects), size) : 0;
+			object_count >= threaded_minimum) {
+			static std::vector<unsigned char> section_changed;
+			section_changed.resize(object_count);
+			auto& threads = MoveThreads::get();
+			const unsigned CHUNK = 128;
+			std::atomic<unsigned> next_index{ 0 };
+			auto move_chunks = [&](unsigned) {
 				for (;;) {
-					unsigned begin = cursor.fetch_add(CHUNK, std::memory_order_relaxed);
-					if (begin >= live)
-						return;
-					unsigned end = std::min(begin + CHUNK, live);
-					for (unsigned i = begin; i < end && i < begin + PREFETCH_AHEAD; ++i)
-						prefetch_object(objects[i]);
-					for (unsigned i = begin; i < end; ++i) {
-						if (i + PREFETCH_AHEAD < end)
-							prefetch_object(objects[i + PREFETCH_AHEAD]);
-						changed[i] = moveOne(layer, objects[i], dx, dy, move_x, move_y);
-					}
+					unsigned begin = next_index.fetch_add(CHUNK, std::memory_order_relaxed);
+					if (begin >= object_count) return;
+					unsigned end = std::min(begin + CHUNK, object_count);
+					for (unsigned i = begin; i < end; ++i)
+						section_changed[i] = move_object(layer, objects[i], dx, dy, move_x, move_y);
 				}
 			};
-			pool.run(slice);
-			for (unsigned i = 0; i < live; ++i)
-				if (changed[i])
-					update_section(objects[i]);
+			threads.run(move_chunks);
+			for (unsigned i = 0; i < object_count; ++i)
+				if (section_changed[i]) update_section(objects[i]);
 			finish(array);
 			return;
 		}
 #endif
-		unsigned live = 0;
-		while (live < size && objects[live])
-			++live;
-		for (unsigned i = 0; i < live && i < PREFETCH_AHEAD; ++i)
-			prefetch_object(objects[i]);
-		for (unsigned i = 0; i < live; ++i) {
-			if (i + PREFETCH_AHEAD < live)
-				prefetch_object(objects[i + PREFETCH_AHEAD]);
-			if (moveOne(layer, objects[i], dx, dy, move_x, move_y))
-				update_section(objects[i]);
-		}
+		unsigned object_count = 0;
+		while (object_count < size && objects[object_count])
+			++object_count;
+		for (unsigned i = 0; i < object_count; ++i)
+			if (move_object(layer, objects[i], dx, dy, move_x, move_y)) update_section(objects[i]);
 		finish(array);
 	}
 }

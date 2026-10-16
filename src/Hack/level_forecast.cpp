@@ -52,7 +52,7 @@ namespace {
         (unsigned short)offsetof(GameObject, first),                                                            \
             (unsigned short)(offsetof(GameObject, last) + sizeof(GameObject::last) - offsetof(GameObject, first)) \
     }
-    constexpr std::array SPANS = {
+    const std::array SPANS = {
         ECHO_SPAN(m_positionXOffset, m_scaleYOffset),
         ECHO_SPAN(m_isDirty, m_isOrientedBoxDirty),
         ECHO_SPAN(m_unmodifiedPositionX, m_positionY),
@@ -65,14 +65,14 @@ namespace {
 #undef ECHO_SPAN
 #pragma clang diagnostic pop
 
-    constexpr std::size_t STRIDE = [] {
+    const std::size_t STRIDE = [] {
         std::size_t total = 0;
         for (auto const& span : SPANS)
             total += span.size;
         return total;
     }();
 
-    constexpr std::size_t RECORD_POS = [] {
+    const std::size_t RECORD_POS = [] {
         std::size_t at = 0;
         for (auto const& span : SPANS) {
             if (span.begin <= offsetof(GameObject, m_positionX) && offsetof(GameObject, m_positionX) < span.begin + span.size)
@@ -113,15 +113,13 @@ namespace {
     using Counts = gd::vector<gd::vector<int>*>;
 
     Bucket* bucket_at(Grid const& grid, int x, int y) {
-        if (x < 0 || y < 0 || (std::size_t)x >= grid.size() || !grid[x])
-            return nullptr;
+        if (x < 0 || y < 0 || (std::size_t)x >= grid.size() || !grid[x]) return nullptr;
         auto& column = *grid[x];
         return (std::size_t)y < column.size() ? column[y] : nullptr;
     }
 
     int* count_at(Counts const& counts, int x, int y) {
-        if (x < 0 || y < 0 || (std::size_t)x >= counts.size() || !counts[x])
-            return nullptr;
+        if (x < 0 || y < 0 || (std::size_t)x >= counts.size() || !counts[x]) return nullptr;
         auto& column = *counts[x];
         return (std::size_t)y < column.size() ? &column[y] : nullptr;
     }
@@ -134,8 +132,7 @@ namespace {
 
     void copy_list(ListCopy& out, Bucket const* bucket, int const* count) {
         out.present = bucket && count;
-        if (!out.present)
-            return;
+        if (!out.present) return;
         out.count = *count;
         int used = std::clamp(*count, 0, (int)bucket->size());
         out.items.assign(bucket->begin(), bucket->begin() + used);
@@ -143,15 +140,12 @@ namespace {
 
     template <class Fix>
     void put_list(ListCopy const& copy, Bucket* bucket, int* count, Fix fix) {
-        if (!copy.present || !bucket || !count)
-            return;
-        if (bucket->size() < copy.items.size())
-            bucket->resize(copy.items.size());
+        if (!copy.present || !bucket || !count) return;
+        if (bucket->size() < copy.items.size()) bucket->resize(copy.items.size());
         std::copy(copy.items.begin(), copy.items.end(), bucket->begin());
         *count = copy.count;
         for (std::size_t i = 0; i < copy.items.size(); ++i) {
-            if (copy.items[i])
-                fix(copy.items[i], (int)i);
+            if (copy.items[i]) fix(copy.items[i], (int)i);
         }
     }
 
@@ -227,11 +221,9 @@ namespace {
         }
 
         Cell* note(int x, int y) {
-            if (!active || x < 0 || y < 0)
-                return nullptr;
+            if (!active || x < 0 || y < 0) return nullptr;
             auto [it, fresh] = cells.try_emplace(key(x, y));
-            if (!fresh)
-                return nullptr;
+            if (!fresh) return nullptr;
             auto& cell = it->second;
             cell.x = x;
             cell.y = y;
@@ -243,14 +235,11 @@ namespace {
         }
 
         void note_appended(GameObject* object) {
-            if (!active)
-                return;
+            if (!active) return;
             int x = object->m_outerSectionIndex, y = object->m_middleSectionIndex;
-            if (cells.contains(key(x, y)))
-                return;
+            if (cells.contains(key(x, y))) return;
             auto* cell = note(x, y);
-            if (!cell)
-                return;
+            if (!cell) return;
             auto drop = [object](ListCopy& list) {
                 if (list.present && !list.items.empty() && list.items.back() == object) {
                     list.items.pop_back();
@@ -260,13 +249,11 @@ namespace {
             drop(cell->main);
             drop(cell->non_effect);
             drop(cell->blocks);
-            if (cell->non_effect.present && cell->non_effect.items.empty())
-                cell->flag = false;
+            if (cell->non_effect.present && cell->non_effect.items.empty()) cell->flag = false;
         }
 
         void end() {
-            if (!active)
-                return;
+            if (!active) return;
             active = false;
             for (auto const& [object, was] : indexes) {
                 object->m_someOtherIndex = was.other;
@@ -307,8 +294,8 @@ namespace {
         }
     };
 
-    constexpr double TOLERANCE = 0.3;
-    constexpr int BUILD_PER_FRAME = 60;
+    const double TOLERANCE = 0.3;
+    const int BUILD_PER_FRAME = 60;
 
     struct Forecast {
         PlayLayer* play = nullptr;
@@ -403,46 +390,33 @@ namespace {
         return value;
     }
 
-    std::unordered_set<int>& needed_groups() {
-        static std::unordered_set<int> groups;
-        return groups;
-    }
+    static std::unordered_set<int> g_needed_groups;
 
     void note_needed_groups(GJEffectManager* manager) {
-        auto& groups = needed_groups();
+        auto& groups = g_needed_groups;
         groups.clear();
-        if (!manager)
-            return;
         for (auto const& command : manager->m_unkVector560)
-            if (command.m_centerGroupID > 0)
-                groups.insert(command.m_centerGroupID);
+            if (command.m_centerGroupID > 0) groups.insert(command.m_centerGroupID);
     }
 
     CCArray* forecast_members(CCArray* objects) {
-        if (!state().recording || !objects)
-            return objects;
-        auto const& needed = needed_groups();
+        if (!state().recording || !objects) return objects;
+        auto const& needed = g_needed_groups;
         auto keep = [&](GameObject* object) {
-            if (object->m_objectType != GameObjectType::Decoration)
-                return true;
-            if (needed.empty() || !object->m_groups)
-                return false;
+            if (object->m_objectType != GameObjectType::Decoration) return true;
+            if (needed.empty() || !object->m_groups) return false;
             for (int g = 0; g < object->m_groupCount; ++g)
-                if (needed.contains((*object->m_groups)[g]))
-                    return true;
+                if (needed.contains((*object->m_groups)[g])) return true;
             return false;
         };
         unsigned amt = objects->count();
         unsigned first = 0;
         for (; first < amt; ++first) {
             auto* obj = static_cast<GameObject*>(objects->objectAtIndex(first));
-            if (!obj)
-                return objects;
-            if (!keep(obj))
-                break;
+            if (!obj) return objects;
+            if (!keep(obj)) break;
         }
-        if (first == amt)
-            return objects;
+        if (first == amt) return objects;
         static CCArray* kept = [] {
             auto* array = CCArray::create();
             array->retain();
@@ -451,23 +425,15 @@ namespace {
         kept->removeAllObjects();
         for (unsigned n = 0; n < amt; ++n) {
             auto* obj = static_cast<GameObject*>(objects->objectAtIndex(n));
-            if (!obj)
-                break;
-            if (n < first || (n > first && keep(obj)))
-                kept->addObject(obj);
+            if (!obj) break;
+            if (n < first || (n > first && keep(obj))) kept->addObject(obj);
         }
         return kept;
     }
 
-    unsigned long long& live_steps() {
-        static unsigned long long steps = 0;
-        return steps;
-    }
+    static unsigned long long g_live_steps = 0;
 
-    bool& stale() {
-        static bool flag = true;
-        return flag;
-    }
+    static bool g_stale = true;
 
     int last_rebuild_step = 0;
 
@@ -475,13 +441,13 @@ namespace {
 
     void refresh_objects(Forecast& f, PlayLayer* play) {
         // hopefully fixes crash
-        if (f.play == play && f.array == play->m_objects && f.epoch == MovingObjects::group_epoch &&
+        if (f.play == play && f.array == play->m_objects && f.epoch == MovingObjects::group_version &&
             play->m_objects && f.array_count == play->m_objects->count())
             return;
         f.play = play;
         f.array = play->m_objects;
         f.array_count = play->m_objects ? play->m_objects->count() : 0;
-        f.epoch = MovingObjects::group_epoch;
+        f.epoch = MovingObjects::group_version;
         for (auto* obj : f.objects)
             obj->release();
         f.objects.clear();
@@ -491,12 +457,10 @@ namespace {
         // pointed at whatever sat there now)
         f.follow_members.clear();
         f.follow_frames.clear();
-        if (!play->m_objects)
-            return;
+        if (!play->m_objects) return;
         for (unsigned i = 0; i < play->m_objects->count(); ++i) {
             auto* obj = static_cast<GameObject*>(play->m_objects->objectAtIndex(i));
-            if (!obj || obj->m_groupCount <= 0)
-                continue;
+            if (!obj || obj->m_groupCount <= 0) continue;
             f.index.emplace(obj, (unsigned)f.objects.size());
             obj->retain();
             f.objects.push_back(obj);
@@ -523,8 +487,7 @@ namespace {
 
     unsigned ensure_index(Forecast& f, GameObject* object) {
         auto [it, fresh] = f.index.try_emplace(object, (unsigned)f.objects.size());
-        if (!fresh)
-            return it->second;
+        if (!fresh) return it->second;
         object->retain();
         f.objects.push_back(object);
         f.base.resize(f.objects.size() * STRIDE);
@@ -553,13 +516,11 @@ namespace {
     }
 
     void keep_base(Forecast& f, unsigned i) {
-        if (!f.base_stamp[i])
-            cache_live(f, i);
+        if (!f.base_stamp[i]) cache_live(f, i);
     }
 
     void keep_spot(Forecast& f, unsigned i) {
-        if (f.spot_stamp[i] == f.touch_epoch)
-            return;
+        if (f.spot_stamp[i] == f.touch_epoch) return;
         f.spot_stamp[i] = f.touch_epoch;
         f.spot[i] = f.objects[i]->CCNode::getPosition();
     }
@@ -568,16 +529,11 @@ namespace {
         auto* obj = f.objects[i];
         if (node && f.node_stamp[i] == f.touch_epoch) {
             auto const& saved = f.nodes[i];
-            if (obj->getRotationX() != saved.rotationX)
-                obj->setRotationX(saved.rotationX);
-            if (obj->getRotationY() != saved.rotationY)
-                obj->setRotationY(saved.rotationY);
-            if (obj->getScaleX() != saved.scaleX)
-                obj->setScaleX(saved.scaleX);
-            if (obj->getScaleY() != saved.scaleY)
-                obj->setScaleY(saved.scaleY);
-            if (obj->getOpacity() != saved.opacity)
-                obj->setOpacity(saved.opacity);
+            if (obj->getRotationX() != saved.rotationX) obj->setRotationX(saved.rotationX);
+            if (obj->getRotationY() != saved.rotationY) obj->setRotationY(saved.rotationY);
+            if (obj->getScaleX() != saved.scaleX) obj->setScaleX(saved.scaleX);
+            if (obj->getScaleY() != saved.scaleY) obj->setScaleY(saved.scaleY);
+            if (obj->getOpacity() != saved.opacity) obj->setOpacity(saved.opacity);
         }
         scatter(obj, f.base.data() + (std::size_t)i * STRIDE);
         // the fields are back, but the hitbox the look ahead worked out for the place IT had the object is still sitting
@@ -592,16 +548,14 @@ namespace {
         // fuck gd
         if (node && f.spot_stamp[i] == f.touch_epoch) {
             auto const& spot = f.spot[i];
-            if (!obj->CCNode::getPosition().equals(spot))
-                obj->CCNode::setPosition(spot);
+            if (!obj->CCNode::getPosition().equals(spot)) obj->CCNode::setPosition(spot);
             if (auto* detail = obj->m_colorSprite; detail && !obj->m_colorSpriteLocked && !detail->getPosition().equals(spot))
                 detail->setPosition(spot);
         }
     }
 
     void touch(Forecast& f, unsigned i) {
-        if (f.touch_stamp[i] == f.touch_epoch)
-            return;
+        if (f.touch_stamp[i] == f.touch_epoch) return;
         f.touch_stamp[i] = f.touch_epoch;
         f.touched.push_back(i);
         keep_spot(f, i);
@@ -642,8 +596,7 @@ namespace {
 
     void fire_ahead(Forecast& f, PlayLayer* play, CCPoint at) {
         auto* list = static_cast<CCArray*>(play->m_spawnObjects ? play->m_spawnObjects->objectForKey(f.channel) : nullptr);
-        if (!list)
-            return;
+        if (!list) return;
         auto* body = play->m_player1;
         bool sideways = body && body->m_isSideways;
         while ((unsigned)f.cursor < list->count()) {
@@ -654,8 +607,7 @@ namespace {
             }
             float key = sideways ? obj->m_speedStart.y : obj->m_speedStart.x;
             float player = sideways ? at.y : at.x;
-            if (f.goingBack ? key < player : key > player)
-                break;
+            if (f.goingBack ? key < player : key > player) break;
             ++f.cursor;
             bool spawn = obj->m_objectID == 1268;
             if (obj->m_isGroupDisabled || obj->m_isTouchTriggered || !(motion_trigger(obj->m_objectID) || spawn))
@@ -669,8 +621,7 @@ namespace {
         std::size_t used = 0;
         for (auto const& frame : f.frames)
             used += frame.size();
-        if (f.records.size() < (used + f.objects.size()) * STRIDE * 2 + (1u << 20))
-            return;
+        if (f.records.size() < (used + f.objects.size()) * STRIDE * 2 + (1u << 20)) return;
         std::vector<unsigned char> kept;
         kept.reserve((used + f.objects.size()) * STRIDE);
         std::unordered_map<unsigned, unsigned> moved;
@@ -685,22 +636,19 @@ namespace {
                 entry.second = keep(entry.second);
         }
         for (auto& offset : f.latest) {
-            if (offset != UINT_MAX)
-                offset = keep(offset);
+            if (offset != UINT_MAX) offset = keep(offset);
         }
         f.records = std::move(kept);
     }
 
-    constexpr std::size_t RECORD_LIMIT = std::size_t{ 192 } << 20;
+    const std::size_t RECORD_LIMIT = std::size_t{ 192 } << 20;
 
     CCPoint player_after(Forecast const& f, unsigned long long absolute, CCPoint node, CCPoint live_step, unsigned long long live_now) {
         if (!f.path.empty()) {
-            if (absolute + 1 == f.path_start)
-                return f.path_before;
+            if (absolute + 1 == f.path_start) return f.path_before;
             if (absolute >= f.path_start) {
                 auto idx = absolute - f.path_start;
-                if (idx < f.path.size())
-                    return f.path[(std::size_t)idx];
+                if (idx < f.path.size()) return f.path[(std::size_t)idx];
                 auto last = f.path.back();
                 auto step = f.path.size() >= 2 ? last - f.path[f.path.size() - 2] : last - f.path_before;
                 return last + step * (float)(idx - (f.path.size() - 1));
@@ -732,8 +680,7 @@ namespace {
         f.sections.begin(play);
         for (unsigned i = 0; i < f.objects.size(); ++i) {
             bool quiet = f.has_quiet[i] && f.quiet.size() >= ((std::size_t)i + 1) * STRIDE;
-            if (f.latest[i] == UINT_MAX && !quiet)
-                continue;
+            if (f.latest[i] == UINT_MAX && !quiet) continue;
             touch(f, i);
             scatter(f.objects[i], quiet ? f.quiet.data() + (std::size_t)i * STRIDE : f.records.data() + f.latest[i]);
             play->updateObjectSection(f.objects[i]);
@@ -746,7 +693,7 @@ namespace {
         auto camera = play->m_gameState.m_cameraPosition;
         auto camera2 = play->m_gameState.m_cameraPosition2;
         bool sideways = p1 && p1->m_isSideways;
-        auto live_now = live_steps();
+        auto live_now = g_live_steps;
         auto live_step = p1 ? node1 - p1->m_lastPosition : CCPoint{};
         play->m_effectManager = f.shadow;
         // mega hack hooks updateSpawnTriggers & reads the managers PARENT as the level, no null check
@@ -766,10 +713,8 @@ namespace {
                 auto before = player_after(f, absolute - 2, node1, live_step, live_now);
                 fire_from = at;
                 f.fired_from.push_back(at);
-                if (p1)
-                    p1->CCNode::setPosition(at);
-                if (p2)
-                    p2->CCNode::setPosition(node2 + (at - node1));
+                if (p1) p1->CCNode::setPosition(at);
+                if (p2) p2->CCNode::setPosition(node2 + (at - node1));
                 f.shadow->m_unk780 = at.x - before.x;
                 f.shadow->m_unk784 = at.y - before.y;
                 player_dy = (double)at.y - (double)before.y;
@@ -783,19 +728,16 @@ namespace {
             // m_unkVector6f0 is the list gd walks in processPlayerFollowActions (the effect manager + 0x608 on mac).
             // each 1 is a CCMoveCNode: its tag is the group, 0a8 the speed, 0b0 the delay, 0b8 the offset, 0c0 the max speed.
             for (auto* follow : f.shadow->m_unkVector6f0) {
-                if (!follow)
-                    continue;
+                if (!follow) continue;
                 auto id = (std::size_t)std::clamp(follow->getTag(), 0, 9999);
                 auto* members = id < play->m_groups.size() ? play->m_groups[id] : nullptr;
-                if (!members)
-                    continue;
+                if (!members) continue;
                 follows.push_back({ (int)id, (float)follow->m_unk0a8, (float)follow->m_unk0c0,
                     (float)follow->m_unk0b0, follow->m_unk0b8 });
                 auto [listed, fresh] = f.follow_members.try_emplace((int)id);
                 for (unsigned n = 0; n < members->count(); ++n) {
                     auto* obj = static_cast<GameObject*>(members->objectAtIndex(n));
-                    if (!obj)
-                        break;
+                    if (!obj) break;
                     auto i = ensure_index(f, obj);
                     keep_base(f, i);
                     // put back after the run & thats ALL. theyre not recorded: every line of the trajectory works them out
@@ -803,8 +745,7 @@ namespace {
                     // in the collision grid, not the normal sections)
                     touch(f, i);
                     f.lock_y[i] = 3;
-                    if (fresh)
-                        listed->second.push_back(i);
+                    if (fresh) listed->second.push_back(i);
                 }
             }
             f.shadow->updateSpawnTriggers(f.dt);
@@ -835,10 +776,8 @@ namespace {
         f.shadow->setParent(nullptr);
         play->m_effectManager = live;
         play->m_spawnTuples = tuples;
-        if (p1)
-            p1->CCNode::setPosition(node1);
-        if (p2)
-            p2->CCNode::setPosition(node2);
+        if (p1) p1->CCNode::setPosition(node1);
+        if (p2) p2->CCNode::setPosition(node2);
         for (auto it = f.fired.rbegin(); it != f.fired.rend(); ++it)
             std::memcpy(reinterpret_cast<unsigned char*>(it->object) + sizeof(CCSprite), it->bytes.data(), it->bytes.size());
         f.fired.clear();
@@ -878,13 +817,12 @@ namespace {
         f.fired_from.clear();
         ++f.generation;
         auto* live = play->m_effectManager;
-        if (!live)
-            return;
+        if (!live) return;
         EffectManagerState saved;
         live->saveToState(saved);
-        f.origin = live_steps();
+        f.origin = g_live_steps;
         f.valid = true;
-        stale() = false;
+        g_stale = false;
         last_rebuild_step = Logic::get().step_frame;
         auto const& game = play->m_gameState;
         f.channel = game.m_currentChannel;
@@ -909,8 +847,7 @@ namespace {
             }
         }
         if (saved.m_vectorGroupCommandObject2.empty() && !ahead) {
-            if (f.shadow)
-                f.shadow->release();
+            if (f.shadow) f.shadow->release();
             f.shadow = nullptr;
             f.frames.resize((std::size_t)steps);
             f.follow_frames.resize(f.frames.size());
@@ -918,8 +855,7 @@ namespace {
             f.horizon = steps;
             return;
         }
-        if (f.shadow)
-            f.shadow->release();
+        if (f.shadow) f.shadow->release();
         f.shadow = GJEffectManager::create();
         if (!f.shadow) {
             f.valid = false;
@@ -945,25 +881,24 @@ namespace forecast {
     }
 
     void invalidate() {
-        stale() = true;
+        g_stale = true;
         state().path.clear();
     }
 
     void note_live_step() {
-        ++live_steps();
+        ++g_live_steps;
     }
 
     void note_player_path(std::vector<CCPoint> path, CCPoint before) {
         auto& f = state();
         f.path = std::move(path);
         f.path_before = before;
-        f.path_start = live_steps();
+        f.path_start = g_live_steps;
     }
 
     bool trigger_between(Forecast const& f, PlayLayer* play, float lo, float hi, bool sideways) {
         auto* list = static_cast<CCArray*>(play->m_spawnObjects ? play->m_spawnObjects->objectForKey(f.channel) : nullptr);
-        if (!list)
-            return false;
+        if (!list) return false;
         auto key_of = [&](unsigned i) {
             auto* obj = static_cast<EffectGameObject*>(list->objectAtIndex(i));
             return obj ? (sideways ? obj->m_speedStart.y : obj->m_speedStart.x) : -INFINITY;
@@ -971,15 +906,12 @@ namespace forecast {
         unsigned low = 0, high = list->count();
         while (low < high) {
             unsigned mid = low + (high - low) / 2;
-            if (key_of(mid) <= lo)
-                low = mid + 1;
-            else
-                high = mid;
+            if (key_of(mid) <= lo) low = mid + 1;
+            else high = mid;
         }
         for (unsigned i = low; i < list->count() && key_of(i) <= hi; ++i) {
             auto* obj = static_cast<EffectGameObject*>(list->objectAtIndex(i));
-            if (obj && (motion_trigger(obj->m_objectID) || obj->m_objectID == 1268))
-                return true;
+            if (obj && (motion_trigger(obj->m_objectID) || obj->m_objectID == 1268)) return true;
         }
         return false;
     }
@@ -988,8 +920,7 @@ namespace forecast {
         auto const& game = play->m_gameState;
         if (!game.m_moveEffectInstances.empty() || !game.m_rotateEffectInstances.empty() || !game.m_scaleEffectInstances.empty())
             return true;
-        if (!f.shadow)
-            return false;
+        if (!f.shadow) return false;
         for (auto const& command : f.shadow->m_unkVector560)
             if (command.m_lockToPlayerX || command.m_lockToPlayerY || command.m_lockToCameraX || command.m_lockToCameraY)
                 return true;
@@ -998,8 +929,7 @@ namespace forecast {
 
     void prepare(PlayLayer* play, int steps, float dt) {
         auto& f = state();
-        if (!play || steps <= 0 || f.applying)
-            return;
+        if (!play || steps <= 0 || f.applying) return;
         steps = std::max(steps, std::max(32, (int)(Logic::get().sample_rate() / 15.0)));
         if (Logic::get().backstep_target >= 0 || Logic::get().backstepping) {
             f.valid = false;
@@ -1007,25 +937,22 @@ namespace forecast {
             return;
         }
         refresh_objects(f, play);
-        if (f.dt != dt)
-            stale() = true;
+        if (f.dt != dt) g_stale = true;
         f.dt = dt;
-        unsigned long long elapsed = live_steps() - f.origin;
+        unsigned long long elapsed = g_live_steps - f.origin;
         if (f.valid && play->m_player1) {
             auto expected = f.player_at + f.player_step * (float)elapsed;
-            bool onPath = live_steps() >= f.path_start && live_steps() - f.path_start < f.path.size();
-            if (onPath)
-                expected = f.path[(std::size_t)(live_steps() - f.path_start)];
+            bool onPath = g_live_steps >= f.path_start && g_live_steps - f.path_start < f.path.size();
+            if (onPath) expected = f.path[(std::size_t)(g_live_steps - f.path_start)];
             auto live = play->m_player1->getPosition();
             auto step = live - play->m_player1->m_lastPosition;
             bool sideways = play->m_player1->m_isSideways;
             float off = sideways ? std::abs(expected.y - live.y) : std::abs(expected.x - live.x);
             float speed = onPath ? 0.f : sideways ? std::abs(step.y - f.player_step.y)
                                                   : std::abs(step.x - f.player_step.x);
-            if (play->m_isPlatformer ? off > 30.f : off > 0.5f || speed > 0.001f)
-                stale() = true;
+            if (play->m_isPlatformer ? off > 30.f : off > 0.5f || speed > 0.001f) g_stale = true;
         }
-        if (f.valid && !stale() && elapsed > 0 && elapsed <= (unsigned long long)f.frames.size()) {
+        if (f.valid && !g_stale && elapsed > 0 && elapsed <= (unsigned long long)f.frames.size()) {
             if (f.last_stamp.size() < f.objects.size()) {
                 f.last_stamp.resize(f.objects.size(), 0);
                 f.last_offset.resize(f.objects.size(), 0);
@@ -1046,25 +973,21 @@ namespace forecast {
                 std::memcpy(&px, f.records.data() + f.last_offset[i] + RECORD_POS, sizeof(double));
                 std::memcpy(&py, f.records.data() + f.last_offset[i] + RECORD_POS + sizeof(double), sizeof(double));
                 auto* obj = f.objects[i];
-                if (f.lock_y[i] == 3)
-                    continue;
+                if (f.lock_y[i] == 3) continue;
                 if (std::abs(px - obj->m_positionX) > TOLERANCE || std::abs(py - obj->m_positionY) > TOLERANCE) {
                     wrong = true;
                     break;
                 }
             }
             for (auto* obj : f.live_moved) {
-                if (wrong)
-                    break;
+                if (wrong) break;
                 auto it = f.index.find(obj);
                 if (it != f.index.end() && it->second < f.last_stamp.size() && f.last_stamp[it->second] == f.last_epoch)
                     continue;
-                if (obj->m_objectType == GameObjectType::Decoration)
-                    continue;
+                if (obj->m_objectType == GameObjectType::Decoration) continue;
                 wrong = true;
             }
-            if (wrong)
-                stale() = true;
+            if (wrong) g_stale = true;
         }
         for (auto* obj : f.live_moved) {
             if (auto it = f.index.find(obj); it != f.index.end() && f.base_stamp[it->second])
@@ -1072,23 +995,20 @@ namespace forecast {
         }
         f.live_moved.clear();
         for (unsigned i = 0; i < f.latest.size(); ++i) {
-            if ((f.latest[i] != UINT_MAX || f.has_quiet[i]) && f.base_stamp[i])
-                cache_live(f, i);
+            if ((f.latest[i] != UINT_MAX || f.has_quiet[i]) && f.base_stamp[i]) cache_live(f, i);
         }
         // followers too. gd moves them w/out telling anyone, so where they really are has to be read again every time
         // (a stale 1 here = the follower gets thrown back to where it was a while ago after every look ahead)
         for (auto const& [group, members] : f.follow_members)
             for (auto i : members)
-                if (i < f.objects.size() && f.base_stamp[i])
-                    cache_live(f, i);
-        if (f.valid && !stale() && !f.path.empty() && play->m_player1) {
+                if (i < f.objects.size() && f.base_stamp[i]) cache_live(f, i);
+        if (f.valid && !g_stale && !f.path.empty() && play->m_player1) {
             bool sideways = play->m_player1->m_isSideways;
             bool exact = player_exact(f, play);
             std::size_t built = std::min(f.fired_from.size(), f.frames.size());
             for (std::size_t k = (std::size_t)(std::min<unsigned long long>(elapsed, built)); k < built; ++k) {
                 auto was = f.fired_from[k];
-                if (std::isnan(was.x))
-                    continue;
+                if (std::isnan(was.x)) continue;
                 unsigned long long absolute = f.origin + k;
                 if (absolute + 1 < f.path_start || absolute >= f.path_start + f.path.size())
                     continue;
@@ -1096,14 +1016,13 @@ namespace forecast {
                 float travel = sideways ? std::abs(now.y - was.y) : std::abs(now.x - was.x);
                 bool differs = exact ? std::max(std::abs(now.x - was.x), std::abs(now.y - was.y)) > 0.01f
                                      : travel > 0.01f && trigger_between(f, play, sideways ? std::min(now.y, was.y) : std::min(now.x, was.x), sideways ? std::max(now.y, was.y) : std::max(now.x, was.x), sideways);
-                if (!differs)
-                    continue;
-                stale() = true;
+                if (!differs) continue;
+                g_stale = true;
                 break;
             }
         }
         bool old = Logic::get().step_frame - last_rebuild_step > (int)(Logic::get().sample_rate() * 30.0);
-        if (stale() || !f.valid || old || elapsed > (unsigned long long)f.horizon) {
+        if (g_stale || !f.valid || old || elapsed > (unsigned long long)f.horizon) {
             rebuild(f, play, steps);
             return;
         }
@@ -1113,7 +1032,7 @@ namespace forecast {
             f.fired_from.erase(f.fired_from.begin(), f.fired_from.begin() + (std::ptrdiff_t)(std::min<unsigned long long>(elapsed, f.fired_from.size())));
             f.player_at = f.player_at + f.player_step * (float)elapsed;
             f.steps_run -= (int)elapsed;
-            f.origin = live_steps();
+            f.origin = g_live_steps;
             f.horizon = (int)f.frames.size();
             compact(f);
         }
@@ -1131,8 +1050,7 @@ namespace forecast {
                 int lead = std::max(16, (int)(Logic::get().sample_rate() / 30.0));
                 target = std::min(steps, std::max(covered + (player_exact(f, play) ? 0 : 8), lead));
             }
-            if (f.horizon < target)
-                extend(f, play, std::min(target - f.horizon, BUILD_PER_FRAME));
+            if (f.horizon < target) extend(f, play, std::min(target - f.horizon, BUILD_PER_FRAME));
         }
     }
 
@@ -1147,11 +1065,9 @@ namespace forecast {
 
     void apply(PlayLayer* play, int step, CCRect const& area, float player_y) {
         auto& f = state();
-        if (!play || play != f.play || !f.valid || step < 1)
-            return;
+        if (!play || play != f.play || !f.valid || step < 1) return;
         auto begin = [&] {
-            if (f.applying)
-                return;
+            if (f.applying) return;
             f.applying = true;
             ++f.apply_epoch;
             f.applied.clear();
@@ -1188,8 +1104,7 @@ namespace forecast {
             float tick = f.dt * 60.f;
             for (auto const& follow : follows) {
                 auto members = f.follow_members.find(follow.group);
-                if (members == f.follow_members.end())
-                    continue;
+                if (members == f.follow_members.end()) continue;
                 float pull = std::clamp(follow.speed * tick, 0.f, 1.f);
                 float most = follow.max * tick;
                 float icon = player_y;
@@ -1198,8 +1113,7 @@ namespace forecast {
                     int at = slot() - back;
                     icon = f.ring[(std::size_t)(at < 0 ? at + 200 : at)];
                 }
-                if (icon == 0.f)
-                    continue;
+                if (icon == 0.f) continue;
                 float target = icon + (float)follow.offset;
                 begin();
                 for (auto i : members->second) {
@@ -1210,8 +1124,7 @@ namespace forecast {
                     }
                     float move = pull * (target - (float)f.line_y[i]);
                     if (move != 0.f) {
-                        if (most > 0.f)
-                            move = std::clamp(move, -most, most);
+                        if (most > 0.f) move = std::clamp(move, -most, most);
                         f.line_y[i] += (double)move;
                     }
                     if (f.applied_stamp[i] != f.apply_epoch) {
@@ -1227,18 +1140,15 @@ namespace forecast {
                 }
             }
         }
-        if (step > f.horizon)
-            return;
+        if (step > f.horizon) return;
         auto const& frame = f.frames[(std::size_t)(step - 1)];
         double lift = 0.0;
         if (std::isfinite(player_y) && (std::size_t)(step - 1) < f.fired_from.size()) {
             float assumed = f.fired_from[(std::size_t)(step - 1)].y;
-            if (std::isfinite(assumed))
-                lift = (double)player_y - (double)assumed;
+            if (std::isfinite(assumed)) lift = (double)player_y - (double)assumed;
         }
         if (!f.applying) {
-            if (frame.empty())
-                return;
+            if (frame.empty()) return;
             begin();
         }
         auto put = [&](unsigned i, unsigned offset) {
@@ -1262,8 +1172,7 @@ namespace forecast {
                 f.pending_record[i] = UINT_MAX;
             }
             else {
-                if (f.pending_record[i] == UINT_MAX)
-                    f.pending.push_back(i);
+                if (f.pending_record[i] == UINT_MAX) f.pending.push_back(i);
                 f.pending_record[i] = offset;
             }
         }
@@ -1274,8 +1183,7 @@ namespace forecast {
                 ++n;
                 continue;
             }
-            if (offset != UINT_MAX)
-                put(i, offset);
+            if (offset != UINT_MAX) put(i, offset);
             f.pending_record[i] = UINT_MAX;
             f.pending[n] = f.pending.back();
             f.pending.pop_back();
@@ -1291,8 +1199,7 @@ namespace forecast {
 
     void suspend(PlayLayer* play) {
         auto& f = state();
-        if (!f.applying)
-            return;
+        if (!f.applying) return;
         f.applying = false;
         for (auto i : f.pending)
             f.pending_record[i] = UINT_MAX;
@@ -1312,12 +1219,10 @@ namespace {
 // same story as the backstep one: a hook on updateObjectSection is paid for on every moving object every step.
 // it is only needed while predictions can run w/ moving objects on. coming back on, the forecast is rebuilt
 void echo_forecast_section_hook(bool on) {
-    if (!g_section_hook || on == g_section_hook_on)
-        return;
+    if (!g_section_hook || on == g_section_hook_on) return;
     if (on ? g_section_hook->enable().isOk() : g_section_hook->disable().isOk()) {
         g_section_hook_on = on;
-        if (on)
-            stale() = true;
+        if (on) g_stale = true;
     }
 }
 
@@ -1342,8 +1247,7 @@ class $modify(ForecastSections, GJBaseGameLayer) {
 
     void addToSection(GameObject* object) {
         auto& f = state();
-        if (f.sections.layer == this)
-            f.sections.keep_indexes(object);
+        if (f.sections.layer == this) f.sections.keep_indexes(object);
         GJBaseGameLayer::addToSection(object);
         if (f.sections.active && object && f.sections.layer == this)
             f.sections.note_appended(object);
@@ -1381,12 +1285,10 @@ class $modify(ForecastSections, GJBaseGameLayer) {
 class $modify(ForecastMoves, GJBaseGameLayer) {
     static void note_moving(CCArray* objects) {
         auto& f = state();
-        if (!f.recording || !objects)
-            return;
+        if (!f.recording || !objects) return;
         for (unsigned n = 0; n < objects->count(); ++n) {
             auto* obj = static_cast<GameObject*>(objects->objectAtIndex(n));
-            if (!obj)
-                break;
+            if (!obj) break;
             auto i = ensure_index(f, obj);
             keep_base(f, i);
             keep_spot(f, i);
@@ -1413,8 +1315,7 @@ class $modify(ForecastMoves, GJBaseGameLayer) {
 
 class $modify(ForecastToggles, GJBaseGameLayer) {
     void toggleGroupTriggered(int group, bool activate, gd::vector<int> const& remapKeys, int triggerID, int controlID) {
-        if (state().recording)
-            return;
+        if (state().recording) return;
         if (Logic::get().trace_logging && !Logic::get().predicting)
             trace_note(fmt::format("TG frame={} group={} on={} trigger={} state={}\n", Logic::get().step_frame, group, activate, triggerID, (int)Logic::get().state));
         GJBaseGameLayer::toggleGroupTriggered(group, activate, remapKeys, triggerID, controlID);
@@ -1440,8 +1341,7 @@ class $modify(ForecastAreas, GJBaseGameLayer) {
     void keep_area(CCArray* objects, int outerMin, int outerMax, int middleMin, int middleMax, bool targetGroups) {
         auto& f = state();
         auto keep = [&f](GameObject* object) {
-            if (!object)
-                return;
+            if (!object) return;
             keep_base(f, ensure_index(f, object));
         };
         if (targetGroups && objects) {
@@ -1453,14 +1353,12 @@ class $modify(ForecastAreas, GJBaseGameLayer) {
         auto& counts = *reinterpret_cast<Counts*>(&m_sectionSizes);
         int last_x = std::min(outerMax, (int)grid.size() - 1);
         for (int x = std::max(outerMin, 0); x <= last_x; ++x) {
-            if (!grid[x])
-                continue;
+            if (!grid[x]) continue;
             int last_y = std::min(middleMax, (int)grid[x]->size() - 1);
             for (int y = std::max(middleMin, 0); y <= last_y; ++y) {
                 auto* bucket = bucket_at(grid, x, y);
                 auto* amt = count_at(counts, x, y);
-                if (!bucket || !amt)
-                    continue;
+                if (!bucket || !amt) continue;
                 int used = std::clamp(*amt, 0, (int)bucket->size());
                 for (int i = 0; i < used; ++i)
                     keep((*bucket)[i]);
@@ -1496,14 +1394,11 @@ class $modify(ForecastAreas, GJBaseGameLayer) {
 class $modify(ForecastNodes, GameObject) {
     void keep_node() {
         auto& f = state();
-        if (!f.recording)
-            return;
+        if (!f.recording) return;
         auto it = f.index.find(this);
-        if (it == f.index.end())
-            return;
+        if (it == f.index.end()) return;
         auto i = it->second;
-        if (f.node_stamp[i] == f.touch_epoch)
-            return;
+        if (f.node_stamp[i] == f.touch_epoch) return;
         f.node_stamp[i] = f.touch_epoch;
         keep_spot(f, i);
         f.nodes[i] = node_of(this);
@@ -1546,8 +1441,7 @@ class $modify(ForecastLiveTriggers, EffectGameObject) {
         if (!f.recording && !Logic::get().predicting && layer && static_cast<GJBaseGameLayer*>(f.play) == layer && (motion_trigger(m_objectID) || m_objectID == 1268)) {
             auto ahead = forecast_fired.find(m_uniqueID);
             bool known = ahead != forecast_fired.end() && ahead->second == f.generation;
-            if (f.valid && !known)
-                stale() = true;
+            if (f.valid && !known) g_stale = true;
         }
         EffectGameObject::triggerObject(layer, uniqueID, remapKeys);
     }

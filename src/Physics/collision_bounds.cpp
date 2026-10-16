@@ -22,8 +22,7 @@ static bool getters_native() {
 
 static bool foreign_hook() {
     for (auto* mod : Loader::get()->getAllMods()) {
-        if (mod == Mod::get())
-            continue;
+        if (mod == Mod::get()) continue;
         for (auto* hook : mod->getHooks())
             if (hook->isEnabled() && hook->getAddress() == geode::base::get() + 0x214960) // tf
                 return true;
@@ -33,16 +32,14 @@ static bool foreign_hook() {
 
 namespace CollisionBounds {
     void prepare() {
-        if (!bounds_patch)
-            return;
+        if (!bounds_patch) return;
         if (!getters_native() || foreign_hook()) {
             if (auto res = bounds_patch->disable(); res) {
                 bounds_patch = nullptr;
             }
             return;
         }
-        if (!Logic::bot_disabled() && !bounds_patch->isEnabled())
-            (void)bounds_patch->enable();
+        if (!Logic::bot_disabled() && !bounds_patch->isEnabled()) (void)bounds_patch->enable();
     }
 }
 

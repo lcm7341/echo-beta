@@ -26,8 +26,7 @@ using namespace geode::prelude;
 
 FramePose Logic::capture_pose(PlayerObject* player) {
     FramePose pose;
-    if (!player)
-        return pose;
+    if (!player) return pose;
     pose.x = player->getPositionX();
     pose.y = player->getPositionY();
     pose.rotation = player->getRotation();
@@ -57,8 +56,7 @@ void Logic::set_replay_pos(PlayLayer* play) {
 
 void Logic::trim_recorded_inputs(int frame) {
     bool record1 = records_player(false), record2 = records_player(true);
-    if (!record1 && !record2)
-        return;
+    if (!record1 && !record2) return;
     compact_inputs(inputs, poses, input_ids, [&](const Frame& input) {
         bool matches = input.player2 ? record2 : record1;
         bool later = frame <= 0 ? input.number >= frame : input.number > frame;
@@ -70,16 +68,14 @@ void Logic::trim_recorded_inputs(int frame) {
 
 void Logic::trim_fresh_attempt() {
     trim_recorded_inputs(0);
-    if (!is_playing())
-        trim_rates(0);
+    if (!is_playing()) trim_rates(0);
     removed_frames = 0;
     replay_pos = 0;
 }
 
 PlayerSnapshot Logic::capture_player(PlayerObject* player) {
     PlayerSnapshot shot;
-    if (!player)
-        return shot;
+    if (!player) return shot;
     shot.present = true;
     shot.x = player->getPositionX();
     shot.y = player->getPositionY();
@@ -210,38 +206,22 @@ PlayerSnapshot Logic::capture_player(PlayerObject* player) {
 }
 
 void Logic::apply_player(PlayerObject* player, const PlayerSnapshot& shot) {
-    if (!player || !shot.present)
-        return;
-    if (player->m_isShip && !shot.ship)
-        player->toggleFlyMode(false, true);
-    if (player->m_isBird && !shot.bird)
-        player->toggleBirdMode(false, true);
-    if (player->m_isBall && !shot.ball)
-        player->toggleRollMode(false, true);
-    if (player->m_isDart && !shot.dart)
-        player->toggleDartMode(false, true);
-    if (player->m_isRobot && !shot.robot)
-        player->toggleRobotMode(false, true);
-    if (player->m_isSpider && !shot.spider)
-        player->toggleSpiderMode(false, true);
-    if (player->m_isSwing && !shot.swing)
-        player->toggleSwingMode(false, true);
-    if (shot.ship && !player->m_isShip)
-        player->toggleFlyMode(true, true);
-    if (shot.bird && !player->m_isBird)
-        player->toggleBirdMode(true, true);
-    if (shot.ball && !player->m_isBall)
-        player->toggleRollMode(true, true);
-    if (shot.dart && !player->m_isDart)
-        player->toggleDartMode(true, true);
-    if (shot.robot && !player->m_isRobot)
-        player->toggleRobotMode(true, true);
-    if (shot.spider && !player->m_isSpider)
-        player->toggleSpiderMode(true, true);
-    if (shot.swing && !player->m_isSwing)
-        player->toggleSwingMode(true, true);
-    if (player->m_isUpsideDown != shot.upside_down)
-        player->flipGravity(shot.upside_down, true);
+    if (!player || !shot.present) return;
+    if (player->m_isShip && !shot.ship) player->toggleFlyMode(false, true);
+    if (player->m_isBird && !shot.bird) player->toggleBirdMode(false, true);
+    if (player->m_isBall && !shot.ball) player->toggleRollMode(false, true);
+    if (player->m_isDart && !shot.dart) player->toggleDartMode(false, true);
+    if (player->m_isRobot && !shot.robot) player->toggleRobotMode(false, true);
+    if (player->m_isSpider && !shot.spider) player->toggleSpiderMode(false, true);
+    if (player->m_isSwing && !shot.swing) player->toggleSwingMode(false, true);
+    if (shot.ship && !player->m_isShip) player->toggleFlyMode(true, true);
+    if (shot.bird && !player->m_isBird) player->toggleBirdMode(true, true);
+    if (shot.ball && !player->m_isBall) player->toggleRollMode(true, true);
+    if (shot.dart && !player->m_isDart) player->toggleDartMode(true, true);
+    if (shot.robot && !player->m_isRobot) player->toggleRobotMode(true, true);
+    if (shot.spider && !player->m_isSpider) player->toggleSpiderMode(true, true);
+    if (shot.swing && !player->m_isSwing) player->toggleSwingMode(true, true);
+    if (player->m_isUpsideDown != shot.upside_down) player->flipGravity(shot.upside_down, true);
     // mini cube respawned full size once :/
     bool mini = shot.vehicle_size != 1.f;
     player->m_vehicleSize = mini ? 1.f : 0.6f;
@@ -421,8 +401,7 @@ void Logic::trim_from_checkpoint(PlayLayer* play, const Checkpoint& checkpoint) 
     if (is_recording()) {
         int frame = get_frame(play);
         trim_recorded_inputs(frame);
-        if (!is_playing())
-            trim_rates(frame);
+        if (!is_playing()) trim_rates(frame);
         sort_inputs();
         replay_pos = inputs.size();
     }
@@ -461,8 +440,7 @@ struct InputIndex {
 
 static int lane_of(bool player2, int button) {
     int slot = Logic::button_slot(button);
-    if (slot < 0)
-        return -1;
+    if (slot < 0) return -1;
     return (player2 ? 3 : 0) + slot;
 }
 
@@ -475,17 +453,14 @@ static bool append_input(InputIndex& index, const Frame& input) {
     if (lane >= 0) {
         auto& at = index.lanes[(size_t)lane];
         auto& both = index.lanes[(size_t)(6 + lane % 3)];
-        if (!at.frames.empty() && input.number < at.frames.back())
-            return false;
-        if (!both.frames.empty() && input.number < both.frames.back())
-            return false;
+        if (!at.frames.empty() && input.number < at.frames.back()) return false;
+        if (!both.frames.empty() && input.number < both.frames.back()) return false;
         at.frames.push_back(input.number);
         at.held.push_back(input.holding ? 1 : 0);
         both.frames.push_back(input.number);
         both.held.push_back(input.holding ? 1 : 0);
     }
-    if (index.count > 0 && input.number < index.last.number)
-        index.sorted = false;
+    if (index.count > 0 && input.number < index.last.number) index.sorted = false;
     (input.holding ? index.holds : index.releases) += 1;
     index.last = input;
     ++index.count;
@@ -509,8 +484,7 @@ static void rebuild_index(InputIndex& index, const std::vector<Frame>& inputs) {
     bool in_order = std::ranges::all_of(inputs, [&](const Frame& input) {
         return append_input(index, input);
     });
-    if (in_order)
-        return;
+    if (in_order) return;
 
     reset();
     std::array<std::vector<size_t>, 9> members;
@@ -521,8 +495,7 @@ static void rebuild_index(InputIndex& index, const std::vector<Frame>& inputs) {
             members[(size_t)lane].push_back(i);
             members[(size_t)(6 + lane % 3)].push_back(i);
         }
-        if (i > 0 && input.number < inputs[i - 1].number)
-            index.sorted = false;
+        if (i > 0 && input.number < inputs[i - 1].number) index.sorted = false;
         (input.holding ? index.holds : index.releases) += 1;
     }
     for (size_t lane = 0; lane < members.size(); ++lane) {
@@ -541,8 +514,7 @@ static void rebuild_index(InputIndex& index, const std::vector<Frame>& inputs) {
         }
     }
     index.count = inputs.size();
-    if (!inputs.empty())
-        index.last = inputs.back();
+    if (!inputs.empty()) index.last = inputs.back();
 }
 
 static InputIndex& held_index() {
@@ -554,15 +526,11 @@ static InputIndex& synced_index(const Logic& logic) {
     auto& idx = held_index();
     const auto& inputs = logic.inputs;
     bool kept = idx.owner == &inputs && idx.revision == logic.inputs_revision && idx.count <= inputs.size();
-    if (kept && idx.count > 0)
-        kept = same_input(inputs[idx.count - 1], idx.last);
-    if (kept && idx.count == inputs.size())
-        kept = idx.data == inputs.data();
-    if (!kept)
-        rebuild_index(idx, inputs);
+    if (kept && idx.count > 0) kept = same_input(inputs[idx.count - 1], idx.last);
+    if (kept && idx.count == inputs.size()) kept = idx.data == inputs.data();
+    if (!kept) rebuild_index(idx, inputs);
     for (size_t i = idx.count; i < inputs.size(); ++i) {
-        if (append_input(idx, inputs[i]))
-            continue;
+        if (append_input(idx, inputs[i])) continue;
         rebuild_index(idx, inputs);
         break;
     }
@@ -583,15 +551,13 @@ bool Logic::held_at(bool player2, int frame, int button) {
         bool held = false;
         for (const auto& input : inputs) {
             int stored = input.button == 0 ? JUMP : input.button;
-            if (input.player2 != player2 || stored != want || input.number > frame)
-                continue;
+            if (input.player2 != player2 || stored != want || input.number > frame) continue;
             held = input.holding;
         }
         return held;
     }
     size_t slot = (size_t)lane;
-    if (live_seen[slot] && frame >= live_frame[slot])
-        return live_held[slot] != 0;
+    if (live_seen[slot] && frame >= live_frame[slot]) return live_held[slot] != 0;
     if (is_playing() && !is_recording()) {
         auto* play = PlayLayer::get();
         if (play && !(play->m_levelSettings && play->m_levelSettings->m_twoPlayerMode)) {
@@ -604,8 +570,7 @@ bool Logic::held_at(bool player2, int frame, int button) {
         for (size_t i = inputs.size(); i-- > 0;) {
             const auto& input = inputs[i];
             int stored = input.button == 0 ? JUMP : input.button;
-            if (input.player2 != player2 || stored != want || input.number > frame)
-                continue;
+            if (input.player2 != player2 || stored != want || input.number > frame) continue;
             return input.holding;
         }
         return false;
@@ -626,12 +591,10 @@ bool Logic::inputs_sorted() {
 static void note_live(Logic& logic, const Frame& frame) {
     logic.newest_input = std::max(logic.newest_input, frame.number);
     int slot = Logic::button_slot(frame.button);
-    if (slot < 0)
-        return;
+    if (slot < 0) return;
     slot += frame.player2 ? 3 : 0;
     size_t lane = (size_t)slot;
-    if (logic.live_seen[lane] && frame.number < logic.live_frame[lane])
-        return;
+    if (logic.live_seen[lane] && frame.number < logic.live_frame[lane]) return;
     logic.live_frame[lane] = frame.number;
     logic.live_held[lane] = frame.holding ? 1 : 0;
     logic.live_seen[lane] = 1;
@@ -639,16 +602,13 @@ static void note_live(Logic& logic, const Frame& frame) {
 
 static void grow_sides(Logic& logic, size_t index, bool appended) {
     auto grow = [&](auto& side, auto empty) {
-        if (side.empty())
-            return;
+        if (side.empty()) return;
         if (side.size() + 1 != logic.inputs.size()) {
             side.clear();
             return;
         }
-        if (appended)
-            side.push_back(empty);
-        else
-            side.insert(side.begin() + (std::ptrdiff_t)index, empty);
+        if (appended) side.push_back(empty);
+        else side.insert(side.begin() + (std::ptrdiff_t)index, empty);
     };
     grow(logic.poses, FramePose{});
     grow(logic.input_ids, 0ull);
@@ -659,27 +619,22 @@ static void grow_sides(Logic& logic, size_t index, bool appended) {
 size_t Logic::add_input(const Frame& frame) {
     (frame.holding ? hold_count : release_count) += 1;
     if (!sort_automatically || !is_playing()) {
-        if (!inputs.empty() && frame.number < inputs.back().number)
-            inputs_in_order = false;
+        if (!inputs.empty() && frame.number < inputs.back().number) inputs_in_order = false;
         inputs.push_back(frame);
         grow_sides(*this, inputs.size() - 1, true);
         note_live(*this, frame);
         return inputs.size() - 1;
     }
     auto later = std::upper_bound(inputs.begin(), inputs.end(), frame, [](const Frame& key, const Frame& element) {
-        if (key.number != element.number)
-            return key.number < element.number;
-        if (key.player2 != element.player2)
-            return key.player2 < element.player2;
+        if (key.number != element.number) return key.number < element.number;
+        if (key.player2 != element.player2) return key.player2 < element.player2;
         return key.button < element.button;
     });
     size_t idx = (size_t)std::distance(inputs.begin(), later);
     inputs.insert(later, frame);
     grow_sides(*this, idx, false);
-    if (idx + 1 != inputs.size())
-        touch_inputs();
-    if (idx <= replay_pos)
-        ++replay_pos;
+    if (idx + 1 != inputs.size()) touch_inputs();
+    if (idx <= replay_pos) ++replay_pos;
     note_live(*this, frame);
     return idx;
 }
@@ -696,23 +651,17 @@ void Logic::refresh_live_hold() {
     for (const auto& input : inputs) {
         note_live(*this, input);
         (input.holding ? hold_count : release_count) += 1;
-        if (prev >= 0 && input.number < prev)
-            inputs_in_order = false;
+        if (prev >= 0 && input.number < prev) inputs_in_order = false;
         prev = input.number;
     }
 }
 
 void Logic::record_input(GJBaseGameLayer* play, bool down, bool player1, int button, bool force) {
-    if (!is_recording() || !play)
-        return;
-    if (resetting || refresh_only || ignore_record_frames > 0)
-        return;
-    if (button != 0 && button != JUMP && button != LEFT && button != RIGHT)
-        return;
-    if (button == 0)
-        button = JUMP;
-    if (mirror_click)
-        return;
+    if (!is_recording() || !play) return;
+    if (resetting || refresh_only || ignore_record_frames > 0) return;
+    if (button != 0 && button != JUMP && button != LEFT && button != RIGHT) return;
+    if (button == 0) button = JUMP;
+    if (mirror_click) return;
     bool player2 = !player1;
     bool two_player = play->m_levelSettings && play->m_levelSettings->m_twoPlayerMode;
     bool folded = !two_player && player2;
@@ -720,15 +669,13 @@ void Logic::record_input(GJBaseGameLayer* play, bool down, bool player1, int but
         player1 = true;
         player2 = false;
     }
-    if (!records_player(player2) && !(folded && records_player(true)))
-        return;
+    if (!records_player(player2) && !(folded && records_player(true))) return;
     int now = step_frame + 1;
     if (!is_playing()) {
         auto last = std::find_if(inputs.rbegin(), inputs.rend(), [player2](const Frame& input) {
             return input.player2 == player2;
         });
-        if (last != inputs.rend() && last->number > now)
-            return;
+        if (last != inputs.rend() && last->number > now) return;
     }
     if (!force && down == held_at(player2, now, button)) {
         if (tracing())
@@ -774,8 +721,7 @@ struct CpsScan {
 };
 
 static void note_rule(std::vector<CpsNote>& notes, int first, int last, std::string text) {
-    if (last < first)
-        std::swap(first, last);
+    if (last < first) std::swap(first, last);
     if (!notes.empty() && notes.back().text == text && notes.back().last + 1 >= first) {
         notes.back().first = std::min(notes.back().first, first);
         notes.back().last = std::max(notes.back().last, last);
@@ -787,8 +733,7 @@ static void note_rule(std::vector<CpsNote>& notes, int first, int last, std::str
 static void eval_player_cps(CpsScan& scan, const std::vector<int>& presses, bool player2) {
     auto& notes = player2 ? scan.notes_p2 : scan.notes_p1;
     const char* who = player2 ? "P2" : "P1";
-    if (presses.empty())
-        return;
+    if (presses.empty()) return;
     std::vector<double> times(presses.size());
     std::ranges::transform(presses, times.begin(), [&](int frame) {
         return scan.seconds_at(frame);
@@ -800,8 +745,7 @@ static void eval_player_cps(CpsScan& scan, const std::vector<int>& presses, bool
         int end = idx;
         while (end < (int)presses.size() && presses[end] == frame)
             ++end;
-        if (end - idx > Logic::MAX_PER_FRAME)
-            note_rule(notes, frame, frame, "Rule 2");
+        if (end - idx > Logic::MAX_PER_FRAME) note_rule(notes, frame, frame, "Rule 2");
         idx = end;
     }
 
@@ -822,8 +766,7 @@ static void eval_player_cps(CpsScan& scan, const std::vector<int>& presses, bool
                 presses[left],
                 presses[right]);
         }
-        if (amt > scan.max_cps)
-            note_rule(notes, presses[left], presses[right], "Rule 1");
+        if (amt > scan.max_cps) note_rule(notes, presses[left], presses[right], "Rule 1");
     }
 
     int n = (int)presses.size();
@@ -841,8 +784,7 @@ static void eval_player_cps(CpsScan& scan, const std::vector<int>& presses, bool
         auto first = std::upper_bound(peak.begin(), peak.begin() + last_start + 1, need - slack);
         for (int start = (int)std::distance(peak.begin(), first); start <= last_start; ++start) {
             double margin = lead[(size_t)start] - need;
-            if (margin <= -slack)
-                continue;
+            if (margin <= -slack) continue;
             int amt = end - start + 1;
             if (margin > slack || Logic::burst_too_fast(amt, scan.seconds_at(presses[end]) - scan.seconds_at(presses[start]))) {
                 note_rule(notes, presses[start], presses[end], "Rule 3");
@@ -853,10 +795,8 @@ static void eval_player_cps(CpsScan& scan, const std::vector<int>& presses, bool
 
     int current_best = 0;
     auto colon = scan.highest.find(": ");
-    if (colon != std::string::npos)
-        current_best = std::atoi(scan.highest.c_str() + colon + 2);
-    if (best >= current_best)
-        scan.highest = best_text;
+    if (colon != std::string::npos) current_best = std::atoi(scan.highest.c_str() + colon + 2);
+    if (best >= current_best) scan.highest = best_text;
 }
 
 static void scan_cps(CpsScan& scan, const std::vector<int>& p1, const std::vector<int>& p2) {
@@ -867,8 +807,7 @@ static void scan_cps(CpsScan& scan, const std::vector<int>& p1, const std::vecto
 static std::pair<std::vector<int>, std::vector<int>> split_presses(const std::vector<Frame>& inputs) {
     std::pair<std::vector<int>, std::vector<int>> presses;
     for (const auto& input : inputs) {
-        if (!input.holding)
-            continue;
+        if (!input.holding) continue;
         (input.player2 ? presses.second : presses.first).push_back(input.number);
     }
     return presses;
@@ -900,8 +839,7 @@ void Logic::recompute_cps() {
                 return;
             }
             geode::queueInMainThread([scan = std::move(scan), mine]() mutable {
-                if (mine != ticket.load())
-                    return;
+                if (mine != ticket.load()) return;
                 take_cps(Logic::get(), scan);
             });
         }).detach();

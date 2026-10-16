@@ -7,19 +7,20 @@
 
 using namespace geode::prelude;
 
-static bool ready = false;
+static bool no_other_hooks = false;
+#define MOVE_OBJECTS_ADDRESS 0x22dd50
+#define UPDATE_OBJECT_SECTION_ADDRESS 0x227f50
 
 namespace MovingObjects {
     void prepare() {
 #ifdef GEODE_IS_WINDOWS
-        ready = true;
+        no_other_hooks = true;
         for (auto* mod : Loader::get()->getAllMods()) {
-            if (mod == Mod::get())
-                continue;
+            if (mod == Mod::get()) continue;
             for (auto* hook : mod->getHooks()) {
                 auto address = hook->getAddress();
-                if (hook->isEnabled() && (address == geode::base::get() + 0x22dd50 || address == geode::base::get() + 0x227f50)) {
-                    ready = false;
+                if (hook->isEnabled() && (address == geode::base::get() + MOVE_OBJECTS_ADDRESS || address == geode::base::get() + UPDATE_OBJECT_SECTION_ADDRESS)) {
+                    no_other_hooks = false;
                     return;
                 }
             }
@@ -28,27 +29,27 @@ namespace MovingObjects {
     }
 }
 
-class $modify(EchoGroupEpochPlay, PlayLayer) {
+class $modify(EchoGroupVersionPlay, PlayLayer) {
     void addToGroup(GameObject* object, int groupID, bool triggerGroup) {
-        ++MovingObjects::group_epoch;
+        ++MovingObjects::group_version;
         PlayLayer::addToGroup(object, groupID, triggerGroup);
     }
 };
 
 class $modify(EchoMovingObjects, GJBaseGameLayer) {
     void addToGroup(GameObject* object, int groupID, bool triggerGroup) {
-        ++MovingObjects::group_epoch;
+        ++MovingObjects::group_version;
         GJBaseGameLayer::addToGroup(object, groupID, triggerGroup);
     }
 
     void moveObjects(CCArray* objects, double dx, double dy, bool lockPlayerY) {
 #ifdef GEODE_IS_WINDOWS
-        if (ready && objects && Logic::as_play(this) && !Logic::get().predicting) {
-            MovingObjects::move(this, objects, dx, dy, [](void* p) {
-                return static_cast<CCArray*>(p)->count();
+        if (no_other_hooks && objects && Logic::as_play(this) && !Logic::get().predicting) {
+            MovingObjects::move(this, objects, dx, dy, [](void* array) {
+                return static_cast<CCArray*>(array)->count();
             },
-                [](void* p) {
-                    auto* data = static_cast<CCArray*>(p)->data;
+                [](void* array) {
+                    auto* data = static_cast<CCArray*>(array)->data;
                     return std::pair{ data->arr, data->num };
                 },
                 [this](void* object) {

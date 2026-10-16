@@ -11,12 +11,11 @@ using namespace geode::prelude;
 
 class GdrReplay {
 public:
-    static constexpr float game_version = 2.2081f, format_version = 1.f;
-    static constexpr int max_depth = 64;
+    static inline const float game_version = 2.2081f, format_version = 1.f;
+    static const int max_depth = 64;
 
     static unsigned long long big(ByteCursor& in, size_t width) {
-        if (!in.take(width))
-            return 0;
+        if (!in.take(width)) return 0;
         unsigned long long value = 0;
         for (size_t i = 0; i < width; ++i)
             value = value << 8 | in.data[in.at - width + i];
@@ -35,18 +34,12 @@ public:
             return nullptr;
         }
         auto type = (unsigned char)in.uint(1);
-        if (in.failed)
-            return nullptr;
-        if (type <= 0x7f)
-            return matjson::Value((std::intmax_t)type);
-        if (type >= 0xe0)
-            return matjson::Value((std::intmax_t)((signed char)type));
-        if ((type & 0xf0) == 0x80)
-            return map(in, type & 0x0f, depth);
-        if ((type & 0xf0) == 0x90)
-            return array(in, type & 0x0f, depth);
-        if ((type & 0xe0) == 0xa0)
-            return text(in, type & 0x1f);
+        if (in.failed) return nullptr;
+        if (type <= 0x7f) return matjson::Value((std::intmax_t)type);
+        if (type >= 0xe0) return matjson::Value((std::intmax_t)((signed char)type));
+        if ((type & 0xf0) == 0x80) return map(in, type & 0x0f, depth);
+        if ((type & 0xf0) == 0x90) return array(in, type & 0x0f, depth);
+        if ((type & 0xe0) == 0xa0) return text(in, type & 0x1f);
         switch (type) {
         case 0xc0:
             return nullptr;
@@ -213,24 +206,20 @@ bool ReplayIO::read_gdr(const fs::path& path, MacroSnap& out) {
     matjson::Value json;
     if (start != data.end() && *start == '{') {
         auto parsed = matjson::parse(std::string_view(reinterpret_cast<const char*>(data.data()), data.size()));
-        if (!parsed)
-            return false;
+        if (!parsed) return false;
         json = parsed.unwrap();
     }
     else {
         json = GdrReplay::decode(in);
-        if (in.failed)
-            return false;
+        if (in.failed) return false;
     }
-    if (!json.isObject() || !json["inputs"].isArray())
-        return false;
+    if (!json.isObject() || !json["inputs"].isArray()) return false;
     std::vector<Frame> inputs;
     for (const auto& item : json["inputs"]) {
         Frame input;
         input.number = std::max(ReplayIO::read_int(item["frame"], 0), 0);
         input.button = ReplayIO::read_int(item["btn"], 1);
-        if (input.button < 1 || input.button > 3)
-            input.button = 1;
+        if (input.button < 1 || input.button > 3) input.button = 1;
         input.player2 = ReplayIO::read_boolish(item["2p"]);
         input.holding = ReplayIO::read_boolish(item["down"]);
         inputs.push_back(input);

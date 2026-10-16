@@ -29,13 +29,10 @@ namespace OBB {
 			double low = dot(other[0], edge), high = low;
 			for (int i = 1; i < 4; ++i) {
 				double value = dot(other[i], edge);
-				if (value < low)
-					low = value;
-				else if (value > high)
-					high = value;
+				if (value < low) low = value;
+				else if (value > high) high = value;
 			}
-			if (low > origin + 1.0 || high < origin)
-				return false;
+			if (low > origin + 1.0 || high < origin) return false;
 		}
 		return true;
 	}

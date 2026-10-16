@@ -97,7 +97,7 @@ static SwsContext* echo_get_sws(int srcW, int srcH, int srcFormat, int dstW, int
     SwsFilter* dstFilter, const double* param) {
     auto* context = g_get_sws(srcW, srcH, srcFormat, dstW, dstH, dstFormat, flags, srcFilter, dstFilter, param);
     if (context && g_echo_color_fix && g_set_sws_colors && g_get_sws_coefficients) {
-        constexpr int ITU709 = 1;
+        const int ITU709 = 1;
         const auto* bt709 = g_get_sws_coefficients(ITU709);
         g_set_sws_colors(context, bt709, 1, bt709, 0, 0, 1 << 16, 1 << 16);
     }
@@ -107,10 +107,8 @@ static SwsContext* echo_get_sws(int srcW, int srcH, int srcFormat, int dstW, int
 static int echo_open_codec(AVCodecContext* context, const AVCodec* codec, AVDictionary** options) {
     AVDictionary* local = nullptr;
     AVDictionary** chosen = options ? options : &local;
-    if (g_echo_preset)
-        g_set_dictionary(chosen, "preset", g_echo_preset, 0);
-    if (g_echo_global_header)
-        g_set_dictionary(chosen, "flags", "+global_header", 0);
+    if (g_echo_preset) g_set_dictionary(chosen, "preset", g_echo_preset, 0);
+    if (g_echo_global_header) g_set_dictionary(chosen, "flags", "+global_header", 0);
     if (g_echo_color_fix) {
         g_set_dictionary(chosen, "colorspace", "bt709", 0);
         g_set_dictionary(chosen, "color_primaries", "bt709", 0);
@@ -118,21 +116,17 @@ static int echo_open_codec(AVCodecContext* context, const AVCodec* codec, AVDict
         g_set_dictionary(chosen, "color_range", "tv", 0);
     }
     int res = g_open_codec(context, codec, chosen);
-    if (local)
-        g_free_dictionary(&local);
+    if (local) g_free_dictionary(&local);
     return res;
 }
 
 static void install_encoder_options() {
     static bool installed = false;
-    if (installed)
-        return;
+    if (installed) return;
     auto* dependency = Loader::get()->getLoadedMod("eclipse.ffmpeg-api");
-    if (!dependency)
-        return;
+    if (!dependency) return;
     void* binary = dlopen(dependency->getBinaryPath().c_str(), RTLD_NOW | RTLD_NOLOAD);
-    if (!binary)
-        return;
+    if (!binary) return;
     g_open_codec = reinterpret_cast<OpenCodec>(dlsym(binary, "avcodec_open2"));
     g_set_dictionary = reinterpret_cast<SetDictionary>(dlsym(binary, "av_dict_set"));
     g_free_dictionary = reinterpret_cast<FreeDictionary>(dlsym(binary, "av_dict_free"));
@@ -226,8 +220,7 @@ public:
         return value;
     }
     ~Recorder() {
-        if (worker.joinable())
-            worker.detach();
+        if (worker.joinable()) worker.detach();
     }
 #ifdef GEODE_IS_WINDOWS
     void close_handle(HANDLE& handle);
@@ -286,11 +279,11 @@ public:
     void uncap_pace();
     void restore_pace();
 
-    static constexpr int RING = 6;
+    static const int RING = 6;
 #ifdef GEODE_IS_WINDOWS
-    static constexpr size_t QUEUE = 12;
+    static const size_t QUEUE = 12;
 #else
-    static constexpr size_t QUEUE = 4;
+    static const size_t QUEUE = 4;
 #endif
 
     bool active = false;
@@ -382,12 +375,10 @@ FMOD_RESULT F_CALLBACK AudioTap::read(FMOD_DSP_STATE*, float* in, float* out, un
     auto& tap = AudioTap::get();
     size_t amt = (size_t)length * (size_t)in_channels;
     std::memcpy(out, in, amt * sizeof(float));
-    if (out_channels)
-        *out_channels = in_channels;
+    if (out_channels) *out_channels = in_channels;
     std::lock_guard guard(tap.lock);
     if (!tap.mixing) {
-        if (tap.attached)
-            ++tap.stray_blocks;
+        if (tap.attached) ++tap.stray_blocks;
         return FMOD_OK;
     }
     tap.channels = in_channels;
@@ -397,25 +388,18 @@ FMOD_RESULT F_CALLBACK AudioTap::read(FMOD_DSP_STATE*, float* in, float* out, un
 
 void AudioTap::bind_bus() {
     auto* engine = FMODAudioEngine::get();
-    if (!engine || !engine->m_system || !dsp)
-        return;
+    if (!engine || !engine->m_system || !dsp) return;
     FMOD::ChannelGroup* live = nullptr;
-    if (engine->m_system->getMasterChannelGroup(&live) != FMOD_OK || !live)
-        return;
+    if (engine->m_system->getMasterChannelGroup(&live) != FMOD_OK || !live) return;
     if (live != master) {
         // DONT leave it frozen
-        if (master && attached)
-            master->setPaused(false);
-        if (master)
-            master->removeDSP(dsp);
-        if (live->addDSP(FMOD_CHANNELCONTROL_DSP_TAIL, dsp) == FMOD_OK)
-            master = live;
+        if (master && attached) master->setPaused(false);
+        if (master) master->removeDSP(dsp);
+        if (live->addDSP(FMOD_CHANNELCONTROL_DSP_TAIL, dsp) == FMOD_OK) master = live;
     }
-    if (!master)
-        return;
+    if (!master) return;
     auto adopt = [&](FMOD::ChannelGroup* group) {
-        if (!group || group == master)
-            return;
+        if (!group || group == master) return;
         group->setPaused(false);
         master->addGroup(group, true, nullptr);
     };
@@ -426,25 +410,21 @@ void AudioTap::bind_bus() {
 }
 
 void AudioTap::hold_effects() {
-    if (!attached)
-        return;
+    if (!attached) return;
     auto* engine = FMODAudioEngine::get();
-    if (!engine)
-        return;
+    if (!engine) return;
     float volume = std::clamp(effects, 0.f, 1.f);
     engine->setEffectsVolume(volume);
     if (engine->m_globalChannel) {
         engine->m_globalChannel->setVolume(volume);
         engine->m_globalChannel->setPaused(false);
     }
-    if (engine->m_reverbChannel)
-        engine->m_reverbChannel->setPaused(false);
+    if (engine->m_reverbChannel) engine->m_reverbChannel->setPaused(false);
 }
 
 bool AudioTap::attach(float music, float sfx, const fs::path& file) {
     auto* engine = FMODAudioEngine::get();
-    if (attached || !engine || !engine->m_system)
-        return false;
+    if (attached || !engine || !engine->m_system) return false;
     auto* system = engine->m_system;
     FMOD_DSP_DESCRIPTION description{};
     description.pluginsdkversion = FMOD_PLUGIN_SDK_VERSION;
@@ -452,8 +432,7 @@ bool AudioTap::attach(float music, float sfx, const fs::path& file) {
     description.numinputbuffers = 1;
     description.numoutputbuffers = 1;
     description.read = &AudioTap::read;
-    if (system->createDSP(&description, &dsp) != FMOD_OK || !dsp)
-        return false;
+    if (system->createDSP(&description, &dsp) != FMOD_OK || !dsp) return false;
     if (system->getMasterChannelGroup(&master) != FMOD_OK || !master || master->addDSP(FMOD_CHANNELCONTROL_DSP_TAIL, dsp) != FMOD_OK) {
         dsp->release();
         dsp = nullptr;
@@ -489,8 +468,7 @@ bool AudioTap::attach(float music, float sfx, const fs::path& file) {
                 FMOD_MODE wanted = (mode & ~(FMOD_MODE)(FMOD_CREATESTREAM | FMOD_NONBLOCKING)) | FMOD_CREATESAMPLE;
                 auto res = system->createSound(it->second.m_filePath.c_str(), wanted, nullptr, &sample);
                 // DONT free ts gd might still use it
-                if (res == FMOD_OK && sample)
-                    it->second.m_sound = sample;
+                if (res == FMOD_OK && sample) it->second.m_sound = sample;
             }
         }
         engine->queueStartMusic(song, 1.f, 0.f, std::clamp(music, 0.f, 1.f), false, (int)song_ms, 0, 0, 0, 0, false, 0, false, false);
@@ -503,20 +481,16 @@ bool AudioTap::attach(float music, float sfx, const fs::path& file) {
         sample_streams(engine);
         // play once NOT loop
         auto* channel = engine->getActiveMusicChannel(0);
-        if (channel)
-            channel->setLoopCount(0);
+        if (channel) channel->setLoopCount(0);
         // jukebox (replaced songs) adds the songs start offset inside queueStartMusic. song_ms was read off the channel, so it
         // already had that offset in it & the song came back that much AHEAD for the whole render (0.4s on wndystein).
         // setting the spot on the channel itself goes around every hook
-        if (channel)
-            channel->setPosition(song_ms, FMOD_TIMEUNIT_MS);
+        if (channel) channel->setPosition(song_ms, FMOD_TIMEUNIT_MS);
         song_at_start = song_ms;
         bool playing = false;
-        if (channel)
-            channel->isPlaying(&playing);
+        if (channel) channel->isPlaying(&playing);
     }
-    if (engine->m_backgroundMusicChannel)
-        engine->m_backgroundMusicChannel->setPaused(false);
+    if (engine->m_backgroundMusicChannel) engine->m_backgroundMusicChannel->setPaused(false);
     old_music = engine->getBackgroundMusicVolume();
     old_sfx = engine->getEffectsVolume();
     moved_groups.clear();
@@ -542,8 +516,7 @@ bool AudioTap::attach(float music, float sfx, const fs::path& file) {
 }
 
 void AudioTap::detach() {
-    if (!attached)
-        return;
+    if (!attached) return;
     freeze(false);
     heard.clear();
     loudest = 0.f;
@@ -553,12 +526,9 @@ void AudioTap::detach() {
     out.close();
     pending.clear();
     auto* engine = FMODAudioEngine::get();
-    if (!engine || !engine->m_system)
-        return;
-    if (master && dsp)
-        master->removeDSP(dsp);
-    if (dsp)
-        dsp->release();
+    if (!engine || !engine->m_system) return;
+    if (master && dsp) master->removeDSP(dsp);
+    if (dsp) dsp->release();
     dsp = nullptr;
     master = nullptr;
     engine->setBackgroundMusicVolume(old_music);
@@ -572,8 +542,7 @@ void AudioTap::detach() {
 // freezes all sound between frames
 // without ts sfx play like 2-3x speed :/
 void AudioTap::freeze(bool frozen) {
-    if (master)
-        master->setPaused(frozen);
+    if (master) master->setPaused(frozen);
 }
 
 void AudioTap::sample_streams(FMODAudioEngine* engine) {
@@ -586,28 +555,23 @@ void AudioTap::sample_streams(FMODAudioEngine* engine) {
     for (auto& [id, channel] : engine->m_channelIDToChannel)
         add(channel);
     auto walk = [&](auto& self, FMOD::ChannelGroup* group, int depth) -> void {
-        if (!group || depth > 8)
-            return;
+        if (!group || depth > 8) return;
         int amt = 0;
         if (group->getNumChannels(&amt) == FMOD_OK) {
             for (int i = 0; i < amt; ++i) {
                 FMOD::Channel* channel = nullptr;
-                if (group->getChannel(i, &channel) == FMOD_OK)
-                    add(channel);
+                if (group->getChannel(i, &channel) == FMOD_OK) add(channel);
             }
         }
         int groups = 0;
-        if (group->getNumGroups(&groups) != FMOD_OK)
-            return;
+        if (group->getNumGroups(&groups) != FMOD_OK) return;
         for (int i = 0; i < groups; ++i) {
             FMOD::ChannelGroup* child = nullptr;
-            if (group->getGroup(i, &child) == FMOD_OK)
-                self(self, child, depth + 1);
+            if (group->getGroup(i, &child) == FMOD_OK) self(self, child, depth + 1);
         }
     };
     FMOD::ChannelGroup* root = nullptr;
-    if (system->getMasterChannelGroup(&root) == FMOD_OK)
-        walk(walk, root, 0);
+    if (system->getMasterChannelGroup(&root) == FMOD_OK) walk(walk, root, 0);
 
     for (auto* channel : playing) {
         bool active = false;
@@ -618,19 +582,16 @@ void AudioTap::sample_streams(FMODAudioEngine* engine) {
             continue;
         std::string path;
         for (auto& [music_id, entry] : engine->m_fmodMusic) {
-            if (entry.m_sound == sound)
-                path = entry.m_filePath;
+            if (entry.m_sound == sound) path = entry.m_filePath;
         }
         for (auto& [name, entry] : engine->m_fmodSounds) {
             if (path.empty() && entry.m_sound == sound)
                 path = entry.m_filePath.empty() ? std::string(name) : std::string(entry.m_filePath);
         }
         for (auto& [name, cached] : engine->m_soundPathToSound) {
-            if (path.empty() && cached == sound)
-                path = name;
+            if (path.empty() && cached == sound) path = name;
         }
-        if (path.empty() || undecodable.contains(path))
-            continue;
+        if (path.empty() || undecodable.contains(path)) continue;
         FMOD::Sound* sample = nullptr;
         FMOD_MODE wanted = (mode & ~(FMOD_MODE)(FMOD_CREATESTREAM | FMOD_NONBLOCKING)) | FMOD_CREATESAMPLE;
         auto res = system->createSound(path.c_str(), wanted, nullptr, &sample);
@@ -669,8 +630,7 @@ void AudioTap::sample_streams(FMODAudioEngine* engine) {
         next->setPosition(position, FMOD_TIMEUNIT_PCM);
         next->setVolume(volume);
         next->setPitch(pitch);
-        if (frequency > 0.f)
-            next->setFrequency(frequency);
+        if (frequency > 0.f) next->setFrequency(frequency);
         for (unsigned i = 0; i < fades; ++i)
             next->addFadePoint(fade_clocks[i], fade_volumes[i]);
         void* data = nullptr;
@@ -680,20 +640,16 @@ void AudioTap::sample_streams(FMODAudioEngine* engine) {
         channel->setCallback(nullptr);
         channel->stop();
         for (auto& [id, held] : engine->m_channelIDToChannel) {
-            if (held == channel)
-                held = next;
+            if (held == channel) held = next;
         }
         for (auto& [music_id, entry] : engine->m_fmodMusic) {
-            if (entry.m_sound == sound)
-                entry.m_sound = sample;
+            if (entry.m_sound == sound) entry.m_sound = sample;
         }
         for (auto& [name, entry] : engine->m_fmodSounds) {
-            if (entry.m_sound == sound)
-                entry.m_sound = sample;
+            if (entry.m_sound == sound) entry.m_sound = sample;
         }
         for (auto& [name, cached] : engine->m_soundPathToSound) {
-            if (cached == sound)
-                cached = sample;
+            if (cached == sound) cached = sample;
         }
         next->setPaused(paused);
     }
@@ -709,8 +665,7 @@ void AudioTap::keep_song_on_time(FMODAudioEngine* engine) {
     }
     bool paused = false;
     channel->getPaused(&paused);
-    if (paused)
-        return;
+    if (paused) return;
     size_t buffered = 0;
     {
         std::lock_guard guard(lock);
@@ -736,13 +691,11 @@ void AudioTap::keep_song_on_time(FMODAudioEngine* engine) {
 
 void AudioTap::advance(float dt, float fade) {
     auto* engine = FMODAudioEngine::get();
-    if (!attached || !engine || !engine->m_system || rate <= 0)
-        return;
+    if (!attached || !engine || !engine->m_system || rate <= 0) return;
     auto* play = PlayLayer::get();
     bool opening = Logic::get().render_record_pause && play && !play->m_started;
     if (opening) {
-        if (engine->m_backgroundMusicChannel)
-            engine->m_backgroundMusicChannel->setPaused(true);
+        if (engine->m_backgroundMusicChannel) engine->m_backgroundMusicChannel->setPaused(true);
         clock += (double)(dt);
         unsigned long long target = (unsigned long long)std::llround(clock * (double)(rate));
         int ch = channels > 0 ? channels : 2;
@@ -777,8 +730,7 @@ void AudioTap::advance(float dt, float fade) {
     freeze(true);
     mixing = false;
     std::lock_guard guard(lock);
-    if (channels <= 0)
-        return;
+    if (channels <= 0) return;
     size_t take = (size_t)(std::min<unsigned long long>(target - std::min(target, written), pending.size() / (size_t)channels));
     size_t amt = take * (size_t)channels;
     float gain = std::clamp(fade, 0.f, 1.f);
@@ -809,24 +761,20 @@ void Recorder::close_handle(HANDLE& handle) {
 bool Recorder::connect_pipe(HANDLE pipe) {
     OVERLAPPED wait{};
     wait.hEvent = CreateEventA(nullptr, TRUE, FALSE, nullptr);
-    if (!wait.hEvent)
-        return false;
+    if (!wait.hEvent) return false;
     BOOL ok = ConnectNamedPipe(pipe, &wait);
     if (!ok && GetLastError() == ERROR_IO_PENDING)
         ok = WaitForSingleObject(wait.hEvent, 4000) == WAIT_OBJECT_0;
-    if (!ok && GetLastError() == ERROR_PIPE_CONNECTED)
-        ok = TRUE;
+    if (!ok && GetLastError() == ERROR_PIPE_CONNECTED) ok = TRUE;
     CloseHandle(wait.hEvent);
     return ok == TRUE;
 }
 
 bool Recorder::write_all(HANDLE pipe, const void* data, size_t size) {
-    if (pipe == nullptr || pipe == INVALID_HANDLE_VALUE)
-        return false;
+    if (pipe == nullptr || pipe == INVALID_HANDLE_VALUE) return false;
     const auto* bytes = static_cast<const unsigned char*>(data);
     HANDLE event = CreateEventA(nullptr, TRUE, FALSE, nullptr);
-    if (!event)
-        return false;
+    if (!event) return false;
     size_t sent = 0;
     while (sent < size) {
         OVERLAPPED wait{};
@@ -865,8 +813,7 @@ fs::path Recorder::game_directory() {
 
 std::string Recorder::ffmpeg_path() {
     auto beside = Recorder::get().game_directory() / "ffmpeg.exe";
-    if (fs::exists(beside))
-        return beside.string();
+    if (fs::exists(beside)) return beside.string();
     return "ffmpeg.exe";
 }
 
@@ -876,8 +823,7 @@ std::string Recorder::run_hidden(std::string command, const fs::path& log_path) 
     security.bInheritHandle = TRUE;
     HANDLE log = CreateFileA(log_path.string().c_str(), GENERIC_WRITE, FILE_SHARE_READ, &security, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
     HANDLE input = CreateFileA("NUL", GENERIC_READ, FILE_SHARE_READ, &security, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (log == INVALID_HANDLE_VALUE)
-        return "could not open the ffmpeg log";
+    if (log == INVALID_HANDLE_VALUE) return "could not open the ffmpeg log";
     STARTUPINFOA startup{};
     startup.cb = sizeof(startup);
     startup.dwFlags = STARTF_USESHOWWINDOW | STARTF_USESTDHANDLES;
@@ -890,14 +836,12 @@ std::string Recorder::run_hidden(std::string command, const fs::path& log_path) 
     mutable_command.push_back('\0');
     if (!CreateProcessA(nullptr, mutable_command.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW, nullptr, nullptr, &startup, &process)) {
         CloseHandle(log);
-        if (input != INVALID_HANDLE_VALUE)
-            CloseHandle(input);
+        if (input != INVALID_HANDLE_VALUE) CloseHandle(input);
         return "could not start ffmpeg";
     }
     CloseHandle(process.hThread);
     CloseHandle(log);
-    if (input != INVALID_HANDLE_VALUE)
-        CloseHandle(input);
+    if (input != INVALID_HANDLE_VALUE) CloseHandle(input);
     if (WaitForSingleObject(process.hProcess, 180000) == WAIT_TIMEOUT)
         TerminateProcess(process.hProcess, 1);
     DWORD code = 1;
@@ -909,13 +853,10 @@ std::string Recorder::run_hidden(std::string command, const fs::path& log_path) 
     std::string line;
     std::string last;
     while (std::getline(in, line)) {
-        if (!line.empty())
-            last = line;
+        if (!line.empty()) last = line;
     }
-    if (last.empty())
-        last = "ffmpeg failed";
-    if (last.size() > 160)
-        last = last.substr(last.size() - 160);
+    if (last.empty()) last = "ffmpeg failed";
+    if (last.size() > 160) last = last.substr(last.size() - 160);
     return last;
 }
 
@@ -925,8 +866,7 @@ static std::string quote_arg(const fs::path& path) {
 
 static fs::path probe_binary() {
     auto beside = fs::path(Recorder::get().ffmpeg_path()).replace_filename("ffprobe.exe");
-    if (fs::exists(beside))
-        return beside;
+    if (fs::exists(beside)) return beside;
     return "ffprobe.exe";
 }
 
@@ -940,12 +880,9 @@ static std::string run_logged(std::string command, const fs::path& log_path, con
                      ? log
                      : CreateFileA(capture.string().c_str(), GENERIC_WRITE, FILE_SHARE_READ, &security, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (log == INVALID_HANDLE_VALUE || out == INVALID_HANDLE_VALUE) {
-        if (log != INVALID_HANDLE_VALUE)
-            CloseHandle(log);
-        if (out != INVALID_HANDLE_VALUE && out != log)
-            CloseHandle(out);
-        if (input != INVALID_HANDLE_VALUE)
-            CloseHandle(input);
+        if (log != INVALID_HANDLE_VALUE) CloseHandle(log);
+        if (out != INVALID_HANDLE_VALUE && out != log) CloseHandle(out);
+        if (input != INVALID_HANDLE_VALUE) CloseHandle(input);
         return "could not open the ffmpeg log";
     }
     STARTUPINFOA startup{};
@@ -960,18 +897,14 @@ static std::string run_logged(std::string command, const fs::path& log_path, con
     mutable_command.push_back('\0');
     if (!CreateProcessA(nullptr, mutable_command.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW | BELOW_NORMAL_PRIORITY_CLASS, nullptr, nullptr, &startup, &process)) {
         CloseHandle(log);
-        if (out != log)
-            CloseHandle(out);
-        if (input != INVALID_HANDLE_VALUE)
-            CloseHandle(input);
+        if (out != log) CloseHandle(out);
+        if (input != INVALID_HANDLE_VALUE) CloseHandle(input);
         return "could not start ffmpeg";
     }
     CloseHandle(process.hThread);
     CloseHandle(log);
-    if (out != log)
-        CloseHandle(out);
-    if (input != INVALID_HANDLE_VALUE)
-        CloseHandle(input);
+    if (out != log) CloseHandle(out);
+    if (input != INVALID_HANDLE_VALUE) CloseHandle(input);
     WaitForSingleObject(process.hProcess, INFINITE);
     DWORD code = 1;
     GetExitCodeProcess(process.hProcess, &code);
@@ -982,13 +915,10 @@ static std::string run_logged(std::string command, const fs::path& log_path, con
     std::string line;
     std::string last;
     while (std::getline(in, line)) {
-        if (!line.empty())
-            last = line;
+        if (!line.empty()) last = line;
     }
-    if (last.empty())
-        last = "ffmpeg failed";
-    if (last.size() > 180)
-        last = last.substr(last.size() - 180);
+    if (last.empty()) last = "ffmpeg failed";
+    if (last.size() > 180) last = last.substr(last.size() - 180);
     return last;
 }
 
@@ -997,16 +927,14 @@ static std::optional<double> probe_seconds(const fs::path& file, const fs::path&
     auto capture = scratch / "echo-probe.txt";
     auto log = scratch / "echo-probe.log";
     error = run_logged(command, log, capture);
-    if (!error.empty())
-        return std::nullopt;
+    if (!error.empty()) return std::nullopt;
     std::ifstream in(capture);
     std::string text;
     std::getline(in, text);
     try {
         size_t used = 0;
         double seconds = std::stod(text, &used);
-        if (seconds > 0.0)
-            return seconds;
+        if (seconds > 0.0) return seconds;
     }
     catch (...) {
     }
@@ -1018,8 +946,7 @@ static bool probe_audio(const fs::path& file, const fs::path& scratch) {
     auto command = quote_arg(probe_binary()) + " -v error -select_streams a:0 -show_entries stream=index -of csv=p=0 " + quote_arg(file);
     auto capture = scratch / "echo-probe-audio.txt";
     auto log = scratch / "echo-probe.log";
-    if (!run_logged(command, log, capture).empty())
-        return false;
+    if (!run_logged(command, log, capture).empty()) return false;
     std::ifstream in(capture);
     std::string text;
     std::getline(in, text);
@@ -1048,8 +975,7 @@ static std::string merge_encode() {
     std::string flags = " -c:v " + codec + video_rate(codec, logic.render_bitrate, extra);
     if (extra.find("-pix_fmt") == std::string::npos)
         flags += logic.render_bitrate <= 0 && !hardware ? " -pix_fmt yuv444p" : " -pix_fmt yuv420p";
-    if (!extra.empty())
-        flags += " " + extra;
+    if (!extra.empty()) flags += " " + extra;
     return flags;
 }
 
@@ -1065,11 +991,9 @@ static std::string join_films_in(const fs::path& first, const fs::path& second, 
         return probe_error;
     }
     auto second_length = probe_seconds(second, scratch, probe_error);
-    if (!second_length)
-        return probe_error;
+    if (!second_length) return probe_error;
     double fade = std::min(1.0, std::min(*first_length, *second_length) * 0.45);
-    if (!(fade > 0.05))
-        return "The videos are too short to crossfade";
+    if (!(fade > 0.05)) return "The videos are too short to crossfade";
     double offset = *first_length - fade;
     Logic::get().merge_seconds = (float)(*first_length + *second_length - fade);
     bool audio = probe_audio(first, scratch) && probe_audio(second, scratch);
@@ -1099,8 +1023,7 @@ static std::string join_films_in(const fs::path& first, const fs::path& second, 
 }
 
 void Logic::merge_renders(const fs::path& first_path, const fs::path& second_path) {
-    if (merge_busy)
-        return;
+    if (merge_busy) return;
     auto folder = save_root() / "renders";
     std::error_code error;
     fs::create_directories(folder, error);
@@ -1123,8 +1046,7 @@ void Logic::merge_renders(const fs::path& first_path, const fs::path& second_pat
             merge_busy = false;
             if (failure.empty())
                 notify(fmt::format("Joined {}", dest.filename().string()), true);
-            else
-                notify(failure, false);
+            else notify(failure, false);
         });
     }).detach();
 }
@@ -1138,16 +1060,13 @@ static fs::path find_tool(const char* name) {
         while (!rest.empty()) {
             auto colon = rest.find(':');
             auto dir = rest.substr(0, colon);
-            if (!dir.empty())
-                places.push_back(fs::path(std::string(dir)) / name);
-            if (colon == std::string_view::npos)
-                break;
+            if (!dir.empty()) places.push_back(fs::path(std::string(dir)) / name);
+            if (colon == std::string_view::npos) break;
             rest.remove_prefix(colon + 1);
         }
     }
     for (const auto& place : places) {
-        if (access(place.c_str(), X_OK) == 0)
-            return place;
+        if (access(place.c_str(), X_OK) == 0) return place;
     }
     return {};
 }
@@ -1158,21 +1077,16 @@ static pid_t spawn_tool(const std::vector<std::string>& args, int input, const f
     posix_spawn_file_actions_init(&actions);
     posix_spawnattr_init(&attributes);
     posix_spawnattr_setflags(&attributes, POSIX_SPAWN_CLOEXEC_DEFAULT);
-    if (input >= 0)
-        posix_spawn_file_actions_adddup2(&actions, input, 0);
-    else
-        posix_spawn_file_actions_addopen(&actions, 0, "/dev/null", O_RDONLY, 0);
+    if (input >= 0) posix_spawn_file_actions_adddup2(&actions, input, 0);
+    else posix_spawn_file_actions_addopen(&actions, 0, "/dev/null", O_RDONLY, 0);
     auto direct = [&](int fd, const fs::path& file) {
-        if (file.empty())
-            posix_spawn_file_actions_addopen(&actions, fd, "/dev/null", O_WRONLY, 0);
+        if (file.empty()) posix_spawn_file_actions_addopen(&actions, fd, "/dev/null", O_WRONLY, 0);
         else
             posix_spawn_file_actions_addopen(&actions, fd, file.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
     };
     direct(2, err);
-    if (!out.empty() && out == err)
-        posix_spawn_file_actions_adddup2(&actions, 2, 1);
-    else
-        direct(1, out);
+    if (!out.empty() && out == err) posix_spawn_file_actions_adddup2(&actions, 2, 1);
+    else direct(1, out);
     std::vector<char*> argv;
     for (const auto& arg : args)
         argv.push_back(const_cast<char*>(arg.c_str()));
@@ -1189,12 +1103,9 @@ static int wait_tool(pid_t pid, double seconds) {
     while (true) {
         int status = 0;
         pid_t done = waitpid(pid, &status, seconds > 0.0 ? WNOHANG : 0);
-        if (done == pid)
-            return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
-        if (done < 0 && errno == ECHILD)
-            return 0;
-        if (done < 0 && errno != EINTR)
-            return -1;
+        if (done == pid) return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+        if (done < 0 && errno == ECHILD) return 0;
+        if (done < 0 && errno != EINTR) return -1;
         if (seconds > 0.0) {
             if (chrono::duration<double>(chrono::steady_clock::now() - started).count() > seconds) {
                 kill(pid, SIGKILL);
@@ -1211,18 +1122,15 @@ static std::string last_line(const fs::path& log, size_t limit) {
     std::string line;
     std::string last;
     while (std::getline(in, line)) {
-        if (!line.empty())
-            last = line;
+        if (!line.empty()) last = line;
     }
-    if (last.size() > limit)
-        last = last.substr(last.size() - limit);
+    if (last.size() > limit) last = last.substr(last.size() - limit);
     return last;
 }
 
 static std::string run_tool(const std::vector<std::string>& args, const fs::path& log, const fs::path& capture, double seconds = 0.0) {
     pid_t pid = spawn_tool(args, -1, capture.empty() ? log : capture, log);
-    if (!pid)
-        return "could not start " + fs::path(args.front()).filename().string();
+    if (!pid) return "could not start " + fs::path(args.front()).filename().string();
     if (wait_tool(pid, seconds) == 0)
         return {};
     auto last = last_line(log, 180);
@@ -1236,18 +1144,15 @@ static std::vector<std::string> split_args(const std::string& text) {
     char quote = 0;
     for (char c : text) {
         if (quote) {
-            if (c == quote)
-                quote = 0;
-            else
-                word += c;
+            if (c == quote) quote = 0;
+            else word += c;
         }
         else if (c == '"' || c == '\'') {
             quote = c;
             any = true;
         }
         else if (c == ' ' || c == '\t' || c == '\n') {
-            if (any)
-                words.push_back(std::move(word));
+            if (any) words.push_back(std::move(word));
             word.clear();
             any = false;
         }
@@ -1256,8 +1161,7 @@ static std::vector<std::string> split_args(const std::string& text) {
             any = true;
         }
     }
-    if (any)
-        words.push_back(std::move(word));
+    if (any) words.push_back(std::move(word));
     return words;
 }
 
@@ -1269,8 +1173,7 @@ static std::vector<std::string> video_rate(const std::string& codec, int bitrate
     if ((codec == "libx264" || codec == "libx265") && !has("-preset"))
         flags.insert(flags.end(), { "-preset", Logic::get().render_preset });
     bool own_rate = has("-crf") || has("-qp") || has("-b:v") || has("-q:v") || has("-cq") || has("-global_quality") || has("-qscale") || has("-rc ");
-    if (own_rate)
-        return flags;
+    if (own_rate) return flags;
     if (bitrate > 0)
         flags.insert(flags.end(), { "-b:v", std::to_string(bitrate) });
     else if (codec.find("videotoolbox") != std::string::npos)
@@ -1283,15 +1186,13 @@ static std::vector<std::string> video_rate(const std::string& codec, int bitrate
 static std::optional<double> probe_seconds(const fs::path& probe, const fs::path& file, const fs::path& scratch, std::string& error) {
     auto capture = scratch / "echo-probe.txt";
     error = run_tool({ probe.string(), "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", file.string() }, scratch / "echo-probe.log", capture);
-    if (!error.empty())
-        return std::nullopt;
+    if (!error.empty()) return std::nullopt;
     std::ifstream in(capture);
     std::string text;
     std::getline(in, text);
     try {
         double seconds = std::stod(text);
-        if (seconds > 0.0)
-            return seconds;
+        if (seconds > 0.0) return seconds;
     }
     catch (...) {
     }
@@ -1328,24 +1229,18 @@ static std::vector<std::string> merge_encode() {
 
 static std::string join_films_in(const fs::path& first, const fs::path& second, const fs::path& dest, const std::vector<std::string>& encode) {
     auto ffmpeg = Recorder::ffmpeg_path();
-    if (ffmpeg.empty())
-        return "ffmpeg was not found";
+    if (ffmpeg.empty()) return "ffmpeg was not found";
     auto probe = ffmpeg.parent_path() / "ffprobe";
-    if (access(probe.c_str(), X_OK) != 0)
-        probe = find_tool("ffprobe");
-    if (probe.empty())
-        return "Merging needs ffprobe, which comes with ffmpeg";
+    if (access(probe.c_str(), X_OK) != 0) probe = find_tool("ffprobe");
+    if (probe.empty()) return "Merging needs ffprobe, which comes with ffmpeg";
     auto scratch = dest.parent_path();
     std::string probe_error;
     auto first_length = probe_seconds(probe, first, scratch, probe_error);
-    if (!first_length)
-        return probe_error;
+    if (!first_length) return probe_error;
     auto second_length = probe_seconds(probe, second, scratch, probe_error);
-    if (!second_length)
-        return probe_error;
+    if (!second_length) return probe_error;
     double fade = std::min(1.0, std::min(*first_length, *second_length) * 0.45);
-    if (!(fade > 0.05))
-        return "The videos are too short to crossfade";
+    if (!(fade > 0.05)) return "The videos are too short to crossfade";
     double offset = *first_length - fade;
     Logic::get().merge_seconds = (float)(*first_length + *second_length - fade);
     bool audio = probe_audio(probe, first, scratch) && probe_audio(probe, second, scratch);
@@ -1376,14 +1271,12 @@ fs::path Recorder::ffmpeg_path() {
 }
 
 bool Recorder::write_all(int fd, const void* data, size_t size) {
-    if (fd < 0)
-        return false;
+    if (fd < 0) return false;
     const auto* bytes = static_cast<const unsigned char*>(data);
     while (size > 0) {
         ssize_t wrote = ::write(fd, bytes, size);
         if (wrote < 0) {
-            if (errno == EINTR)
-                continue;
+            if (errno == EINTR) continue;
             return false;
         }
         bytes += wrote;
@@ -1393,8 +1286,7 @@ bool Recorder::write_all(int fd, const void* data, size_t size) {
 }
 
 void Logic::merge_renders(const fs::path& first_path, const fs::path& second_path) {
-    if (merge_busy)
-        return;
+    if (merge_busy) return;
     auto folder = save_root() / "renders";
     std::error_code error;
     fs::create_directories(folder, error);
@@ -1417,8 +1309,7 @@ void Logic::merge_renders(const fs::path& first_path, const fs::path& second_pat
             merge_busy = false;
             if (failure.empty())
                 notify(fmt::format("Joined {}", dest.filename().string()), true);
-            else
-                notify(failure, false);
+            else notify(failure, false);
         });
     }).detach();
 }
@@ -1432,26 +1323,21 @@ void Logic::merge_renders(const fs::path&, const fs::path&) {
 float Logic::merge_progress() {
     static float shown = -1.f;
     static chrono::steady_clock::time_point last;
-    if (!merge_busy)
-        return shown = -1.f;
+    if (!merge_busy) return shown = -1.f;
     auto now = chrono::steady_clock::now();
-    if (now - last < chrono::milliseconds(250))
-        return shown;
+    if (now - last < chrono::milliseconds(250)) return shown;
     last = now;
     float total = merge_seconds;
     std::ifstream in(merge_folder / "echo-merge-progress.txt", std::ios::binary | std::ios::ate);
-    if (!in || total <= 0.f)
-        return shown = -1.f;
+    if (!in || total <= 0.f) return shown = -1.f;
     auto size = (std::streamoff)in.tellg();
     std::streamoff len = std::min<std::streamoff>(size, 600);
     std::string tail((size_t)len, '\0');
     in.seekg(size - len);
     in.read(tail.data(), len);
     auto at = tail.rfind("out_time_us=");
-    if (at == std::string::npos)
-        at = tail.rfind("out_time_ms=");
-    if (at == std::string::npos)
-        return shown;
+    if (at == std::string::npos) at = tail.rfind("out_time_ms=");
+    if (at == std::string::npos) return shown;
     double micro = std::strtod(tail.c_str() + at + 12, nullptr);
     return shown = std::clamp((float)(micro / 1e6 / total), 0.f, 1.f);
 }
@@ -1503,10 +1389,8 @@ std::optional<CCSize> Recorder::window_pixels() {
     HDC context = wglGetCurrentDC();
     HWND window = context ? WindowFromDC(context) : nullptr;
     RECT client{};
-    if (!window || !GetClientRect(window, &client))
-        return std::nullopt;
-    if (client.right <= client.left || client.bottom <= client.top)
-        return std::nullopt;
+    if (!window || !GetClientRect(window, &client)) return std::nullopt;
+    if (client.right <= client.left || client.bottom <= client.top) return std::nullopt;
     return CCSize((float)(client.right - client.left), (float)(client.bottom - client.top));
 #else
     return std::nullopt;
@@ -1514,8 +1398,7 @@ std::optional<CCSize> Recorder::window_pixels() {
 }
 
 void Recorder::shift_ui(PlayLayer* play, float by) {
-    if (!play || by == 0.f)
-        return;
+    if (!play || by == 0.f) return;
     if (play->m_progressBar)
         play->m_progressBar->setPositionX(play->m_progressBar->getPositionX() + by * .5f);
     if (play->m_percentageLabel)
@@ -1535,8 +1418,7 @@ void Recorder::hold_view() {
         GLint viewport[4] = {};
         glGetIntegerv(GL_VIEWPORT, viewport);
         saved_pixels = CCSize((float)(viewport[0] * 2 + viewport[2]), (float)(viewport[1] * 2 + viewport[3]));
-        if (saved_pixels.width < 1.f || saved_pixels.height < 1.f)
-            saved_pixels = saved_frame;
+        if (saved_pixels.width < 1.f || saved_pixels.height < 1.f) saved_pixels = saved_frame;
 #endif
         holding = true;
     }
@@ -1579,8 +1461,7 @@ CCSize Recorder::real_frame() {
 }
 
 void Recorder::release_view() {
-    if (!holding)
-        return;
+    if (!holding) return;
     holding = false;
     auto restore = real_frame();
     Recorder::get().silent_change_size(restore);
@@ -1602,13 +1483,11 @@ void Recorder::release_view() {
         shader->m_state.m_textureScaleY = shader_saved.texture_scale_y;
     }
     else {
-        if (shader_saved.texture)
-            shader_saved.texture->release();
+        if (shader_saved.texture) shader_saved.texture->release();
         Recorder::get().resize_shader_layer(restore);
     }
     shader_saved = {};
-    if (ui_owner && ui_owner == PlayLayer::get())
-        shift_ui(ui_owner, -ui_shift);
+    if (ui_owner && ui_owner == PlayLayer::get()) shift_ui(ui_owner, -ui_shift);
     ui_owner = nullptr;
     ui_shift = 0.f;
     CCDirector::sharedDirector()->setNextDeltaTimeZero(true);
@@ -1622,14 +1501,12 @@ size_t Recorder::frame_bytes() const {
 #ifdef GEODE_IS_WINDOWS
 static GLuint compileShader(GLenum kind, const char* source) {
     GLuint shader = glCreateShader(kind);
-    if (!shader)
-        return 0;
+    if (!shader) return 0;
     glShaderSource(shader, 1, &source, nullptr);
     glCompileShader(shader);
     GLint ok = 0;
     glGetShaderiv(shader, GL_COMPILE_STATUS, &ok);
-    if (ok)
-        return shader;
+    if (ok) return shader;
     glDeleteShader(shader);
     return 0;
 }
@@ -1638,10 +1515,8 @@ static GLuint link_program(const char* vertex, const char* fragment) {
     GLuint vs = compileShader(GL_VERTEX_SHADER, vertex);
     GLuint frag = compileShader(GL_FRAGMENT_SHADER, fragment);
     if (!vs || !frag) {
-        if (vs)
-            glDeleteShader(vs);
-        if (frag)
-            glDeleteShader(frag);
+        if (vs) glDeleteShader(vs);
+        if (frag) glDeleteShader(frag);
         return 0;
     }
     GLuint program = glCreateProgram();
@@ -1652,8 +1527,7 @@ static GLuint link_program(const char* vertex, const char* fragment) {
     glDeleteShader(frag);
     GLint ok = 0;
     glGetProgramiv(program, GL_LINK_STATUS, &ok);
-    if (ok)
-        return program;
+    if (ok) return program;
     glDeleteProgram(program);
     return 0;
 }
@@ -1688,17 +1562,13 @@ static std::string encoder_flags(const std::string& codec, const std::string& ex
     };
     std::string flags;
     if (!has("-preset") && !has("-quality")) {
-        if (codec.find("nvenc") != std::string::npos)
-            flags += " -preset p1";
-        else if (codec.find("amf") != std::string::npos)
-            flags += " -quality speed";
-        else if (codec.find("qsv") != std::string::npos)
-            flags += " -preset veryfast";
+        if (codec.find("nvenc") != std::string::npos) flags += " -preset p1";
+        else if (codec.find("amf") != std::string::npos) flags += " -quality speed";
+        else if (codec.find("qsv") != std::string::npos) flags += " -preset veryfast";
         else if (codec == "libx264" || codec == "libx265")
             flags += " -preset " + Logic::get().render_preset;
     }
-    if (with_rate && codec.find("nvenc") != std::string::npos && !has("-rc "))
-        flags += " -rc vbr";
+    if (with_rate && codec.find("nvenc") != std::string::npos && !has("-rc ")) flags += " -rc vbr";
     return flags;
 }
 
@@ -1707,29 +1577,21 @@ static std::string video_rate(const std::string& codec, int bitrate, const std::
         return extra.find(key) != std::string::npos;
     };
     bool own_rate = has("-crf") || has("-qp") || has("-b:v") || has("-q:v") || has("-cq") || has("-global_quality") || has("-qscale") || has("-rc ");
-    if (own_rate)
-        return encoder_flags(codec, extra, false);
+    if (own_rate) return encoder_flags(codec, extra, false);
     if (bitrate > 0)
         return encoder_flags(codec, extra, true) + fmt::format(" -b:v {}", bitrate);
     std::string flags;
     if (!has("-preset") && !has("-quality")) {
-        if (codec.find("nvenc") != std::string::npos)
-            flags += " -preset p1";
-        else if (codec.find("amf") != std::string::npos)
-            flags += " -quality speed";
-        else if (codec.find("qsv") != std::string::npos)
-            flags += " -preset veryfast";
+        if (codec.find("nvenc") != std::string::npos) flags += " -preset p1";
+        else if (codec.find("amf") != std::string::npos) flags += " -quality speed";
+        else if (codec.find("qsv") != std::string::npos) flags += " -preset veryfast";
         else if (codec == "libx264" || codec == "libx265")
             flags += " -preset " + Logic::get().render_preset;
     }
-    if (codec.find("nvenc") != std::string::npos)
-        flags += " -rc constqp -qp 0";
-    else if (codec.find("amf") != std::string::npos)
-        flags += " -rc cqp -qp_i 0 -qp_p 0";
-    else if (codec.find("qsv") != std::string::npos)
-        flags += " -global_quality 1";
-    else
-        flags += " -qp 0";
+    if (codec.find("nvenc") != std::string::npos) flags += " -rc constqp -qp 0";
+    else if (codec.find("amf") != std::string::npos) flags += " -rc cqp -qp_i 0 -qp_p 0";
+    else if (codec.find("qsv") != std::string::npos) flags += " -global_quality 1";
+    else flags += " -qp 0";
     return flags;
 }
 
@@ -1781,8 +1643,7 @@ void main() {
 )";
     y_prog = link_program(vertex, luma);
     uv_prog = link_program(vertex, chroma);
-    if (!y_prog || !uv_prog)
-        return false;
+    if (!y_prog || !uv_prog) return false;
     GLint old_texture = 0, old_fbo = 0;
     glGetIntegerv(GL_TEXTURE_BINDING_2D, &old_texture);
     glGetIntegerv(GL_FRAMEBUFFER_BINDING, &old_fbo);
@@ -1796,18 +1657,12 @@ void main() {
 }
 
 void Recorder::close_nv12() {
-    if (y_prog)
-        glDeleteProgram(y_prog);
-    if (uv_prog)
-        glDeleteProgram(uv_prog);
-    if (y_fbo)
-        glDeleteFramebuffers(1, &y_fbo);
-    if (uv_fbo)
-        glDeleteFramebuffers(1, &uv_fbo);
-    if (y_color)
-        glDeleteTextures(1, &y_color);
-    if (uv_color)
-        glDeleteTextures(1, &uv_color);
+    if (y_prog) glDeleteProgram(y_prog);
+    if (uv_prog) glDeleteProgram(uv_prog);
+    if (y_fbo) glDeleteFramebuffers(1, &y_fbo);
+    if (uv_fbo) glDeleteFramebuffers(1, &uv_fbo);
+    if (y_color) glDeleteTextures(1, &y_color);
+    if (uv_color) glDeleteTextures(1, &uv_color);
     y_prog = 0;
     uv_prog = 0;
     y_fbo = 0;
@@ -1826,10 +1681,8 @@ void Recorder::convert_nv12() {
     glGetIntegerv(GL_VIEWPORT, viewport);
     GLboolean blend = glIsEnabled(GL_BLEND);
     GLboolean depth = glIsEnabled(GL_DEPTH_TEST);
-    if (blend)
-        glDisable(GL_BLEND);
-    if (depth)
-        glDisable(GL_DEPTH_TEST);
+    if (blend) glDisable(GL_BLEND);
+    if (depth) glDisable(GL_DEPTH_TEST);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, color);
     glBindFramebuffer(GL_FRAMEBUFFER, y_fbo);
@@ -1846,22 +1699,16 @@ void Recorder::convert_nv12() {
     glBindTexture(GL_TEXTURE_2D, old_texture);
     glBindFramebuffer(GL_FRAMEBUFFER, old_fbo);
     glViewport(viewport[0], viewport[1], viewport[2], viewport[3]);
-    if (blend)
-        glEnable(GL_BLEND);
-    if (depth)
-        glEnable(GL_DEPTH_TEST);
+    if (blend) glEnable(GL_BLEND);
+    if (depth) glEnable(GL_DEPTH_TEST);
 }
 #endif
 
 void Recorder::uncap_pace() {
-    if (pace_held)
-        return;
-    if (auto* director = CCDirector::sharedDirector()) {
-        saved_interval = director->getAnimationInterval();
-        if (!(saved_interval > 0.f))
-            saved_interval = 1.f / 60.f;
-        director->setAnimationInterval(1.f / 10000.f);
-    }
+    if (pace_held) return;
+    auto* director = CCDirector::sharedDirector();
+    saved_interval = director->getAnimationInterval();
+    director->setAnimationInterval(1.f / 10000.f);
 #ifdef GEODE_IS_WINDOWS
     saved_swap = 1;
     if (auto get_swap = reinterpret_cast<GetSwapIntervalFn>(wglGetProcAddress("wglGetSwapIntervalEXT")))
@@ -1881,11 +1728,9 @@ void Recorder::uncap_pace() {
 }
 
 void Recorder::restore_pace() {
-    if (!pace_held)
-        return;
+    if (!pace_held) return;
     pace_held = false;
-    if (auto* director = CCDirector::sharedDirector())
-        director->setAnimationInterval(saved_interval > 0.f ? saved_interval : 1.f / 60.f);
+    CCDirector::sharedDirector()->setAnimationInterval(saved_interval);
 #ifdef GEODE_IS_WINDOWS
     if (auto set_swap = reinterpret_cast<SwapIntervalFn>(wglGetProcAddress("wglSwapIntervalEXT")))
         set_swap(saved_swap);
@@ -1922,8 +1767,7 @@ bool Recorder::open_target() {
 
 #ifdef GEODE_IS_WINDOWS
     nv12 = !use_api && Recorder::get().setup_nv12();
-    if (!nv12)
-        Recorder::get().close_nv12();
+    if (!nv12) Recorder::get().close_nv12();
     auto bytes = (GLsizeiptr)Recorder::get().frame_bytes();
     glGenBuffers(RING, pbo.data());
     for (auto buf : pbo) {
@@ -1964,10 +1808,8 @@ bool Recorder::open_target() {
     shade->retain();
     bar_back = CCSprite::create("slidergroove2.png");
     bar_fill = CCSprite::create("sliderBar2.png");
-    if (bar_back)
-        bar_back->retain();
-    if (bar_fill)
-        bar_fill->retain();
+    if (bar_back) bar_back->retain();
+    if (bar_fill) bar_fill->retain();
     if (bar_back && bar_fill) {
         ccTexParams params = { GL_LINEAR, GL_LINEAR, GL_REPEAT, GL_CLAMP_TO_EDGE };
         bar_fill->getTexture()->setTexParameters(&params);
@@ -1976,8 +1818,7 @@ bool Recorder::open_target() {
         bar_back->addChild(bar_fill, -1);
     }
     bar_text = CCLabelBMFont::create("Rendering", "bigFont.fnt");
-    if (bar_text)
-        bar_text->retain();
+    if (bar_text) bar_text->retain();
     bar_shown.clear();
     text_at = {};
     return complete;
@@ -1986,44 +1827,34 @@ bool Recorder::open_target() {
 void Recorder::close_target() {
 #ifdef GEODE_IS_MACOS
     in_flight.clear();
-    if (pbo[0])
-        glDeleteBuffers(RING, pbo.data());
+    if (pbo[0]) glDeleteBuffers(RING, pbo.data());
     pbo.fill(0);
     buffered_capture = false;
 #endif
 #ifdef GEODE_IS_WINDOWS
     for (auto& fence : fences) {
-        if (fence)
-            glDeleteSync(fence);
+        if (fence) glDeleteSync(fence);
         fence = nullptr;
     }
     in_flight.clear();
-    if (pbo[0])
-        glDeleteBuffers(RING, pbo.data());
+    if (pbo[0]) glDeleteBuffers(RING, pbo.data());
     pbo.fill(0);
     Recorder::get().close_nv12();
 #endif
 #ifdef GEODE_IS_IOS
-    if (direct_fbo)
-        glDeleteFramebuffers(1, &direct_fbo);
+    if (direct_fbo) glDeleteFramebuffers(1, &direct_fbo);
     direct_fbo = 0;
     direct_failed = false;
 #endif
-    if (fbo)
-        glDeleteFramebuffers(1, &fbo);
-    if (color)
-        glDeleteTextures(1, &color);
+    if (fbo) glDeleteFramebuffers(1, &fbo);
+    if (color) glDeleteTextures(1, &color);
     fbo = 0;
     color = 0;
-    if (shade)
-        shade->release();
+    if (shade) shade->release();
     shade = nullptr;
-    if (bar_back)
-        bar_back->release();
-    if (bar_fill)
-        bar_fill->release();
-    if (bar_text)
-        bar_text->release();
+    if (bar_back) bar_back->release();
+    if (bar_fill) bar_fill->release();
+    if (bar_text) bar_text->release();
     bar_back = nullptr;
     bar_fill = nullptr;
     bar_text = nullptr;
@@ -2031,8 +1862,7 @@ void Recorder::close_target() {
 
 #ifdef GEODE_IS_MACOS
 bool Recorder::capture_bgra_buffered() {
-    if (!buffered_capture)
-        return false;
+    if (!buffered_capture) return false;
     while ((int)in_flight.size() >= RING && harvest(true)) {
     }
     glBindBuffer(GL_PIXEL_PACK_BUFFER, pbo[next_slot]);
@@ -2055,10 +1885,8 @@ void Recorder::drawFrame() {
     glViewport(0, 0, width, height);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     kmGLPushMatrix();
-    if (auto* play = PlayLayer::get())
-        play->visit();
-    else if (auto* scene = director->getRunningScene())
-        scene->visit();
+    if (auto* play = PlayLayer::get()) play->visit();
+    else if (auto* scene = director->getRunningScene()) scene->visit();
     if (fade < 1.f && shade) {
         shade->setContentSize(director->getWinSize());
         shade->setOpacity((GLubyte)std::lround((1.f - fade) * 255.f));
@@ -2073,8 +1901,7 @@ void Recorder::drawFrame() {
     }
 #endif
 #ifdef GEODE_IS_WINDOWS
-    if (nv12)
-        Recorder::get().convert_nv12();
+    if (nv12) Recorder::get().convert_nv12();
     int slot = next_slot;
     while (fences[slot] && Recorder::get().harvest(true)) {
     }
@@ -2121,8 +1948,7 @@ void Recorder::drawFrame() {
 }
 
 void Recorder::show_overlay() {
-    if (!active)
-        return;
+    if (!active) return;
     if (holding) {
 #ifdef GEODE_IS_MOBILE
         silent_change_size(saved_frame);
@@ -2131,27 +1957,23 @@ void Recorder::show_overlay() {
 #endif
     }
     auto pixels = window_pixels().value_or(saved_pixels);
-    if (pixels.width < 1.f || pixels.height < 1.f)
-        pixels = CCSize(1.f, 1.f);
+    if (pixels.width < 1.f || pixels.height < 1.f) pixels = CCSize(1.f, 1.f);
     GLfloat clear[4] = {};
     glGetFloatv(GL_COLOR_CLEAR_VALUE, clear);
     GLboolean scissor = glIsEnabled(GL_SCISSOR_TEST);
-    if (scissor)
-        glDisable(GL_SCISSOR_TEST);
+    if (scissor) glDisable(GL_SCISSOR_TEST);
 
     glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)screen_fbo);
     glViewport(0, 0, (GLsizei)pixels.width, (GLsizei)pixels.height);
     glClearColor(0.f, 0.f, 0.f, 1.f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-    if (Logic::get().render_show_lvl)
-        Recorder::get().draw_preview(pixels);
+    if (Logic::get().render_show_lvl) Recorder::get().draw_preview(pixels);
     PauseLayer* pause = nullptr;
     if (auto* scene = CCDirector::sharedDirector()->getRunningScene())
         pause = scene->getChildByType<PauseLayer>(0);
     if (!pause) {
-        if (auto* play = PlayLayer::get())
-            pause = play->getChildByType<PauseLayer>(0);
+        if (auto* play = PlayLayer::get()) pause = play->getChildByType<PauseLayer>(0);
     }
     if (pause) {
         kmGLPushMatrix();
@@ -2167,8 +1989,7 @@ void Recorder::show_overlay() {
     }
 
     glClearColor(clear[0], clear[1], clear[2], clear[3]);
-    if (scissor)
-        glEnable(GL_SCISSOR_TEST);
+    if (scissor) glEnable(GL_SCISSOR_TEST);
     glViewport(0, 0, (GLsizei)pixels.width, (GLsizei)pixels.height);
 }
 
@@ -2176,8 +1997,7 @@ void Recorder::show_overlay() {
 static GLuint flip_program() {
     static GLuint program = 0;
     static bool tried = false;
-    if (tried)
-        return program;
+    if (tried) return program;
     tried = true;
     auto compile = [](GLenum type, const char* source) {
         GLuint shader = glCreateShader(type);
@@ -2193,8 +2013,7 @@ static GLuint flip_program() {
     };
     GLuint vertex = compile(GL_VERTEX_SHADER, "attribute vec2 a_position; attribute vec2 a_texCoord; varying vec2 v_texCoord; void main() { v_texCoord = a_texCoord; gl_Position = vec4(a_position, 0.0, 1.0); }");
     GLuint fragment = compile(GL_FRAGMENT_SHADER, "precision mediump float; varying vec2 v_texCoord; uniform sampler2D u_texture; void main() { gl_FragColor = texture2D(u_texture, v_texCoord); }");
-    if (!vertex || !fragment)
-        return 0;
+    if (!vertex || !fragment) return 0;
     GLuint made = glCreateProgram();
     glAttachShader(made, vertex);
     glAttachShader(made, fragment);
@@ -2216,8 +2035,7 @@ static GLuint flip_program() {
 }
 
 bool Recorder::draw_direct() {
-    if (!use_api || !api || direct_failed)
-        return false;
+    if (!use_api || !api || direct_failed) return false;
     Timed timed{ g_timing.read_ns };
     GLuint program = flip_program();
     unsigned target = 0;
@@ -2226,8 +2044,7 @@ bool Recorder::draw_direct() {
         direct_failed = true;
         return false;
     }
-    if (!direct_fbo)
-        glGenFramebuffers(1, &direct_fbo);
+    if (!direct_fbo) glGenFramebuffers(1, &direct_fbo);
     glBindFramebuffer(GL_FRAMEBUFFER, direct_fbo);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, target, 0);
     bool complete = glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
@@ -2260,11 +2077,9 @@ bool Recorder::draw_direct() {
 #endif
 
 void Recorder::draw_preview(CCSize pixels) {
-    if (!color || width < 1 || height < 1 || pixels.width < 1.f || pixels.height < 1.f)
-        return;
+    if (!color || width < 1 || height < 1 || pixels.width < 1.f || pixels.height < 1.f) return;
     auto* program = CCShaderCache::sharedShaderCache()->programForKey(kCCShader_PositionTexture);
-    if (!program)
-        return;
+    if (!program) return;
     auto win = CCDirector::sharedDirector()->getWinSize();
     float screen = pixels.width / pixels.height;
     float video = (float)(width) / (float)(height);
@@ -2286,19 +2101,17 @@ void Recorder::draw_preview(CCSize pixels) {
 }
 
 void Recorder::draw_progress() {
-    if (!bar_text)
-        return;
+    if (!bar_text) return;
     auto status = Logic::get().render_status();
-    if (!status.active)
-        return;
+    if (!status.active) return;
     auto win = CCDirector::sharedDirector()->getWinSize();
     float scale = win.height / 320.f;
     CCPoint middle = { win.width * 0.5f, win.height * 0.5f };
     if (bar_back && bar_fill) {
         float full = bar_back->getTextureRect().size.width - 4.f;
         bar_fill->setTextureRect({ 0.f, 0.f, full * std::clamp(status.known ? status.progress : 0.f, 0.f, 1.f), 8.f });
-        if (auto* manager = GameManager::get())
-            bar_fill->setColor(manager->colorForIdx(manager->getPlayerColor()));
+        auto* manager = GameManager::get();
+        bar_fill->setColor(manager->colorForIdx(manager->getPlayerColor()));
         bar_back->setScale(1.3f * scale);
         bar_back->setPosition(middle);
     }
@@ -2313,26 +2126,22 @@ void Recorder::draw_progress() {
     bar_text->setScale(0.4f * scale);
     bar_text->setPosition({ middle.x, middle.y + 22.f * scale });
     kmGLPushMatrix();
-    if (bar_back && bar_fill)
-        bar_back->visit();
+    if (bar_back && bar_fill) bar_back->visit();
     bar_text->visit();
     kmGLPopMatrix();
 }
 
 #if defined(GEODE_IS_WINDOWS) || defined(GEODE_IS_MACOS)
 bool Recorder::harvest(bool wait) {
-    if (in_flight.empty())
-        return false;
+    if (in_flight.empty()) return false;
     int slot = in_flight.front();
 #ifdef GEODE_IS_WINDOWS
     GLenum state = glClientWaitSync(fences[slot], wait ? GL_SYNC_FLUSH_COMMANDS_BIT : 0, wait ? 5'000'000'000ull : 0);
-    if (!wait && state != GL_ALREADY_SIGNALED && state != GL_CONDITION_SATISFIED)
-        return false;
+    if (!wait && state != GL_ALREADY_SIGNALED && state != GL_CONDITION_SATISFIED) return false;
     glDeleteSync(fences[slot]);
     fences[slot] = nullptr;
 #else
-    if (!wait && (int)in_flight.size() < RING - 1)
-        return false;
+    if (!wait && (int)in_flight.size() < RING - 1) return false;
     Timed timed{ g_timing.read_ns };
 #endif
     in_flight.pop_front();
@@ -2378,8 +2187,7 @@ void Recorder::queue_frame(std::vector<unsigned char> frame) {
             return queue.size() < QUEUE || broken;
         });
     }
-    if (broken)
-        return;
+    if (broken) return;
     queue.push_back(std::move(frame));
     wake.notify_all();
 }
@@ -2392,8 +2200,7 @@ void Recorder::encode_loop() {
             wake.wait(guard, [this] {
                 return closing || !queue.empty();
             });
-            if (queue.empty())
-                return;
+            if (queue.empty()) return;
             frame = std::move(queue.front());
             queue.pop_front();
         }
@@ -2404,8 +2211,7 @@ void Recorder::encode_loop() {
         }
         {
             std::lock_guard guard(lock);
-            if (spare_frames.size() < QUEUE + 1)
-                spare_frames.push_back(std::move(frame));
+            if (spare_frames.size() < QUEUE + 1) spare_frames.push_back(std::move(frame));
         }
     }
 }
@@ -2427,35 +2233,30 @@ void Recorder::finish_video() {
     spare_frames.clear();
     closing = false;
 #ifdef ECHO_FFMPEG_API
-    if (api)
-        api->stop();
+    if (api) api->stop();
     api.reset();
 #endif
 #ifdef GEODE_IS_WINDOWS
     Recorder::get().close_handle(video);
     if (process) {
-        if (WaitForSingleObject(process, 30000) != WAIT_OBJECT_0)
-            TerminateProcess(process, 0);
+        if (WaitForSingleObject(process, 30000) != WAIT_OBJECT_0) TerminateProcess(process, 0);
         CloseHandle(process);
         process = nullptr;
     }
 #endif
 #ifdef GEODE_IS_MACOS
-    if (video >= 0)
-        close(video);
+    if (video >= 0) close(video);
     video = -1;
     if (process) {
         int code = wait_tool(process, 60.0);
         process = 0;
         if (code != 0) {
             encode_error = last_line(video_log, 160);
-            if (encode_error.empty())
-                encode_error = "ffmpeg did not finish the video";
+            if (encode_error.empty()) encode_error = "ffmpeg did not finish the video";
         }
     }
     std::error_code ignored;
-    if (encode_error.empty() && !video_log.empty())
-        fs::remove(video_log, ignored);
+    if (encode_error.empty() && !video_log.empty()) fs::remove(video_log, ignored);
 #endif
 }
 
@@ -2480,11 +2281,9 @@ bool Recorder::prefer_api() {
 }
 
 bool Recorder::idle() const {
-    if (active)
-        return false;
+    if (active) return false;
 #ifdef ECHO_FFMPEG_API
-    if (api)
-        return false;
+    if (api) return false;
 #endif
 #ifdef GEODE_IS_WINDOWS
     return process == nullptr && video == INVALID_HANDLE_VALUE;
@@ -2510,8 +2309,7 @@ bool Recorder::write_out(const std::vector<unsigned char>& frame) {
 #ifdef GEODE_IS_WINDOWS
     return Recorder::get().write_all(video, frame.data(), frame.size());
 #elif defined(GEODE_IS_MACOS)
-    if (Recorder::get().write_all(video, frame.data(), frame.size()))
-        return true;
+    if (Recorder::get().write_all(video, frame.data(), frame.size())) return true;
     std::this_thread::sleep_for(chrono::milliseconds(100));
     auto reason = last_line(video_log, 160);
     std::lock_guard guard(lock);
@@ -2549,11 +2347,9 @@ std::string Recorder::open_api(int fps) {
     install_encoder_options();
 #endif
     const auto& logic = Logic::get();
-    if (!Recorder::api_available())
-        return "FFmpeg API is not installed";
+    if (!Recorder::api_available()) return "FFmpeg API is not installed";
     auto encoder = std::make_unique<ffmpeg::events::Recorder>();
-    if (!encoder->isValid())
-        return "FFmpeg API did not respond";
+    if (!encoder->isValid()) return "FFmpeg API did not respond";
     auto codecs = ffmpeg::events::Recorder::getAvailableCodecs();
     auto offered = [&](const std::string& name) {
         return codecs.empty() || std::ranges::find(codecs, name) != codecs.end();
@@ -2611,8 +2407,7 @@ std::string Recorder::open_api(int fps) {
 #endif
         encoder = std::make_unique<ffmpeg::events::Recorder>();
         auto res = encoder->init(settings);
-        if (res.isErr())
-            error = res.unwrapErr();
+        if (res.isErr()) error = res.unwrapErr();
         return res.isOk();
     });
     if (opened == attempts.end()) {
@@ -2628,8 +2423,7 @@ std::string Recorder::open_api(int fps) {
 static bool write_wav(const fs::path& raw, const fs::path& wav, int rate, int channels) {
     std::ifstream in(raw, std::ios::binary);
     std::ofstream out(wav, std::ios::binary | std::ios::trunc);
-    if (!in || !out || rate <= 0 || channels <= 0)
-        return false;
+    if (!in || !out || rate <= 0 || channels <= 0) return false;
     auto put = [&](auto value) {
         out.write(reinterpret_cast<const char*>(&value), sizeof(value));
     };
@@ -2654,8 +2448,7 @@ static bool write_wav(const fs::path& raw, const fs::path& wav, int rate, int ch
     while (in) {
         in.read(reinterpret_cast<char*>(block.data()), (std::streamsize)(block.size() * sizeof(float)));
         size_t amt = (size_t)in.gcount() / (sizeof(float) * width);
-        if (amt == 0)
-            break;
+        if (amt == 0) break;
         auto pcm = std::views::iota(size_t{ 0 }, amt) | std::views::transform([&](size_t i) {
             const float* frame = block.data() + i * width;
             return std::array<short, 2>{ sample(frame[0]), sample(width > 1 ? frame[1] : frame[0]) };
@@ -2689,12 +2482,10 @@ void Recorder::save_api_render() {
         }
     };
     if (!has_audio) {
-        if (!audio.empty())
-            fs::remove(audio, error);
+        if (!audio.empty()) fs::remove(audio, error);
         if (frames > 0 && fs::exists(output, error))
             finish(output, {});
-        else
-            Logic::get().message = "Render stopped";
+        else Logic::get().message = "Render stopped";
         return;
     }
     saving = true;
@@ -2731,13 +2522,11 @@ void Recorder::save_api_render() {
                     if (auto mixed = ffmpeg::events::AudioMixer::mixVideoRaw(video, stereo, temp); mixed.isErr())
                         failed = mixed.unwrapErr();
                 }
-                else if (!write_wav(raw, wav, rate, channels))
-                    failed = "could not write the audio";
+                else if (!write_wav(raw, wav, rate, channels)) failed = "could not write the audio";
                 else {
                     if (auto mixed = ffmpeg::events::AudioMixer::mixVideoAudio(video, wav, temp); mixed.isErr())
                         failed = mixed.unwrapErr();
-                    else
-                        fs::remove(wav, error);
+                    else fs::remove(wav, error);
                 }
 #endif
             }
@@ -2757,22 +2546,18 @@ void Recorder::save_api_render() {
                     std::error_code restore_error;
                     fs::rename(backup, video, restore_error);
                 }
-                else
-                    fs::remove(backup, error);
+                else fs::remove(backup, error);
             }
-            if (error)
-                failed = "could not replace the video";
+            if (error) failed = "could not replace the video";
         }
-        if (failed.empty())
-            fs::remove(raw, error);
+        if (failed.empty()) fs::remove(raw, error);
         else {
             fs::remove(temp, error);
             if (write_wav(raw, wav, rate, channels)) {
                 fs::remove(raw, error);
                 failed += "; audio kept in " + wav.filename().string();
             }
-            else
-                failed += "; raw audio kept in " + raw.filename().string();
+            else failed += "; raw audio kept in " + raw.filename().string();
         }
         Loader::get()->queueInMainThread([finish, video, failed] {
             finish(video, failed);
@@ -2785,8 +2570,7 @@ void Recorder::save_api_render() {
 bool Recorder::mux_audio() {
     auto& tap = AudioTap::get();
     std::error_code error;
-    if (audio.empty())
-        return true;
+    if (audio.empty()) return true;
     bool has_audio = frames > 0 && tap.written > 0 && tap.rate > 0 && tap.channels > 0 && fs::exists(output, error);
     if (!has_audio) {
         fs::remove(audio, error);
@@ -2817,8 +2601,7 @@ bool Recorder::mux_audio() {
     fs::remove(log, error);
     if (failed.empty()) {
         fs::rename(temp, output, error);
-        if (error)
-            failed = "could not replace the video";
+        if (error) failed = "could not replace the video";
     }
     if (failed.empty()) {
         fs::remove(audio, error);
@@ -2842,8 +2625,7 @@ bool Recorder::mux_audio() {
 bool Recorder::mux_audio() {
     auto& tap = AudioTap::get();
     std::error_code error;
-    if (audio.empty())
-        return true;
+    if (audio.empty()) return true;
     bool has_audio = frames > 0 && tap.written > 0 && tap.rate > 0 && tap.channels > 0 && fs::exists(output, error);
     if (!has_audio) {
         fs::remove(audio, error);
@@ -2872,8 +2654,7 @@ bool Recorder::mux_audio() {
     fs::remove(log, error);
     if (failed.empty()) {
         fs::rename(temp, output, error);
-        if (error)
-            failed = "could not replace the video";
+        if (error) failed = "could not replace the video";
     }
     if (failed.empty()) {
         fs::remove(audio, error);
@@ -2894,12 +2675,10 @@ bool Recorder::mux_audio() {
 #endif
 
 static float lvl_fraction(PlayLayer* play, int last_input_frame) {
-    if (!play)
-        return -1.f;
+    if (!play) return -1.f;
     if (!play->m_isPlatformer && play->m_player1 && play->m_endPortal) {
         float end_x = play->m_endPortal->getPositionX();
-        if (end_x > 0.f)
-            return std::clamp(play->m_player1->getPositionX() / end_x, 0.f, 1.f);
+        if (end_x > 0.f) return std::clamp(play->m_player1->getPositionX() / end_x, 0.f, 1.f);
     }
     if (Logic::get().is_playing() && last_input_frame > 0) {
         return std::clamp((float)(Logic::get().step_frame) / (float)(last_input_frame), 0.f, 1.f);
@@ -2917,8 +2696,7 @@ static std::string clock_text(double seconds) {
 RenderStatus Logic::render_status() {
     auto& film = Recorder::get();
     RenderStatus status;
-    if (!film.active)
-        return status;
+    if (!film.active) return status;
     status.active = true;
     if (film.paused) {
         status.text = "Render paused";
@@ -2926,8 +2704,7 @@ RenderStatus Logic::render_status() {
     }
     auto* play = PlayLayer::get();
     double video = (double)(film.frames) * (double)(render_step());
-    if (film.busy_seconds > 0.05)
-        status.speed = (float)(video / film.busy_seconds);
+    if (film.busy_seconds > 0.05) status.speed = (float)(video / film.busy_seconds);
     auto& marks = film.pace_marks;
     if (!marks.empty() && (film.busy_seconds < marks.back().first || video < marks.back().second)) {
         marks.clear();
@@ -2955,8 +2732,7 @@ RenderStatus Logic::render_status() {
         int channel = play->m_gameState.m_currentChannel;
         double end = play->timeForPos(play->m_endPortal->getPosition(), 0, channel, true, 0);
         double here = play->timeForPos(play->m_player1->getPosition(), 0, channel, true, 0);
-        if (std::isfinite(end) && std::isfinite(here) && end > 0.0)
-            left_game = std::max(end - here, 0.0);
+        if (end > 0.0) left_game = std::max(end - here, 0.0);
     }
     double game_speed = std::max((double)(render_speed()), 0.01);
     double tail = (double)(render_after_end);
@@ -3003,8 +2779,7 @@ void Logic::sync_render_pause_button() {
 #ifndef GEODE_IS_MOBILE
     hide = false;
 #endif
-    if (hidden && hidden != button)
-        hidden = nullptr;
+    if (hidden && hidden != button) hidden = nullptr;
     if (hide && !hidden && button->isVisible()) {
         button->setVisible(false);
         hidden = button;
@@ -3027,16 +2802,12 @@ bool Logic::render_uses_screen_shape() {
 }
 
 int Logic::render_width_for(int width, int height) {
-    if (!render_uses_screen_shape())
-        return width;
+    if (!render_uses_screen_shape()) return width;
     auto* view = CCEGLView::get();
-    if (!view)
-        return width;
+    if (!view) return width;
     auto frame = view->getFrameSize();
-    if (Recorder::get().holding)
-        frame = Recorder::get().saved_frame;
-    if (frame.width <= 1.f || frame.height <= 1.f)
-        return width;
+    if (Recorder::get().holding) frame = Recorder::get().saved_frame;
+    if (frame.width <= 1.f || frame.height <= 1.f) return width;
     float wide = std::max(frame.width, frame.height);
     float tall = std::min(frame.width, frame.height);
     return std::max((int)std::lround((float)(height) * wide / tall), 2) & ~1;
@@ -3068,22 +2839,17 @@ bool Logic::render_blocks_mixer() {
 
 bool Logic::render_should_skip() {
     auto* play = PlayLayer::get();
-    if (!play || render_paused())
-        return true;
-    if (pause_menu_open())
-        return true;
+    if (!play || render_paused()) return true;
+    if (pause_menu_open()) return true;
     bool started = play->m_started || (render_record_pause && Recorder::get().seen_frames >= 2);
-    if (!started)
-        return true;
-    if (play->m_isPaused)
-        return true;
+    if (!started) return true;
+    if (play->m_isPaused) return true;
     return false;
 }
 
 bool Logic::begin_render_frame() {
     auto& film = Recorder::get();
-    if (!film.active)
-        return false;
+    if (!film.active) return false;
     auto now = chrono::steady_clock::now();
     double gap = film.ticked ? chrono::duration<double>(now - film.last_tick).count() : 0.0;
     film.last_tick = now;
@@ -3111,8 +2877,7 @@ void Logic::show_render_overlay() {
 bool Logic::capture_frame() {
     auto& film = Recorder::get();
     auto* play = PlayLayer::get();
-    if (!film.active || !play)
-        return false;
+    if (!film.active || !play) return false;
     float dt = render_step();
     if (play->m_hasCompletedLevel) {
         film.endTime += dt;
@@ -3121,8 +2886,7 @@ bool Logic::capture_frame() {
             stop_render();
             if (leave) {
                 Loader::get()->queueInMainThread([] {
-                    if (auto* layer = PlayLayer::get())
-                        layer->onQuit();
+                    if (auto* layer = PlayLayer::get()) layer->onQuit();
                 });
             }
             return false;
@@ -3134,8 +2898,7 @@ bool Logic::capture_frame() {
         fadeOut = std::clamp((render_after_end - film.endTime) / render_fade_out, 0.f, 1.f);
     }
     film.fade = std::min(fadeIn, fadeOut);
-    if (film.start_fraction < 0.f)
-        film.start_fraction = lvl_fraction(play, film.last_input_frame);
+    if (film.start_fraction < 0.f) film.start_fraction = lvl_fraction(play, film.last_input_frame);
     AudioTap::get().advance(dt * film.audio_speed, film.fade);
     film.drawFrame();
     if (film.frames % (std::max(render_fps, 1) * 5) == 0 && g_render_notes.size() < 60000) {
@@ -3153,8 +2916,7 @@ bool Logic::capture_frame() {
     if (film.broken) {
         std::string reason = film.use_api ? "Encoding failed: " + film.failure : std::string("The render pipe closed");
 #ifdef GEODE_IS_MACOS
-        if (!film.use_api && !film.failure.empty())
-            reason = "Encoding failed: " + film.failure;
+        if (!film.use_api && !film.failure.empty()) reason = "Encoding failed: " + film.failure;
 #endif
         stop_render();
         notify(reason, false);
@@ -3229,14 +2991,12 @@ void Logic::stop_render() {
 #ifdef GEODE_IS_WINDOWS
     if (film.starting && !film.active) {
         film.cancel = true;
-        if (film.video != INVALID_HANDLE_VALUE)
-            CancelIoEx(film.video, nullptr);
+        if (film.video != INVALID_HANDLE_VALUE) CancelIoEx(film.video, nullptr);
         message = "Render canceled";
         return;
     }
 #endif
-    if (film.idle())
-        return;
+    if (film.idle()) return;
     film.starting = false;
     film.cancel = false;
     film.active = false;
@@ -3252,8 +3012,7 @@ void Logic::stop_render() {
     }
 #ifdef GEODE_IS_WINDOWS
     bool muxed = film.mux_audio();
-    if (muxed)
-        message = "Render stopped";
+    if (muxed) message = "Render stopped";
 #endif
 #ifdef GEODE_IS_MACOS
     if (!film.encode_error.empty()) {
@@ -3270,16 +3029,13 @@ void Logic::stop_render() {
 
 void Logic::start_render() {
     auto& film = Recorder::get();
-    if (film.active || film.starting)
-        return;
+    if (film.active || film.starting) return;
     if (film.saving) {
         notify("Still saving the last render", false);
         return;
     }
     auto* play = PlayLayer::get();
-    auto* director = CCDirector::sharedDirector();
-    auto* view = director ? director->getOpenGLView() : nullptr;
-    if (!play || !view) {
+    if (!play) {
         render_queued = true;
         notify("Rendering starts when you enter a level", true);
         return;
@@ -3292,8 +3048,7 @@ void Logic::start_render() {
     }
     int fps = std::max(render_fps, 1);
     std::string ext = render_extension.empty() ? "mp4" : render_extension;
-    if (ext.front() == '.')
-        ext.erase(ext.begin());
+    if (ext.front() == '.') ext.erase(ext.begin());
     render_speed_locked = 0.f;
     film.audio_speed = render_speed();
     auto folder = save_root() / "renders";
@@ -3467,8 +3222,7 @@ void Logic::start_render() {
         return render_args.find(key) != std::string::npos;
     };
     std::string filters = "vflip";
-    if (render_color_fix)
-        filters += ",colorspace=all=bt709:iall=bt470bg:fast=1";
+    if (render_color_fix) filters += ",colorspace=all=bt709:iall=bt470bg:fast=1";
     std::vector<std::string> args{
         ffmpeg.string(), "-y", "-loglevel", "error", "-f", "rawvideo", "-pix_fmt", "bgra",
         "-s", fmt::format("{}x{}", width, height), "-r", std::to_string(fps), "-i", "pipe:0", "-an",

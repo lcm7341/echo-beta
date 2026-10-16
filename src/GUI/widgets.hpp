@@ -116,7 +116,7 @@ namespace EchoUI {
 
 	bool CollapseBar(const char* title, Icon icon, bool open);
 
-	bool& single_column();
+	extern bool g_single_column;
 	
 	void ScrollMark();
 	void BeginTiles(float left, float top, float right, float bottom, float tile_width_em, float shown = 1.f, float rate = 1.f);
@@ -132,8 +132,8 @@ namespace EchoUI {
 		float flown = 1.f;
 	};
 
-	std::unordered_map<std::string, TileState>& tile_states();
-	bool& tiles_changed();
+	extern std::unordered_map<std::string, TileState> g_tile_states;
+	extern bool g_tiles_changed;
 	void TileGroup(const char* name);
 	bool BeginTileOfCards(const char* title, float width_em);
 	void EndTileOfCards();
@@ -191,9 +191,9 @@ namespace EchoUI {
 
 	int preset_count();
 	const Preset& preset(int index);
-	bool& rainbow_rim();
-	bool& button_effects();
-	Scene& scene();
+	extern bool g_rainbow_rim;
+	extern bool g_button_effects;
+	extern Scene g_scene;
 	const char* scene_name(Scene which);
 	Scene scene_named(std::string_view name);
 	void apply_palette(const Palette& palette);

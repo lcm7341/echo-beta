@@ -14,7 +14,7 @@ using namespace geode::prelude;
 
 class EchoJson {
 public:
-    static constexpr int version = 2;
+    static const int version = 2;
 
     static std::string number(double value) {
         return std::isfinite(value) ? fmt::format("{}", value) : "0";
@@ -38,10 +38,8 @@ public:
     static int button_from_json(const matjson::Value& json) {
         if (auto name = json.asString()) {
             const auto& text = name.unwrap();
-            if (text == "left")
-                return 2;
-            if (text == "right")
-                return 3;
+            if (text == "left") return 2;
+            if (text == "right") return 3;
             return 1;
         }
         int button = ReplayIO::read_int(json, 1);
@@ -68,10 +66,8 @@ public:
             }
             out.lvl_seed_known = true;
         }
-        if (auto flag = json["velocity_unrounding"].asBool())
-            out.unrounded = flag.unwrap();
-        if (auto flag = json["silicate_variance"].asBool())
-            out.silicate_variance = flag.unwrap();
+        if (auto flag = json["velocity_unrounding"].asBool()) out.unrounded = flag.unwrap();
+        if (auto flag = json["silicate_variance"].asBool()) out.silicate_variance = flag.unwrap();
         if (auto flag = json["low_detail_mode"].asBool()) {
             out.ldm = flag.unwrap();
             out.ldm_known = true;
@@ -103,16 +99,14 @@ public:
             }
             inputs.push_back(input);
         }
-        if (poses.size() != inputs.size())
-            poses.clear();
+        if (poses.size() != inputs.size()) poses.clear();
         ReplayIO::adopt_inputs(out, std::move(inputs), (float)ReplayIO::read_number(json["fps"], 240.0), std::move(poses));
         if (json.contains("rates") && json["rates"].isArray()) {
             for (const auto& item : json["rates"]) {
                 RateChange change;
                 change.frame = ReplayIO::read_int(item["frame"], 0);
                 change.fps = (float)ReplayIO::read_number(item["fps"], 240.0);
-                if (change.frame >= 0 && change.fps >= 1.f)
-                    out.rates.push_back(change);
+                if (change.frame >= 0 && change.fps >= 1.f) out.rates.push_back(change);
             }
             tidy_rates(out.rates, out.fps);
         }
@@ -136,8 +130,7 @@ public:
             input.holding = ReplayIO::read_boolish(item["holding"]);
             input.player2 = item.contains("player_2") && ReplayIO::read_boolish(item["player_2"]);
             int button = ReplayIO::read_int(item["button"], 1);
-            if (button < 1 || button > 3)
-                button = 1;
+            if (button < 1 || button > 3) button = 1;
             input.button = (unsigned char)button;
             if (debug || item.contains("x_position")) {
                 FramePose pose;
@@ -150,8 +143,7 @@ public:
             }
             inputs.push_back(input);
         }
-        if (poses.size() != inputs.size())
-            poses.clear();
+        if (poses.size() != inputs.size()) poses.clear();
         ReplayIO::adopt_inputs(out, std::move(inputs), (float)ReplayIO::read_number(json["fps"], 240.0), std::move(poses));
         out.end_x = (float)ReplayIO::read_number(json["end_xpos"], 0.0);
         if (json["metadata"].isObject()) {
@@ -176,22 +168,18 @@ bool ReplayIO::write_echo_json(const fs::path& path, const MacroSnap& snap) {
     std::vector<Frame> sorted;
     std::vector<FramePose> sorted_poses;
     sorted.reserve(inputs.size());
-    if (debug)
-        sorted_poses.reserve(inputs.size());
+    if (debug) sorted_poses.reserve(inputs.size());
     for (size_t i : order) {
         auto input = inputs[i];
-        if (input.button < 1 || input.button > 3)
-            input.button = 1;
+        if (input.button < 1 || input.button > 3) input.button = 1;
         input.number = std::max(input.number, 0);
         sorted.push_back(input);
-        if (debug)
-            sorted_poses.push_back(poses[i]);
+        if (debug) sorted_poses.push_back(poses[i]);
     }
     inputs.swap(sorted);
     poses.swap(sorted_poses);
     std::ofstream file(path);
-    if (!file)
-        return false;
+    if (!file) return false;
     file << "{\n";
     file << "\t\"format\": \"echo\",\n";
     file << fmt::format("\t\"version\": {},\n", EchoJson::version);
@@ -209,10 +197,8 @@ bool ReplayIO::write_echo_json(const fs::path& path, const MacroSnap& snap) {
     file << fmt::format("\t\"attempts\": {},\n", snap.attempts);
     if (snap.lvl_seed_known)
         file << fmt::format("\t\"seed\": \"{}\",\n", snap.lvl_seed);
-    if (snap.unrounded)
-        file << "\t\"velocity_unrounding\": true,\n";
-    if (snap.silicate_variance)
-        file << "\t\"silicate_variance\": true,\n";
+    if (snap.unrounded) file << "\t\"velocity_unrounding\": true,\n";
+    if (snap.silicate_variance) file << "\t\"silicate_variance\": true,\n";
     if (snap.ldm_known)
         file << fmt::format("\t\"low_detail_mode\": {},\n", snap.ldm);
     file << fmt::format("\t\"debug\": {},\n", debug);
@@ -227,10 +213,8 @@ bool ReplayIO::write_echo_json(const fs::path& path, const MacroSnap& snap) {
 bool ReplayIO::read_echo_json(const fs::path& path, MacroSnap& out) {
     std::ifstream file(path);
     auto parsed = matjson::Value::parse(file);
-    if (!parsed)
-        return false;
+    if (!parsed) return false;
     const auto& json = parsed.unwrap();
-    if (!json.contains("inputs") || !json["inputs"].isArray())
-        return false;
+    if (!json.contains("inputs") || !json["inputs"].isArray()) return false;
     return EchoJson::is_current(json) ? EchoJson::read_current(json, out) : EchoJson::read_old(json, out);
 }

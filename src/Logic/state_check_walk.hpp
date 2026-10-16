@@ -5,8 +5,8 @@
 #include <initializer_list>
 #include <type_traits>
 
-constexpr std::size_t NODE_LEFT = 0, NODE_PARENT = 8, NODE_RIGHT = 16, NODE_ISNIL = 25;
-constexpr std::size_t LIST_NEXT = 0, LIST_PREV = 8;
+const std::size_t NODE_LEFT = 0, NODE_PARENT = 8, NODE_RIGHT = 16, NODE_ISNIL = 25;
+const std::size_t LIST_NEXT = 0, LIST_PREV = 8;
 
 inline bool plausible_pointer(std::uintptr_t p) {
 	return p >= 0x10000 && p < 0x7fff'ffff'ffff && (p & 0xf) == 0;
@@ -21,22 +21,18 @@ inline bool is_nil_node(std::uintptr_t node) {
 }
 
 inline bool walk_tree(std::uintptr_t head, std::size_t size) {
-	if (!plausible_pointer(head) || !is_nil_node(head))
-		return false;
+	if (!plausible_pointer(head) || !is_nil_node(head)) return false;
 	auto root = read_word_at(head, NODE_PARENT);
-	if (size == 0)
-		return root == head;
+	if (size == 0) return root == head;
 	if (!plausible_pointer(root) || is_nil_node(root) || read_word_at(root, NODE_PARENT) != head)
 		return false;
 	auto node = read_word_at(head, NODE_LEFT);
 	std::size_t seen = 0;
 	while (node != head) {
-		if (!plausible_pointer(node) || is_nil_node(node) || ++seen > size)
-			return false;
+		if (!plausible_pointer(node) || is_nil_node(node) || ++seen > size) return false;
 		for (auto side : { NODE_LEFT, NODE_RIGHT }) {
 			auto child = read_word_at(node, side);
-			if (child == head)
-				continue;
+			if (child == head) continue;
 			if (!plausible_pointer(child) || is_nil_node(child) || read_word_at(child, NODE_PARENT) != node)
 				return false;
 		}
@@ -44,31 +40,26 @@ inline bool walk_tree(std::uintptr_t head, std::size_t size) {
 		if (right != head) {
 			node = right;
 			for (std::size_t depth = 0; read_word_at(node, NODE_LEFT) != head; ++depth) {
-				if (depth > size)
-					return false;
+				if (depth > size) return false;
 				node = read_word_at(node, NODE_LEFT);
-				if (!plausible_pointer(node))
-					return false;
+				if (!plausible_pointer(node)) return false;
 			}
 			continue;
 		}
 		auto parent = read_word_at(node, NODE_PARENT);
 		for (std::size_t depth = 0; parent != head && node == read_word_at(parent, NODE_RIGHT); ++depth) {
-			if (depth > size || !plausible_pointer(parent))
-				return false;
+			if (depth > size || !plausible_pointer(parent)) return false;
 			node = parent;
 			parent = read_word_at(node, NODE_PARENT);
 		}
-		if (parent != head && !plausible_pointer(parent))
-			return false;
+		if (parent != head && !plausible_pointer(parent)) return false;
 		node = parent;
 	}
 	return seen == size && read_word_at(head, NODE_RIGHT) != 0;
 }
 
 inline bool walk_list(std::uintptr_t head, std::size_t size) {
-	if (!plausible_pointer(head))
-		return false;
+	if (!plausible_pointer(head)) return false;
 	auto node = read_word_at(head, LIST_NEXT);
 	std::size_t seen = 0;
 	while (node != head) {

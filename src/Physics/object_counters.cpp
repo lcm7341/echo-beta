@@ -13,14 +13,12 @@ static T* resolve(std::uintptr_t site, std::size_t operand, std::size_t length, 
     const auto* code = reinterpret_cast<const unsigned char*>(geode::base::get() + site);
     std::size_t i = 0;
     for (auto byte : prefix) {
-        if (code[i++] != byte)
-            return nullptr;
+        if (code[i++] != byte) return nullptr;
     }
     int rel = 0;
     std::memcpy(&rel, code + operand, 4);
     auto target = reinterpret_cast<std::uintptr_t>(code + length) + rel;
-    if (target != geode::base::get() + expected)
-        return nullptr;
+    if (target != geode::base::get() + expected) return nullptr;
     return reinterpret_cast<T*>(target);
 }
 #endif
@@ -30,13 +28,12 @@ template <class T>
 static T* known(std::uintptr_t data, std::initializer_list<std::pair<std::uintptr_t, unsigned>> code) {
     auto base = geode::base::get();
     for (const auto& [offset, word] : code) {
-        if (*reinterpret_cast<const unsigned*>(base + offset) != word)
-            return nullptr;
+        if (*reinterpret_cast<const unsigned*>(base + offset) != word) return nullptr;
     }
     return reinterpret_cast<T*>(base + data);
 }
 #endif
-constexpr unsigned long long VARIANCE_SEED = 0;
+const unsigned long long VARIANCE_SEED = 0;
 
 int* unique_id_counter() {
 #ifdef GEODE_IS_WINDOWS
@@ -64,8 +61,7 @@ unsigned long long* variance_generator() {
 }
 
 void reseed_variance() {
-    if (auto* generator = variance_generator())
-        *generator = VARIANCE_SEED;
+    if (auto* generator = variance_generator()) *generator = VARIANCE_SEED;
 }
 
 class $modify(CheckpointCounters, PlayLayer) {
@@ -75,10 +71,8 @@ class $modify(CheckpointCounters, PlayLayer) {
         int id = ids ? *ids : 0;
         unsigned long long draw = variance ? *variance : 0;
         auto* checkpoint = PlayLayer::createCheckpoint();
-        if (ids)
-            *ids = id;
-        if (variance)
-            *variance = draw;
+        if (ids) *ids = id;
+        if (variance) *variance = draw;
         return checkpoint;
     }
 };

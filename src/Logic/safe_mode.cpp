@@ -13,8 +13,7 @@ static std::vector<std::string_view> g_used;
 std::vector<std::string_view> Logic::active_cheats() const {
     std::vector<std::string_view> out;
     auto add = [&](bool on, std::string_view name) {
-        if (on)
-            out.push_back(name);
+        if (on) out.push_back(name);
     };
     add(noclip_p1 || noclip_p2, "Noclip");
     add(speedhack != 1.f, "Speedhack");
@@ -61,20 +60,16 @@ bool Logic::attempt_cheated() const {
 }
 
 void Logic::update_safe_mode(PlayLayer* play) {
-    if (!play)
-        return;
-    if (!safe_mode)
-        return;
+    if (!play) return;
+    if (!safe_mode) return;
     for (auto name : active_cheats()) {
         g_cheated = true;
-        if (std::ranges::find(g_used, name) == g_used.end())
-            g_used.push_back(name);
+        if (std::ranges::find(g_used, name) == g_used.end()) g_used.push_back(name);
     }
 }
 
 void Logic::hold_safe_mode_test_mode(PlayLayer* play) {
-    if (!play || !g_cheated || g_applied)
-        return;
+    if (!play || !g_cheated || g_applied) return;
     g_saved_test_mode = play->m_isTestMode;
     play->m_isTestMode = true;
     g_applied = true;
@@ -83,8 +78,7 @@ void Logic::hold_safe_mode_test_mode(PlayLayer* play) {
 void Logic::end_safe_mode_attempt(PlayLayer* play) {
     g_cheated = false;
     g_used.clear();
-    if (g_applied && play)
-        play->m_isTestMode = g_saved_test_mode;
+    if (g_applied && play) play->m_isTestMode = g_saved_test_mode;
     g_applied = false;
 }
 

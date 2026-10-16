@@ -35,14 +35,12 @@ namespace {
         std::string copy(text);
         char* stop = nullptr;
         float value = std::strtof(copy.c_str(), &stop);
-        if (stop != copy.c_str() + copy.size())
-            return std::nullopt;
+        if (stop != copy.c_str() + copy.size()) return std::nullopt;
         return value;
 #else
         float value = 0.f;
         auto [end, error] = std::from_chars(text.data(), text.data() + text.size(), value);
-        if (error != std::errc{} || end != text.data() + text.size())
-            return std::nullopt;
+        if (error != std::errc{} || end != text.data() + text.size()) return std::nullopt;
         return value;
 #endif
     }
@@ -51,8 +49,7 @@ namespace {
 class $modify(EchoPrecisionSave, GameObject) {
     gd::string getSaveString(GJBaseGameLayer* layer) {
         auto saved = GameObject::getSaveString(layer);
-        if (other_mod_saves())
-            return saved;
+        if (other_mod_saves()) return saved;
         std::string_view text(saved.data(), saved.size());
         auto position = getPosition();
         auto exact_for = [&](int key) -> std::optional<std::pair<float, float>> {
@@ -86,8 +83,7 @@ class $modify(EchoPrecisionSave, GameObject) {
         bool is_key = true;
         while (at <= text.size()) {
             auto comma = text.find(',', at);
-            if (comma == std::string_view::npos)
-                comma = text.size();
+            if (comma == std::string_view::npos) comma = text.size();
             auto token = text.substr(at, comma - at);
             std::string_view written = token;
             std::string replacement;
@@ -107,14 +103,12 @@ class $modify(EchoPrecisionSave, GameObject) {
                 }
             }
             out.append(written);
-            if (comma == text.size())
-                break;
+            if (comma == text.size()) break;
             out.push_back(',');
             at = comma + 1;
             is_key = !is_key;
         }
-        if (!changed)
-            return saved;
+        if (!changed) return saved;
         return gd::string(out);
     }
 };

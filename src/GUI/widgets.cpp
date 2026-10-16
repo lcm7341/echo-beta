@@ -36,8 +36,7 @@ namespace EchoUI {
             draw->AddCircleFilled(center, radius, col, segments);
             return;
         }
-        if ((col & IM_COL32_A_MASK) == 0 || radius < 0.5f)
-            return;
+        if ((col & IM_COL32_A_MASK) == 0 || radius < 0.5f) return;
         segments = std::max(segments, 3);
         static std::array<std::vector<ImVec2>, 65> tables;
         auto& unit = tables[(std::size_t)segments];
@@ -55,7 +54,7 @@ namespace EchoUI {
     }
 
     // ImHashData is a crc, which is linear: hashing 0, 1, 2.. put every "random" star & petal on a few straight lines
-    constexpr unsigned RANDOM_MIX_1 = 2146121005u, RANDOM_MIX_2 = 2221713035u;
+    const unsigned RANDOM_MIX_1 = 2146121005u, RANDOM_MIX_2 = 2221713035u;
 
     static unsigned random_bits(unsigned x) {
         x ^= x >> 16;
@@ -71,8 +70,7 @@ namespace EchoUI {
     }
 
     static void gloss(ImDrawList* draw, const ImRect& bb, float rounding) {
-        if (!rainbow_rim())
-            return;
+        if (!g_rainbow_rim) return;
         float alpha = ImGui::GetStyle().Alpha;
         int from = draw->VtxBuffer.Size;
         draw->AddRect(ImVec2(bb.Min.x + .5f, bb.Min.y + .5f), ImVec2(bb.Max.x - .5f, bb.Max.y - .5f), IM_COL32_WHITE, rounding, 0, 1.f);
@@ -102,7 +100,7 @@ namespace EchoUI {
 
     // a light theme turned down doesnt get grey, it goes to its night look. night = how far the sky is (0-1),
     // night_menu = how far the menu itself is: it fades to dark w/ light text from NIGHT_TOP down to NIGHT_LOW
-    constexpr float NIGHT_TOP = .88f, NIGHT_LOW = .72f;
+    const float NIGHT_TOP = .88f, NIGHT_LOW = .72f;
     static float night = 0.f;
     static float night_menu = 0.f;
 
@@ -112,24 +110,20 @@ namespace EchoUI {
     }
 
     static ImVec4 turned(ImVec4 tint, const Grade& grade) {
-        if (grade.plain())
-            return tint;
+        if (grade.plain()) return tint;
         float h, sat, val;
         ImGui::ColorConvertRGBtoHSV(tint.x, tint.y, tint.z, h, sat, val);
         h += grade.turn;
         h -= std::floor(h);
         sat = std::clamp(sat * grade.saturation, 0.f, 1.f);
-        if (grade.brightness < 1.f)
-            val = std::pow(val, 1.f / std::max(grade.brightness, .1f));
-        else
-            val = std::clamp(val * grade.brightness, 0.f, 1.f);
+        if (grade.brightness < 1.f) val = std::pow(val, 1.f / std::max(grade.brightness, .1f));
+        else val = std::clamp(val * grade.brightness, 0.f, 1.f);
         ImGui::ColorConvertHSVtoRGB(h, sat, val, tint.x, tint.y, tint.z);
         return tint;
     }
 
     static void turn_verts(ImDrawList* draw, int from, const Grade& turn) {
-        if (turn.plain())
-            return;
+        if (turn.plain()) return;
         for (int v = from; v < draw->VtxBuffer.Size; ++v) {
             auto& vert = draw->VtxBuffer[v];
             ImVec4 tint = turned(ImGui::ColorConvertU32ToFloat4(vert.col), turn);
@@ -144,20 +138,17 @@ namespace EchoUI {
     float ease(ImGuiID id, float target, float speed) {
         static std::unordered_map<ImGuiID, float> values;
         auto [at, fresh] = values.try_emplace(id, target);
-        if (fresh)
-            return target;
+        if (fresh) return target;
         float dt = std::min(ImGui::GetIO().DeltaTime, 1.f / 30.f);
         float step = std::min(1.f, dt * speed * GUI::get().anim_rate());
         at->second += (target - at->second) * step;
-        if (std::abs(target - at->second) < .002f)
-            at->second = target;
+        if (std::abs(target - at->second) < .002f) at->second = target;
         return at->second;
     }
 
     float glide_in(float t) {
         t = std::clamp(t, 0.f, 1.f);
-        if (t >= 1.f)
-            return 1.f;
+        if (t >= 1.f) return 1.f;
         return 1.f - std::pow(2.f, -10.f * t);
     }
 
@@ -178,11 +169,9 @@ namespace EchoUI {
     void EndEntrance() {
         ImDrawList* list = g_entrance.list;
         g_entrance.list = nullptr;
-        if (!list || g_entrance.t >= 1.f)
-            return;
+        if (!list || g_entrance.t >= 1.f) return;
         int end = list->VtxBuffer.Size;
-        if (end <= g_entrance.start)
-            return;
+        if (end <= g_entrance.start) return;
         ImVec2 low(FLT_MAX, FLT_MAX);
         ImVec2 high(-FLT_MAX, -FLT_MAX);
         for (int i = g_entrance.start; i < end; ++i) {
@@ -205,8 +194,7 @@ namespace EchoUI {
 
     bool Checkbox(const char* label, bool* value) {
         ImGuiWindow* window = ImGui::GetCurrentWindow();
-        if (window->SkipItems)
-            return false;
+        if (window->SkipItems) return false;
         ImGuiContext& g = *GImGui;
         const ImGuiStyle& style = g.Style;
         ImGuiID id = window->GetID(label);
@@ -215,8 +203,7 @@ namespace EchoUI {
         ImVec2 pos = window->DC.CursorPos;
         ImRect total(pos, ImVec2(pos.x + side + (label_size.x > 0.f ? style.ItemInnerSpacing.x + label_size.x : 0.f), pos.y + label_size.y + style.FramePadding.y * 2.f));
         ImGui::ItemSize(total, style.FramePadding.y);
-        if (!ImGui::ItemAdd(total, id))
-            return false;
+        if (!ImGui::ItemAdd(total, id)) return false;
         bool hovered = false;
         bool held = false;
         bool pressed = ImGui::ButtonBehavior(total, id, &hovered, &held);
@@ -256,8 +243,7 @@ namespace EchoUI {
 
     bool Button(const char* label, const ImVec2& size_arg) {
         ImGuiWindow* window = ImGui::GetCurrentWindow();
-        if (window->SkipItems)
-            return false;
+        if (window->SkipItems) return false;
         ImGuiContext& g = *GImGui;
         const ImGuiStyle& style = g.Style;
         ImGuiID id = window->GetID(label);
@@ -266,8 +252,7 @@ namespace EchoUI {
         ImVec2 size = ImGui::CalcItemSize(size_arg, label_size.x + style.FramePadding.x * 2.f, label_size.y + style.FramePadding.y * 2.f);
         ImRect bb(pos, ImVec2(pos.x + size.x, pos.y + size.y));
         ImGui::ItemSize(size, style.FramePadding.y);
-        if (!ImGui::ItemAdd(bb, id))
-            return false;
+        if (!ImGui::ItemAdd(bb, id)) return false;
         bool hovered = false;
         bool held = false;
         bool pressed = ImGui::ButtonBehavior(bb, id, &hovered, &held);
@@ -323,7 +308,7 @@ namespace EchoUI {
         from = draw->VtxBuffer.Size;
         float inset = outline + band * .5f;
         draw->AddRect(ImVec2(a.x + inset, a.y + inset), ImVec2(b.x - inset, b.y - inset), ImGui::ColorConvertFloat4ToU32(band4), std::max(0.f, rounding - inset), 0, band);
-        if (rainbow_rim()) {
+        if (g_rainbow_rim) {
             ImVec2 mid((a.x + b.x) * .5f, (a.y + b.y) * .5f);
             float drift = (float)(ImGui::GetTime()) * .16f;
             for (int v = from; v < draw->VtxBuffer.Size; ++v) {
@@ -335,7 +320,7 @@ namespace EchoUI {
                 vert.col = (ImGui::ColorConvertFloat4ToU32(shade) & ~IM_COL32_A_MASK) | (vert.col & IM_COL32_A_MASK);
             }
         }
-        else if (scene() != Scene::None) {
+        else if (g_scene != Scene::None) {
             ImVec2 mid((a.x + b.x) * .5f, (a.y + b.y) * .5f);
             float time = (float)(ImGui::GetTime());
             float flame = candle();
@@ -343,7 +328,7 @@ namespace EchoUI {
                 auto& vert = draw->VtxBuffer[v];
                 float turn = std::atan2(vert.pos.y - mid.y, vert.pos.x - mid.x);
                 ImVec4 shade(1.f, 1.f, 1.f, 1.f);
-                switch (scene()) {
+                switch (g_scene) {
                 case Scene::Halloween: {
                     shade = mix(ImVec4(.52f, .22f, .86f, 1.f), ImVec4(1.f, .5f, .08f, 1.f), .5f + .5f * std::sin(turn * 3.f + time * 1.6f));
                     float glow = .72f + .28f * flame;
@@ -503,7 +488,7 @@ namespace EchoUI {
         draw->PrimWriteIdx((ImDrawIdx)(first + 2));
     }
 
-    constexpr unsigned NOISE_X = 374761393u, NOISE_Y = 668265263u, NOISE_MIX = 1274126177u;
+    const unsigned NOISE_X = 374761393u, NOISE_Y = 668265263u, NOISE_MIX = 1274126177u;
 
     static float noise(float x, float y) {
         auto lattice = [](int ix, int iy) {
@@ -523,8 +508,7 @@ namespace EchoUI {
     }
 
     static void ribbon(const Backdrop& back, float y, float thick, float swell, float speed, float seed, ImVec4 tint) {
-        if (y + thick * 1.5f + swell < back.a.y || y - thick * 1.5f - swell > back.b.y)
-            return;
+        if (y + thick * 1.5f + swell < back.a.y || y - thick * 1.5f - swell > back.b.y) return;
         ImVec2 uv = back.draw->_Data->TexUvWhitePixel;
         float time = back.time * speed;
 
@@ -608,8 +592,7 @@ namespace EchoUI {
         };
         auto floor = [&](float x) {
             float in = std::min(x - back.a.x, back.b.x - x);
-            if (in >= back.rounding)
-                return back.b.y;
+            if (in >= back.rounding) return back.b.y;
             float short_ = back.rounding - std::max(in, 0.f);
             return back.b.y - (back.rounding - std::sqrt(std::max(back.rounding * back.rounding - short_ * short_, 0.f)));
         };
@@ -689,8 +672,7 @@ namespace EchoUI {
         for (int k = 0; k < 9; ++k) {
             float number = (float)(k);
             float lean = std::remainder(number * .6981317f + back.time * .09f, 6.2831853f);
-            if (std::abs(lean) > 1.45f)
-                continue;
+            if (std::abs(lean) > 1.45f) continue;
             float wide = .08f + .04f * std::sin(back.time * .9f + number * 2.f);
             beam(back.draw, sun, ImVec2(sun.x + std::sin(lean - wide) * reach, sun.y + std::cos(lean - wide) * reach), ImVec2(sun.x + std::sin(lean + wide) * reach, sun.y + std::cos(lean + wide) * reach), faded(beam_tint, .6f * glow * back.alpha));
         }
@@ -699,14 +681,13 @@ namespace EchoUI {
             spread -= std::floor(spread);
             back.draw->AddCircle(sun, back.screen.y * (.15f + 1.5f * spread), ImGui::ColorConvertFloat4ToU32(faded(ring_tint, .55f * glow * (1.f - spread) * std::min(1.f, spread * 6.f) * back.alpha)), 96, back.unit * (.12f + .5f * spread));
         }
-        constexpr float PUFFS[][3] = { { -1.3f, .15f, .8f }, { -.5f, -.25f, 1.f }, { .4f, -.1f, 1.15f }, { 1.2f, .2f, .75f } };
+        const float PUFFS[][3] = { { -1.3f, .15f, .8f }, { -.5f, -.25f, 1.f }, { .4f, -.1f, 1.15f }, { 1.2f, .2f, .75f } };
         for (int k = 0; k < 6; ++k) {
             float number = (float)(k);
             float size = back.unit * (2.2f + .5f * (float)(k % 3));
             float span = back.screen.x + back.unit * 24.f;
             ImVec2 at(std::fmod(back.time * back.unit * (1.6f + .7f * number) + number * span * .23f, span) - back.unit * 12.f, back.screen.y * (.1f + .16f * number) + std::sin(back.time * .5f + number) * back.unit * .8f);
-            if (outside(back, at, size * 2.8f))
-                continue;
+            if (outside(back, at, size * 2.8f)) continue;
             for (const auto& puff : PUFFS)
                 soft_disc(back.draw, ImVec2(at.x + puff[0] * size, at.y + (puff[1] + .28f) * size), size * puff[2], faded(cloud_shade, .45f * back.alpha), .6f);
             for (const auto& puff : PUFFS)
@@ -766,8 +747,8 @@ namespace EchoUI {
             float size = std::max(.6f, back.unit * .035f);
             back.draw->AddRectFilled(ImVec2(at.x - size * .5f, at.y - size * .5f), ImVec2(at.x + size * .5f, at.y + size * .5f), ImGui::ColorConvertFloat4ToU32(ImVec4(.85f, .86f, 1.f, lit)));
         }
-        constexpr float TEMPS[][4] = { { .66f, .78f, 1.f, .2f }, { .86f, .9f, 1.f, .75f }, { 1.f, .95f, .84f, .93f }, { 1.f, .8f, .62f, 1.f } };
-        constexpr float LAYER_SPEED[] = { .15f, .4f, .9f };
+        const float TEMPS[][4] = { { .66f, .78f, 1.f, .2f }, { .86f, .9f, 1.f, .75f }, { 1.f, .95f, .84f, .93f }, { 1.f, .8f, .62f, 1.f } };
+        const float LAYER_SPEED[] = { .15f, .4f, .9f };
         int stars = scatter(back, 3.5f, 30, 260);
         for (int i = 0; i < stars; ++i) {
             float r = chance(back, i, 3);
@@ -807,8 +788,7 @@ namespace EchoUI {
             float clock = back.time / every + chance(back, lane, 72);
             int which = (int)(std::floor(clock));
             float run = (clock - std::floor(clock)) / .22f;
-            if (run >= 1.f)
-                continue;
+            if (run >= 1.f) continue;
             int seed = which * 2 + lane;
             ImVec2 start(back.a.x + back.width * (.05f + .7f * chance(back, seed, 73)), back.a.y + back.tall * (.02f + .45f * chance(back, seed, 74)));
             float angle = .3f + .5f * chance(back, seed, 75);
@@ -922,17 +902,13 @@ namespace EchoUI {
         ImVec4 body, top, drop;
     };
 
-    constexpr Liquid WATER{ .72f, 1.f, .7f, .9f, 1.f, 10, .065f, 4.5f, 6.f, 16.f, { .65f, 1.f, .95f, .4f }, { .65f, 1.f, .95f, .65f }, { .75f, .97f, 1.f, .85f } };
-    constexpr Liquid LAVA{ .74f, .55f, 1.1f, .6f, .5f, 4, .11f, 2.6f, 2.5f, 7.f, { 1.f, .38f, .05f, .75f }, { 1.f, .78f, .25f, .95f }, { 1.f, .6f, .15f, .95f } };
+    const Liquid WATER{ .72f, 1.f, .7f, .9f, 1.f, 10, .065f, 4.5f, 6.f, 16.f, { .65f, 1.f, .95f, .4f }, { .65f, 1.f, .95f, .65f }, { .75f, .97f, 1.f, .85f } };
+    const Liquid LAVA{ .74f, .55f, 1.1f, .6f, .5f, 4, .11f, 2.6f, 2.5f, 7.f, { 1.f, .38f, .05f, .75f }, { 1.f, .78f, .25f, .95f }, { 1.f, .6f, .15f, .95f } };
 
-    static std::unordered_map<ImGuiID, std::vector<Splash>>& splashes() {
-        static std::unordered_map<ImGuiID, std::vector<Splash>> all;
-        return all;
-    }
+    static std::unordered_map<ImGuiID, std::vector<Splash>> g_splashes;
     static void button_skin(ImDrawList* draw, const ImRect& body, float rounding, ImGuiID id, float hot, float down, float keep, const ImVec4* given, float given_amount) {
-        Scene which = scene();
-        if (which == Scene::None || keep <= .01f)
-            return;
+        Scene which = g_scene;
+        if (which == Scene::None || keep <= .01f) return;
 
         struct Look {
             ImVec4 top, bottom;
@@ -996,7 +972,7 @@ namespace EchoUI {
         };
         auto tank = [&](const Liquid& liquid) {
             ImGuiContext& g = *GImGui;
-            auto& presses = splashes()[id];
+            auto& presses = g_splashes[id];
             if (g.ActiveId == id && g.ActiveIdIsJustActivated) {
                 static unsigned count = 0;
                 presses.push_back({ time, std::clamp((ImGui::GetIO().MousePos.x - body.Min.x) / std::max(wide, 1.f), 0.f, 1.f), ++count });
@@ -1004,7 +980,7 @@ namespace EchoUI {
             std::erase_if(presses, [&](const Splash& press) {
                 return time - press.began > liquid.settle * 4.6f;
             });
-            constexpr int MODES = 8;
+            const int MODES = 8;
             float modes[MODES] = {};
             float total = 0.f;
             for (int n = 1; n <= MODES; ++n)
@@ -1037,14 +1013,12 @@ namespace EchoUI {
                 for (std::size_t i = 0; i < outline.size(); ++i) {
                     ImVec2 a = outline[i], b = outline[(i + 1) % outline.size()];
                     if (std::abs(a.x - b.x) < 1e-3f) {
-                        if (std::abs(x - a.x) > 1e-3f)
-                            continue;
+                        if (std::abs(x - a.x) > 1e-3f) continue;
                         top = std::min({ top, a.y, b.y });
                         bottom = std::max({ bottom, a.y, b.y });
                         continue;
                     }
-                    if (x < std::min(a.x, b.x) || x > std::max(a.x, b.x))
-                        continue;
+                    if (x < std::min(a.x, b.x) || x > std::max(a.x, b.x)) continue;
                     float y = a.y + (b.y - a.y) * (x - a.x) / (b.x - a.x);
                     top = std::min(top, y);
                     bottom = std::max(bottom, y);
@@ -1060,8 +1034,7 @@ namespace EchoUI {
             for (float x : xs) {
                 float top = 0.f, bottom = 0.f;
                 inside(x, top, bottom);
-                if (bottom < top)
-                    continue;
+                if (bottom < top) continue;
                 top_line.emplace_back(x, std::clamp(surface(x), top, bottom));
                 floor_line.emplace_back(x, bottom);
             }
@@ -1077,14 +1050,12 @@ namespace EchoUI {
             auto fold = [](float v, float lo, float hi) {
                 float span = std::max(hi - lo, 1.f);
                 float t = std::fmod(v - lo, span * 2.f);
-                if (t < 0.f)
-                    t += span * 2.f;
+                if (t < 0.f) t += span * 2.f;
                 return lo + (t <= span ? t : span * 2.f - t);
             };
             for (const auto& press : presses) {
                 float since = time - press.began;
-                if (since > flight)
-                    continue;
+                if (since > flight) continue;
                 float start_x = body.Min.x + wide * press.at;
                 float start_y = body.Min.y + tall * level;
                 for (int i = 0; i < liquid.drops; ++i) {
@@ -1094,17 +1065,15 @@ namespace EchoUI {
                     float x = start_x + (r1 - .5f) * tall * liquid.spread * since;
                     float y = start_y - tall * liquid.throw_up * (.6f + .4f * r2) * since + .5f * tall * liquid.gravity * since * since;
                     ImVec2 at(fold(x, body.Min.x + radius, body.Max.x - radius), fold(y, body.Min.y + radius, body.Max.y));
-                    if (at.y > surface(at.x) && since > .08f)
-                        continue;
+                    if (at.y > surface(at.x) && since > .08f) continue;
                     float top = 0.f, bottom = 0.f;
                     inside(at.x, top, bottom);
-                    if (at.y - radius < top || at.y + radius > bottom)
-                        continue;
+                    if (at.y - radius < top || at.y + radius > bottom) continue;
                     circle_filled_cached(draw, at, radius, ImGui::ColorConvertFloat4ToU32(faded(turned(liquid.drop, accent_turn), alpha)), 10);
                 }
             }
         };
-        switch (button_effects() ? which : Scene::None) {
+        switch (g_button_effects ? which : Scene::None) {
         case Scene::Halloween: {
             float flame = .55f + .25f * std::sin(time * (3.f + 3.f * own(1)) + own(2) * 40.f) + .2f * std::sin(time * (9.f + 4.f * own(3)) + own(4) * 20.f);
             line(body.Max.y - 1.5f, std::max(1.5f, tall * .07f), faded(look.glow, flame * alpha), rounding * .5f);
@@ -1199,7 +1168,7 @@ namespace EchoUI {
         draw->PopClipRect();
 
         ImVec4 edge = look.edge;
-        if (which == Scene::Space && button_effects()) {
+        if (which == Scene::Space && g_button_effects) {
             ImGui::ColorConvertHSVtoRGB(.66f + .14f * std::sin(time * .8f + own(5) * 6.2831853f), .6f, 1.f, edge.x, edge.y, edge.z);
             edge = turned(edge, accent_turn);
         }
@@ -1207,13 +1176,11 @@ namespace EchoUI {
     }
 
     static void round_off(ImDrawList* draw, int idx_from, int cmd_from, const ImRect& box, float rounding) {
-        if (rounding < .5f || draw->CmdBuffer.Size == 0)
-            return;
+        if (rounding < .5f || draw->CmdBuffer.Size == 0) return;
         draw->PathRect(box.Min, box.Max, rounding);
         std::vector<ImVec2> outline(draw->_Path.begin(), draw->_Path.end());
         draw->PathClear();
-        if (outline.size() < 3)
-            return;
+        if (outline.size() < 3) return;
         float turn = 0.f;
         for (std::size_t i = 0; i < outline.size(); ++i) {
             ImVec2 a = outline[i], b = outline[(i + 1) % outline.size()];
@@ -1266,8 +1233,7 @@ namespace EchoUI {
                         const ImDrawVert& p = poly[k];
                         const ImDrawVert& q = poly[(k + 1) % poly.size()];
                         bool p_in = inside(p.pos), q_in = inside(q.pos);
-                        if (p_in)
-                            next.push_back(p);
+                        if (p_in) next.push_back(p);
                         if (p_in != q_in) {
                             float dp = (b.x - a.x) * (p.pos.y - a.y) - (b.y - a.y) * (p.pos.x - a.x);
                             float dq = (b.x - a.x) * (q.pos.y - a.y) - (b.y - a.y) * (q.pos.x - a.x);
@@ -1276,8 +1242,7 @@ namespace EchoUI {
                     }
                     poly.swap(next);
                 }
-                if (poly.size() < 3)
-                    continue;
+                if (poly.size() < 3) continue;
                 // the new points need indices that still fit after this cmds vertex offset
                 if (sizeof(ImDrawIdx) == 2 && draw->VtxBuffer.Size - (int)cmd.VtxOffset + (int)poly.size() >= (1 << 16)) {
                     indices.push_back(tri[0]);
@@ -1319,7 +1284,7 @@ namespace EchoUI {
         int from = back.draw->VtxBuffer.Size;
         int idx_from = back.draw->IdxBuffer.Size;
         int cmd_from = back.draw->CmdBuffer.Size - 1;
-        switch (scene()) {
+        switch (g_scene) {
         case Scene::Halloween:
             halloween_scene(back);
             break;
@@ -1346,21 +1311,16 @@ namespace EchoUI {
     }
 
     void WindowRims(float alpha) {
-        if (alpha <= .01f)
-            return;
+        if (alpha <= .01f) return;
         ImGuiContext& g = *GImGui;
         for (ImGuiWindow* window : g.Windows) {
             if (!window->Active || window->Hidden || (window->Flags & ImGuiWindowFlags_ChildWindow))
                 continue;
-            if (window->Size.x < 4.f || window->Size.y < 4.f || window->IsFallbackWindow)
-                continue;
-            if (window->Flags & ImGuiWindowFlags_NoBackground)
-                continue;
+            if (window->Size.x < 4.f || window->Size.y < 4.f || window->IsFallbackWindow) continue;
+            if (window->Flags & ImGuiWindowFlags_NoBackground) continue;
             bool plain = (window->Flags & (ImGuiWindowFlags_Popup | ImGuiWindowFlags_Tooltip)) != 0;
-            if (rainbow_rim() && !plain)
-                rainbow_body(window, alpha);
-            if (scene() != Scene::None && !plain)
-                drawScene(window, alpha);
+            if (g_rainbow_rim && !plain) rainbow_body(window, alpha);
+            if (g_scene != Scene::None && !plain) drawScene(window, alpha);
             rim(window, alpha);
         }
     }
@@ -1370,10 +1330,7 @@ namespace EchoUI {
         bool active = false;
     };
 
-    static std::unordered_map<ImGuiID, FieldState>& field_states() {
-        static std::unordered_map<ImGuiID, FieldState> states;
-        return states;
-    }
+    static std::unordered_map<ImGuiID, FieldState> g_field_states;
 
     struct OpenField {
         ImGuiID id = 0;
@@ -1415,8 +1372,7 @@ namespace EchoUI {
     }
 
     static float range_fill(double value, double min, double max) {
-        if (!(min < max) || !std::isfinite(min) || !std::isfinite(max) || max - min > 1e7)
-            return -1.f;
+        if (!(min < max) || max - min > 1e7) return -1.f;
         return (float)(std::clamp((value - min) / (max - min), 0.0, 1.0));
     }
 
@@ -1451,8 +1407,8 @@ namespace EchoUI {
             break;
         }
         case Icon::Tools: {
-            constexpr float WIDTH = .15f, HEAD_SIZE = .21f, HEAD_AT = .2f, JAW = .06f, TIP = .16f, CAP_AT = -.38f;
-            constexpr float PI_F = 3.14159265f;
+            const float WIDTH = .15f, HEAD_SIZE = .21f, HEAD_AT = .2f, JAW = .06f, TIP = .16f, CAP_AT = -.38f;
+            const float PI_F = 3.14159265f;
             ImVec2 half[40];
             int m = 0;
             for (int i = 0; i <= 6; ++i) {
@@ -1461,8 +1417,7 @@ namespace EchoUI {
             }
             float neck = HEAD_AT - std::sqrt(HEAD_SIZE * HEAD_SIZE - WIDTH * WIDTH * .25f);
             float from = std::atan2(-WIDTH * .5f, neck - HEAD_AT), to = -std::acos(TIP / HEAD_SIZE);
-            if (from > to)
-                from -= 2.f * PI_F;
+            if (from > to) from -= 2.f * PI_F;
             for (int i = 1; i <= 24; ++i) {
                 float a = from + (to - from) * (float)(i) / 24.f;
                 half[m++] = ImVec2(HEAD_AT + HEAD_SIZE * std::cos(a), HEAD_SIZE * std::sin(a));
@@ -1485,7 +1440,7 @@ namespace EchoUI {
         }
         case Icon::Gear: {
             ImVec2 rim[32];
-            constexpr float STEP = 6.2831853f / 8.f;
+            const float STEP = 6.2831853f / 8.f;
             for (int i = 0; i < 8; ++i) {
                 float a = (float)(i) * STEP;
                 float turns[] = { a - STEP * .3f, a - STEP * .17f, a + STEP * .17f, a + STEP * .3f };
@@ -1532,8 +1487,7 @@ namespace EchoUI {
         if (lum > .55f) {
             ImVec4 dark = color(ImGuiCol_WindowBg);
             float body_lum = dark.x * .2126f + dark.y * .7152f + dark.z * .0722f;
-            if (body_lum > .12f)
-                dark = ImVec4(.08f, .08f, .08f, 1.f);
+            if (body_lum > .12f) dark = ImVec4(.08f, .08f, .08f, 1.f);
             dark.w = 1.f;
             return dark;
         }
@@ -1551,7 +1505,7 @@ namespace EchoUI {
         g_field = { id, bb, window };
         if (!window->SkipItems && ImGui::IsRectVisible(bb.Min, bb.Max)) {
             if (parts <= 1) {
-                draw_field(window, id, bb, fill, field_states()[id]);
+                draw_field(window, id, bb, fill, g_field_states[id]);
             }
             else {
                 float gap = ImGui::GetStyle().ItemInnerSpacing.x;
@@ -1563,7 +1517,7 @@ namespace EchoUI {
                     draw_field(window, sub(id, i == 0 ? "part0" : i == 1 ? "part1"
                                                               : i == 2   ? "part2"
                                                                          : "part3"),
-                        ImRect(ImVec2(x, pos.y), ImVec2(x + w, bb.Max.y)), -1.f, field_states()[id]);
+                        ImRect(ImVec2(x, pos.y), ImVec2(x + w, bb.Max.y)), -1.f, g_field_states[id]);
                     x += w + gap;
                 }
             }
@@ -1574,7 +1528,7 @@ namespace EchoUI {
     void end_field() {
         ImGui::PopStyleColor(3);
         ImGuiContext& g = *GImGui;
-        auto& state = field_states()[g_field.id];
+        auto& state = g_field_states[g_field.id];
         bool over = g.HoveredWindow == g_field.window && g_field.bb.Contains(g.IO.MousePos);
         state.hovered = ImGui::IsItemHovered() || (over && g.ActiveId == 0);
         state.active = ImGui::IsItemActive() || (g.ActiveId != 0 && g.ActiveIdWindow == g_field.window && g_field.bb.Contains(g.IO.MouseClickedPos[0]) && g.IO.MouseDown[0]);
@@ -1600,7 +1554,7 @@ namespace EchoUI {
         float side = ImGui::GetFrameHeight();
         ImVec2 pos = window->DC.CursorPos;
         ImRect bb(pos, ImVec2(pos.x + ((flags & ImGuiComboFlags_NoPreview) ? side : ImGui::CalcItemWidth()), pos.y + side));
-        auto& state = field_states()[id];
+        auto& state = g_field_states[id];
         float turned = ease(sub(id, "combo-open"), state.active ? 1.f : 0.f, 16.f);
         if (!window->SkipItems && ImGui::IsRectVisible(bb.Min, bb.Max)) {
             draw_field(window, id, bb, -1.f, state);
@@ -1622,8 +1576,7 @@ namespace EchoUI {
 
     bool Combo(const char* label, int* current, const char* const items[], int count) {
         const char* shown = *current >= 0 && *current < count ? items[*current] : "";
-        if (!BeginCombo(label, shown))
-            return false;
+        if (!BeginCombo(label, shown)) return false;
         bool changed = false;
         for (int i = 0; i < count; ++i) {
             ImGui::PushID(i);
@@ -1631,8 +1584,7 @@ namespace EchoUI {
                 *current = i;
                 changed = true;
             }
-            if (i == *current)
-                ImGui::SetItemDefaultFocus();
+            if (i == *current) ImGui::SetItemDefaultFocus();
             ImGui::PopID();
         }
         ImGui::EndCombo();
@@ -1648,8 +1600,7 @@ namespace EchoUI {
 
     bool Selectable(const char* label, bool selected, ImGuiSelectableFlags flags, const ImVec2& size) {
         ImGuiWindow* window = ImGui::GetCurrentWindow();
-        if (window->SkipItems)
-            return false;
+        if (window->SkipItems) return false;
         static ImDrawListSplitter layers;
         ImDrawList* draw = window->DrawList;
         layers.Split(draw, 2);
@@ -1682,8 +1633,7 @@ namespace EchoUI {
 
     bool ActionButton(const char* label, Icon icon, bool active, const ImVec2& size_arg, ImVec4 tint) {
         ImGuiWindow* window = ImGui::GetCurrentWindow();
-        if (window->SkipItems)
-            return false;
+        if (window->SkipItems) return false;
         ImGuiContext& g = *GImGui;
         const ImGuiStyle& style = g.Style;
         ImGuiID id = window->GetID(label);
@@ -1692,8 +1642,7 @@ namespace EchoUI {
         ImVec2 size = ImGui::CalcItemSize(size_arg, label_size.x + style.FramePadding.x * 2.f, label_size.y + style.FramePadding.y * 2.f);
         ImRect bb(pos, ImVec2(pos.x + size.x, pos.y + size.y));
         ImGui::ItemSize(size, style.FramePadding.y);
-        if (!ImGui::ItemAdd(bb, id))
-            return false;
+        if (!ImGui::ItemAdd(bb, id)) return false;
         bool hovered = false;
         bool held = false;
         bool pressed = ImGui::ButtonBehavior(bb, id, &hovered, &held);
@@ -1741,8 +1690,7 @@ namespace EchoUI {
 
     bool NavItem(const char* label, Icon icon, bool selected, float width, float height) {
         ImGuiWindow* window = ImGui::GetCurrentWindow();
-        if (window->SkipItems)
-            return false;
+        if (window->SkipItems) return false;
         const ImGuiStyle& style = ImGui::GetStyle();
         ImGuiID id = window->GetID(label);
         ImVec2 label_size = ImGui::CalcTextSize(label, nullptr, true);
@@ -1750,8 +1698,7 @@ namespace EchoUI {
         ImVec2 size(width + nav_icon_width(), height > 0.f ? height : ImGui::GetFrameHeight());
         ImRect bb(pos, ImVec2(pos.x + size.x, pos.y + size.y));
         ImGui::ItemSize(size, style.FramePadding.y);
-        if (!ImGui::ItemAdd(bb, id))
-            return false;
+        if (!ImGui::ItemAdd(bb, id)) return false;
         bool hovered = false;
         bool held = false;
         bool pressed = ImGui::ButtonBehavior(bb, id, &hovered, &held);
@@ -1887,8 +1834,7 @@ namespace EchoUI {
 
     static bool close_button(ImGuiWindow* window, const ImRect& bb, const char* id_text) {
         ImGuiID id = window->GetID(id_text);
-        if (!ImGui::ItemAdd(bb, id))
-            return false;
+        if (!ImGui::ItemAdd(bb, id)) return false;
         bool hovered = false;
         bool held = false;
         bool pressed = ImGui::ButtonBehavior(bb, id, &hovered, &held);
@@ -1907,8 +1853,7 @@ namespace EchoUI {
 
     bool TitleBar(const char* title, Icon icon, bool closable, float width) {
         ImGuiWindow* window = ImGui::GetCurrentWindow();
-        if (window->SkipItems)
-            return false;
+        if (window->SkipItems) return false;
         const ImGuiStyle& style = ImGui::GetStyle();
         float height = ImGui::GetFrameHeight();
         float start_y = ImGui::GetCursorPosY();
@@ -1944,17 +1889,13 @@ namespace EchoUI {
 
     static ImVector<CardRow> g_card_rows;
 
-    static std::unordered_map<ImGuiID, float>& row_heights() {
-        static std::unordered_map<ImGuiID, float> heights;
-        return heights;
-    }
+    static std::unordered_map<ImGuiID, float> g_row_heights;
 
     static float g_card_needs = -1.f;
 
     bool CollapseBar(const char* title, Icon icon, bool open) {
         ImGuiWindow* window = ImGui::GetCurrentWindow();
-        if (window->SkipItems)
-            return false;
+        if (window->SkipItems) return false;
         const ImGuiStyle& style = ImGui::GetStyle();
         ImGuiID id = window->GetID("##echo-collapse");
         float height = ImGui::GetFrameHeight();
@@ -1965,8 +1906,7 @@ namespace EchoUI {
         float width = std::max(need, window->Size.x - style.WindowPadding.x * 2.f);
         ImRect bb(pos, ImVec2(pos.x + width, pos.y + height));
         ImGui::ItemSize(ImVec2(need, height), 0.f);
-        if (!ImGui::ItemAdd(bb, id))
-            return false;
+        if (!ImGui::ItemAdd(bb, id)) return false;
         bool hovered = false;
         bool held = false;
         bool pressed = ImGui::ButtonBehavior(bb, id, &hovered, &held);
@@ -1998,13 +1938,10 @@ namespace EchoUI {
 
     static ImGuiID g_last_card_row = 0;
 
-    static std::unordered_map<ImGuiID, float>& row_extras() {
-        static std::unordered_map<ImGuiID, float> extras;
-        return extras;
-    }
+    static std::unordered_map<ImGuiID, float> g_row_extras;
 
     void EndCardRow() {
-        row_heights()[g_card_rows.back().id] = g_card_rows.back().tallest;
+        g_row_heights[g_card_rows.back().id] = g_card_rows.back().tallest;
         g_last_card_row = g_card_rows.back().id;
         g_card_rows.pop_back();
     }
@@ -2014,7 +1951,7 @@ namespace EchoUI {
     }
 
     float& card_row_extra(ImGuiID row) {
-        return row_extras()[row];
+        return g_row_extras[row];
     }
 
     float CardFill(float min_em) {
@@ -2023,15 +1960,11 @@ namespace EchoUI {
         return std::max(least, ImGui::GetContentRegionAvail().y);
     }
 
-    bool& single_column() {
-        static bool on = false;
-        return on;
-    }
+    bool g_single_column = false;
 
     void ScrollMark() {
         ImGuiWindow* window = ImGui::GetCurrentWindow();
-        if (window->ScrollMax.y <= 0.f)
-            return;
+        if (window->ScrollMax.y <= 0.f) return;
         ImRect box = window->Rect();
         float tall = box.GetHeight();
         float thumb = std::max(em(1.2f), tall * tall / (tall + window->ScrollMax.y));
@@ -2069,15 +2002,11 @@ namespace EchoUI {
 
     static Tiling g_tiles;
 
-    static std::unordered_map<ImGuiID, float>& tile_widths() {
-        static std::unordered_map<ImGuiID, float> widths;
-        return widths;
-    }
+    static std::unordered_map<ImGuiID, float> g_tile_widths;
 
     static void card_heading(const char* title) {
         const char* end = ImGui::FindRenderedTextEnd(title);
-        if (end == title)
-            return;
+        if (end == title) return;
         float font = ImGui::GetFontSize();
         ImVec2 pos = ImGui::GetCursorScreenPos();
         float tick = std::max(2.f, font * .16f);
@@ -2093,7 +2022,7 @@ namespace EchoUI {
         const ImGuiStyle& style = ImGui::GetStyle();
         ImGuiContext& g = *GImGui;
         std::string key = g_tiles.group + "/" + title;
-        TileState& state = tile_states()[key];
+        TileState& state = g_tile_states[key];
         state.seen = g_tiles.frame;
         g_tiles.open = &state;
         g_tiles.skipped = state.hidden;
@@ -2104,7 +2033,7 @@ namespace EchoUI {
         std::string name = std::string(title) + "###echo-tile-" + g_tiles.group + "-" + title;
         ImGuiID id = ImHashStr(name.c_str());
         int columns = (int)(g_tiles.below.size());
-        float wanted = width_em > 0.f ? em(width_em) + style.WindowPadding.x * 2.f : tile_widths()[id];
+        float wanted = width_em > 0.f ? em(width_em) + style.WindowPadding.x * 2.f : g_tile_widths[id];
         int span = std::clamp((int)(std::ceil((wanted + g_tiles.gap - 1.f) / (g_tiles.column + g_tiles.gap))), 1, columns);
         float width = g_tiles.column * (float)(span) + g_tiles.gap * (float)(span - 1);
         ImVec2 display = g.IO.DisplaySize;
@@ -2119,8 +2048,7 @@ namespace EchoUI {
         bool leaving = g_tiles.shown < state.flown - .02f;
         float landed = leaving ? 1.f - std::pow(1.f - along, 3.f) : glide_in(along);
         auto flying = [&](ImVec2 at) {
-            if (along >= 1.f)
-                return at;
+            if (along >= 1.f) return at;
             float pad = em(1.5f);
             float tall = state.height > 0.f ? state.height : display.y;
             ImVec2 away = at;
@@ -2157,7 +2085,7 @@ namespace EchoUI {
                 float x = g_tiles.left + (float)(c) * (g_tiles.column + g_tiles.gap);
                 for (int pass = 0; pass < 8; ++pass) {
                     bool moved = false;
-                    for (const auto& [other_key, other] : tile_states()) {
+                    for (const auto& [other_key, other] : g_tile_states) {
                         if (!other.pinned || other.hidden || other.seen < g_tiles.frame - 1 || other.height <= 0.f)
                             continue;
                         float ox = other.x * display.x;
@@ -2167,8 +2095,7 @@ namespace EchoUI {
                             moved = true;
                         }
                     }
-                    if (!moved)
-                        break;
+                    if (!moved) break;
                 }
                 if (y < best_y - .5f) {
                     best_y = y;
@@ -2190,8 +2117,7 @@ namespace EchoUI {
         ImGuiWindow* window = ImGui::GetCurrentWindow();
         float inner = (width_em > 0.f ? width : window->Size.x) - style.WindowPadding.x * 2.f;
         g_row_widths.push_back(inner);
-        if (!shown)
-            return false;
+        if (!shown) return false;
 
         ImVec2 start = ImGui::GetCursorPos(), start_screen = ImGui::GetCursorScreenPos();
         card_heading(title);
@@ -2212,18 +2138,17 @@ namespace EchoUI {
             state.y += g.IO.MouseDelta.y / display.y;
             g_tiles.dragged = true;
         }
-        if (ImGui::IsItemDeactivated() && state.pinned)
-            tiles_changed() = true;
+        if (ImGui::IsItemDeactivated() && state.pinned) g_tiles_changed = true;
         if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) && state.pinned) {
             state.pinned = false;
-            tiles_changed() = true;
+            g_tiles_changed = true;
         }
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal) && !ImGui::IsItemActive())
             ImGui::SetTooltip(state.pinned ? "Drag to move. Double-click to unpin." : "Drag to pin this somewhere.");
         ImRect cross_box(ImVec2(start_screen.x + inner - cross, start_screen.y), ImVec2(start_screen.x + inner, start_screen.y + bar));
         if (close_button(window, cross_box, "##echo-tile-hide")) {
             state.hidden = true;
-            tiles_changed() = true;
+            g_tiles_changed = true;
         }
         if (state.pinned) {
             ImVec2 dot(cross_box.Min.x - bar * .45f, start_screen.y + bar * .5f);
@@ -2240,7 +2165,7 @@ namespace EchoUI {
             return;
         }
         ImGuiWindow* window = ImGui::GetCurrentWindow();
-        tile_widths()[window->ID] = window->Size.x;
+        g_tile_widths[window->ID] = window->Size.x;
         if (TileState* state = g_tiles.open) {
             state->width = window->Size.x;
             state->height = window->Size.y;
@@ -2253,15 +2178,9 @@ namespace EchoUI {
         ImGui::End();
     }
 
-    std::unordered_map<std::string, TileState>& tile_states() {
-        static std::unordered_map<std::string, TileState> states;
-        return states;
-    }
+    std::unordered_map<std::string, TileState> g_tile_states;
 
-    bool& tiles_changed() {
-        static bool changed = false;
-        return changed;
-    }
+    bool g_tiles_changed = false;
 
     void BeginTiles(float left, float top, float right, float bottom, float tile_width_em, float shown, float rate) {
         const ImGuiStyle& style = ImGui::GetStyle();
@@ -2284,8 +2203,7 @@ namespace EchoUI {
     static bool g_tile_of_cards = false;
 
     bool BeginTileOfCards(const char* title, float width_em) {
-        if (!g_tiles.on)
-            return true;
+        if (!g_tiles.on) return true;
         bool shown = begin_tile(title, width_em);
         g_tiles.on = false;
         g_tile_of_cards = true;
@@ -2293,8 +2211,7 @@ namespace EchoUI {
     }
 
     void EndTileOfCards() {
-        if (!g_tile_of_cards)
-            return;
+        if (!g_tile_of_cards) return;
         g_tile_of_cards = false;
         g_tiles.on = true;
         end_tile();
@@ -2317,12 +2234,10 @@ namespace EchoUI {
                 if (window->ScrollMax.y > 0.f || (window->Flags & ImGuiWindowFlags_Popup))
                     taken = true;
             }
-            if (!taken)
-                g_tiles.scroll -= g.IO.MouseWheel * em(3.f);
+            if (!taken) g_tiles.scroll -= g.IO.MouseWheel * em(3.f);
         }
         g_tiles.scroll = std::clamp(g_tiles.scroll, 0.f, over);
-        if (over <= 0.f)
-            return;
+        if (over <= 0.f) return;
         ImDrawList* draw = ImGui::GetForegroundDrawList();
         float track = g_tiles.bottom - g_tiles.top;
         float total = lowest - g_tiles.top;
@@ -2334,24 +2249,20 @@ namespace EchoUI {
     }
 
     bool BeginCard(const char* title, float width_em) {
-        if (g_tiles.on)
-            return begin_tile(title, width_em);
+        if (g_tiles.on) return begin_tile(title, width_em);
         const ImGuiStyle& style = ImGui::GetStyle();
         float width = em(width_em), height = 0.f;
-        if (single_column())
-            width = std::max(width, ImGui::GetContentRegionAvail().x);
-        if (!g_card_rows.empty() && !single_column()) {
-            if (g_card_rows.back().cards++ > 0)
-                ImGui::SameLine();
-            auto known = row_heights().find(g_card_rows.back().id);
-            if (known != row_heights().end())
+        if (g_single_column) width = std::max(width, ImGui::GetContentRegionAvail().x);
+        if (!g_card_rows.empty() && !g_single_column) {
+            if (g_card_rows.back().cards++ > 0) ImGui::SameLine();
+            auto known = g_row_heights.find(g_card_rows.back().id);
+            if (known != g_row_heights.end())
                 height = known->second + card_row_extra(g_card_rows.back().id);
         }
         g_card_needs = -1.f;
         bool shown = ImGui::BeginChild(title, ImVec2(width, height), height > 0.f ? ImGuiChildFlags_Borders : ImGuiChildFlags_Borders | ImGuiChildFlags_AutoResizeY);
         g_row_widths.push_back(width - style.WindowPadding.x * 2.f);
-        if (shown)
-            card_heading(title);
+        if (shown) card_heading(title);
         return shown;
     }
 
@@ -2374,8 +2285,7 @@ namespace EchoUI {
     void RowWith(const char* label, float reserve_em, const char* tip) {
         ImGui::AlignTextToFramePadding();
         ImGui::TextUnformatted(label);
-        if (tip && ImGui::IsItemHovered())
-            ImGui::SetTooltip("%s", tip);
+        if (tip && ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tip);
         float start = control_start();
         ImGui::SameLine(start);
         float reserve = reserve_em > 0.f ? em(reserve_em) + ImGui::GetStyle().ItemSpacing.x : 0.f;
@@ -2405,14 +2315,12 @@ namespace EchoUI {
         ImGuiWindow* window = ImGui::GetCurrentWindow();
         float side = ImGui::GetFrameHeight();
         ImGui::SameLine(ImGui::GetStyle().WindowPadding.x + row_width() - side);
-        if (window->SkipItems)
-            return false;
+        if (window->SkipItems) return false;
         ImGuiID id = window->GetID(id_text);
         ImVec2 pos = window->DC.CursorPos;
         ImRect bb(pos, ImVec2(pos.x + side, pos.y + side));
         ImGui::ItemSize(bb, ImGui::GetStyle().FramePadding.y);
-        if (!ImGui::ItemAdd(bb, id))
-            return false;
+        if (!ImGui::ItemAdd(bb, id)) return false;
         bool hovered = false;
         bool held = false;
         bool pressed = ImGui::ButtonBehavior(bb, id, &hovered, &held);
@@ -2431,8 +2339,7 @@ namespace EchoUI {
         ImGui::SetNextWindowPos(ImVec2(display.x * .5f, display.y * .5f), ImGuiCond_Always, ImVec2(.5f, .5f));
         flags |= ImGuiWindowFlags_NoMove;
 #endif
-        if (!ImGui::BeginPopupModal(title, nullptr, flags))
-            return false;
+        if (!ImGui::BeginPopupModal(title, nullptr, flags)) return false;
         {
             ImGuiContext& g = *ImGui::GetCurrentContext();
             ImGuiWindow* window = ImGui::GetCurrentWindow();
@@ -2442,10 +2349,8 @@ namespace EchoUI {
         }
         float width = em(width_em);
         g_row_widths.push_back(width > 0.f ? width : ImGui::GetContentRegionAvail().x);
-        if (TitleBar(title, Icon::None, closable, width))
-            ImGui::CloseCurrentPopup();
-        if (width > 0.f)
-            ImGui::Dummy(ImVec2(width, 0.f));
+        if (TitleBar(title, Icon::None, closable, width)) ImGui::CloseCurrentPopup();
+        if (width > 0.f) ImGui::Dummy(ImVec2(width, 0.f));
         return true;
     }
 
@@ -2456,8 +2361,7 @@ namespace EchoUI {
 
     bool ColorEdit4(const char* label, float* rgba, ImGuiColorEditFlags flags) {
         ImGuiWindow* window = ImGui::GetCurrentWindow();
-        if (window->SkipItems)
-            return false;
+        if (window->SkipItems) return false;
         const ImGuiStyle& style = ImGui::GetStyle();
         bool alpha = !(flags & ImGuiColorEditFlags_NoAlpha);
         ImGuiID id = window->GetID(label);
@@ -2471,8 +2375,7 @@ namespace EchoUI {
         if (ImGui::ItemAdd(total, id)) {
             bool hovered = false;
             bool held = false;
-            if (ImGui::ButtonBehavior(total, id, &hovered, &held))
-                ImGui::OpenPopup("##echo-color");
+            if (ImGui::ButtonBehavior(total, id, &hovered, &held)) ImGui::OpenPopup("##echo-color");
             float hot = ease(id, hovered ? 1.f : 0.f);
             ImDrawList* draw = window->DrawList;
             ImVec2 mid(pos.x + side * .5f, pos.y + side * .5f);
@@ -2540,8 +2443,7 @@ namespace EchoUI {
 
     bool ColorEdit3(const char* label, float* rgb, ImGuiColorEditFlags flags) {
         float rgba[4] = { rgb[0], rgb[1], rgb[2], 1.f };
-        if (!ColorEdit4(label, rgba, flags | ImGuiColorEditFlags_NoAlpha))
-            return false;
+        if (!ColorEdit4(label, rgba, flags | ImGuiColorEditFlags_NoAlpha)) return false;
         rgb[0] = rgba[0];
         rgb[1] = rgba[1];
         rgb[2] = rgba[2];
@@ -2557,7 +2459,7 @@ namespace EchoUI {
         ImRect bb(pos, ImVec2(pos.x + size.x, pos.y + size.y));
         g_field = { id, bb, window };
         if (!window->SkipItems && ImGui::IsRectVisible(bb.Min, bb.Max))
-            draw_field(window, id, bb, -1.f, field_states()[id]);
+            draw_field(window, id, bb, -1.f, g_field_states[id]);
         push_clear_frame();
         bool changed = ImGui::InputTextMultiline(label, text, size_arg);
         end_field();
@@ -2566,8 +2468,7 @@ namespace EchoUI {
 
     bool Slider(const char* label, float* value, float min, float max, const char* format, bool rainbow) {
         ImGuiWindow* window = ImGui::GetCurrentWindow();
-        if (window->SkipItems)
-            return false;
+        if (window->SkipItems) return false;
         ImGuiContext& g = *GImGui;
         const ImGuiStyle& style = g.Style;
         ImGuiID id = window->GetID(label);
@@ -2577,8 +2478,7 @@ namespace EchoUI {
         ImRect frame(pos, ImVec2(pos.x + width, pos.y + height));
         ImRect total(pos, ImVec2(frame.Max.x + (label_size.x > 0.f ? style.ItemInnerSpacing.x + label_size.x : 0.f), frame.Max.y));
         ImGui::ItemSize(total, style.FramePadding.y);
-        if (!ImGui::ItemAdd(total, id, &frame))
-            return false;
+        if (!ImGui::ItemAdd(total, id, &frame)) return false;
         bool hovered = false;
         bool held = false;
         ImGui::ButtonBehavior(frame, id, &hovered, &held);
@@ -2626,8 +2526,7 @@ namespace EchoUI {
         }
         circle_filled_cached(draw, at, knob * (1.f + .15f * hot), ImGui::GetColorU32(knob_fill), 24);
         draw->AddCircle(at, knob * (1.f + .15f * hot), ImGui::GetColorU32(mix(color(ImGuiCol_WindowBg), color(ImGuiCol_CheckMark), hot)), 24, std::max(1.5f, height * .07f));
-        if (held && format && *format)
-            ImGui::SetTooltip(format, *value);
+        if (held && format && *format) ImGui::SetTooltip(format, *value);
         if (label_size.x > 0.f)
             ImGui::RenderText(ImVec2(frame.Max.x + style.ItemInnerSpacing.x, pos.y + style.FramePadding.y), label);
         return changed;
@@ -2635,15 +2534,13 @@ namespace EchoUI {
 
     bool ThemeTile(const char* id_text, ImTextureID logo, bool selected) {
         ImGuiWindow* window = ImGui::GetCurrentWindow();
-        if (window->SkipItems)
-            return false;
+        if (window->SkipItems) return false;
         ImGuiID id = window->GetID(id_text);
         float side = em(2.5f);
         ImVec2 pos = window->DC.CursorPos;
         ImRect bb(pos, ImVec2(pos.x + side, pos.y + side));
         ImGui::ItemSize(bb);
-        if (!ImGui::ItemAdd(bb, id))
-            return false;
+        if (!ImGui::ItemAdd(bb, id)) return false;
         bool hovered = false;
         bool held = false;
         bool pressed = ImGui::ButtonBehavior(bb, id, &hovered, &held);
@@ -2660,8 +2557,7 @@ namespace EchoUI {
 
     bool Header(const char* title, const char* version, ImTextureID logo) {
         ImGuiWindow* window = ImGui::GetCurrentWindow();
-        if (window->SkipItems)
-            return false;
+        if (window->SkipItems) return false;
         const ImGuiStyle& style = ImGui::GetStyle();
         float height = ImGui::GetFrameHeight() * 1.2f;
         float start_y = ImGui::GetCursorPosY();
@@ -2699,20 +2595,11 @@ namespace EchoUI {
         window->DrawList->AddRectFilled(ImVec2(x, top + inset), ImVec2(x + width, bottom - inset), ImGui::GetColorU32(ImGuiCol_CheckMark), width * .5f);
     }
 
-    bool& rainbow_rim() {
-        static bool on = false;
-        return on;
-    }
+    bool g_rainbow_rim = false;
 
-    bool& button_effects() {
-        static bool on = true;
-        return on;
-    }
+    bool g_button_effects = true;
 
-    Scene& scene() {
-        static Scene on = Scene::None;
-        return on;
-    }
+    Scene g_scene = Scene::None;
 
     static const char* const SCENE_NAMES[] = { "", "halloween", "hell", "heaven", "space", "ocean", "sakura" };
 
@@ -2722,8 +2609,7 @@ namespace EchoUI {
 
     Scene scene_named(std::string_view name) {
         for (int i = 1; i < (int)(std::size(SCENE_NAMES)); ++i) {
-            if (name == SCENE_NAMES[i])
-                return (Scene)i;
+            if (name == SCENE_NAMES[i]) return (Scene)i;
         }
         return Scene::None;
     }
@@ -2756,10 +2642,9 @@ namespace EchoUI {
         auto ratio = [](float now, float own) {
             return own > .001f ? std::max(now, 0.f) / own : 1.f;
         };
-        for (int i = 0; i < preset_count() && scene() != Scene::None; ++i) {
+        for (int i = 0; i < preset_count() && g_scene != Scene::None; ++i) {
             const auto& own = preset(i).palette;
-            if (own.scene != scene())
-                continue;
+            if (own.scene != g_scene) continue;
             body_turn = { palette.hue - own.hue, ratio(palette.richness, own.richness), ratio(palette.depth, own.depth) };
             if (own.light) {
                 night = std::clamp((1.f - body_turn.brightness) / (1.f - .5f), 0.f, 1.f);
@@ -2806,8 +2691,7 @@ namespace EchoUI {
         };
         Set look;
         night_menu = 0.f;
-        if (!palette.light)
-            look = dark_set(d);
+        if (!palette.light) look = dark_set(d);
         else {
             float fade = night_fade(d);
             Set day = light_set(std::min(1.f, .85f + .15f * (d - NIGHT_LOW) / (1.f - NIGHT_LOW)));
@@ -2827,7 +2711,7 @@ namespace EchoUI {
         }
         ImVec4 background = look.background, panel = look.panel, raised = look.raised, line = look.line, text = look.text, muted = look.muted;
         ImVec4 accent = look.accent, accent_hot = look.accent_hot, button = look.button, button_hot = look.button_hot, buttonDown = look.button_down;
-        rainbow_rim() = palette.rainbow;
+        g_rainbow_rim = palette.rainbow;
         if (palette.rainbow) {
             background.w = 0.f;
             raised = ImVec4(0.f, 0.f, 0.f, .26f);
@@ -2840,10 +2724,9 @@ namespace EchoUI {
             button_hot = ImVec4(1.f, 1.f, 1.f, .2f);
             buttonDown = ImVec4(1.f, 1.f, 1.f, .3f);
         }
-        scene() = palette.rainbow ? Scene::None : palette.scene;
+        g_scene = palette.rainbow ? Scene::None : palette.scene;
         sync_scene_turn(palette);
-        if (scene() != Scene::None)
-            background.w = 0.f;
+        if (g_scene != Scene::None) background.w = 0.f;
         auto set = [&](ImGuiCol slot, ImVec4 value) {
             style.Colors[slot] = value;
         };
@@ -2907,7 +2790,7 @@ namespace EchoUI {
         apply_palette(Palette{});
     }
 
-    constexpr float deg(float degrees) {
+    static float deg(float degrees) {
         return degrees / 360.f;
     }
 

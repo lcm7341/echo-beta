@@ -16,8 +16,7 @@ static bool init_formatted(CCString* self, const char* format, va_list ap) {
     va_copy(copy, ap);
     int len = std::vsnprintf(buffer, sizeof(buffer), format, copy);
     va_end(copy);
-    if (len < 0 || len >= (int)sizeof(buffer))
-        return native_init(self, format, ap);
+    if (len < 0 || len >= (int)sizeof(buffer)) return native_init(self, format, ap);
     self->m_sString.assign(buffer, std::strlen(buffer));
     return true;
 }

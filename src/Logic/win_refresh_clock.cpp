@@ -20,8 +20,7 @@ static double real_total = 0.0, used_total = 0.0;
 static double gd_average = 0.0;
 
 static bool ask_windows_for_ticks(unsigned long long& total_ticks, double& seconds_per_tick) {
-    if (windows_said_no)
-        return false;
+    if (windows_said_no) return false;
 
     DWM_TIMING_INFO info = {};
     info.cbSize = sizeof(info);
@@ -30,8 +29,7 @@ static bool ask_windows_for_ticks(unsigned long long& total_ticks, double& secon
         return false;
     }
 
-    if (info.rateRefresh.uiNumerator == 0 || info.rateRefresh.uiDenominator == 0)
-        return false;
+    if (info.rateRefresh.uiNumerator == 0 || info.rateRefresh.uiDenominator == 0) return false;
     seconds_per_tick = (double)info.rateRefresh.uiDenominator / info.rateRefresh.uiNumerator;
     total_ticks = info.cRefresh;
     if (total_ticks == 0) {
@@ -47,13 +45,11 @@ double refresh_frame_time(double gd_time) {
     QueryPerformanceFrequency(&frequency);
     double real = qpc_last.QuadPart ? (double)(now.QuadPart - qpc_last.QuadPart) / (double)frequency.QuadPart : -1.0;
     qpc_last = now;
-    if (!(real >= 0.0) || real > 0.25)
-        is_first_frame = true;
+    if (!(real >= 0.0) || real > 0.25) is_first_frame = true;
 
     unsigned long long total_ticks;
     double seconds_per_tick;
-    if (!ask_windows_for_ticks(total_ticks, seconds_per_tick))
-        return gd_time;
+    if (!ask_windows_for_ticks(total_ticks, seconds_per_tick)) return gd_time;
 
     unsigned long long ticks_this_frame = total_ticks - ticks_last_frame;
     ticks_last_frame = total_ticks;
@@ -72,8 +68,7 @@ double refresh_frame_time(double gd_time) {
     real_total += real;
 
     double screen_time = ticks_this_frame * seconds_per_tick;
-    if (std::abs(screen_time - gd_time) > seconds_per_tick * 2)
-        screen_time = gd_time;
+    if (std::abs(screen_time - gd_time) > seconds_per_tick * 2) screen_time = gd_time;
     if (std::abs(used_total + screen_time - real_total) > seconds_per_tick)
         screen_time = std::max(real_total - used_total, 0.0);
     used_total += screen_time;

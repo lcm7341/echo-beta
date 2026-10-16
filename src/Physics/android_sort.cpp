@@ -26,12 +26,9 @@ unsigned long sort_calls = 0;
 
 static void my_qsort(void* array, size_t count, size_t item_size, int (*compare)(const void*, const void*)) {
     sort_calls++;
-    if (array == nullptr || compare == nullptr || count < 2 || item_size == 0)
-        return;
-    if (Logic::bot_disabled())
-        qsort(array, count, item_size, compare);
-    else
-        apple_qsort(array, count, item_size, compare);
+    if (array == nullptr || compare == nullptr || count < 2 || item_size == 0) return;
+    if (Logic::bot_disabled()) qsort(array, count, item_size, compare);
+    else apple_qsort(array, count, item_size, compare);
 }
 
 static void* read_slot(void** slot) {

@@ -53,8 +53,7 @@ public:
 	}
 
 	unsigned long long uint(size_t width) {
-		if (!take(width))
-			return 0;
+		if (!take(width)) return 0;
 		unsigned long long value = 0;
 		for (size_t i = 0; i < width; ++i)
 			value |= (unsigned long long)data[at - width + i] << (8 * i);
@@ -64,8 +63,7 @@ public:
 	template <typename T>
 	T pod() {
 		T value{};
-		if (take(sizeof(T)))
-			std::memcpy(&value, data.data() + at - sizeof(T), sizeof(T));
+		if (take(sizeof(T))) std::memcpy(&value, data.data() + at - sizeof(T), sizeof(T));
 		return value;
 	}
 
@@ -73,11 +71,9 @@ public:
 		unsigned long long value = 0;
 		for (int shift = 0; shift < 64; shift += 7) {
 			auto byte = uint(1);
-			if (failed)
-				return 0;
+			if (failed) return 0;
 			value |= (byte & 127) << shift;
-			if (!(byte & 128))
-				return value;
+			if (!(byte & 128)) return value;
 		}
 		failed = true;
 		return 0;
@@ -120,7 +116,7 @@ public:
 
 class ReplayIO {
 public:
-	static constexpr unsigned long long max_inputs = 1ull << 26;
+	static const unsigned long long max_inputs = 1ull << 26;
 
 	static std::string lower_ext(const fs::path& path);
 	static std::string sanitize(std::string name);

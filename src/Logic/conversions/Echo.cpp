@@ -15,78 +15,77 @@ namespace fs = std::filesystem;
 
 using namespace geode::prelude;
 
-// every number below is part of the .echo format. change one & old saves stop loading
+// all these numbers are part of the .echo format. change any of them & old saves wont load anymore
 
-// a bit's odds are counted out of 65536
-constexpr int ODDS_SCALE = 65536;
-constexpr int ODDS_HALF = 32768;
-// odds never go all the way to 0 or 65536
-constexpr int ODDS_EDGE = 64;
-// an Odds stops getting more sure after this many bits
-constexpr int ODDS_MEMORY = 10;
-// a Tally counts out of 2^32
-constexpr unsigned TALLY_HALF = 1u << 31;
-constexpr long long TALLY_MAX = 4294967295ll;
-// how fast a tally learns: QUICK for most, STEADY for the "same as last time" bit
-constexpr int QUICK = 30;
-constexpr int STEADY = 4000;
+// a guess is how sure we are the next bit is a 0, out of 65536
+#define CHANCE_SCALE 65536
+#define CHANCE_HALF 32768
+// never 100% sure either way
+#define CHANCE_EDGE 64
+// old guesses stop learning after this many bits
+#define OLD_GUESS_MEMORY 10
+// newer guesses count out of 2^32 instead
+const unsigned GUESS_START = 1u << 31;
+#define GUESS_MAX 4294967295ll
+// how fast a guess learns. QUICK for most stuff, STEADY for the "same as last time" guess
+#define QUICK 30
+#define STEADY 4000
 
-constexpr unsigned FULL_RANGE = 4294967295u;
-// the range coder puts out a byte whenever its range drops under this
-constexpr unsigned RANGE_TOP = 1u << 24;
-// low's top byte is 255, so a carry could still change it. hold it back
-constexpr unsigned CARRY_ZONE = 255u << 24;
-constexpr int FLUSH_BYTES = 5;
-// a reader can run this far past the end of the data before the file counts as broken
-constexpr size_t READ_PAST_END = 64;
+#define FULL_RANGE 4294967295u
+// once the compressors range gets this small it writes a byte to the file
+const unsigned RANGE_TOP = 1u << 24;
+// if the next byte is 255 it could still change, so it waits
+const unsigned CARRY_ZONE = 255u << 24;
+#define FLUSH_BYTES 5
+// how far a broken file can make the reader run off the end before we give up
+const size_t READ_PAST_END = 64;
 
-// a number is stored as its length in bits (a tree of NUMBER_SLOT_BITS bits), then the bits under its top 1.
-// the first TREE_DEPTH of those have odds for every path, the rest have odds per position
-constexpr int NUMBER_SLOT_BITS = 7;
-constexpr int NUMBER_MAX_LEN = 64;
-constexpr int GAP_SLOT_BITS = 6;
-constexpr int GAP_MAX_LEN = 32;
-constexpr int TREE_DEPTH = 4;
-constexpr int COUNT_BITS = 7;
+// numbers are saved as how many bits long they are, then the bits themselves. the first TREE_DEPTH bits get their own guesses
+#define NUMBER_SLOT_BITS 7
+#define NUMBER_MAX_LEN 64
+#define GAP_SLOT_BITS 6
+#define GAP_MAX_LEN 32
+#define TREE_DEPTH 4
+#define COUNT_BITS 7
 
 // x, y & rotation are floats, the 2 velocities are doubles
-constexpr int POSE_FIELDS = 5;
-constexpr int POSE_FLOATS = 3;
+#define POSE_FIELDS 5
+#define POSE_FLOATS 3
 
-// a channel is a button (jump, left, right) of a player
-constexpr int BUTTONS = 3;
-constexpr int CHANNELS = BUTTONS * 2;
-// a symbol is channel << 1 | holding
-constexpr int SYMBOL_KINDS = CHANNELS * 2;
-constexpr int SYMBOL_SHIFT = 4;
-// each channel is unknown, held or released (3 states). 4 of them are looked at together
-constexpr int HELD_STATES = 81;
-constexpr int CHANNEL_NODES = 5;
-constexpr int HOLD_BASES = 12;
-constexpr int SHORT_GAPS = 6;
-constexpr int GAP_BASES = 4;
-constexpr int GAP_STAGES = 3;
-constexpr int LENGTH_BUCKETS = 40;
-constexpr int MATCH_KINDS = 6;
+// a channel is 1 button (jump, left, right) of 1 player
+#define BUTTONS 3
+#define CHANNELS (BUTTONS * 2)
+// a click kind is its channel & whether its a press or a release
+#define CLICK_KINDS (CHANNELS * 2)
+#define CLICK_SHIFT 4
+// each channel is pressed, released or not used yet. 4 of them get looked at together (3^4 = 81)
+#define HELD_STATES 81
+#define CHANNEL_NODES 5
+#define HOLD_BASES 12
+#define SHORT_GAPS 6
+#define GAP_BASES 4
+#define GAP_STAGES 3
+#define LENGTH_BUCKETS 40
+#define MATCH_KINDS 6
 
-// the 12 bit chances blending works in
-constexpr int CHANCE_MAX = 4095;
-constexpr int SQUASH_LIMIT = 2047;
-constexpr int BLEND_CELLS = 3;
-constexpr int BLEND_ONE = 1 << 16;
-constexpr int BLEND_BIAS = 256;
+// when guesses get mixed theyre out of 4096 instead
+#define CHANCE_MAX 4095
+#define SCORE_LIMIT 2047
+#define MIX_PARTS 3
+#define MIX_ONE (1 << 16)
+#define MIX_BIAS 256
 
-constexpr int MIN_MATCH = 4;
-constexpr unsigned long long LONGEST_CHECK = 64;
-constexpr int MATCH_SLOT_BITS = 18;
-constexpr unsigned long long MATCH_HASH_START = 2685821657736338717ull;
-constexpr unsigned long long MATCH_HASH_MIX = 11400714819323198485ull;
-constexpr unsigned long long MATCH_HASH_ADD = 7146057691288625177ull;
+#define MIN_MATCH 4
+const unsigned long long LONGEST_CHECK = 64;
+#define MATCH_SLOT_BITS 18
+const unsigned long long MATCH_HASH_START = 2685821657736338717ull;
+const unsigned long long MATCH_HASH_MIX = 11400714819323198485ull;
+const unsigned long long MATCH_HASH_ADD = 7146057691288625177ull;
 
-constexpr unsigned long long MAX_RATE_CHANGES = 1ull << 16;
-constexpr size_t RESERVE_LIMIT = 1u << 20;
+const unsigned long long MAX_RATE_CHANGES = 1ull << 16;
+const size_t RESERVE_LIMIT = 1u << 20;
 
-// version 1 files are plain bits
+// version 1 files are just plain bits
 struct BitReader {
     const unsigned char* data = nullptr;
     size_t size = 0;
@@ -96,8 +95,7 @@ struct BitReader {
 
     int bit() {
         if (left == 0) {
-            if (index >= size)
-                return 0;
+            if (index >= size) return 0;
             acc = data[index++];
             left = 8;
         }
@@ -110,8 +108,7 @@ struct BitReader {
     unsigned gamma() {
         unsigned zeros = 0;
         while (bit() == 0) {
-            if (++zeros > 31 || index > size)
-                return 0;
+            if (++zeros > 31 || index > size) return 0;
         }
         unsigned n = 1;
         for (unsigned i = 0; i < zeros; ++i)
@@ -120,59 +117,60 @@ struct BitReader {
     }
 };
 
-// how likely the next bit is a 0. version 2 files learn w/ these
-struct Odds {
-    unsigned short value = ODDS_HALF;
+// version 2 guesses
+struct OldGuess {
+    unsigned short value = CHANCE_HALF;
     unsigned char seen = 0;
 
     unsigned chance() const {
-        return std::clamp<unsigned>(value, ODDS_EDGE, ODDS_SCALE - 1 - ODDS_EDGE);
+        return std::clamp<unsigned>(value, CHANCE_EDGE, CHANCE_SCALE - 1 - CHANCE_EDGE);
     }
 
     void learn(int bit) {
-        int target = bit ? 0 : ODDS_SCALE - 1;
+        int target = bit ? 0 : CHANCE_SCALE - 1;
         value = (unsigned short)(value + (target - (int)value) / ((int)seen + 2));
-        if (seen < ODDS_MEMORY)
-            ++seen;
+        if (seen < OLD_GUESS_MEMORY) ++seen;
     }
 };
 
-// how likely the next bit is a 1. versions 3 & 4 learn w/ these
-struct Tally {
-    unsigned one = TALLY_HALF;
+// version 3 & 4 guesses
+struct Guess {
+    unsigned one = GUESS_START;
     unsigned short seen = 0;
 
-    unsigned zero16() const {
-        return ODDS_SCALE - std::clamp<unsigned>(one >> 16, 1, ODDS_SCALE - 1);
+    unsigned zero_chance() const {
+        return CHANCE_SCALE - std::clamp<unsigned>(one >> 16, 1, CHANCE_SCALE - 1);
     }
 
-    int one12() const {
+    int one_chance() const {
         return (int)(one >> 20);
     }
 
     void learn(int bit, int cap) {
-        long long target = bit ? TALLY_MAX : 0;
+        long long target = bit ? GUESS_MAX : 0;
         one = (unsigned)(one + (target - (long long)one) / (seen + 2));
-        if (seen < cap)
-            ++seen;
+        if (seen < cap) ++seen;
     }
 };
 
-struct RangeWriter {
+// every code_ function below both saves & loads. the Compressor writes the value its given,
+// the Decompressor ignores it & returns what it read instead
+struct Compressor {
+    static const bool reading = false;
     std::vector<unsigned char> bytes;
     unsigned long long low = 0;
     unsigned range = FULL_RANGE;
     unsigned char cache = 0;
     unsigned long long pending = 1;
     bool first = true;
+    bool failed = false;
 
     void shift_low() {
         if ((unsigned)low < CARRY_ZONE || (low >> 32) != 0) {
             unsigned char carry = (unsigned char)(low >> 32);
             unsigned char out = cache;
             do {
-                if (!first)
-                    bytes.push_back((unsigned char)(out + carry));
+                if (!first) bytes.push_back((unsigned char)(out + carry));
                 first = false;
                 out = 255;
             } while (--pending != 0);
@@ -182,7 +180,7 @@ struct RangeWriter {
         low = (low & (RANGE_TOP - 1)) << 8;
     }
 
-    void bit(unsigned zero, int value) {
+    int bit(unsigned zero, int value) {
         unsigned bound = (range >> 16) * zero;
         if (value) {
             low += bound;
@@ -195,11 +193,13 @@ struct RangeWriter {
             range <<= 8;
             shift_low();
         }
+        return value;
     }
 
-    void write(Tally& tally, int value, int cap = QUICK) {
-        bit(tally.zero16(), value);
-        tally.learn(value, cap);
+    int code(Guess& guess, int value, int cap = QUICK) {
+        bit(guess.zero_chance(), value);
+        guess.learn(value, cap);
+        return value;
     }
 
     void finish() {
@@ -218,7 +218,8 @@ struct RangeWriter {
     }
 };
 
-struct RangeReader {
+struct Decompressor {
+    static const bool reading = true;
     const unsigned char* data = nullptr;
     size_t size = 0;
     size_t index = 0;
@@ -228,8 +229,7 @@ struct RangeReader {
 
     unsigned char next() {
         if (index >= size) {
-            if (++index > size + READ_PAST_END)
-                failed = true;
+            if (++index > size + READ_PAST_END) failed = true;
             return 0;
         }
         return data[index++];
@@ -240,7 +240,7 @@ struct RangeReader {
             value = (value << 8) | next();
     }
 
-    int bit(unsigned zero) {
+    int bit(unsigned zero, int = 0) {
         unsigned bound = (range >> 16) * zero;
         int res = value >= bound ? 1 : 0;
         if (res) {
@@ -257,101 +257,62 @@ struct RangeReader {
         return res;
     }
 
-    int read(Odds& odds) {
-        int res = bit(odds.chance());
-        odds.learn(res);
+    int code(OldGuess& guess, int = 0) {
+        int res = bit(guess.chance());
+        guess.learn(res);
         return res;
     }
 
-    int read(Tally& tally, int cap = QUICK) {
-        int res = bit(tally.zero16());
-        tally.learn(res, cap);
+    int code(Guess& guess, int = 0, int cap = QUICK) {
+        int res = bit(guess.zero_chance());
+        guess.learn(res, cap);
         return res;
     }
 };
 
-struct OddsNumbers {
+struct OldNumberGuesses {
     int slot_bits = NUMBER_SLOT_BITS;
     int max_len = NUMBER_MAX_LEN;
-    std::array<Odds, 1 << NUMBER_SLOT_BITS> slot{};
-    std::array<std::array<Odds, 1 << TREE_DEPTH>, NUMBER_MAX_LEN + 1> high{};
-    std::array<std::array<Odds, NUMBER_MAX_LEN>, NUMBER_MAX_LEN + 1> low{};
+    std::array<OldGuess, 1 << NUMBER_SLOT_BITS> slot{};
+    std::array<std::array<OldGuess, 1 << TREE_DEPTH>, NUMBER_MAX_LEN + 1> high{};
+    std::array<std::array<OldGuess, NUMBER_MAX_LEN>, NUMBER_MAX_LEN + 1> low{};
 };
 
-struct TallyNumbers {
-    std::array<Tally, 1 << NUMBER_SLOT_BITS> slot{};
-    std::array<std::array<Tally, 1 << TREE_DEPTH>, NUMBER_MAX_LEN + 1> high{};
-    std::array<std::array<Tally, NUMBER_MAX_LEN>, NUMBER_MAX_LEN + 1> low{};
+struct NumberGuesses {
+    static const int slot_bits = NUMBER_SLOT_BITS;
+    static const int max_len = NUMBER_MAX_LEN;
+    std::array<Guess, 1 << NUMBER_SLOT_BITS> slot{};
+    std::array<std::array<Guess, 1 << TREE_DEPTH>, NUMBER_MAX_LEN + 1> high{};
+    std::array<std::array<Guess, NUMBER_MAX_LEN>, NUMBER_MAX_LEN + 1> low{};
 };
 
-static unsigned long long read_old_number(RangeReader& reader, OddsNumbers& odds) {
-    int node = 1;
-    for (int i = odds.slot_bits - 1; i >= 0; --i)
-        node = (node << 1) | reader.read(odds.slot[node]);
-    int len = node - (1 << odds.slot_bits);
-    if (len > odds.max_len) {
-        reader.failed = true;
-        return 0;
-    }
-    if (len <= 1)
-        return (unsigned long long)len;
-    unsigned long long res = 1;
-    int tree = 1;
-    for (int i = len - 2; i >= 0; --i) {
-        int depth = len - 2 - i;
-        int bit = depth < TREE_DEPTH ? reader.read(odds.high[len][tree]) : reader.read(odds.low[len][i]);
-        if (depth < TREE_DEPTH)
-            tree = (tree << 1) | bit;
-        res = (res << 1) | (unsigned long long)bit;
-    }
-    return res;
-}
-
-static unsigned long long read_number(RangeReader& reader, TallyNumbers& odds) {
-    int node = 1;
-    for (int i = NUMBER_SLOT_BITS - 1; i >= 0; --i)
-        node = (node << 1) | reader.read(odds.slot[node]);
-    int len = node - (1 << NUMBER_SLOT_BITS);
-    if (len > NUMBER_MAX_LEN) {
-        reader.failed = true;
-        return 0;
-    }
-    if (len <= 1)
-        return (unsigned long long)len;
-    unsigned long long res = 1;
-    int tree = 1;
-    for (int i = len - 2; i >= 0; --i) {
-        int depth = len - 2 - i;
-        int bit = depth < TREE_DEPTH ? reader.read(odds.high[len][tree]) : reader.read(odds.low[len][i]);
-        if (depth < TREE_DEPTH)
-            tree = (tree << 1) | bit;
-        res = (res << 1) | (unsigned long long)bit;
-    }
-    return res;
-}
-
-static void write_number(RangeWriter& writer, TallyNumbers& odds, unsigned long long number) {
+template <typename Coder, typename Guesses>
+static unsigned long long code_number(Coder& coder, Guesses& guesses, unsigned long long number) {
     int len = std::bit_width(number);
     int node = 1;
-    for (int i = NUMBER_SLOT_BITS - 1; i >= 0; --i) {
-        int bit = (len >> i) & 1;
-        writer.write(odds.slot[node], bit);
-        node = (node << 1) | bit;
+    for (int i = guesses.slot_bits - 1; i >= 0; --i)
+        node = (node << 1) | coder.code(guesses.slot[node], (len >> i) & 1);
+    len = node - (1 << guesses.slot_bits);
+    if (len > guesses.max_len) {
+        coder.failed = true;
+        return 0;
     }
-    if (len <= 1)
-        return;
+    if (len <= 1) return (unsigned long long)len;
+    unsigned long long res = 1;
     int tree = 1;
     for (int i = len - 2; i >= 0; --i) {
         int depth = len - 2 - i;
         int bit = (int)((number >> i) & 1);
         if (depth < TREE_DEPTH) {
-            writer.write(odds.high[len][tree], bit);
+            bit = coder.code(guesses.high[len][tree], bit);
             tree = (tree << 1) | bit;
         }
         else {
-            writer.write(odds.low[len][i], bit);
+            bit = coder.code(guesses.low[len][i], bit);
         }
+        res = (res << 1) | (unsigned long long)bit;
     }
+    return res;
 }
 
 static unsigned long long zigzag(long long value) {
@@ -362,7 +323,7 @@ static long long unzigzag(unsigned long long value) {
     return (long long)(value >> 1) ^ -(long long)(value & 1);
 }
 
-// poses are stored as how much each field changed since that players last pose
+// poses only save how much they changed since that players last pose
 static std::array<unsigned long long, POSE_FIELDS> pose_fields(const FramePose& pose) {
     return {
         std::bit_cast<unsigned>(pose.x),
@@ -374,14 +335,12 @@ static std::array<unsigned long long, POSE_FIELDS> pose_fields(const FramePose& 
 }
 
 static long long field_change(int field, unsigned long long now, unsigned long long before) {
-    if (field >= POSE_FLOATS)
-        return (long long)(now - before);
+    if (field >= POSE_FLOATS) return (long long)(now - before);
     return (long long)((int)((unsigned)now - (unsigned)before));
 }
 
 static unsigned long long apply_change(int field, unsigned long long before, long long change) {
-    if (field >= POSE_FLOATS)
-        return before + (unsigned long long)change;
+    if (field >= POSE_FLOATS) return before + (unsigned long long)change;
     return (unsigned)((unsigned)before + (unsigned)change);
 }
 
@@ -395,56 +354,30 @@ static FramePose pose_from_fields(const std::array<unsigned long long, POSE_FIEL
     return pose;
 }
 
-static void read_old_poses(RangeReader& reader, const std::vector<Frame>& inputs, std::vector<FramePose>& poses, std::array<OddsNumbers, POSE_FIELDS * 2>& odds) {
+template <typename Coder, typename Guesses>
+static void code_poses(Coder& coder, const std::vector<Frame>& inputs, std::vector<FramePose>& poses, std::array<Guesses, POSE_FIELDS * 2>& guesses) {
     poses.resize(inputs.size());
     std::array<std::array<unsigned long long, POSE_FIELDS>, 2> prev{};
-    for (size_t i = 0; i < inputs.size() && !reader.failed; ++i) {
+    for (size_t i = 0; i < inputs.size() && !coder.failed; ++i) {
         int player = inputs[i].player2 ? 1 : 0;
-        std::array<unsigned long long, POSE_FIELDS> fields{};
+        auto fields = pose_fields(poses[i]);
         for (int field = 0; field < POSE_FIELDS; ++field) {
-            long long change = unzigzag(read_old_number(reader, odds[player * POSE_FIELDS + field]));
-            fields[field] = apply_change(field, prev[player][field], change);
+            unsigned long long change = code_number(coder, guesses[player * POSE_FIELDS + field], zigzag(field_change(field, fields[field], prev[player][field])));
+            fields[field] = apply_change(field, prev[player][field], unzigzag(change));
             prev[player][field] = fields[field];
         }
         poses[i] = pose_from_fields(fields);
     }
 }
 
-static void read_poses(RangeReader& reader, const std::vector<Frame>& inputs, std::vector<FramePose>& poses, std::array<TallyNumbers, POSE_FIELDS * 2>& odds) {
-    poses.resize(inputs.size());
-    std::array<std::array<unsigned long long, POSE_FIELDS>, 2> prev{};
-    for (size_t i = 0; i < inputs.size() && !reader.failed; ++i) {
-        int player = inputs[i].player2 ? 1 : 0;
-        std::array<unsigned long long, POSE_FIELDS> fields{};
-        for (int field = 0; field < POSE_FIELDS; ++field) {
-            long long change = unzigzag(read_number(reader, odds[player * POSE_FIELDS + field]));
-            fields[field] = apply_change(field, prev[player][field], change);
-            prev[player][field] = fields[field];
-        }
-        poses[i] = pose_from_fields(fields);
-    }
-}
+struct OldClickGuesses {
+    std::array<OldGuess, CHANNELS * 2> player{};
+    std::array<std::array<OldGuess, 4>, CHANNELS * 4> button{};
+    std::array<OldGuess, 6> hold{};
+    std::array<OldNumberGuesses, GAP_BASES> gap{};
+    std::array<OldNumberGuesses, POSE_FIELDS * 2> pose{};
 
-static void write_poses(RangeWriter& writer, const std::vector<Frame>& inputs, const std::vector<FramePose>& poses, std::array<TallyNumbers, POSE_FIELDS * 2>& odds) {
-    std::array<std::array<unsigned long long, POSE_FIELDS>, 2> prev{};
-    for (size_t i = 0; i < inputs.size(); ++i) {
-        int player = inputs[i].player2 ? 1 : 0;
-        auto fields = pose_fields(i < poses.size() ? poses[i] : FramePose{});
-        for (int field = 0; field < POSE_FIELDS; ++field) {
-            write_number(writer, odds[player * POSE_FIELDS + field], zigzag(field_change(field, fields[field], prev[player][field])));
-            prev[player][field] = fields[field];
-        }
-    }
-}
-
-struct OldInputOdds {
-    std::array<Odds, CHANNELS * 2> player{};
-    std::array<std::array<Odds, 4>, CHANNELS * 4> button{};
-    std::array<Odds, 6> hold{};
-    std::array<OddsNumbers, GAP_BASES> gap{};
-    std::array<OddsNumbers, POSE_FIELDS * 2> pose{};
-
-    OldInputOdds() {
+    OldClickGuesses() {
         for (auto& numbers : gap) {
             numbers.slot_bits = GAP_SLOT_BITS;
             numbers.max_len = GAP_MAX_LEN;
@@ -452,26 +385,26 @@ struct OldInputOdds {
     }
 };
 
-static void read_version2_inputs(RangeReader& reader, std::vector<Frame>& inputs, std::vector<FramePose>& poses, size_t count, bool samples) {
-    auto odds = std::make_unique<OldInputOdds>();
+static void read_version2_inputs(Decompressor& reader, std::vector<Frame>& inputs, std::vector<FramePose>& poses, size_t count, bool samples) {
+    auto guesses = std::make_unique<OldClickGuesses>();
     std::array<int, CHANNELS> state{};
     int last_channel = 0, last_hold = 0, last_frame = 0;
     for (size_t i = 0; i < count && !reader.failed; ++i) {
         Frame input;
         int context = last_channel * 2 + last_hold;
-        int player2 = reader.read(odds->player[context]);
-        auto& button = odds->button[context * 2 + player2];
-        int high = reader.read(button[1]);
-        int low = reader.read(button[2 + high]);
+        int player2 = reader.code(guesses->player[context]);
+        auto& button = guesses->button[context * 2 + player2];
+        int high = reader.code(button[1]);
+        int low = reader.code(button[2 + high]);
         int code = (high << 1) | low;
         if (code == 3) {
             reader.failed = true;
             break;
         }
         int channel = player2 * BUTTONS + code;
-        int hold = reader.read(odds->hold[state[channel] * 2 + last_hold]);
-        auto& gap = odds->gap[hold * 2 + (channel == last_channel ? 1 : 0)];
-        unsigned long long step = read_old_number(reader, gap);
+        int hold = reader.code(guesses->hold[state[channel] * 2 + last_hold]);
+        auto& gap = guesses->gap[hold * 2 + (channel == last_channel ? 1 : 0)];
+        unsigned long long step = code_number(reader, gap, 0);
         if (step > (unsigned long long)(INT_MAX - last_frame)) {
             reader.failed = true;
             break;
@@ -487,273 +420,210 @@ static void read_version2_inputs(RangeReader& reader, std::vector<Frame>& inputs
         last_hold = hold;
         last_frame = frame;
     }
-    if (samples && !reader.failed)
-        read_old_poses(reader, inputs, poses, odds->pose);
+    if (samples && !reader.failed) code_poses(reader, inputs, poses, guesses->pose);
 }
 
-// a few tallies are mixed into 1 guess. how much each one counts is learned as it goes
-// squash turns a blended score into a 12 bit chance. the curve has a point every 128 & is filled in between
-static int squash(int d) {
-    static constexpr int curve[33] = { 1, 2, 3, 6, 10, 16, 27, 45, 73, 120, 194, 310, 488, 747, 1101, 1546, 2047,
+// 3 guesses get mixed into 1. it learns which one to trust more as it goes
+// score_to_chance turns the mixed score back into a chance (a curve w/ a point every 128)
+static int score_to_chance(int d) {
+    static const int curve[33] = { 1, 2, 3, 6, 10, 16, 27, 45, 73, 120, 194, 310, 488, 747, 1101, 1546, 2047,
         2549, 2994, 3348, 3607, 3785, 3901, 3975, 4022, 4050, 4068, 4079, 4085, 4089, 4092, 4093, 4094 };
-    if (d > SQUASH_LIMIT)
-        return CHANCE_MAX;
-    if (d < -SQUASH_LIMIT)
-        return 1;
+    if (d > SCORE_LIMIT) return CHANCE_MAX;
+    if (d < -SCORE_LIMIT) return 1;
     int w = d & 127;
     int i = (d >> 7) + 16;
     return (curve[i] * (128 - w) + curve[i + 1] * w + 64) >> 7;
 }
 
-static int stretch(int p) {
+static int chance_to_score(int p) {
     static const auto table = [] {
         std::array<short, CHANCE_MAX + 1> res{};
         int at = 0;
-        for (int x = -SQUASH_LIMIT; x <= SQUASH_LIMIT; ++x) {
-            int v = squash(x);
+        for (int x = -SCORE_LIMIT; x <= SCORE_LIMIT; ++x) {
+            int v = score_to_chance(x);
             for (int i = at; i <= v; ++i)
                 res[i] = (short)x;
             at = v + 1;
         }
         for (int i = at; i <= CHANCE_MAX; ++i)
-            res[i] = SQUASH_LIMIT;
+            res[i] = SCORE_LIMIT;
         return res;
     }();
     return table[p];
 }
 
-// the last weight is for a fixed BLEND_BIAS, not a tally
-struct Blend {
-    std::array<int, BLEND_CELLS + 1> weight;
+// the last weight is for a fixed number (MIX_BIAS), not a guess
+struct Mix {
+    std::array<int, MIX_PARTS + 1> weight;
 
-    Blend() {
-        weight.fill(BLEND_ONE / BLEND_CELLS);
-        weight[BLEND_CELLS] = 0;
+    Mix() {
+        weight.fill(MIX_ONE / MIX_PARTS);
+        weight[MIX_PARTS] = 0;
     }
 };
 
-using BlendCells = std::array<Tally*, BLEND_CELLS>;
+using MixGuesses = std::array<Guess*, MIX_PARTS>;
 
-static int blend_chance(const BlendCells& cells, const Blend& blend, std::array<int, BLEND_CELLS + 1>& stretched) {
+static int mix_chance(const MixGuesses& parts, const Mix& mix, std::array<int, MIX_PARTS + 1>& scores) {
     long long dot = 0;
-    for (size_t i = 0; i < BLEND_CELLS; ++i) {
-        stretched[i] = stretch(cells[i]->one12());
-        dot += (long long)blend.weight[i] * stretched[i];
+    for (size_t i = 0; i < MIX_PARTS; ++i) {
+        scores[i] = chance_to_score(parts[i]->one_chance());
+        dot += (long long)mix.weight[i] * scores[i];
     }
-    stretched[BLEND_CELLS] = BLEND_BIAS;
-    dot += (long long)blend.weight[BLEND_CELLS] * stretched[BLEND_CELLS];
-    return std::clamp(squash((int)(dot >> 16)), 1, CHANCE_MAX);
+    scores[MIX_PARTS] = MIX_BIAS;
+    dot += (long long)mix.weight[MIX_PARTS] * scores[MIX_PARTS];
+    return std::clamp(score_to_chance((int)(dot >> 16)), 1, CHANCE_MAX);
 }
 
-static void blend_learn(const BlendCells& cells, Blend& blend, const std::array<int, BLEND_CELLS + 1>& stretched, int one, int bit, int rate) {
+static void mix_learn(const MixGuesses& parts, Mix& mix, const std::array<int, MIX_PARTS + 1>& scores, int one, int bit, int rate) {
     int error = ((bit << 12) - one) * rate;
-    for (size_t i = 0; i <= BLEND_CELLS; ++i)
-        blend.weight[i] += (stretched[i] * error) >> 10;
-    for (auto* cell : cells)
+    for (size_t i = 0; i <= MIX_PARTS; ++i)
+        mix.weight[i] += (scores[i] * error) >> 10;
+    for (auto* cell : parts)
         cell->learn(bit, QUICK);
 }
 
-static void write_blend(RangeWriter& writer, const BlendCells& cells, Blend& blend, int bit, int rate) {
-    std::array<int, BLEND_CELLS + 1> stretched;
-    int one = blend_chance(cells, blend, stretched);
-    writer.bit(ODDS_SCALE - ((unsigned)one << 4), bit);
-    blend_learn(cells, blend, stretched, one, bit, rate);
-}
-
-static int read_blend(RangeReader& reader, const BlendCells& cells, Blend& blend, int rate) {
-    std::array<int, BLEND_CELLS + 1> stretched;
-    int one = blend_chance(cells, blend, stretched);
-    int bit = reader.bit(ODDS_SCALE - ((unsigned)one << 4));
-    blend_learn(cells, blend, stretched, one, bit, rate);
+template <typename Coder>
+static int code_mixed(Coder& coder, const MixGuesses& parts, Mix& mix, int bit, int rate) {
+    std::array<int, MIX_PARTS + 1> scores;
+    int one = mix_chance(parts, mix, scores);
+    bit = coder.bit(CHANCE_SCALE - ((unsigned)one << 4), bit);
+    mix_learn(parts, mix, scores, one, bit, rate);
     return bit;
 }
 
 static int length_bucket(unsigned long long length) {
-    if (length < 4)
-        return (int)length;
+    if (length < 4) return (int)length;
     int width = std::bit_width(length);
     return std::min(4 + (width - 3) * 2 + (int)((length >> (width - 2)) & 1), LENGTH_BUCKETS - 1);
 }
 
-// a gap tree: GAP_SLOT_BITS of length, then the top TREE_DEPTH bits, then the rest by position
-constexpr int SLOT_NODES = 1 << GAP_SLOT_BITS;
-constexpr int HIGH_NODES = (GAP_MAX_LEN + 1) * (1 << TREE_DEPTH);
-using GapTree = std::array<Tally, SLOT_NODES + HIGH_NODES + (GAP_MAX_LEN + 1) * GAP_MAX_LEN>;
+// guesses for 1 gap: how many bits long it is, then its top bits, then the rest
+#define SLOT_NODES (1 << GAP_SLOT_BITS)
+#define HIGH_NODES ((GAP_MAX_LEN + 1) * (1 << TREE_DEPTH))
+using GapGuesses = std::array<Guess, SLOT_NODES + HIGH_NODES + (GAP_MAX_LEN + 1) * GAP_MAX_LEN>;
 
-struct EventOdds {
-    std::array<std::array<Tally, MATCH_KINDS>, LENGTH_BUCKETS> match{};
-    std::array<std::array<Tally, CHANNEL_NODES>, SYMBOL_KINDS * SYMBOL_KINDS> channel_pair{};
-    std::array<std::array<Tally, CHANNEL_NODES>, SYMBOL_KINDS> channel_last{};
-    std::array<std::array<Tally, CHANNEL_NODES>, HELD_STATES * SYMBOL_KINDS> channel_held{};
-    std::array<Blend, CHANNEL_NODES> channel_blend{};
-    std::array<Tally, HOLD_BASES * SHORT_GAPS> hold_short{};
-    std::array<Tally, HOLD_BASES> hold_state{};
-    std::array<Tally, 2 * LENGTH_BUCKETS> hold_gap{};
-    std::array<Blend, 2> hold_blend{};
-    std::array<GapTree, GAP_BASES> gap_kind{};
-    std::array<GapTree, GAP_BASES * LENGTH_BUCKETS> gap_same{}, gap_last{};
-    std::array<Blend, GAP_BASES * GAP_STAGES> gap_blend{};
-    std::array<TallyNumbers, POSE_FIELDS * 2> pose{};
+struct ClickGuesses {
+    std::array<std::array<Guess, MATCH_KINDS>, LENGTH_BUCKETS> match{};
+    std::array<std::array<Guess, CHANNEL_NODES>, CLICK_KINDS * CLICK_KINDS> channel_pair{};
+    std::array<std::array<Guess, CHANNEL_NODES>, CLICK_KINDS> channel_last{};
+    std::array<std::array<Guess, CHANNEL_NODES>, HELD_STATES * CLICK_KINDS> channel_held{};
+    std::array<Mix, CHANNEL_NODES> channel_mix{};
+    std::array<Guess, HOLD_BASES * SHORT_GAPS> hold_short{};
+    std::array<Guess, HOLD_BASES> hold_state{};
+    std::array<Guess, 2 * LENGTH_BUCKETS> hold_gap{};
+    std::array<Mix, 2> hold_mix{};
+    std::array<GapGuesses, GAP_BASES> gap_kind{};
+    std::array<GapGuesses, GAP_BASES * LENGTH_BUCKETS> gap_same{}, gap_last{};
+    std::array<Mix, GAP_BASES * GAP_STAGES> gap_mix{};
+    std::array<NumberGuesses, POSE_FIELDS * 2> pose{};
     std::vector<int> recent = std::vector<int>(1 << MATCH_SLOT_BITS, -1);
 };
 
-static BlendCells gap_cells(EventOdds& odds, int base, int same_bucket, int last_bucket, int node) {
-    return { &odds.gap_kind[base][node], &odds.gap_same[base * LENGTH_BUCKETS + same_bucket][node], &odds.gap_last[base * LENGTH_BUCKETS + last_bucket][node] };
+static MixGuesses gap_guesses(ClickGuesses& guesses, int base, int same_bucket, int last_bucket, int node) {
+    return { &guesses.gap_kind[base][node], &guesses.gap_same[base * LENGTH_BUCKETS + same_bucket][node], &guesses.gap_last[base * LENGTH_BUCKETS + last_bucket][node] };
 }
 
-static void write_gap(RangeWriter& writer, EventOdds& odds, int base, int same_bucket, int last_bucket, unsigned long long number) {
+template <typename Coder>
+static unsigned long long code_gap(Coder& coder, ClickGuesses& guesses, int base, int same_bucket, int last_bucket, unsigned long long number) {
     int len = std::bit_width(number);
     int node = 1;
-    for (int i = GAP_SLOT_BITS - 1; i >= 0; --i) {
-        int bit = (len >> i) & 1;
-        write_blend(writer, gap_cells(odds, base, same_bucket, last_bucket, node), odds.gap_blend[base * GAP_STAGES], bit, 1);
-        node = (node << 1) | bit;
+    for (int i = GAP_SLOT_BITS - 1; i >= 0; --i)
+        node = (node << 1) | code_mixed(coder, gap_guesses(guesses, base, same_bucket, last_bucket, node), guesses.gap_mix[base * GAP_STAGES], (len >> i) & 1, 1);
+    len = node - SLOT_NODES;
+    if (len > GAP_MAX_LEN) {
+        coder.failed = true;
+        return 0;
     }
-    if (len <= 1)
-        return;
+    if (len <= 1) return (unsigned long long)len;
+    unsigned long long res = 1;
     int tree = 1;
     for (int i = len - 2; i >= 0; --i) {
         int depth = len - 2 - i;
         int bit = (int)((number >> i) & 1);
         if (depth < TREE_DEPTH) {
-            write_blend(writer, gap_cells(odds, base, same_bucket, last_bucket, SLOT_NODES + len * (1 << TREE_DEPTH) + tree), odds.gap_blend[base * GAP_STAGES + 1], bit, 1);
+            bit = code_mixed(coder, gap_guesses(guesses, base, same_bucket, last_bucket, SLOT_NODES + len * (1 << TREE_DEPTH) + tree), guesses.gap_mix[base * GAP_STAGES + 1], bit, 1);
             tree = (tree << 1) | bit;
         }
         else {
-            write_blend(writer, gap_cells(odds, base, same_bucket, last_bucket, SLOT_NODES + HIGH_NODES + len * GAP_MAX_LEN + i), odds.gap_blend[base * GAP_STAGES + 2], bit, 1);
-        }
-    }
-}
-
-static unsigned long long read_gap(RangeReader& reader, EventOdds& odds, int base, int same_bucket, int last_bucket) {
-    int node = 1;
-    for (int i = GAP_SLOT_BITS - 1; i >= 0; --i)
-        node = (node << 1) | read_blend(reader, gap_cells(odds, base, same_bucket, last_bucket, node), odds.gap_blend[base * GAP_STAGES], 1);
-    int len = node - SLOT_NODES;
-    if (len > GAP_MAX_LEN) {
-        reader.failed = true;
-        return 0;
-    }
-    if (len <= 1)
-        return (unsigned long long)len;
-    unsigned long long res = 1;
-    int tree = 1;
-    for (int i = len - 2; i >= 0; --i) {
-        int depth = len - 2 - i;
-        int bit = 0;
-        if (depth < TREE_DEPTH) {
-            bit = read_blend(reader, gap_cells(odds, base, same_bucket, last_bucket, SLOT_NODES + len * (1 << TREE_DEPTH) + tree), odds.gap_blend[base * GAP_STAGES + 1], 1);
-            tree = (tree << 1) | bit;
-        }
-        else {
-            bit = read_blend(reader, gap_cells(odds, base, same_bucket, last_bucket, SLOT_NODES + HIGH_NODES + len * GAP_MAX_LEN + i), odds.gap_blend[base * GAP_STAGES + 2], 1);
+            bit = code_mixed(coder, gap_guesses(guesses, base, same_bucket, last_bucket, SLOT_NODES + HIGH_NODES + len * GAP_MAX_LEN + i), guesses.gap_mix[base * GAP_STAGES + 2], bit, 1);
         }
         res = (res << 1) | (unsigned long long)bit;
     }
     return res;
 }
 
-// plain bits, every bit 50/50
-static void write_plain(RangeWriter& writer, unsigned long long value, int width) {
-    for (int i = width - 1; i >= 0; --i)
-        writer.bit(ODDS_HALF, (int)((value >> i) & 1));
-}
-
-static unsigned long long read_plain(RangeReader& reader, int width) {
+// plain bits, no guessing
+template <typename Coder>
+static unsigned long long code_plain(Coder& coder, unsigned long long value, int width) {
     unsigned long long res = 0;
     for (int i = width - 1; i >= 0; --i)
-        res |= (unsigned long long)reader.bit(ODDS_HALF) << i;
+        res |= (unsigned long long)coder.bit(CHANCE_HALF, (int)((value >> i) & 1)) << i;
     return res;
 }
 
-static void write_count(RangeWriter& writer, unsigned long long value) {
-    int len = std::bit_width(value);
-    write_plain(writer, (unsigned long long)len, COUNT_BITS);
-    if (len > 1)
-        write_plain(writer, value, len - 1);
-}
-
-static unsigned long long read_count(RangeReader& reader) {
-    int len = (int)read_plain(reader, COUNT_BITS);
+template <typename Coder>
+static unsigned long long code_count(Coder& coder, unsigned long long value) {
+    int len = (int)code_plain(coder, (unsigned long long)std::bit_width(value), COUNT_BITS);
     if (len > 64) {
-        reader.failed = true;
+        coder.failed = true;
         return 0;
     }
-    if (len <= 1)
-        return (unsigned long long)len;
-    return (1ull << (len - 1)) | read_plain(reader, len - 1);
+    if (len <= 1) return (unsigned long long)len;
+    return (1ull << (len - 1)) | code_plain(coder, value, len - 1);
 }
 
-// a float or double's bits: how many 0s at the bottom, then whats above the lowest 1
-static void write_bits(RangeWriter& writer, unsigned long long bits, int width) {
-    int zeros = bits == 0 ? width : std::countr_zero(bits);
-    write_plain(writer, (unsigned long long)zeros, width == 64 ? 7 : 6);
-    if (zeros >= width)
-        return;
-    write_plain(writer, zeros + 1 < 64 ? bits >> (zeros + 1) : 0, width - zeros - 1);
-}
-
-static unsigned long long read_bits(RangeReader& reader, int width) {
-    int zeros = (int)read_plain(reader, width == 64 ? 7 : 6);
+// floats & doubles: how many 0 bits at the end, then the rest
+template <typename Coder>
+static unsigned long long code_bits(Coder& coder, unsigned long long bits, int width) {
+    int zeros = (int)code_plain(coder, (unsigned long long)(bits == 0 ? width : std::countr_zero(bits)), width == 64 ? 7 : 6);
     if (zeros >= width) {
-        if (zeros > width)
-            reader.failed = true;
+        if (zeros > width) coder.failed = true;
         return 0;
     }
-    unsigned long long rest = read_plain(reader, width - zeros - 1);
+    unsigned long long rest = code_plain(coder, zeros + 1 < 64 ? bits >> (zeros + 1) : 0, width - zeros - 1);
     return ((rest << 1) | 1) << zeros;
 }
 
-static void write_rates(RangeWriter& writer, const std::vector<RateChange>& rates) {
+template <typename Coder>
+static void code_rates(Coder& coder, std::vector<RateChange>& rates, size_t count) {
     int last = 0;
     unsigned prev = 0;
-    for (const auto& change : rates) {
-        write_count(writer, (unsigned long long)std::max(change.frame - last, 0));
-        write_bits(writer, std::bit_cast<unsigned>(change.fps) ^ prev, 32);
-        last = change.frame;
-        prev = std::bit_cast<unsigned>(change.fps);
-    }
-}
-
-static void read_rates(RangeReader& reader, std::vector<RateChange>& rates, size_t count) {
-    int last = 0;
-    unsigned prev = 0;
-    rates.clear();
-    for (size_t i = 0; i < count && !reader.failed; ++i) {
-        unsigned long long gap = read_count(reader);
-        unsigned bits = (unsigned)read_bits(reader, 32);
+    for (size_t i = 0; i < count && !coder.failed; ++i) {
+        RateChange change = Coder::reading ? RateChange{} : rates[i];
+        unsigned long long gap = code_count(coder, (unsigned long long)std::max(change.frame - last, 0));
+        unsigned bits = (unsigned)code_bits(coder, std::bit_cast<unsigned>(change.fps) ^ prev, 32) ^ prev;
         if (gap > (unsigned long long)(INT_MAX - last)) {
-            reader.failed = true;
+            coder.failed = true;
             break;
         }
         last += (int)gap;
-        bits ^= prev;
         float fps = std::bit_cast<float>(bits);
         if (!(fps >= 1.f) || !std::isfinite(fps)) {
-            reader.failed = true;
+            coder.failed = true;
             break;
         }
-        rates.push_back({ last, fps });
+        if (Coder::reading) rates.push_back({ last, fps });
         prev = bits;
     }
 }
 
-// a click is stored as 1 number: (frames since the last click << SYMBOL_SHIFT) | (channel << 1) | holding
-// channel = button (0 jump, 1 left, 2 right) + BUTTONS for player 2
-struct Symbol {
+// each click is saved as 1 number: frames since the last click, which channel & press or release
+// channel = button (0 jump, 1 left, 2 right), +3 for player 2
+struct SavedClick {
     unsigned long long gap = 0;
     int channel = 0;
     int hold = 0;
 
     unsigned long long bits() const {
-        return (gap << SYMBOL_SHIFT) | (unsigned long long)((channel << 1) | hold);
+        return (gap << CLICK_SHIFT) | (unsigned long long)((channel << 1) | hold);
     }
 
-    static Symbol unpack(unsigned long long raw) {
-        return { raw >> SYMBOL_SHIFT, (int)((raw >> 1) & 7), (int)(raw & 1) };
+    static SavedClick unpack(unsigned long long raw) {
+        return { raw >> CLICK_SHIFT, (int)((raw >> 1) & 7), (int)(raw & 1) };
     }
 
-    static Symbol from_input(const Frame& input, int last_frame) {
+    static SavedClick from_input(const Frame& input, int last_frame) {
         int channel = (input.player2 ? BUTTONS : 0) + ReplayIO::button_code(input.button);
         return { (unsigned long long)(input.number - last_frame), channel, input.holding ? 1 : 0 };
     }
@@ -772,7 +642,7 @@ struct Symbol {
     }
 };
 
-// where the last MIN_MATCH clicks were seen before. this exact math is part of the file format: old saves only load if it never changes
+// where these same 4 clicks showed up before. has to stay EXACTLY like this or old saves break
 static unsigned match_slot(const std::vector<unsigned long long>& history) {
     unsigned long long hash = MIN_MATCH * MATCH_HASH_START;
     for (size_t k = history.size() - MIN_MATCH; k < history.size(); ++k)
@@ -780,28 +650,28 @@ static unsigned match_slot(const std::vector<unsigned long long>& history) {
     return (unsigned)(hash >> (64 - MATCH_SLOT_BITS));
 }
 
-// clicks repeat a lot, so the writer & the reader both remember what came after the same clicks last time,
-// & store "same as last time" in 1 bit when its right
-struct EventHistory {
+// macros repeat the same clicks a lot. saving & loading both remember what came next last time,
+// so a click that matches costs almost nothing
+struct PastClicks {
     std::vector<unsigned long long> history;
     size_t ahead = 0;
     unsigned long long matched = 0;
     int misses = 0;
     std::array<int, CHANNELS> state{};
-    std::array<unsigned long long, SYMBOL_KINDS> last_gap_of{};
+    std::array<unsigned long long, CLICK_KINDS> last_gap_of{};
     int last_frame = 0;
 
-    int symbol_at(size_t back) const {
-        return history.size() > back ? (int)(history[history.size() - 1 - back] & ((1 << SYMBOL_SHIFT) - 1)) : 0;
+    int click_at(size_t back) const {
+        return history.size() > back ? (int)(history[history.size() - 1 - back] & ((1 << CLICK_SHIFT) - 1)) : 0;
     }
 
-    Tally& match_tally(EventOdds& odds) const {
-        unsigned long long guess_gap = history[ahead] >> SYMBOL_SHIFT;
+    Guess& match_guess(ClickGuesses& guesses) const {
+        unsigned long long guess_gap = history[ahead] >> CLICK_SHIFT;
         int gap_shape = guess_gap == 0 ? 0 : guess_gap == 1 ? 1 : 2;
-        return odds.match[length_bucket(matched)][gap_shape * 2 + std::min(misses, 1)];
+        return guesses.match[length_bucket(matched)][gap_shape * 2 + std::min(misses, 1)];
     }
 
-    void remember(EventOdds& odds, unsigned long long got, const Symbol& symbol, int frame) {
+    void remember(ClickGuesses& guesses, unsigned long long got, const SavedClick& click, int frame) {
         if (matched > 0 && history[ahead] == got) {
             ++matched;
             ++ahead;
@@ -812,14 +682,13 @@ struct EventHistory {
         history.push_back(got);
         if (history.size() >= MIN_MATCH) {
             unsigned slot = match_slot(history);
-            int at = odds.recent[slot];
+            int at = guesses.recent[slot];
             if (matched == 0 && at >= 0) {
                 unsigned long long len = 0;
                 while (len < (unsigned long long)at && len < LONGEST_CHECK) {
                     size_t here = history.size() - 1 - len;
                     size_t there = (size_t)at - 1 - len;
-                    if (history[there] != history[here])
-                        break;
+                    if (history[there] != history[here]) break;
                     ++len;
                 }
                 if (len >= MIN_MATCH) {
@@ -827,129 +696,91 @@ struct EventHistory {
                     ahead = (size_t)at;
                 }
             }
-            odds.recent[slot] = (int)history.size();
+            guesses.recent[slot] = (int)history.size();
         }
-        state[symbol.channel] = symbol.hold ? 1 : 2;
-        last_gap_of[symbol.channel * 2 + symbol.hold] = symbol.gap;
+        state[click.channel] = click.hold ? 1 : 2;
+        last_gap_of[click.channel * 2 + click.hold] = click.gap;
         last_frame = frame;
     }
 };
 
-// what the channel, hold & gap of a click are guessed from
-struct ClickContext {
+// what we guess the next click from
+struct ClickHints {
     int last = 0, prev = 0, held = 0;
     unsigned long long last_gap = 0;
 
-    explicit ClickContext(const EventHistory& events) {
-        last = events.symbol_at(0);
-        prev = events.symbol_at(1);
-        last_gap = events.history.empty() ? 0 : events.history.back() >> SYMBOL_SHIFT;
-        held = events.state[0] + events.state[1] * 3 + events.state[3] * 9 + events.state[4] * 27;
+    explicit ClickHints(const PastClicks& past) {
+        last = past.click_at(0);
+        prev = past.click_at(1);
+        last_gap = past.history.empty() ? 0 : past.history.back() >> CLICK_SHIFT;
+        held = past.state[0] + past.state[1] * 3 + past.state[3] * 9 + past.state[4] * 27;
     }
 
-    BlendCells channel_cells(EventOdds& odds, int node) const {
-        return { &odds.channel_pair[last * SYMBOL_KINDS + prev][node], &odds.channel_last[last][node], &odds.channel_held[held * SYMBOL_KINDS + last][node] };
+    MixGuesses channel_guesses(ClickGuesses& guesses, int node) const {
+        return { &guesses.channel_pair[last * CLICK_KINDS + prev][node], &guesses.channel_last[last][node], &guesses.channel_held[held * CLICK_KINDS + last][node] };
     }
 
-    int hold_base(const EventHistory& events, int channel) const {
+    int hold_base(const PastClicks& past, int channel) const {
         int same = channel == (last >> 1) ? 1 : 0;
-        return (events.state[channel] * 2 + (last & 1)) * 2 + same;
+        return (past.state[channel] * 2 + (last & 1)) * 2 + same;
     }
 
-    BlendCells hold_cells(EventOdds& odds, const EventHistory& events, int channel) const {
-        int base = hold_base(events, channel);
+    MixGuesses hold_guesses(ClickGuesses& guesses, const PastClicks& past, int channel) const {
+        int base = hold_base(past, channel);
         int short_gap = (int)(std::min<unsigned long long>(last_gap, SHORT_GAPS - 1));
-        int gap_band = (events.state[channel] == 1 ? LENGTH_BUCKETS : 0) + length_bucket(last_gap);
-        return { &odds.hold_short[base * SHORT_GAPS + short_gap], &odds.hold_state[base], &odds.hold_gap[gap_band] };
+        int gap_band = (past.state[channel] == 1 ? LENGTH_BUCKETS : 0) + length_bucket(last_gap);
+        return { &guesses.hold_short[base * SHORT_GAPS + short_gap], &guesses.hold_state[base], &guesses.hold_gap[gap_band] };
     }
 };
 
-static void write_click(RangeWriter& writer, EventOdds& odds, const EventHistory& events, unsigned long long want) {
-    ClickContext context(events);
+template <typename Coder>
+static unsigned long long code_click(Coder& coder, ClickGuesses& guesses, const PastClicks& past, unsigned long long want) {
+    ClickHints context(past);
     int channel = (int)((want >> 1) & 7);
-    int player2 = channel >= BUTTONS ? 1 : 0;
-    int high = (channel % BUTTONS) >> 1;
-    int low = high ? 0 : (channel % BUTTONS) & 1;
-    write_blend(writer, context.channel_cells(odds, 0), odds.channel_blend[0], player2, 2);
-    write_blend(writer, context.channel_cells(odds, 1 + player2), odds.channel_blend[1 + player2], high, 2);
-    if (!high)
-        write_blend(writer, context.channel_cells(odds, 3 + player2), odds.channel_blend[3 + player2], low, 2);
+    int player2 = code_mixed(coder, context.channel_guesses(guesses, 0), guesses.channel_mix[0], channel >= BUTTONS ? 1 : 0, 2);
+    int high = code_mixed(coder, context.channel_guesses(guesses, 1 + player2), guesses.channel_mix[1 + player2], (channel % BUTTONS) >> 1, 2);
+    int low = high ? 0 : code_mixed(coder, context.channel_guesses(guesses, 3 + player2), guesses.channel_mix[3 + player2], (channel % BUTTONS) & 1, 2);
+    channel = player2 * BUTTONS + ((high << 1) | low);
     int same = channel == (context.last >> 1) ? 1 : 0;
-    int hold = (int)(want & 1);
-    write_blend(writer, context.hold_cells(odds, events, channel), odds.hold_blend[same], hold, 2);
-    write_gap(writer, odds, hold * 2 + same, length_bucket(events.last_gap_of[channel * 2 + hold]), length_bucket(context.last_gap), want >> SYMBOL_SHIFT);
+    int hold = code_mixed(coder, context.hold_guesses(guesses, past, channel), guesses.hold_mix[same], (int)(want & 1), 2);
+    unsigned long long gap = code_gap(coder, guesses, hold * 2 + same, length_bucket(past.last_gap_of[channel * 2 + hold]), length_bucket(context.last_gap), want >> CLICK_SHIFT);
+    return SavedClick{ gap, channel, hold }.bits();
 }
 
-static unsigned long long read_click(RangeReader& reader, EventOdds& odds, const EventHistory& events) {
-    ClickContext context(events);
-    int player2 = read_blend(reader, context.channel_cells(odds, 0), odds.channel_blend[0], 2);
-    int high = read_blend(reader, context.channel_cells(odds, 1 + player2), odds.channel_blend[1 + player2], 2);
-    int low = high ? 0 : read_blend(reader, context.channel_cells(odds, 3 + player2), odds.channel_blend[3 + player2], 2);
-    int channel = player2 * BUTTONS + ((high << 1) | low);
-    int same = channel == (context.last >> 1) ? 1 : 0;
-    int hold = read_blend(reader, context.hold_cells(odds, events, channel), odds.hold_blend[same], 2);
-    unsigned long long gap = read_gap(reader, odds, hold * 2 + same, length_bucket(events.last_gap_of[channel * 2 + hold]), length_bucket(context.last_gap));
-    return Symbol{ gap, channel, hold }.bits();
-}
-
-static void write_clicks(RangeWriter& writer, EventOdds& odds, const std::vector<Frame>& inputs) {
-    EventHistory events;
-    events.history.reserve(std::min<size_t>(inputs.size(), RESERVE_LIMIT));
-    for (const auto& input : inputs) {
-        unsigned long long want = Symbol::from_input(input, events.last_frame).bits();
+template <typename Coder>
+static void code_clicks(Coder& coder, ClickGuesses& guesses, std::vector<Frame>& inputs, size_t count) {
+    PastClicks past;
+    past.history.reserve(std::min<size_t>(count, RESERVE_LIMIT));
+    for (size_t i = 0; i < count && !coder.failed; ++i) {
+        unsigned long long want = Coder::reading ? 0 : SavedClick::from_input(inputs[i], past.last_frame).bits();
+        unsigned long long got = want;
         bool guessed = false;
-        if (events.matched > 0) {
-            guessed = want == events.history[events.ahead];
-            writer.write(events.match_tally(odds), guessed ? 1 : 0, STEADY);
-            events.misses = guessed ? 0 : events.misses + 1;
+        if (past.matched > 0) {
+            guessed = coder.code(past.match_guess(guesses), want == past.history[past.ahead] ? 1 : 0, STEADY) != 0;
+            if (guessed) got = past.history[past.ahead];
+            past.misses = guessed ? 0 : past.misses + 1;
         }
-        if (!guessed)
-            write_click(writer, odds, events, want);
-        Symbol symbol = Symbol::unpack(want);
-        if (symbol.overflows(events.last_frame))
-            break;
-        events.remember(odds, want, symbol, events.last_frame + (int)symbol.gap);
-    }
-}
-
-static void read_clicks(RangeReader& reader, EventOdds& odds, std::vector<Frame>& inputs, size_t count) {
-    EventHistory events;
-    events.history.reserve(std::min<size_t>(count, RESERVE_LIMIT));
-    for (size_t i = 0; i < count && !reader.failed; ++i) {
-        unsigned long long got = 0;
-        bool guessed = false;
-        if (events.matched > 0) {
-            guessed = reader.read(events.match_tally(odds), STEADY) != 0;
-            if (guessed)
-                got = events.history[events.ahead];
-            events.misses = guessed ? 0 : events.misses + 1;
-        }
-        if (!guessed)
-            got = read_click(reader, odds, events);
-        Symbol symbol = Symbol::unpack(got);
-        if (symbol.overflows(events.last_frame)) {
-            reader.failed = true;
+        if (!guessed) got = code_click(coder, guesses, past, want);
+        SavedClick click = SavedClick::unpack(got);
+        if (click.overflows(past.last_frame)) {
+            coder.failed = true;
             break;
         }
-        int frame = events.last_frame + (int)symbol.gap;
-        inputs.push_back(symbol.to_input(frame));
-        events.remember(odds, got, symbol, frame);
+        int frame = past.last_frame + (int)click.gap;
+        if (Coder::reading) inputs.push_back(click.to_input(frame));
+        past.remember(guesses, got, click, frame);
     }
 }
 
 int ReplayIO::button_code(int button) {
-    if (button == LEFT)
-        return 1;
-    if (button == RIGHT)
-        return 2;
+    if (button == LEFT) return 1;
+    if (button == RIGHT) return 2;
     return 0;
 }
 
 int ReplayIO::code_button(int code) {
-    if (code == 1)
-        return LEFT;
-    if (code == 2)
-        return RIGHT;
+    if (code == 1) return LEFT;
+    if (code == 2) return RIGHT;
     return JUMP;
 }
 
@@ -968,20 +799,18 @@ static bool read_varint(std::istream& file, unsigned long long& value) {
     value = 0;
     for (int shift = 0; shift < 64; shift += 7) {
         int byte = file.get();
-        if (byte == EOF)
-            return false;
+        if (byte == EOF) return false;
         value |= (unsigned long long)(byte & 127) << shift;
-        if ((byte & 128) == 0)
-            return true;
+        if ((byte & 128) == 0) return true;
     }
     return false;
 }
 
-constexpr unsigned char FLAG_SAMPLES = 1, FLAG_WHOLE_FPS = 2, FLAG_SEED = 4, FLAG_UNROUNDED = 8;
-constexpr unsigned char FLAG_SILICATE_VARIANCE = 16;
-constexpr unsigned char FLAG_LDM_KNOWN = 32, FLAG_LDM = 64;
+const unsigned char FLAG_SAMPLES = 1, FLAG_WHOLE_FPS = 2, FLAG_SEED = 4, FLAG_UNROUNDED = 8;
+const unsigned char FLAG_SILICATE_VARIANCE = 16;
+const unsigned char FLAG_LDM_KNOWN = 32, FLAG_LDM = 64;
 
-struct EchoBody {
+struct EchoFile {
     float fps = 240.f;
     float end_x = 0.f;
     double seconds = 0.0;
@@ -1023,8 +852,8 @@ static std::vector<unsigned char> read_rest(std::istream& file) {
     return { std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>() };
 }
 
-static RangeReader open_range(const std::vector<unsigned char>& bytes) {
-    RangeReader reader;
+static Decompressor open_range(const std::vector<unsigned char>& bytes) {
+    Decompressor reader;
     reader.data = bytes.data();
     reader.size = bytes.size();
     reader.start();
@@ -1032,8 +861,7 @@ static RangeReader open_range(const std::vector<unsigned char>& bytes) {
 }
 
 static bool take(const std::vector<unsigned char>& bytes, size_t& cursor, void* out, size_t size) {
-    if (cursor + size > bytes.size())
-        return false;
+    if (cursor + size > bytes.size()) return false;
     std::memcpy(out, bytes.data() + cursor, size);
     cursor += size;
     return true;
@@ -1041,8 +869,7 @@ static bool take(const std::vector<unsigned char>& bytes, size_t& cursor, void* 
 
 static void read_version1_poses(const std::vector<Frame>& inputs, std::vector<FramePose>& poses, const std::vector<unsigned char>& bytes, const BitReader& stream) {
     size_t cursor = (stream.index * 8 - (size_t)stream.left) / 8;
-    if (stream.left != 0)
-        ++cursor;
+    if (stream.left != 0) ++cursor;
     poses.resize(inputs.size());
     for (auto& pose : poses) {
         if (!take(bytes, cursor, &pose.x, sizeof(pose.x)) || !take(bytes, cursor, &pose.y, sizeof(pose.y)) || !take(bytes, cursor, &pose.rotation, sizeof(pose.rotation)))
@@ -1052,19 +879,16 @@ static void read_version1_poses(const std::vector<Frame>& inputs, std::vector<Fr
     }
 }
 
-static bool load_version1(std::istream& file, unsigned char flags, EchoBody& out) {
+static bool load_version1(std::istream& file, unsigned char flags, EchoFile& out) {
     unsigned short reserved = 0;
     unsigned attempts = 0;
     unsigned amt = 0;
-    if (!ReplayIO::read_pod(file, reserved))
-        return false;
+    if (!ReplayIO::read_pod(file, reserved)) return false;
     if (!ReplayIO::read_pod(file, out.fps) || !ReplayIO::read_pod(file, out.end_x) || !ReplayIO::read_pod(file, out.seconds))
         return false;
-    if (!ReplayIO::read_pod(file, attempts) || !ReplayIO::read_pod(file, amt))
-        return false;
+    if (!ReplayIO::read_pod(file, attempts) || !ReplayIO::read_pod(file, amt)) return false;
     out.attempts = attempts;
-    if (amt > ReplayIO::max_inputs)
-        return false;
+    if (amt > ReplayIO::max_inputs) return false;
     auto bytes = read_rest(file);
     BitReader stream;
     stream.data = bytes.data();
@@ -1079,22 +903,19 @@ static bool load_version1(std::istream& file, unsigned char flags, EchoBody& out
         int code = (high << 1) | stream.bit();
         input.button = ReplayIO::code_button(code);
         unsigned delta = stream.gamma();
-        if (delta == 0)
-            return false;
+        if (delta == 0) return false;
         frame += (int)(delta - 1);
         input.number = frame;
         out.inputs.push_back(input);
     }
-    if (flags & FLAG_SAMPLES)
-        read_version1_poses(out.inputs, out.poses, bytes, stream);
+    if (flags & FLAG_SAMPLES) read_version1_poses(out.inputs, out.poses, bytes, stream);
     return true;
 }
 
-static bool load_version2(std::istream& file, unsigned char flags, EchoBody& out) {
+static bool load_version2(std::istream& file, unsigned char flags, EchoFile& out) {
     if (flags & FLAG_WHOLE_FPS) {
         unsigned long long whole = 0;
-        if (!read_varint(file, whole))
-            return false;
+        if (!read_varint(file, whole)) return false;
         out.fps = (float)whole;
     }
     else if (!ReplayIO::read_pod(file, out.fps)) {
@@ -1103,52 +924,46 @@ static bool load_version2(std::istream& file, unsigned char flags, EchoBody& out
     if (!ReplayIO::read_pod(file, out.end_x) || !ReplayIO::read_pod(file, out.seconds))
         return false;
     unsigned long long amt = 0;
-    if (!read_varint(file, out.attempts) || !read_varint(file, amt))
-        return false;
-    if (amt > ReplayIO::max_inputs)
-        return false;
+    if (!read_varint(file, out.attempts) || !read_varint(file, amt)) return false;
+    if (amt > ReplayIO::max_inputs) return false;
     auto bytes = read_rest(file);
-    RangeReader reader = open_range(bytes);
+    Decompressor reader = open_range(bytes);
     out.inputs.reserve((size_t)(std::min<unsigned long long>(amt, RESERVE_LIMIT)));
     read_version2_inputs(reader, out.inputs, out.poses, (size_t)amt, flags & FLAG_SAMPLES);
     return !reader.failed && out.inputs.size() == amt;
 }
 
-static bool load_version3(std::istream& file, unsigned char flags, int version, EchoBody& out) {
+static bool load_version3(std::istream& file, unsigned char flags, int version, EchoFile& out) {
     auto bytes = read_rest(file);
-    RangeReader reader = open_range(bytes);
-    auto odds = std::make_unique<EventOdds>();
-    out.fps = std::bit_cast<float>((unsigned)read_bits(reader, 32));
-    out.end_x = std::bit_cast<float>((unsigned)read_bits(reader, 32));
-    out.seconds = std::bit_cast<double>(read_bits(reader, 64));
-    out.attempts = read_count(reader);
-    unsigned long long amt = read_count(reader);
-    if (reader.failed || amt > ReplayIO::max_inputs || out.attempts > INT_MAX)
-        return false;
+    Decompressor reader = open_range(bytes);
+    auto guesses = std::make_unique<ClickGuesses>();
+    out.fps = std::bit_cast<float>((unsigned)code_bits(reader, 0, 32));
+    out.end_x = std::bit_cast<float>((unsigned)code_bits(reader, 0, 32));
+    out.seconds = std::bit_cast<double>(code_bits(reader, 0, 64));
+    out.attempts = code_count(reader, 0);
+    unsigned long long amt = code_count(reader, 0);
+    if (reader.failed || amt > ReplayIO::max_inputs || out.attempts > INT_MAX) return false;
     out.inputs.reserve((size_t)(std::min<unsigned long long>(amt, RESERVE_LIMIT)));
-    read_clicks(reader, *odds, out.inputs, (size_t)amt);
+    code_clicks(reader, *guesses, out.inputs, (size_t)amt);
     if (!reader.failed && (flags & FLAG_SAMPLES))
-        read_poses(reader, out.inputs, out.poses, odds->pose);
+        code_poses(reader, out.inputs, out.poses, guesses->pose);
     if (version == 4 && !reader.failed) {
-        unsigned long long rate_count = read_count(reader);
-        if (reader.failed || rate_count > MAX_RATE_CHANGES)
-            return false;
-        read_rates(reader, out.rates, (size_t)rate_count);
-        if (reader.failed || out.rates.size() != rate_count)
-            return false;
+        unsigned long long rate_count = code_count(reader, 0);
+        if (reader.failed || rate_count > MAX_RATE_CHANGES) return false;
+        code_rates(reader, out.rates, (size_t)rate_count);
+        if (reader.failed || out.rates.size() != rate_count) return false;
     }
     if (!reader.failed && (flags & FLAG_SEED)) {
-        out.seed = read_bits(reader, 64);
+        out.seed = code_bits(reader, 0, 64);
         out.has_seed = !reader.failed;
     }
     return !reader.failed && out.inputs.size() == amt;
 }
 
-static void store_echo_body(EchoBody& body, MacroSnap& out) {
+static void store_echo_body(EchoFile& body, MacroSnap& out) {
     out.inputs = std::move(body.inputs);
     out.poses = std::move(body.poses);
-    if (out.poses.size() != out.inputs.size())
-        out.poses.clear();
+    if (out.poses.size() != out.inputs.size()) out.poses.clear();
     out.rates = std::move(body.rates);
     out.fps = body.fps > 0.f ? body.fps : 240.f;
     out.end_x = body.end_x;
@@ -1170,40 +985,33 @@ bool ReplayIO::write_echo(const fs::path& path, const MacroSnap& snap) {
     auto inputs = inputs_in_file_order(snap.inputs, poses.empty() ? nullptr : &poses);
     bool samples = snap.save_debug && poses.size() == inputs.size();
 
-    auto odds = std::make_unique<EventOdds>();
-    RangeWriter writer;
+    auto guesses = std::make_unique<ClickGuesses>();
+    Compressor writer;
     float header_fps = !rates.empty() ? snap.fps : (float)ReplayIO::snap_sample_rate(snap);
-    write_bits(writer, std::bit_cast<unsigned>(header_fps), 32);
-    write_bits(writer, std::bit_cast<unsigned>(snap.end_x), 32);
-    write_bits(writer, std::bit_cast<unsigned long long>(snap.recording_seconds), 64);
-    write_count(writer, (unsigned long long)std::max(snap.attempts, 0));
-    write_count(writer, inputs.size());
-    write_clicks(writer, *odds, inputs);
-    if (samples)
-        write_poses(writer, inputs, poses, odds->pose);
+    code_bits(writer, std::bit_cast<unsigned>(header_fps), 32);
+    code_bits(writer, std::bit_cast<unsigned>(snap.end_x), 32);
+    code_bits(writer, std::bit_cast<unsigned long long>(snap.recording_seconds), 64);
+    code_count(writer, (unsigned long long)std::max(snap.attempts, 0));
+    code_count(writer, inputs.size());
+    code_clicks(writer, *guesses, inputs, inputs.size());
+    if (samples) code_poses(writer, inputs, poses, guesses->pose);
     if (!rates.empty()) {
-        write_count(writer, rates.size());
-        write_rates(writer, rates);
+        code_count(writer, rates.size());
+        code_rates(writer, rates, rates.size());
     }
-    if (snap.lvl_seed_known)
-        write_bits(writer, snap.lvl_seed, 64);
+    if (snap.lvl_seed_known) code_bits(writer, snap.lvl_seed, 64);
     writer.finish();
 
     std::ofstream file(path, std::ios::binary);
-    if (!file)
-        return false;
+    if (!file) return false;
     char magic[4] = { 'E', 'C', 'H', '2' };
     file.write(magic, 4);
     unsigned char version = !rates.empty() ? 4 : 3;
     unsigned char flags = samples ? FLAG_SAMPLES : 0;
-    if (snap.lvl_seed_known)
-        flags |= FLAG_SEED;
-    if (snap.unrounded)
-        flags |= FLAG_UNROUNDED;
-    if (snap.silicate_variance)
-        flags |= FLAG_SILICATE_VARIANCE;
-    if (snap.ldm_known)
-        flags |= FLAG_LDM_KNOWN | (snap.ldm ? FLAG_LDM : 0);
+    if (snap.lvl_seed_known) flags |= FLAG_SEED;
+    if (snap.unrounded) flags |= FLAG_UNROUNDED;
+    if (snap.silicate_variance) flags |= FLAG_SILICATE_VARIANCE;
+    if (snap.ldm_known) flags |= FLAG_LDM_KNOWN | (snap.ldm ? FLAG_LDM : 0);
     ReplayIO::write_pod(file, version);
     ReplayIO::write_pod(file, flags);
     if (!writer.bytes.empty())
@@ -1213,31 +1021,24 @@ bool ReplayIO::write_echo(const fs::path& path, const MacroSnap& snap) {
 
 bool ReplayIO::read_echo(const fs::path& path, MacroSnap& out) {
     std::ifstream file(path, std::ios::binary);
-    if (!file)
-        return false;
+    if (!file) return false;
     char magic[4] = {};
     file.read(magic, 4);
-    if (!file || std::string_view(magic, 4) != "ECH2")
-        return false;
+    if (!file || std::string_view(magic, 4) != "ECH2") return false;
     unsigned char version = 0;
     unsigned char flags = 0;
-    if (!ReplayIO::read_pod(file, version) || !ReplayIO::read_pod(file, flags))
-        return false;
+    if (!ReplayIO::read_pod(file, version) || !ReplayIO::read_pod(file, flags)) return false;
 
-    EchoBody body;
+    EchoFile body;
     bool loaded = false;
     body.unrounded = (flags & FLAG_UNROUNDED) != 0;
     body.silicate_variance = (flags & FLAG_SILICATE_VARIANCE) != 0;
     body.ldm_known = (flags & FLAG_LDM_KNOWN) != 0;
     body.ldm = (flags & FLAG_LDM) != 0;
-    if (version == 1)
-        loaded = load_version1(file, flags, body);
-    else if (version == 2)
-        loaded = load_version2(file, flags, body);
-    else if (version == 3 || version == 4)
-        loaded = load_version3(file, flags, version, body);
-    if (!loaded)
-        return false;
+    if (version == 1) loaded = load_version1(file, flags, body);
+    else if (version == 2) loaded = load_version2(file, flags, body);
+    else if (version == 3 || version == 4) loaded = load_version3(file, flags, version, body);
+    if (!loaded) return false;
     store_echo_body(body, out);
     return true;
 }

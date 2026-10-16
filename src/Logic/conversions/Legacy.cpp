@@ -12,19 +12,16 @@ namespace fs = std::filesystem;
 
 template <typename T>
 bool ReplayIO::read_pod(const std::vector<unsigned char>& data, size_t& cursor, T& value) {
-    if (cursor + sizeof(value) > data.size())
-        return false;
+    if (cursor + sizeof(value) > data.size()) return false;
     std::memcpy(&value, data.data() + cursor, sizeof(value));
     cursor += sizeof(value);
     return true;
 }
 
 bool ReplayIO::parse_legacy(const std::vector<unsigned char>& data, int string_bytes, bool with_meta, MacroSnap& out) {
-    if (string_bytes != 24 && string_bytes != 32)
-        return false;
+    if (string_bytes != 24 && string_bytes != 32) return false;
     size_t cursor = 0;
-    if (data.size() < (size_t)string_bytes + 8)
-        return false;
+    if (data.size() < (size_t)string_bytes + 8) return false;
     unsigned long long len = 0;
     unsigned long long capacity = 0;
     if (string_bytes == 32) {
@@ -38,11 +35,9 @@ bool ReplayIO::parse_legacy(const std::vector<unsigned char>& data, int string_b
         len = short_length;
         capacity = short_capacity;
     }
-    if (len < 4 || len > 7 || capacity < len || capacity > 15)
-        return false;
+    if (len < 4 || len > 7 || capacity < len || capacity > 15) return false;
     std::string name(reinterpret_cast<const char*>(data.data()), (size_t)len);
-    if (name != "SIMPLE" && name != "DEBUG" && name != "META" && name != "METADBG")
-        return false;
+    if (name != "SIMPLE" && name != "DEBUG" && name != "META" && name != "METADBG") return false;
     cursor = (size_t)string_bytes;
     float fps = 0.f;
     float end_x = 0.f;
@@ -55,12 +50,9 @@ bool ReplayIO::parse_legacy(const std::vector<unsigned char>& data, int string_b
         if (!ReplayIO::read_pod(data, cursor, seconds) || !ReplayIO::read_pod(data, cursor, clicks) || !ReplayIO::read_pod(data, cursor, attempts))
             return false;
     }
-    if (!std::isfinite(fps) || fps < 1.f || fps > 100000.f)
-        return false;
-    if (!std::isfinite(end_x) || !std::isfinite(seconds))
-        return false;
-    if (attempts < 0 || attempts > 100000000 || clicks < 0)
-        return false;
+    if (!std::isfinite(fps) || fps < 1.f || fps > 100000.f) return false;
+    if (!std::isfinite(end_x) || !std::isfinite(seconds)) return false;
+    if (attempts < 0 || attempts > 100000000 || clicks < 0) return false;
     bool debug = name == "DEBUG" || name == "METADBG";
     MacroSnap parsed;
     parsed.format = ReplayIO::format_from_name(name);
@@ -70,8 +62,7 @@ bool ReplayIO::parse_legacy(const std::vector<unsigned char>& data, int string_b
     parsed.attempts = attempts;
     int prev = -1;
     while (cursor < data.size()) {
-        if (cursor + 6 > data.size())
-            return false;
+        if (cursor + 6 > data.size()) return false;
         int number = 0;
         unsigned char holding = 0;
         unsigned char player2 = 0;
@@ -95,11 +86,9 @@ bool ReplayIO::parse_legacy(const std::vector<unsigned char>& data, int string_b
                 return false;
         }
         parsed.inputs.push_back(input);
-        if (debug)
-            parsed.poses.push_back(pose);
+        if (debug) parsed.poses.push_back(pose);
     }
-    if (cursor != data.size())
-        return false;
+    if (cursor != data.size()) return false;
     out = std::move(parsed);
     return true;
 }
@@ -117,8 +106,7 @@ bool ReplayIO::read_legacy_echo(const fs::path& path, MacroSnap& out) {
     const bool metas[] = { true, false };
     for (int width : widths) {
         for (bool meta : metas) {
-            if (ReplayIO::parse_legacy(data, width, meta, out))
-                return true;
+            if (ReplayIO::parse_legacy(data, width, meta, out)) return true;
         }
     }
     return false;

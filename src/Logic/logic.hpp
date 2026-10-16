@@ -39,14 +39,14 @@ void echo_raw_hooks(bool on);
 #endif
 
 #ifdef GEODE_IS_WINDOWS
-inline constexpr bool step_patched = true;
+inline const bool step_patched = true;
 #else
 inline bool step_patched = false;
 #endif
-inline constexpr float VANILLA_TPS = 240.f;
-inline constexpr int JUMP = (int)PlayerButton::Jump;
-inline constexpr int LEFT = (int)PlayerButton::Left;
-inline constexpr int RIGHT = (int)PlayerButton::Right;
+inline const float VANILLA_TPS = 240.f;
+inline const int JUMP = (int)PlayerButton::Jump;
+inline const int LEFT = (int)PlayerButton::Left;
+inline const int RIGHT = (int)PlayerButton::Right;
 
 enum class RunState {
 	Idle,
@@ -663,10 +663,8 @@ public:
 	}
 
 	void set_input_id(size_t index, unsigned long long id) {
-		if (index >= inputs.size())
-			return;
-		if (input_ids.size() <= index)
-			input_ids.resize(index + 1);
+		if (index >= inputs.size()) return;
+		if (input_ids.size() <= index) input_ids.resize(index + 1);
 		input_ids[index] = id;
 	}
 
@@ -675,10 +673,8 @@ public:
 	}
 
 	void set_pose_at(size_t index, FramePose pose) {
-		if (poses.size() < inputs.size())
-			poses.resize(inputs.size());
-		if (index < poses.size())
-			poses[index] = pose;
+		if (poses.size() < inputs.size()) poses.resize(inputs.size());
+		if (index < poses.size()) poses[index] = pose;
 	}
 
 	void clear_sides() {
@@ -710,14 +706,12 @@ public:
 	}
 
 	bool plays_player(bool player2) const {
-		if (!is_playing())
-			return false;
+		if (!is_playing()) return false;
 		return player2 ? play_p2 : play_p1;
 	}
 
 	bool records_player(bool player2) const {
-		if (!is_recording() || plays_player(player2))
-			return false;
+		if (!is_recording() || plays_player(player2)) return false;
 		return player2 ? record_p2 : record_p1;
 	}
 
@@ -727,14 +721,12 @@ public:
 
 	int steps_until_rate_change() const {
 		auto after = rate_after(rates, step_frame);
-		if (after != rates.end())
-			return after->frame - step_frame;
+		if (after != rates.end()) return after->frame - step_frame;
 		return 2048;
 	}
 
 	double sample_rate() const {
-		float rate = std::isfinite(fps) ? fps : 240.f;
-		return (double)std::max(rate, step_patched ? 1.f : VANILLA_TPS);
+		return (double)std::max(fps, step_patched ? 1.f : VANILLA_TPS);
 	}
 
 	float physics_step() const {
@@ -749,9 +741,9 @@ public:
 		return seconds_at_frame(rates, macro_fps, frame);
 	}
 
-	static constexpr int MAX_PER_SECOND = 16, MAX_PER_FRAME = 3;
-	static constexpr float MAX_BURST_RATE = 48.f;
-	static constexpr int MIN_BURST_CLICKS = 5;
+	static const int MAX_PER_SECOND = 16, MAX_PER_FRAME = 3;
+	static inline const float MAX_BURST_RATE = 48.f;
+	static const int MIN_BURST_CLICKS = 5;
 
 	static Logic& get();
 	const char* state_name(RunState state);
@@ -998,24 +990,18 @@ public:
 
 	// pressing a direction clears the other one even if its still held :/
 	static bool button_held(PlayerObject* body, int button) {
-		if (!body)
-			return false;
+		if (!body) return false;
 		auto found = body->m_holdingButtons.find(button);
 		bool mapped = found != body->m_holdingButtons.end() && found->second;
-		if (button == LEFT)
-			return mapped || body->m_holdingLeft;
-		if (button == RIGHT)
-			return mapped || body->m_holdingRight;
+		if (button == LEFT) return mapped || body->m_holdingLeft;
+		if (button == RIGHT) return mapped || body->m_holdingRight;
 		return mapped;
 	}
 
 	static int button_slot(int button) {
-		if (button == 0 || button == JUMP)
-			return 0;
-		if (button == LEFT)
-			return 1;
-		if (button == RIGHT)
-			return 2;
+		if (button == 0 || button == JUMP) return 0;
+		if (button == LEFT) return 1;
+		if (button == RIGHT) return 2;
 		return -1;
 	}
 
@@ -1024,7 +1010,7 @@ public:
 	size_t add_input(const Frame& frame);
 	void refresh_live_hold();
 	void record_input(GJBaseGameLayer* play, bool down, bool player1, int button = JUMP, bool force = false);
-	static constexpr bool record_every_input() {
+	static bool record_every_input() {
 #if defined(GEODE_IS_WINDOWS) || defined(GEODE_IS_MACOS)
 		return true;
 #else
@@ -1035,43 +1021,37 @@ public:
 
 	static float read_float(const char* key, float fallback) {
 		auto* mod = geode::Mod::get();
-		if (!mod->hasSetting(key))
-			return fallback;
+		if (!mod->hasSetting(key)) return fallback;
 		return mod->getSettingValue<float>(key);
 	}
 
 	static bool read_bool(const char* key, bool fallback) {
 		auto* mod = geode::Mod::get();
-		if (!mod->hasSetting(key))
-			return fallback;
+		if (!mod->hasSetting(key)) return fallback;
 		return mod->getSettingValue<bool>(key);
 	}
 
 	static int read_int(const char* key, int fallback) {
 		auto* mod = geode::Mod::get();
-		if (!mod->hasSetting(key))
-			return fallback;
+		if (!mod->hasSetting(key)) return fallback;
 		return (int)(mod->getSettingValue<long long>(key));
 	}
 
 	static void write_bool(const char* key, bool value) {
 		auto* mod = geode::Mod::get();
-		if (!mod->hasSetting(key))
-			return;
+		if (!mod->hasSetting(key)) return;
 		mod->setSettingValue<bool>(key, value);
 	}
 
 	static void write_float(const char* key, float value) {
 		auto* mod = geode::Mod::get();
-		if (!mod->hasSetting(key))
-			return;
+		if (!mod->hasSetting(key)) return;
 		mod->setSettingValue<float>(key, value);
 	}
 
 	static void write_int(const char* key, int value) {
 		auto* mod = geode::Mod::get();
-		if (!mod->hasSetting(key))
-			return;
+		if (!mod->hasSetting(key)) return;
 		mod->setSettingValue<long long>(key, (long long)value);
 	}
 };

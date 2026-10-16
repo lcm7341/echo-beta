@@ -26,10 +26,10 @@ static mach_vm_address_t near_veneer(uintptr_t base) {
             continue;
 #ifdef GEODE_IS_ARM_MAC
         std::array<unsigned char, 16> bytes{ 0x50, 0, 0, 0x58, 0, 0x02, 0x1f, 0xd6 }; // ldr x16,#8; br x16
-        constexpr size_t pointer_offset = 8;
+        const size_t pointer_offset = 8;
 #else
         std::array<unsigned char, 13> bytes{ 0x49, 0xbb, 0, 0, 0, 0, 0, 0, 0, 0, 0x41, 0xff, 0xe3 }; // movabs r11; jmp r11
-        constexpr size_t pointer_offset = 2;
+        const size_t pointer_offset = 2;
 #endif
         auto dst = reinterpret_cast<uintptr_t>(&shake_random);
         std::memcpy(bytes.data() + pointer_offset, &dst, sizeof(dst));
@@ -49,8 +49,7 @@ $execute {
     bool matches = std::all_of(MacPatches::shake_sites.begin(), MacPatches::shake_sites.end(), [base](const auto& site) {
         return std::memcmp(reinterpret_cast<void*>(base + site.offset), site.original.data(), site.original.size()) == 0;
     });
-    if (!matches)
-        return;
+    if (!matches) return;
     if (auto veneer = near_veneer(base)) {
         std::vector<Patch*> installed;
         bool success = true;

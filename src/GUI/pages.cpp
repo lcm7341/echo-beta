@@ -29,8 +29,7 @@ static const char* const QUAD[] = { "Off", "Player 1", "Player 2", "Both" };
 static const ImVec4 RECORD_RED(1.f, .36f, .44f, 1.f);
 
 static void tip(const char* text) {
-    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-        ImGui::SetTooltip("%s", text);
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("%s", text);
 }
 
 static bool toggle(const char* label, bool& field) {
@@ -42,20 +41,17 @@ static void save() {
 }
 
 static void saved_on_release() {
-    if (ImGui::IsItemDeactivatedAfterEdit())
-        save();
+    if (ImGui::IsItemDeactivatedAfterEdit()) save();
 }
 
 static void persist_on_release() {
-    if (ImGui::IsItemDeactivatedAfterEdit())
-        GUI::get().persist();
+    if (ImGui::IsItemDeactivatedAfterEdit()) GUI::get().persist();
 }
 
 static bool quad_row(const char* label, const char* id, bool& p1, bool& p2, const char* hint = nullptr) {
     EchoUI::Row(label, hint);
     int idx = GUI::get().quad_index(p1, p2);
-    if (!EchoUI::Combo(id, &idx, QUAD, 4))
-        return false;
+    if (!EchoUI::Combo(id, &idx, QUAD, 4)) return false;
     GUI::get().apply_quad(idx, p1, p2);
     return true;
 }
@@ -98,8 +94,7 @@ static void draw_hitbox_settings() {
     EchoUI::SectionLabel("Shown and colors");
     auto shape = [](const char* label, bool& enabled, float* tint) {
         ImGui::PushID(label);
-        if (EchoUI::ColorEdit4("##color", tint, ImGuiColorEditFlags_AlphaBar))
-            save();
+        if (EchoUI::ColorEdit4("##color", tint, ImGuiColorEditFlags_AlphaBar)) save();
         ImGui::SameLine();
         toggle(label, enabled);
         ImGui::PopID();
@@ -125,11 +120,9 @@ static void draw_hitbox_settings() {
 
 static void draw_traj_settings() {
     auto& logic = Logic::get();
-    if (toggle("Moving Object Support", logic.traj_moving_objects))
-        Logic::get().reset_traj();
+    if (toggle("Moving Object Support", logic.traj_moving_objects)) Logic::get().reset_traj();
     tip("Moves moving objects along with the trajectory. Turning this off is faster but less accurate.");
-    if (toggle("Follow Hide Player", logic.traj_follow_hide_player))
-        Logic::get().reset_traj();
+    if (toggle("Follow Hide Player", logic.traj_follow_hide_player)) Logic::get().reset_traj();
     tip("Will hide the trajectory of the hidden player.");
     ImGui::BeginDisabled(logic.traj_follow_hide_player);
     if (quad_row("Hide trajectory", "##hide-trajectory", logic.hide_traj_p1, logic.hide_traj_p2)) {
@@ -151,8 +144,7 @@ static void draw_traj_settings() {
     tip("Player 2 uses the inverted colors.");
     auto line = [](const char* label, bool& enabled, float* tint) {
         ImGui::PushID(label);
-        if (EchoUI::ColorEdit4("##color", tint, ImGuiColorEditFlags_AlphaBar))
-            save();
+        if (EchoUI::ColorEdit4("##color", tint, ImGuiColorEditFlags_AlphaBar)) save();
         ImGui::SameLine();
         toggle(label, enabled);
         ImGui::PopID();
@@ -164,8 +156,7 @@ static void draw_traj_settings() {
 
 static void draw_label_settings() {
     auto& logic = Logic::get();
-    if (toggle("Auto Position", logic.labels_auto))
-        save();
+    if (toggle("Auto Position", logic.labels_auto)) save();
     tip("Automatically stacks labels from a corner in the order below.");
     if (logic.labels_auto) {
         EchoUI::Row("Corner");
@@ -240,8 +231,7 @@ static void draw_label_settings() {
         EchoUI::Selectable("=##grip", false, ImGuiSelectableFlags_NoAutoClosePopups, ImVec2(grip_w, 0.f));
         if (ImGui::IsItemHovered() || ImGui::IsItemActive())
             ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNS);
-        if (ImGui::IsItemActive())
-            GUI::get().scroll_hold = ImGui::GetItemID();
+        if (ImGui::IsItemActive()) GUI::get().scroll_hold = ImGui::GetItemID();
         if (ImGui::IsItemActive()) {
             float dy = ImGui::GetMouseDragDelta(ImGuiMouseButton_Left, 0.f).y;
             float row_h = ImGui::GetFrameHeightWithSpacing();
@@ -254,15 +244,12 @@ static void draw_label_settings() {
                 }
             }
         }
-        if (ImGui::IsItemDeactivated())
-            save();
+        if (ImGui::IsItemDeactivated()) save();
         ImGui::SameLine();
-        if (EchoUI::Checkbox("##shown", &(logic.*label.shown)))
-            save();
+        if (EchoUI::Checkbox("##shown", &(logic.*label.shown))) save();
         ImGui::SameLine(title_x);
         std::string title = label.title;
-        if (title.starts_with("Show "))
-            title = title.substr(5);
+        if (title.starts_with("Show ")) title = title.substr(5);
         ImGui::AlignTextToFramePadding();
         ImGui::TextUnformatted(title.c_str());
         ImGui::SameLine(fields_x);
@@ -283,8 +270,7 @@ static void draw_label_settings() {
             place.opacity = std::clamp(opacity, 0, 100);
         saved_on_release();
         ImGui::SameLine();
-        if (EchoUI::Checkbox("##prefix", &place.prefix))
-            save();
+        if (EchoUI::Checkbox("##prefix", &place.prefix)) save();
         ImGui::PopItemWidth();
         ImGui::PopID();
     }
@@ -295,8 +281,7 @@ static void draw_sequence_card() {
     auto& logic = Logic::get();
     static int selected = -1;
     static int amount = 1;
-    if (toggle("Enable Sequence", logic.sequence_enabled))
-        logic.replay_index = 0;
+    if (toggle("Enable Sequence", logic.sequence_enabled)) logic.replay_index = 0;
     EchoUI::RowHalf();
     if (toggle("Random Order", logic.sequence_random)) {
         logic.replay_index = 0;
@@ -304,20 +289,17 @@ static void draw_sequence_card() {
     }
     tip("Plays the queue in a random order");
     ImGui::BeginChild("##sequence-list", ImVec2(-FLT_MIN, EchoUI::em(9.f)), ImGuiChildFlags_Borders);
-    if (logic.sequence.empty())
-        ImGui::TextDisabled("The queue is empty");
+    if (logic.sequence.empty()) ImGui::TextDisabled("The queue is empty");
     for (unsigned i = 0; i < logic.sequence.size(); ++i) {
         ImGui::PushID((int)(i));
         auto row = fmt::format("{}.  {}", i + 1, logic.sequence[i].name);
-        if (EchoUI::Selectable(row.c_str(), selected == (int)(i)))
-            selected = (int)(i);
+        if (EchoUI::Selectable(row.c_str(), selected == (int)(i))) selected = (int)(i);
         ImGui::PopID();
     }
     ImGui::EndChild();
     bool picked = selected >= 0 && selected < (int)(logic.sequence.size());
     float third = EchoUI::RowButton(3);
-    if (EchoUI::Button("Add", ImVec2(third, 0.f)))
-        GUI::get().open_macro_picker(true, amount);
+    if (EchoUI::Button("Add", ImVec2(third, 0.f))) GUI::get().open_macro_picker(true, amount);
     ImGui::SameLine();
     ImGui::BeginDisabled(!picked);
     if (EchoUI::Button("Remove", ImVec2(third, 0.f)) && picked) {
@@ -337,8 +319,7 @@ static void draw_sequence_card() {
     ImGui::EndDisabled();
     EchoUI::Row("Copies per add");
     EchoUI::InputInt("##sequence-amount", &amount);
-    if (amount < 1)
-        amount = 1;
+    if (amount < 1) amount = 1;
 }
 
 static void draw_video_shape(bool& open_save_preset) {
@@ -349,7 +330,7 @@ static void draw_video_shape(bool& open_save_preset) {
         int width, height, fps, mbps;
     };
 
-    static constexpr Shape DEFAULTS[] = {
+    static const Shape DEFAULTS[] = {
         { "720p 30", 1280, 720, 30, 8 },
         { "720p 60", 1280, 720, 60, 12 },
         { "1080p 60", 1920, 1080, 60, 20 },
@@ -357,8 +338,8 @@ static void draw_video_shape(bool& open_save_preset) {
         { "1440p 60", 2560, 1440, 60, 30 },
         { "4K 60", 3840, 2160, 60, 50 },
     };
-    static constexpr int SIZES[][2] = { { 640, 360 }, { 854, 480 }, { 1280, 720 }, { 1600, 900 }, { 1920, 1080 }, { 2560, 1440 }, { 3840, 2160 } };
-    static constexpr int RATES[] = { 24, 30, 48, 50, 60, 72, 90, 100, 120, 144, 165, 180, 240, 360 };
+    static const int SIZES[][2] = { { 640, 360 }, { 854, 480 }, { 1280, 720 }, { 1600, 900 }, { 1920, 1080 }, { 2560, 1440 }, { 3840, 2160 } };
+    static const int RATES[] = { 24, 30, 48, 50, 60, 72, 90, 100, 120, 144, 165, 180, 240, 360 };
     auto matches = [&](int width, int height, int fps) {
         return logic.render_width == width && logic.render_height == height && logic.render_fps == fps;
     };
@@ -373,13 +354,11 @@ static void draw_video_shape(bool& open_save_preset) {
     std::string shown = "Custom";
     int mine = -1;
     for (const auto& preset : DEFAULTS) {
-        if (matches(preset.width, preset.height, preset.fps))
-            shown = preset.name;
+        if (matches(preset.width, preset.height, preset.fps)) shown = preset.name;
     }
     for (int i = 0; i < (int)(logic.render_presets.size()); ++i) {
         const auto& preset = logic.render_presets[(size_t)i];
-        if (!matches(preset.width, preset.height, preset.fps))
-            continue;
+        if (!matches(preset.width, preset.height, preset.fps)) continue;
         shown = preset.name;
         mine = i;
     }
@@ -390,23 +369,19 @@ static void draw_video_shape(bool& open_save_preset) {
     bool forced = false;
 #endif
     ImGui::BeginDisabled(forced);
-    if (toggle("Match Screen Shape", logic.render_screen_shape))
-        save();
+    if (toggle("Match Screen Shape", logic.render_screen_shape)) save();
     ImGui::EndDisabled();
     tip(forced ? "iOS always renders at the screen's shape: the game cannot draw at another." : "On: the video is as wide as your screen's shape at the chosen height (1080 high on a phone comes out wider than 1920).\nOff: the size as chosen.");
 #endif
     bool shaped = logic.render_uses_screen_shape();
     auto sized = [&](const std::string& name, int width, int height) {
-        if (!shaped)
-            return name;
+        if (!shaped) return name;
         return fmt::format("{}  ({} x {})", name, logic.render_width_for(width, height), height);
     };
     for (const auto& preset : DEFAULTS) {
-        if (shown == preset.name)
-            shown = sized(preset.name, preset.width, preset.height);
+        if (shown == preset.name) shown = sized(preset.name, preset.width, preset.height);
     }
-    if (mine >= 0)
-        shown = sized(shown, logic.render_width, logic.render_height);
+    if (mine >= 0) shown = sized(shown, logic.render_width, logic.render_height);
     EchoUI::RowWith("Preset", mine >= 0 ? 4.4f : 0.f);
     if (EchoUI::BeginCombo("##render-preset", shown.c_str())) {
         for (const auto& preset : DEFAULTS) {
@@ -414,8 +389,7 @@ static void draw_video_shape(bool& open_save_preset) {
             if (EchoUI::Selectable(label.c_str(), matches(preset.width, preset.height, preset.fps)))
                 use(preset.width, preset.height, preset.fps, preset.mbps * 1000000);
         }
-        if (!logic.render_presets.empty())
-            EchoUI::Separator();
+        if (!logic.render_presets.empty()) EchoUI::Separator();
         for (int i = 0; i < (int)(logic.render_presets.size()); ++i) {
             auto preset = logic.render_presets[(size_t)i];
             ImGui::PushID(i);
@@ -425,8 +399,7 @@ static void draw_video_shape(bool& open_save_preset) {
             ImGui::PopID();
         }
         EchoUI::Separator();
-        if (EchoUI::Selectable("Save current as..."))
-            open_save_preset = true;
+        if (EchoUI::Selectable("Save current as...")) open_save_preset = true;
         ImGui::EndCombo();
     }
     if (mine >= 0) {
@@ -439,12 +412,10 @@ static void draw_video_shape(bool& open_save_preset) {
 
     int size_index = -1;
     for (int i = 0; i < IM_ARRAYSIZE(SIZES); ++i) {
-        if (logic.render_width == SIZES[i][0] && logic.render_height == SIZES[i][1])
-            size_index = i;
+        if (logic.render_width == SIZES[i][0] && logic.render_height == SIZES[i][1]) size_index = i;
     }
     static bool custom_size = false;
-    if (size_index < 0)
-        custom_size = true;
+    if (size_index < 0) custom_size = true;
     if (!custom_size) {
         EchoUI::Row("Size");
         auto text = fmt::format("{} x {}", logic.render_width_for(logic.render_width, logic.render_height), logic.render_height);
@@ -501,8 +472,7 @@ static void draw_click_types(bool& softs, float& soft_ms, bool& hards, float& ha
     toggle("Micro Clicks", micros);
     EchoUI::Row("Micro up to");
     int micro = micro_ms;
-    if (EchoUI::DragInt("##micro-ms", &micro, 1.f, 0, 100, "%d ms"))
-        micro_ms = std::max(micro, 0);
+    if (EchoUI::DragInt("##micro-ms", &micro, 1.f, 0, 100, "%d ms")) micro_ms = std::max(micro, 0);
     saved_on_release();
     EchoUI::Row("Soft up to");
     GUI::get().drag_float_setting("##soft-ms", soft_ms, 1.f, 0.f, 500.f, "%.0f ms");
@@ -547,13 +517,11 @@ void GUI::main() {
         toggle("Ignore Inputs During Playback", logic.ignore_inputs);
         GUI::get().offer_rebind("key-ignore");
         if (EchoUI::Button("Reset Level", ImVec2(half, 0.f))) {
-            if (auto* level = PlayLayer::get())
-                level->resetLevel();
+            if (auto* level = PlayLayer::get()) level->resetLevel();
         }
         GUI::get().offer_rebind("key-reset");
         ImGui::SameLine();
-        if (EchoUI::Button("Close Menu", ImVec2(half, 0.f)))
-            GUI::get().begin_close();
+        if (EchoUI::Button("Close Menu", ImVec2(half, 0.f))) GUI::get().begin_close();
         GUI::get().offer_rebind("open-menu");
     }
     EchoUI::EndCard();
@@ -563,8 +531,7 @@ void GUI::main() {
         ImGuiID speed_id = ImGui::GetID("##speed");
         bool typing = ImGui::TempInputIsActive(speed_id);
         bool dragging = ImGui::GetActiveID() == speed_id && !typing;
-        if (!dragging)
-            dragged = logic.speedhack;
+        if (!dragging) dragged = logic.speedhack;
         float stepped = std::clamp(std::round(dragged / .05f) * .05f, .01f, 5.f);
         auto shown = fmt::format("{:.2f}x", stepped);
         float drag_rate = 0.005f * std::max(dragged, 1.f);
@@ -572,15 +539,12 @@ void GUI::main() {
             GUI::get().set_speed(typing ? dragged : std::clamp(std::round(dragged / .05f) * .05f, .01f, 5.f), false);
         }
         GUI::get().offer_rebind("key-speedhack");
-        if (ImGui::IsItemDeactivatedAfterEdit())
-            GUI::get().set_speed(logic.speedhack, true);
+        if (ImGui::IsItemDeactivatedAfterEdit()) GUI::get().set_speed(logic.speedhack, true);
 
         static float input_tps = -1.f;
-        if (input_tps < 0.f)
-            input_tps = logic.fps;
+        if (input_tps < 0.f) input_tps = logic.fps;
         static float input_fps = -1.f;
-        if (input_fps < 0.f)
-            input_fps = logic.playback_fps >= 1.f ? logic.playback_fps : 240.f;
+        if (input_fps < 0.f) input_fps = logic.playback_fps >= 1.f ? logic.playback_fps : 240.f;
         float set_em = 3.2f;
         EchoUI::RowWith("TPS", set_em, "Physics steps per second.");
         EchoUI::DragFloat("##tps", &input_tps, 1.f, 1.f, FLT_MAX, "%.2f");
@@ -600,24 +564,20 @@ void GUI::main() {
             input_fps = std::clamp(input_fps, 1.f, FLT_MAX);
             GUI::get().set_playback_fps(input_fps);
         }
-        if (toggle("Lock FPS", logic.lock_delta))
-            GUI::get().drop_carry();
+        if (toggle("Lock FPS", logic.lock_delta)) GUI::get().drop_carry();
         tip("Moves the level exactly one frame for every frame drawn, essentially smooth fix.");
         EchoUI::RowHalf();
         ImGui::BeginDisabled(logic.lock_delta);
-        if (toggle("Real Time", logic.real_time_mode))
-            GUI::get().drop_carry();
+        if (toggle("Real Time", logic.real_time_mode)) GUI::get().drop_carry();
         tip("Keeps the game at full speed when it lags instead of slowing it down.");
-        if (EchoUI::Gear("##real-time-settings"))
-            open_real_time = true;
+        if (EchoUI::Gear("##real-time-settings")) open_real_time = true;
         ImGui::EndDisabled();
         toggle("Audio Speedhack", logic.audio_speedhack);
         tip("Makes the audio follow your speedhack.");
         EchoUI::RowHalf();
         toggle("Sync Audio", logic.sync_audio);
         tip("Syncs the audio if the game lags");
-        if (EchoUI::Gear("##sync-audio-settings"))
-            open_sync_audio = true;
+        if (EchoUI::Gear("##sync-audio-settings")) open_sync_audio = true;
     }
     EchoUI::EndCard();
     EchoUI::EndCardRow();
@@ -626,8 +586,7 @@ void GUI::main() {
         ImGui::SetNextItemWidth(-FLT_MIN);
         if (EchoUI::InputTextWithHint("###replay_name", "Replay name", &logic.macro_name))
             logic.macro_name_typed = true;
-        if (ImGui::IsItemDeactivatedAfterEdit())
-            logic.macro_path.clear();
+        if (ImGui::IsItemDeactivatedAfterEdit()) logic.macro_path.clear();
         ImGui::TextDisabled("%i inputs   %s TPS%s", (int)(logic.inputs.size()), fmt::format("{:g}", logic.fps).c_str(), !logic.macro_ldm_known ? "" : logic.macro_ldm ? "   LDM on" : "   LDM off");
         float half = EchoUI::RowButton(2);
         bool just_saved = std::chrono::steady_clock::now() - logic.saved_at < std::chrono::seconds(1);
@@ -637,24 +596,20 @@ void GUI::main() {
         ImGui::EndDisabled();
         GUI::get().offer_rebind("key-save");
         ImGui::SameLine();
-        if (EchoUI::Button("Load", ImVec2(half, 0.f)))
-            Logic::get().pick_replay();
+        if (EchoUI::Button("Load", ImVec2(half, 0.f))) Logic::get().pick_replay();
         GUI::get().offer_rebind("key-load");
         ImGui::BeginDisabled(busy);
-        if (EchoUI::Button("Merge In", ImVec2(half, 0.f)))
-            GUI::get().open_merge_picker();
+        if (EchoUI::Button("Merge In", ImVec2(half, 0.f))) GUI::get().open_merge_picker();
         ImGui::EndDisabled();
         tip("Merges another replay's inputs into this one. Both replays need the same TPS.");
         ImGui::SameLine();
         ImGui::BeginDisabled(logic.inputs.empty());
-        if (EchoUI::Button("Clear", ImVec2(half, 0.f)))
-            want_reset = true;
+        if (EchoUI::Button("Clear", ImVec2(half, 0.f))) want_reset = true;
         ImGui::EndDisabled();
         tip("Removes every input from the current replay.");
         toggle("No Overwrite", logic.no_overwrite);
         GUI::get().offer_rebind("key-no-overwrite", "Saves as a new file instead of overwriting the current replay.");
-        if (EchoUI::Gear("##overwrite-settings"))
-            open_overwrite = true;
+        if (EchoUI::Gear("##overwrite-settings")) open_overwrite = true;
         EchoUI::Separator();
         ImGui::BeginDisabled(!logic.backstep && !logic.best_frame_running);
 #ifdef GEODE_IS_MOBILE
@@ -665,13 +620,11 @@ void GUI::main() {
         if (EchoUI::Button(logic.best_frame_running ? "Stop Searching" : "Find Best Frame", ImVec2(-FLT_MIN, 0.f)))
             Logic::get().request_best_frame();
         GUI::get().offer_rebind("find-best-frame", "Finds the frame where your next click is the safest and steps to it. Requires Backstep.");
-        if (toggle("Click That Frame", logic.best_frame_click))
-            persist();
+        if (toggle("Click That Frame", logic.best_frame_click)) persist();
         tip("Automatically clicks on the best frame instead of only stopping there.");
         EchoUI::RowHalf();
         ImGui::BeginDisabled(!logic.best_frame_click);
-        if (toggle("Keep Going", logic.best_frame_auto))
-            persist();
+        if (toggle("Keep Going", logic.best_frame_auto)) persist();
         ImGui::EndDisabled();
         tip("Keeps finding the next best frame after each click until none survive.");
 #endif
@@ -700,18 +653,15 @@ void GUI::main() {
                 GUI::get().set_frame_advance(!logic.frame_advance);
             tip("Keeps playing, or stops again. The bar stays on screen.");
             ImGui::SameLine();
-            if (EchoUI::Button("Step", ImVec2(each, 0.f)))
-                Logic::get().advance_one_frame();
+            if (EchoUI::Button("Step", ImVec2(each, 0.f))) Logic::get().advance_one_frame();
         }
         else {
             float step_w = EchoUI::RowRight(4.6f);
-            if (EchoUI::Button("Step", ImVec2(step_w, 0.f)))
-                Logic::get().advance_one_frame();
+            if (EchoUI::Button("Step", ImVec2(step_w, 0.f))) Logic::get().advance_one_frame();
         }
 #else
         float step_w = EchoUI::RowRight(4.6f);
-        if (EchoUI::Button("Step", ImVec2(step_w, 0.f)))
-            Logic::get().advance_one_frame();
+        if (EchoUI::Button("Step", ImVec2(step_w, 0.f))) Logic::get().advance_one_frame();
 #endif
         GUI::get().offer_rebind("step-frame");
         EchoUI::Row("Hold delay", "How long Step is held before it starts repeating.");
@@ -725,12 +675,10 @@ void GUI::main() {
             logic.advance_speed = (float)(std::clamp(held, 1, 200));
         saved_on_release();
         EchoUI::Separator();
-        if (toggle("Backstep", logic.backstep) && !logic.backstep)
-            Logic::get().clear_backsteps();
+        if (toggle("Backstep", logic.backstep) && !logic.backstep) Logic::get().clear_backsteps();
         tip("Allows you to step backwards while recording. Higher TPS saves less often and replays your inputs from the last save.");
         float back_w = EchoUI::RowRight(4.6f);
-        if (EchoUI::Button("Back", ImVec2(back_w, 0.f)))
-            Logic::get().back_tap_queued = true;
+        if (EchoUI::Button("Back", ImVec2(back_w, 0.f))) Logic::get().back_tap_queued = true;
         GUI::get().offer_rebind("step-back");
         EchoUI::Row("Saved states", "How many states to keep as a percent of your TPS. 100% at 240 TPS keeps 240.");
         if (EchoUI::DragInt("##backstep-saves", &logic.backstep_percent, 1.f, 1, 200, "%d%%"))
@@ -740,16 +688,13 @@ void GUI::main() {
     EchoUI::EndCard();
     EchoUI::EndCardRow();
 
-    if (open_real_time)
-        ImGui::OpenPopup("Real Time Settings");
+    if (open_real_time) ImGui::OpenPopup("Real Time Settings");
     if (EchoUI::BeginModal("Real Time Settings", 20.f)) {
-        if (toggle("True Real Time", logic.true_real_time))
-            GUI::get().drop_carry();
+        if (toggle("True Real Time", logic.true_real_time)) GUI::get().drop_carry();
         tip("Runs every step as close to real time as the game allows. Accuracy is untested.");
         EchoUI::EndModal();
     }
-    if (open_sync_audio)
-        ImGui::OpenPopup("Sync Audio Settings");
+    if (open_sync_audio) ImGui::OpenPopup("Sync Audio Settings");
     if (EchoUI::BeginModal("Sync Audio Settings", 20.f)) {
         EchoUI::Row("Threshold", "How far the audio can drift before it gets synced.");
         if (EchoUI::DragInt("##sync-threshold", &logic.sync_audio_threshold, 5.f, 20, 2000, "%d ms"))
@@ -757,21 +702,18 @@ void GUI::main() {
         saved_on_release();
         EchoUI::EndModal();
     }
-    if (open_overwrite)
-        ImGui::OpenPopup("Overwrite Settings");
+    if (open_overwrite) ImGui::OpenPopup("Overwrite Settings");
     if (EchoUI::BeginModal("Overwrite Settings", 20.f)) {
         EchoUI::Row("Rename format", "Added to the name instead of overwriting. # is the number, so _# saves Replay_1.");
         EchoUI::InputText("##rename-format", &logic.rename_format);
         saved_on_release();
         std::string shown = logic.rename_format.empty() ? std::string("_#") : logic.rename_format;
-        if (shown.find('#') == std::string::npos)
-            shown += "#";
+        if (shown.find('#') == std::string::npos) shown += "#";
         shown.replace(shown.find('#'), 1, "1");
         ImGui::TextDisabled("Replay%s.echo", shown.c_str());
         EchoUI::EndModal();
     }
-    if (want_reset)
-        ImGui::OpenPopup("Clear Replay");
+    if (want_reset) ImGui::OpenPopup("Clear Replay");
     if (EchoUI::BeginModal("Clear Replay", 16.f)) {
         ImGui::TextUnformatted("Remove every input from this replay?");
         float half = EchoUI::RowButton(2);
@@ -780,8 +722,7 @@ void GUI::main() {
             ImGui::CloseCurrentPopup();
         }
         ImGui::SameLine();
-        if (EchoUI::Button("Keep", ImVec2(half, 0.f)))
-            ImGui::CloseCurrentPopup();
+        if (EchoUI::Button("Keep", ImVec2(half, 0.f))) ImGui::CloseCurrentPopup();
         EchoUI::EndModal();
     }
 }
@@ -792,21 +733,17 @@ void GUI::tools() {
 
     EchoUI::BeginCardRow("assists-0");
     if (EchoUI::BeginCard("Safety and Auto Input", card_width())) {
-        if (quad_row("Noclip", "##noclip", logic.noclip_p1, logic.noclip_p2))
-            GUI::get().persist();
+        if (quad_row("Noclip", "##noclip", logic.noclip_p1, logic.noclip_p2)) GUI::get().persist();
         GUI::get().offer_rebind("key-noclip", "The keybind turns noclip off, and back on for the same players.");
         toggle("Safe Mode", logic.safe_mode);
         tip("Removes the ability to make progress when using hacks. You can still make progress if no hacks are on, though.");
-        if (toggle("Prevent Death", logic.pause_before_kill))
-            Logic::get().reset_traj();
+        if (toggle("Prevent Death", logic.pause_before_kill)) Logic::get().reset_traj();
         GUI::get().offer_rebind("key-pause-before-kill", "Stops on the frame before you die while recording. Works without Show Trajectory.");
         EchoUI::Separator();
         toggle("Autoclicker", logic.autoclicker);
         GUI::get().offer_rebind("key-autoclick");
-        if (EchoUI::Gear("##autoclicker-settings"))
-            open_autoclicker = true;
-        if (toggle("Trajectory Autoclicker", logic.traj_autoclicker))
-            Logic::get().reset_traj();
+        if (EchoUI::Gear("##autoclicker-settings")) open_autoclicker = true;
+        if (toggle("Trajectory Autoclicker", logic.traj_autoclicker)) Logic::get().reset_traj();
         GUI::get().offer_rebind("key-traj-autoclick", "Automatically clicks or releases when the next frame would kill you. Works without Show Trajectory.");
         ImGui::BeginDisabled(!logic.traj_autoclicker);
         EchoUI::Row("Lookahead", "Clicks when you would die within this many frames.");
@@ -819,8 +756,7 @@ void GUI::tools() {
         if (quad_row("Auto Straight UFO", "##straight-ufo", logic.straight_ufo_p1, logic.straight_ufo_p2, "Clicks for you to keep the UFO at one height."))
             GUI::get().persist();
         ImGui::BeginDisabled(!logic.straight_fly() && !logic.straight_ufo());
-        if (EchoUI::Button("Straight Fly Settings...", ImVec2(-FLT_MIN, 0.f)))
-            open_straight = true;
+        if (EchoUI::Button("Straight Fly Settings...", ImVec2(-FLT_MIN, 0.f))) open_straight = true;
         ImGui::EndDisabled();
     }
     EchoUI::EndCard();
@@ -833,8 +769,7 @@ void GUI::tools() {
             GUI::get().persist();
         const char* follow[] = { "Off", "P2 follows P1", "P1 follows P2" };
         EchoUI::Row("Follow", "For two player levels, the following player will copy the followed player after that many frames or milliseconds.");
-        if (EchoUI::Combo("##follow", &logic.follow_mode, follow, 3))
-            GUI::get().persist();
+        if (EchoUI::Combo("##follow", &logic.follow_mode, follow, 3)) GUI::get().persist();
         ImGui::BeginDisabled(logic.follow_mode == 0);
         {
             EchoUI::RowWith("Delay", 5.f);
@@ -858,20 +793,15 @@ void GUI::tools() {
     EchoUI::BeginCardRow("assists-1");
     if (EchoUI::BeginCard("Orb Assists", card_width())) {
         ImGui::TextDisabled("While recording");
-        if (toggle("Click Dash Orbs", logic.click_dash_orbs))
-            Logic::get().reset_traj();
+        if (toggle("Click Dash Orbs", logic.click_dash_orbs)) Logic::get().reset_traj();
         GUI::get().offer_rebind("key-click-dash-orbs", "Automatically swift clicks stacked dash orbs. Does not affect playback.");
-        if (toggle("Click Black Orbs", logic.click_black_orbs))
-            Logic::get().reset_traj();
+        if (toggle("Click Black Orbs", logic.click_black_orbs)) Logic::get().reset_traj();
         GUI::get().offer_rebind("key-click-black-orbs", "Automatically swift clicks black orbs as UFO. Does not affect playback.");
-        if (toggle("Black Orb on Pad", logic.pad_black_orb))
-            Logic::get().reset_traj();
+        if (toggle("Black Orb on Pad", logic.pad_black_orb)) Logic::get().reset_traj();
         GUI::get().offer_rebind("key-pad-black-orb", "Automatically swift clicks black orbs when hitting a pad.");
-        if (toggle("Blue Orb on Pad", logic.pad_blue_orb))
-            Logic::get().reset_traj();
+        if (toggle("Blue Orb on Pad", logic.pad_blue_orb)) Logic::get().reset_traj();
         GUI::get().offer_rebind("key-pad-blue-orb", "Automatically swift clicks blue orbs when hitting a pad.");
-        if (toggle("Easy Black Orb UFO", logic.easy_black_ufo))
-            Logic::get().reset_traj();
+        if (toggle("Easy Black Orb UFO", logic.easy_black_ufo)) Logic::get().reset_traj();
         tip("Swift clicks black orbs as UFO, but only while you are falling.");
     }
     EchoUI::EndCard();
@@ -889,8 +819,7 @@ void GUI::tools() {
             auto* level = PlayLayer::get() ? PlayLayer::get()->m_level : nullptr;
             bool ldm = logic.macro_ldm_known ? logic.macro_ldm : level && level->m_lowDetailModeToggled;
             ImGui::BeginDisabled(locked);
-            if (EchoUI::Checkbox("Low Detail Mode", &ldm))
-                logic.set_macro_ldm(ldm);
+            if (EchoUI::Checkbox("Low Detail Mode", &ldm)) logic.set_macro_ldm(ldm);
             ImGui::EndDisabled();
             tip("Saves LDM setting in the macro, as it sometimes breaks if not set correctly.");
         }
@@ -914,8 +843,7 @@ void GUI::tools() {
     }
     EchoUI::EndCard();
     EchoUI::EndCardRow();
-    if (open_straight)
-        ImGui::OpenPopup("Straight Fly");
+    if (open_straight) ImGui::OpenPopup("Straight Fly");
     if (EchoUI::BeginModal("Straight Fly", 18.f)) {
         auto value_row = [&](const char* label, const char* id, float& value, float speed, const char* hint) {
             EchoUI::Row(label, hint);
@@ -936,8 +864,7 @@ void GUI::tools() {
         EchoUI::EndModal();
     }
 
-    if (open_autoclicker)
-        ImGui::OpenPopup("Autoclicker");
+    if (open_autoclicker) ImGui::OpenPopup("Autoclicker");
     if (EchoUI::BeginModal("Autoclicker", 18.f)) {
         toggle("Enabled", logic.autoclicker);
         const char* players[] = { "Player 1", "Player 2", "Both" };
@@ -984,22 +911,18 @@ void GUI::draw_visuals() {
     if (EchoUI::BeginCard("Overlays", card_width())) {
         toggle("Hitboxes", logic.show_hitboxes);
         GUI::get().offer_rebind("key-hitboxes");
-        if (EchoUI::Gear("##hitbox-settings"))
-            open_hitboxes = true;
+        if (EchoUI::Gear("##hitbox-settings")) open_hitboxes = true;
         toggle("Trajectory", logic.show_traj);
         GUI::get().offer_rebind("key-trajectory");
-        if (EchoUI::Gear("##trajectory-settings"))
-            open_traj = true;
+        if (EchoUI::Gear("##trajectory-settings")) open_traj = true;
         toggle("Layout Mode", logic.layout_mode);
         GUI::get().offer_rebind("key-layout");
-        if (EchoUI::Gear("##layout-settings"))
-            open_layout = true;
+        if (EchoUI::Gear("##layout-settings")) open_layout = true;
     }
     EchoUI::EndCard();
     if (EchoUI::BeginCard("Player", card_width())) {
         if (quad_row("Hide player", "##hide-player", logic.hide_p1, logic.hide_p2)) {
-            if (logic.traj_follow_hide_player)
-                Logic::get().reset_traj();
+            if (logic.traj_follow_hide_player) Logic::get().reset_traj();
             GUI::get().persist();
         }
         toggle("Fix Rotation Bug", logic.fix_tps_rotation);
@@ -1013,17 +936,13 @@ void GUI::draw_visuals() {
         for (std::size_t i = 0; i < order.size(); ++i) {
             const auto& label = *order[i];
             std::string title = label.title;
-            if (title.starts_with("Show "))
-                title = title.substr(5);
-            if (i % 2)
-                EchoUI::RowHalf();
+            if (title.starts_with("Show ")) title = title.substr(5);
+            if (i % 2) EchoUI::RowHalf();
             ImGui::PushID(label.key);
-            if (EchoUI::Checkbox(title.c_str(), &(logic.*label.shown)))
-                save();
+            if (EchoUI::Checkbox(title.c_str(), &(logic.*label.shown))) save();
             ImGui::PopID();
         }
-        if (EchoUI::Button("Position, Size and Font", ImVec2(-FLT_MIN, 0.f)))
-            open_labels = true;
+        if (EchoUI::Button("Position, Size and Font", ImVec2(-FLT_MIN, 0.f))) open_labels = true;
         tip("Changes where each label sits, its size, opacity, font and order.");
     }
     EchoUI::EndCard();
@@ -1036,8 +955,7 @@ void GUI::draw_visuals() {
         toggle("Hide New Best", logic.hide_new_best);
         toggle("Hide Endscreen", logic.hide_endscreen);
         tip("The end screen never shows, so leave the level from the pause menu.");
-        if (toggle("No Mirror Portals", logic.no_mirror_portals))
-            GUI::get().apply_no_mirror();
+        if (toggle("No Mirror Portals", logic.no_mirror_portals)) GUI::get().apply_no_mirror();
         tip("Stops mirror portals from flipping the level.");
         toggle("Stacked Orb Optimization", opt_effects);
         tip("Clicking many orbs on the same frame only shows one effect.");
@@ -1045,34 +963,27 @@ void GUI::draw_visuals() {
     EchoUI::EndCard();
     EchoUI::EndCardRow();
 
-    if (open_hitboxes)
-        ImGui::OpenPopup("Hitboxes");
+    if (open_hitboxes) ImGui::OpenPopup("Hitboxes");
     if (EchoUI::BeginModal("Hitboxes", 26.f)) {
         draw_hitbox_settings();
         EchoUI::EndModal();
     }
-    if (open_traj)
-        ImGui::OpenPopup("Trajectory");
+    if (open_traj) ImGui::OpenPopup("Trajectory");
     if (EchoUI::BeginModal("Trajectory", 20.f)) {
         draw_traj_settings();
         EchoUI::EndModal();
     }
-    if (open_layout)
-        ImGui::OpenPopup("Layout Mode");
+    if (open_layout) ImGui::OpenPopup("Layout Mode");
     if (EchoUI::BeginModal("Layout Mode", 18.f)) {
         toggle("Use Regular Background", logic.layout_use_regular_bg);
         tip("Uses the level's actual background");
-        if (toggle("Default Art", logic.layout_default_art))
-            Logic::get().refresh_default_art();
+        if (toggle("Default Art", logic.layout_default_art)) Logic::get().refresh_default_art();
         tip("Draws every block, slope & spike as the standard one, sized to its hitbox.");
-        if (EchoUI::ColorEdit3("Background color", logic.background_color))
-            save();
-        if (EchoUI::ColorEdit3("Ground color", logic.blocks_color))
-            save();
+        if (EchoUI::ColorEdit3("Background color", logic.background_color)) save();
+        if (EchoUI::ColorEdit3("Ground color", logic.blocks_color)) save();
         EchoUI::EndModal();
     }
-    if (open_labels)
-        ImGui::OpenPopup("On-Screen Labels");
+    if (open_labels) ImGui::OpenPopup("On-Screen Labels");
     if (EchoUI::BeginModal("On-Screen Labels", 34.f)) {
         draw_label_settings();
         EchoUI::EndModal();
@@ -1089,12 +1000,10 @@ void GUI::draw_macro() {
         EchoUI::Row("Format");
         EchoUI::Combo("##convert-format", &format, formats, 5);
         float half = EchoUI::RowButton(2);
-        if (EchoUI::Button("Export", ImVec2(half, 0.f)))
-            Logic::get().export_kind(formats[format]);
+        if (EchoUI::Button("Export", ImVec2(half, 0.f))) Logic::get().export_kind(formats[format]);
         tip("Converts the current replay to the converted folder");
         ImGui::SameLine();
-        if (EchoUI::Button("Import", ImVec2(half, 0.f)))
-            Logic::get().import_replays();
+        if (EchoUI::Button("Import", ImVec2(half, 0.f))) Logic::get().import_replays();
         tip("Import a replay of the selected type to convert to Echo");
         if (EchoUI::Button("Convert Folder", ImVec2(half, 0.f)))
             Logic::get().convert_legacy_echoes();
@@ -1130,8 +1039,7 @@ void GUI::draw_macro() {
         stat("Attempts", fmt::format("{}", logic.attempts));
         stat("Clicks", fmt::format("{}", clicks));
         stat("Level seed", logic.lvl_seed_known && PlayLayer::get() ? fmt::format("{}", logic.lvl_seed) : std::string("not set"));
-        if (toggle("Override seed", logic.seed_override))
-            GUI::get().apply_seed_override();
+        if (toggle("Override seed", logic.seed_override)) GUI::get().apply_seed_override();
         tip("Overrides the game seed to this value");
         ImGui::BeginDisabled(!logic.seed_override);
         EchoUI::Row("Seed");
@@ -1169,8 +1077,7 @@ void GUI::clickbot() {
         std::vector<std::string> folders;
         std::error_code folder_error;
         for (const auto& entry : fs::directory_iterator(folders_root, folder_error)) {
-            if (!entry.is_directory(folder_error))
-                continue;
+            if (!entry.is_directory(folder_error)) continue;
             try {
                 folders.push_back(entry.path().filename().string());
             }
@@ -1183,8 +1090,7 @@ void GUI::clickbot() {
         }
         catch (...) {
         }
-        if (cur.empty())
-            cur = pack;
+        if (cur.empty()) cur = pack;
         EchoUI::RowWith("Click pack", 5.f);
         if (EchoUI::BeginCombo(player == 0 ? "##clickpack-p1" : "##clickpack-p2", cur.empty() ? "None" : cur.c_str())) {
             for (const auto& folder : folders) {
@@ -1271,8 +1177,7 @@ void GUI::renderer() {
         EchoUI::InputTextWithHint("##render-name", logic.macro_name.empty() ? "Replay" : logic.macro_name.c_str(), &logic.render_name);
         float half = EchoUI::RowButton(2);
         ImGui::BeginDisabled(logic.merge_busy);
-        if (EchoUI::Button("Join Two Videos", ImVec2(half, 0.f)))
-            GUI::get().open_render_picker();
+        if (EchoUI::Button("Join Two Videos", ImVec2(half, 0.f))) GUI::get().open_render_picker();
         ImGui::EndDisabled();
 #ifdef GEODE_IS_MACOS
         tip("Joins two videos back to back with a crossfade.");
@@ -1372,8 +1277,7 @@ void GUI::renderer() {
     }
     EchoUI::EndCard();
     EchoUI::EndCardRow();
-    if (open_save_preset)
-        ImGui::OpenPopup("Save Video Preset");
+    if (open_save_preset) ImGui::OpenPopup("Save Video Preset");
     if (EchoUI::BeginModal("Save Video Preset", 16.f)) {
         static std::string name;
         ImGui::TextDisabled("%i x %i   %i FPS", logic.render_width, logic.render_height, logic.render_fps);
@@ -1397,29 +1301,21 @@ void GUI::renderer() {
 CCTexture2D* GUI::theme_logo_texture() {
     const auto& name = Logic::get().theme_name;
     for (int i = 1; i < EchoUI::preset_count(); ++i) {
-        if (name != EchoUI::preset(i).name)
-            continue;
+        if (name != EchoUI::preset(i).name) continue;
         const auto& preset = EchoUI::preset(i);
         auto sprite = fmt::format("{}/echo-logo-{}.png", Mod::get()->getID(), GUI::get().lower_copy(preset.name));
-        if (auto image = EchoUI::logo_texture(sprite.c_str()))
-            return image;
+        if (auto image = EchoUI::logo_texture(sprite.c_str())) return image;
     }
-    if (!GUI::get().has_palette || name == "Echo")
-        return EchoUI::logo_texture("logo.png"_spr);
+    if (!GUI::get().has_palette || name == "Echo") return EchoUI::logo_texture("logo.png"_spr);
     const auto& palette = GUI::get().palette;
     const char* base = nullptr;
-    if (palette.rainbow)
-        base = "rainbow";
-    else if (palette.scene != EchoUI::Scene::None)
-        base = EchoUI::scene_name(palette.scene);
-    else if (palette.light)
-        base = "white";
-    else if (palette.accent_saturation < .06f)
-        base = palette.depth < .8f ? "black" : "silver";
+    if (palette.rainbow) base = "rainbow";
+    else if (palette.scene != EchoUI::Scene::None) base = EchoUI::scene_name(palette.scene);
+    else if (palette.light) base = "white";
+    else if (palette.accent_saturation < .06f) base = palette.depth < .8f ? "black" : "silver";
     if (base) {
         auto sprite = fmt::format("{}/echo-logo-{}.png", Mod::get()->getID(), base);
-        if (auto image = EchoUI::logo_texture(sprite.c_str()))
-            return image;
+        if (auto image = EchoUI::logo_texture(sprite.c_str())) return image;
     }
     return EchoUI::logo_tinted_texture(palette.accent_hue);
 }
@@ -1447,8 +1343,7 @@ void GUI::draw_theme() {
             tip(preset.name);
         }
         float half = EchoUI::RowButton(2);
-        if (EchoUI::Button("Randomize", ImVec2(half, 0.f)))
-            gui.randomize_theme();
+        if (EchoUI::Button("Randomize", ImVec2(half, 0.f))) gui.randomize_theme();
         tip("Picks a random color for the menu and logo.");
         ImGui::SameLine();
         if (EchoUI::Button("Reset", ImVec2(half, 0.f))) {
@@ -1468,8 +1363,7 @@ void GUI::draw_theme() {
             save();
         }
         ImGui::SameLine();
-        if (EchoUI::Button("Load", ImVec2(half, 0.f)))
-            gui.open_theme_picker();
+        if (EchoUI::Button("Load", ImVec2(half, 0.f))) gui.open_theme_picker();
     }
     EchoUI::EndCard();
     if (EchoUI::BeginCard("Interface", card_width())) {
@@ -1480,8 +1374,7 @@ void GUI::draw_theme() {
             menu_size = std::clamp(menu_size, 0.35f, drag_max);
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip(logic.docked_menu ? "The docked menu's size. The undocked menu has its own." : "The undocked menu's size. The docked menu has its own.");
-        if (ImGui::IsItemActivated())
-            gui.scale_dragging = true;
+        if (ImGui::IsItemActivated()) gui.scale_dragging = true;
         if (ImGui::IsItemDeactivated()) {
             gui.scale_dragging = false;
             menu_size = std::clamp(menu_size, 0.35f, gui.scale_cap);
@@ -1494,8 +1387,7 @@ void GUI::draw_theme() {
         {
             static float draft = 1.f;
             static bool dragging = false;
-            if (!dragging)
-                draft = logic.menu_inner_scale;
+            if (!dragging) draft = logic.menu_inner_scale;
             EchoUI::Row("Control size");
             if (EchoUI::DragFloat("##menu-inner", &draft, 0.005f, 1.f, 1.5f, "%.2fx"))
                 draft = std::clamp(draft, 1.f, 1.5f);
@@ -1512,8 +1404,7 @@ void GUI::draw_theme() {
             logic.menu_anim_speed = std::clamp(logic.menu_anim_speed, 0.25f, 4.f);
         saved_on_release();
 #ifndef GEODE_IS_MOBILE
-        if (EchoUI::Checkbox("One window (docked)", &logic.docked_menu))
-            save();
+        if (EchoUI::Checkbox("One window (docked)", &logic.docked_menu)) save();
         tip("Turning this off makes every page its own window.");
 #endif
 #ifdef GEODE_IS_MOBILE
@@ -1527,8 +1418,7 @@ void GUI::draw_theme() {
                 logic.floating_size = std::clamp(logic.floating_size, 24.f, 72.f);
             EchoUI::preview_logo(ImGui::IsItemActive());
             saved_on_release();
-            if (EchoUI::Checkbox("Hide Icon When Playing", &logic.floating_hide_in_lvl))
-                save();
+            if (EchoUI::Checkbox("Hide Icon When Playing", &logic.floating_hide_in_lvl)) save();
             tip("Hides the floating Echo icon while playing a level. It comes back when you pause.");
         }
         toggle("TPS Changes During Playback", logic.playback_tps_changes);
@@ -1544,7 +1434,7 @@ void GUI::draw_theme() {
         if (EchoUI::Button("Open Logs Folder"))
             geode::utils::file::openFolder(logic.save_root() / "logs");
         tip("Opens the folder the logs are saved in.");
-        if (EchoUI::Checkbox("Button Effects", &EchoUI::button_effects()))
+        if (EchoUI::Checkbox("Button Effects", &EchoUI::g_button_effects))
             gui.export_theme(gui.theme_path("current"));
         tip("Enables button animations for the animated themes.");
         EchoUI::RowHalf();
@@ -1556,11 +1446,9 @@ void GUI::draw_theme() {
         }
         tip("Draws curves with fewer segments.");
         bool disabled = Logic::bot_disabled();
-        if (EchoUI::Checkbox("Disable Bot", &disabled))
-            Logic::set_bot_disabled(disabled);
+        if (EchoUI::Checkbox("Disable Bot", &disabled)) Logic::set_bot_disabled(disabled);
         tip("Completely disables the bot.");
-        if (EchoUI::Button("Advanced Style...", ImVec2(-FLT_MIN, 0.f)))
-            open_advanced = true;
+        if (EchoUI::Button("Advanced Style...", ImVec2(-FLT_MIN, 0.f))) open_advanced = true;
         tip("Lets you edit every size and color.");
     }
     EchoUI::EndCard();
@@ -1572,10 +1460,8 @@ void GUI::draw_theme() {
         bool settled = false;
         auto slider = [&](const char* label, const char* id, float* field, float min, float max, bool rainbow, const char* hint) {
             EchoUI::Row(label, hint);
-            if (EchoUI::Slider(id, field, min, max, rainbow ? "" : "%.2f", rainbow))
-                live = true;
-            if (ImGui::IsItemDeactivatedAfterEdit())
-                settled = true;
+            if (EchoUI::Slider(id, field, min, max, rainbow ? "" : "%.2f", rainbow)) live = true;
+            if (ImGui::IsItemDeactivatedAfterEdit()) settled = true;
         };
         slider("Body", "##palette-hue", &palette.hue, 0.f, 1.f, true, "The color the menu's dark body is tinted with.");
         slider("Accent", "##palette-accent", &palette.accent_hue, 0.f, 1.f, true, "The bright color of the rim, toggles and markers. The logo takes it too.");
@@ -1588,8 +1474,7 @@ void GUI::draw_theme() {
             EchoUI::apply_palette(palette);
             gui.paint_editor_from_theme();
         }
-        if (settled)
-            gui.use_palette(palette, "Custom");
+        if (settled) gui.use_palette(palette, "Custom");
     }
     EchoUI::EndCard();
 #ifndef GEODE_IS_MOBILE
@@ -1612,8 +1497,7 @@ void GUI::draw_theme() {
                 gui.prompt = action.setting;
                 gui.prompt_nested = false;
             }
-            if (none)
-                ImGui::PopStyleColor();
+            if (none) ImGui::PopStyleColor();
             ImGui::PopID();
         }
         ImGui::EndChild();
@@ -1626,8 +1510,7 @@ void GUI::draw_theme() {
     style.AntiAliasedLinesUseTex = true;
     style.AntiAliasedFill = true;
 
-    if (open_advanced)
-        ImGui::OpenPopup("Advanced Style");
+    if (open_advanced) ImGui::OpenPopup("Advanced Style");
     if (EchoUI::BeginModal("Advanced Style", 27.f)) {
         gui.ui_editor();
         EchoUI::EndModal();

@@ -14,7 +14,6 @@ unsigned window_display() {
 }
 
 double window_max_refresh() {
-    if (@available(macOS 12.0, *))
-        return (double)gameScreen().maximumFramesPerSecond;
+    if (@available(macOS 12.0, *)) return (double)gameScreen().maximumFramesPerSecond;
     return 0.0;
 }

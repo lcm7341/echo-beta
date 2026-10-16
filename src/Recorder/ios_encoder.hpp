@@ -51,8 +51,7 @@ namespace ffmpeg {
 				m_bytes = (std::size_t)settings.m_width * settings.m_height * 4;
 				m_bottomUp = settings.m_doVerticalFlip;
 				auto failed = open_video(m_writer, settings.m_outputFile.string(), (int)settings.m_width, (int)settings.m_height, settings.m_fps, settings.m_bitrate);
-				if (!failed.empty())
-					return geode::Err(std::move(failed));
+				if (!failed.empty()) return geode::Err(std::move(failed));
 				return geode::Ok();
 			}
 
@@ -60,8 +59,7 @@ namespace ffmpeg {
 				if (frame.size() < m_bytes)
 					return geode::Err(std::string("A frame was the wrong size"));
 				auto failed = write_frame(m_writer, frame.data(), m_bottomUp);
-				if (!failed.empty())
-					return geode::Err(std::move(failed));
+				if (!failed.empty()) return geode::Err(std::move(failed));
 				return geode::Ok();
 			}
 
@@ -76,8 +74,7 @@ namespace ffmpeg {
 			}
 
 			void stop() {
-				if (!m_writer)
-					return;
+				if (!m_writer) return;
 				close_video(m_writer);
 				m_writer = nullptr;
 			}
@@ -91,8 +88,7 @@ namespace ffmpeg {
 		struct AudioMixer {
 			static geode::Result<void, std::string> mixVideoRaw(const fs::path& video, const std::vector<float>& stereo, const fs::path& output) {
 				auto failed = add_audio(video.string(), stereo.data(), stereo.size() / 2, output.string());
-				if (!failed.empty())
-					return geode::Err(std::move(failed));
+				if (!failed.empty()) return geode::Err(std::move(failed));
 				return geode::Ok();
 			}
 		};

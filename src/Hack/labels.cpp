@@ -37,11 +37,24 @@ public:
     std::unordered_map<int, CCTextAlignment> alignments;
 };
 
-constexpr int FRAME_TAG = 60417, CPS_TAG = 60418, PERCENT_TAG = 60419, TIME_TAG = 60420;
-constexpr int RECORD_TAG = 60421, DEBUG_TAG = 60423, POS_TAG = 60424, VELOCITY_TAG = 60425;
-constexpr int ALIVE_TAG = 60426, MAX_CPS_TAG = 60427, GRAVITY_TAG = 60428, DEATH_TAG = 60429;
-constexpr int UTILITY_TAG = 60430, SAFE_MODE_TAG = 60431;
-constexpr int FPS_TAG = 60448, DEBUG_STATS_TAG = 60449, SPEED_TAG = 60450, SSB_TAG = 60451;
+#define FRAME_TAG 60417
+#define CPS_TAG 60418
+#define PERCENT_TAG 60419
+#define TIME_TAG 60420
+#define RECORD_TAG 60421
+#define DEBUG_TAG 60423
+#define POS_TAG 60424
+#define VELOCITY_TAG 60425
+#define ALIVE_TAG 60426
+#define MAX_CPS_TAG 60427
+#define GRAVITY_TAG 60428
+#define DEATH_TAG 60429
+#define UTILITY_TAG 60430
+#define SAFE_MODE_TAG 60431
+#define FPS_TAG 60448
+#define DEBUG_STATS_TAG 60449
+#define SPEED_TAG 60450
+#define SSB_TAG 60451
 
 namespace {
     LabelInfo const LABELS[] = {
@@ -87,12 +100,10 @@ std::vector<LabelInfo const*> ordered_labels(Logic const& value) {
     std::vector<LabelInfo const*> out;
     for (auto const& key : value.label_order) {
         auto* info = label_info(key);
-        if (info && std::ranges::find(out, info) == out.end())
-            out.push_back(info);
+        if (info && std::ranges::find(out, info) == out.end()) out.push_back(info);
     }
     for (auto const& info : LABELS) {
-        if (std::ranges::find(out, &info) == out.end())
-            out.push_back(&info);
+        if (std::ranges::find(out, &info) == out.end()) out.push_back(&info);
     }
     return out;
 }
@@ -101,8 +112,7 @@ void move_label(Logic& value, LabelInfo const& label, int delta) {
     auto order = ordered_labels(value);
     auto at = std::ranges::find(order, &label) - order.begin();
     auto to = at + delta;
-    if (to < 0 || to >= (std::ptrdiff_t)order.size())
-        return;
+    if (to < 0 || to >= (std::ptrdiff_t)order.size()) return;
     std::swap(order[(size_t)at], order[(size_t)to]);
     value.label_order.clear();
     for (auto* info : order)
@@ -115,19 +125,15 @@ std::vector<std::string> const& label_font_names() {
 }
 
 std::string label_font_file(int index) {
-    if (index <= 0)
-        return "bigFont.fnt";
-    if (index == 1)
-        return "goldFont.fnt";
-    if (index == 2)
-        return "chatFont.fnt";
+    if (index <= 0) return "bigFont.fnt";
+    if (index == 1) return "goldFont.fnt";
+    if (index == 2) return "chatFont.fnt";
     return fmt::format("gjFont{:02}.fnt", std::clamp(index - 2, 1, 59));
 }
 
 int label_font_index(std::string const& file) {
     for (int i = 0; i < (int)(label_font_names().size()); ++i) {
-        if (label_font_file(i) == file)
-            return i;
+        if (label_font_file(i) == file) return i;
     }
     return 0;
 }
@@ -135,22 +141,19 @@ int label_font_index(std::string const& file) {
 void Labels::sync_label(PlayLayer* play, int tag, bool visible, LabelPlacement const& place, std::string const& text, ccColor3B color) {
     auto* label = typeinfo_cast<CCLabelBMFont*>(play->getChildByTag(tag));
     if (!visible) {
-        if (label)
-            label->removeFromParent();
+        if (label) label->removeFromParent();
         return;
     }
     auto const& logic = Logic::get();
     if (!label) {
         label = CCLabelBMFont::create(text.c_str(), font.c_str());
-        if (!label)
-            return;
+        if (!label) return;
         label->setAnchorPoint({ 0.f, 0.5f });
         alignments[tag] = kCCTextAlignmentLeft;
         play->addChild(label, 999, tag);
     }
     // cocos rebuilds the whole label even if unchanged .......... w optimization?
-    if (text != label->getString())
-        label->setString(text.c_str());
+    if (text != label->getString()) label->setString(text.c_str());
     if (!logic.labels_auto) {
         if (label->getAnchorPoint() != CCPoint{ 0.f, 0.5f })
             label->setAnchorPoint({ 0.f, 0.5f });
@@ -164,14 +167,11 @@ void Labels::sync_label(PlayLayer* play, int tag, bool visible, LabelPlacement c
             label->setPosition({ place.x, place.y });
     }
     float scale = place.scale * logic.label_scale;
-    if (label->getScaleX() != scale || label->getScaleY() != scale)
-        label->setScale(scale);
+    if (label->getScaleX() != scale || label->getScaleY() != scale) label->setScale(scale);
     auto opacity = (GLubyte)std::lround(std::clamp(place.opacity, 0, 100) * 2.55f);
-    if (label->getOpacity() != opacity)
-        label->setOpacity(opacity);
+    if (label->getOpacity() != opacity) label->setOpacity(opacity);
     auto cur = label->getColor();
-    if (cur.r != color.r || cur.g != color.g || cur.b != color.b)
-        label->setColor(color);
+    if (cur.r != color.r || cur.g != color.g || cur.b != color.b) label->setColor(color);
 }
 
 #ifdef GEODE_IS_IOS
@@ -180,15 +180,13 @@ float echo_ios_corner_ratio();
 
 void Labels::layout(PlayLayer* play) {
     auto const& logic = Logic::get();
-    if (!logic.labels_auto || !play)
-        return;
+    if (!logic.labels_auto || !play) return;
     auto win = CCDirector::get()->getWinSize();
     bool right = logic.label_corner == 1 || logic.label_corner == 3, bottom = logic.label_corner >= 2;
-    constexpr float MARGIN = 3.f;
-    constexpr float GAP = 2.f;
+    const float MARGIN = 3.f;
+    const float GAP = 2.f;
     auto order = ordered_labels(logic);
-    if (bottom)
-        std::ranges::reverse(order);
+    if (bottom) std::ranges::reverse(order);
     float radius = 0.f;
 #ifdef GEODE_IS_IOS
     // 1.15: apples corners are not circles belief it or no
@@ -196,19 +194,16 @@ void Labels::layout(PlayLayer* play) {
         radius = echo_ios_corner_ratio() * std::min(win.width, win.height) * 1.15f;
 #endif
     auto corner = [radius](float from_edge) {
-        if (from_edge >= radius)
-            return 0.f;
+        if (from_edge >= radius) return 0.f;
         float up = radius - from_edge;
         return radius - std::sqrt(std::max(0.f, radius * radius - up * up));
     };
     float used = 0.f;
     for (auto* info : order) {
         auto* label = typeinfo_cast<CCLabelBMFont*>(play->getChildByTag(info->tag));
-        if (!label || !label->isVisible())
-            continue;
+        if (!label || !label->isVisible()) continue;
         CCPoint anchor{ right ? 1.f : 0.f, bottom ? 0.f : 1.f };
-        if (label->getAnchorPoint() != anchor)
-            label->setAnchorPoint(anchor);
+        if (label->getAnchorPoint() != anchor) label->setAnchorPoint(anchor);
         auto& alignment = alignments[info->tag];
         auto wanted = right ? kCCTextAlignmentRight : kCCTextAlignmentLeft;
         if (alignment != wanted) {
@@ -218,8 +213,7 @@ void Labels::layout(PlayLayer* play) {
         float height = label->getScaledContentSize().height;
         float in = MARGIN + corner(MARGIN + used);
         CCPoint position{ right ? win.width - in : in, bottom ? MARGIN + used : win.height - MARGIN - used };
-        if (label->getPosition() != position)
-            label->setPosition(position);
+        if (label->getPosition() != position) label->setPosition(position);
         used += height + GAP;
     }
 }
@@ -262,17 +256,15 @@ namespace {
         built = now;
         text.clear();
         text += fmt::format("{:.1f} fps  avg {:.2f}ms  median {:.2f}  1% {:.2f}  max {:.2f}  hitches/s {}\n", s.fps, s.avg_ms, s.median_ms, s.low1_ms, s.max_ms, s.hitches);
-        if (!s.last_hitch.empty())
-            text += "last hitch: " + s.last_hitch + "\n";
+        if (!s.last_hitch.empty()) text += "last hitch: " + s.last_hitch + "\n";
         text += fmt::format("avg ms  phys {:.2f}  bstep {:.2f}  traj {:.2f}  auto {:.2f}  hbox {:.2f}  lbl {:.2f}  draw+wait {:.2f}\n", s.slot_ms[PERF_PHYSICS], s.slot_ms[PERF_BACKSTEP],
             s.slot_ms[PERF_TRAJECTORY], s.slot_ms[PERF_AUTOCLICK], s.slot_ms[PERF_HITBOXES], s.slot_ms[PERF_LABELS], s.draw_ms);
         text += fmt::format("max ms  phys {:.2f}  bstep {:.2f}  traj {:.2f}  auto {:.2f}  hbox {:.2f}  lbl {:.2f}\n", s.slot_max_ms[PERF_PHYSICS], s.slot_max_ms[PERF_BACKSTEP],
             s.slot_max_ms[PERF_TRAJECTORY], s.slot_max_ms[PERF_AUTOCLICK], s.slot_max_ms[PERF_HITBOXES], s.slot_max_ms[PERF_LABELS]);
         text += fmt::format("tps {:.1f} real / {:g} set  steps/frame {:.2f}  level speed {:.3f}x (hack {:g}x)\n", s.steps_per_sec, logic.sample_rate(), s.steps_per_frame,
             s.level_speed, logic.speedhack);
-        auto* director = CCDirector::sharedDirector();
         text += fmt::format("dt gd {:.2f}ms used {:.2f}ms  cap {:.2f}ms  carry {:.3f}ms  lock fps {}  real time {}\n", s.gd_dt_ms, s.used_dt_ms,
-            director ? director->getAnimationInterval() * 1000.0 : 0.0, logic.carry * 1000.0, logic.lock_delta ? "on" : "off", logic.real_time_mode ? "on" : "off");
+            CCDirector::sharedDirector()->getAnimationInterval() * 1000.0, logic.carry * 1000.0, logic.lock_delta ? "on" : "off", logic.real_time_mode ? "on" : "off");
         if (logic.backstep)
             text += fmt::format("backstep  saves/s {}  gap {} steps  save {:.2f}ms avg  held {}  last: gd {:.2f} extra {:.2f} objects {:.2f} trim {:.2f}\n",
                 s.saves_per_sec, logic.backstep_interval(), logic.backstep_save_sec * 1000.0, logic.backsteps.size(), s.save_gd_ms, s.save_extra_ms,
@@ -299,8 +291,7 @@ void Logic::draw_overlay(PlayLayer* play) {
     if (labels.font != font) {
         labels.font = font;
         for (auto const& info : label_infos()) {
-            if (auto* old = play->getChildByTag(info.tag))
-                old->removeFromParent();
+            if (auto* old = play->getChildByTag(info.tag)) old->removeFromParent();
         }
     }
     bool show_labels = !(logic.render_hide_labels && Logic::get().render_capturing());
@@ -374,31 +365,25 @@ void Logic::draw_overlay(PlayLayer* play) {
     bool dual = play->m_gameState.m_isDualMode && play->m_player2;
     auto body_text = [&](auto&& text_for) {
         std::string text = text_for(play->m_player1, false);
-        if (dual)
-            text += "   " + text_for(play->m_player2, true);
+        if (dual) text += "   " + text_for(play->m_player2, true);
         return text;
     };
     auto named = [&](bool second, std::string text) {
-        if (!dual)
-            return text;
+        if (!dual) return text;
         return std::string(second ? "P2 " : "P1 ") + text;
     };
     int places = std::clamp(logic.label_decimals, 0, 8);
     Labels::get().sync_label(play, POS_TAG, show_labels && logic.show_pos, logic.pos_label, named_label(logic.pos_label, "Position", body_text([&](PlayerObject* body, bool second) {
-        if (!body)
-            return named(second, "--");
+        if (!body) return named(second, "--");
         auto pos = body->getPosition();
         return named(second, fmt::format("{:.{}f}, {:.{}f}", pos.x, places, pos.y, places));
     })),
         { 255, 255, 255 });
     Labels::get().sync_label(play, VELOCITY_TAG, show_labels && logic.show_velocity, logic.velocity_label, named_label(logic.velocity_label, "Velocity", body_text([&](PlayerObject* body, bool second) {
-        if (!body)
-            return named(second, "--");
+        if (!body) return named(second, "--");
         float forward = body->m_playerSpeed * (float)(body->m_speedMultiplier) * 5.77f;
-        if (body->m_isGoingLeft)
-            forward = -forward;
-        if (body->m_isPlatformer)
-            forward = (float)(body->m_platformerXVelocity);
+        if (body->m_isGoingLeft) forward = -forward;
+        if (body->m_isPlatformer) forward = (float)(body->m_platformerXVelocity);
         float vx = body->m_isSideways ? (float)(body->m_yVelocity) : forward;
         float vy = body->m_isSideways ? forward : (float)(body->m_yVelocity);
         return named(second, fmt::format("{:.{}f}, {:.{}f}", vx, places, vy, places));
@@ -420,8 +405,7 @@ void Logic::draw_overlay(PlayLayer* play) {
     })),
         { 255, 255, 255 });
     Labels::get().sync_label(play, SPEED_TAG, show_labels && logic.show_speed, logic.speed_label, named_label(logic.speed_label, "Speed", body_text([&](PlayerObject* body, bool second) {
-        if (!body)
-            return named(second, "--");
+        if (!body) return named(second, "--");
         float speed = body->m_playerSpeed;
         char const* text = speed == 0.7f ? "0.5x" : speed == 1.1f ? "2x" : speed == 1.3f ? "3x" : speed == 1.6f ? "4x" : speed == 0.9f ? "1x" : nullptr;
         return named(second, text ? std::string(text) : fmt::format("{:g}", speed));
@@ -433,15 +417,12 @@ void Logic::draw_overlay(PlayLayer* play) {
     std::string utilities;
     if (show_labels && logic.show_utilities) {
         auto add = [&](bool on, std::string_view name) {
-            if (!on)
-                return;
-            if (!utilities.empty())
-                utilities += '\n';
+            if (!on) return;
+            if (!utilities.empty()) utilities += '\n';
             utilities += name;
         };
         auto pair = [](bool p1, bool p2, std::string_view name) {
-            if (p1 && p2)
-                return std::string(name);
+            if (p1 && p2) return std::string(name);
             return std::string(name) + (p1 ? " P1" : " P2");
         };
         if (logic.noclip_p1 || logic.noclip_p2)
@@ -483,8 +464,7 @@ void Logic::draw_overlay(PlayLayer* play) {
     if (show_labels && logic.show_safe_mode && logic.safe_mode) {
         auto names = Logic::get().attempt_cheats();
         for (auto name : Logic::get().active_cheats()) {
-            if (std::ranges::find(names, name) == names.end())
-                names.push_back(name);
+            if (std::ranges::find(names, name) == names.end()) names.push_back(name);
         }
         for (auto name : names) {
             blocked += blocked.empty() ? "Cheats: " : ", ";
@@ -494,27 +474,21 @@ void Logic::draw_overlay(PlayLayer* play) {
     Labels::get().sync_label(play, SAFE_MODE_TAG, !blocked.empty(), logic.safe_mode_label, blocked, { 255, 60, 60 });
     sync_perf_labels(play, show_labels);
     for (int tag = 60432; tag <= 60447; ++tag) {
-        if (auto* leftover = play->getChildByTag(tag))
-            leftover->removeFromParent();
+        if (auto* leftover = play->getChildByTag(tag)) leftover->removeFromParent();
     }
     Logic::get().sync_death_label(play);
 }
 
 void Logic::sync_death_label(PlayLayer* play) {
-    if (!play)
-        return;
+    if (!play) return;
     auto const& logic = Logic::get();
     bool dead = play->m_playerDied || (play->m_player1 && play->m_player1->m_isDead) || (play->m_player2 && play->m_player2->m_isDead);
     bool show = !dead && logic.show_death_next && (logic.death_next_p1 || logic.death_next_p2);
-    if (logic.render_hide_labels && Logic::get().render_capturing())
-        show = false;
+    if (logic.render_hide_labels && Logic::get().render_capturing()) show = false;
     std::string text = "Death next frame";
-    if (logic.death_next_p1 && logic.death_next_p2)
-        text = "Death next frame";
-    else if (play->m_gameState.m_isDualMode && logic.death_next_p1)
-        text = "P1 dies next frame";
-    else if (play->m_gameState.m_isDualMode && logic.death_next_p2)
-        text = "P2 dies next frame";
+    if (logic.death_next_p1 && logic.death_next_p2) text = "Death next frame";
+    else if (play->m_gameState.m_isDualMode && logic.death_next_p1) text = "P1 dies next frame";
+    else if (play->m_gameState.m_isDualMode && logic.death_next_p2) text = "P2 dies next frame";
     Labels::get().sync_label(play, DEATH_TAG, show, logic.death_label, text, { 255, 40, 40 });
     Labels::get().layout(play);
 }

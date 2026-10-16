@@ -93,10 +93,8 @@ static void note_hitch(const PerfFrame& frame) {
     std::string parts;
     int worst = -1;
     for (int s = 0; s < PERF_SLOT_COUNT; ++s) {
-        if (frame.slot[s] < 0.05)
-            continue;
-        if (worst < 0 || frame.slot[s] > frame.slot[worst])
-            worst = s;
+        if (frame.slot[s] < 0.05) continue;
+        if (worst < 0 || frame.slot[s] > frame.slot[worst]) worst = s;
         parts += fmt::format(" {}={:.2f}", perf_slot_name((PerfSlot)s), frame.slot[s]);
     }
     double counted = frame.draw_ms;
@@ -138,8 +136,7 @@ PerfScope::PerfScope(PerfSlot slot) : slot(slot), from(Clock::now()), parent(g_t
 PerfScope::~PerfScope() {
     double took = ms_between(from, Clock::now());
     g_now.slot[slot] += std::max(0.0, took - nested);
-    if (parent)
-        parent->nested += took;
+    if (parent) parent->nested += took;
     g_top = parent;
 }
 
@@ -185,8 +182,7 @@ void perf_note_frame_dt(double gd_dt, double used_dt) {
 }
 
 void perf_note_steps(int step, double level_time) {
-    if (g_last_step >= 0 && step >= g_last_step)
-        g_now.steps += step - g_last_step;
+    if (g_last_step >= 0 && step >= g_last_step) g_now.steps += step - g_last_step;
     if (g_last_level_time >= 0.0 && level_time >= g_last_level_time)
         g_now.level_time += level_time - g_last_level_time;
     g_last_step = step;

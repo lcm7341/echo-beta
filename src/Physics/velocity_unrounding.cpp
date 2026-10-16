@@ -17,7 +17,7 @@ struct Site {
     std::size_t size;
 };
 
-constexpr std::array SITES{
+const std::array SITES{
     Site{ 0x38c329, 0x24 }, // updateJump
     Site{ 0x213ea2, 0x32 }, // checkCollisions
     Site{ 0x38dac7, 0x38 }, // postCollision
@@ -31,8 +31,7 @@ static bool available = false;
 static bool applied = false;
 
 static void prepare() {
-    if (prepared)
-        return;
+    if (prepared) return;
     prepared = true;
     if (Loader::get()->isModLoaded("chizz.velocity-unrounding")) {
         return;
@@ -58,11 +57,9 @@ static void prepare() {
 
 void Logic::sync_unrounding() {
     bool want = unrounded_physics();
-    if (want == applied)
-        return;
+    if (want == applied) return;
     prepare();
-    if (!available)
-        return;
+    if (!available) return;
     for (auto* patch : patches)
         (void)(want ? patch->enable() : patch->disable());
     applied = want;

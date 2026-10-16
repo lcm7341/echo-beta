@@ -33,8 +33,7 @@ class $modify(SilicateVarianceLayer, GJBaseGameLayer) {
             unsigned long long seed = logic.lvl_seed_known ? logic.lvl_seed : 0;
             auto stamp = [&](int group) {
                 auto* objects = getGroup(group);
-                if (!objects)
-                    return;
+                if (!objects) return;
                 for (int i = 0; i < (int)objects->count(); ++i) {
                     if (auto* obj = static_cast<GameObject*>(objects->objectAtIndex(i)))
                         obj->m_varianceIndex = variance_index(seed, obj, group, i);

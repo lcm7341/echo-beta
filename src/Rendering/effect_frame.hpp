@@ -28,22 +28,18 @@ struct EffectFrame {
 
 	EffectSeen* find(const EffectKey& key, bool& fresh) {
 		fresh = false;
-		if (!on)
-			return nullptr;
+		if (!on) return nullptr;
 		EffectSeen* free = nullptr;
 		for (std::size_t i = 0; i < amt; ++i) {
-			if (seen[i].key == key)
-				return &seen[i];
-			if (!free && !seen[i].key.owner)
-				free = &seen[i];
+			if (seen[i].key == key) return &seen[i];
+			if (!free && !seen[i].key.owner) free = &seen[i];
 		}
 		if (free) {
 			fresh = true;
 			*free = { key };
 			return free;
 		}
-		if (amt >= seen.size())
-			return nullptr;
+		if (amt >= seen.size()) return nullptr;
 		fresh = true;
 		seen[amt] = { key };
 		return &seen[amt++];

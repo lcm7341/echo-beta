@@ -82,8 +82,7 @@ struct StyleVarGuard {
 	int count = 0;
 
 	~StyleVarGuard() {
-		if (count > 0)
-			ImGui::PopStyleVar(count);
+		if (count > 0) ImGui::PopStyleVar(count);
 	}
 };
 
@@ -205,12 +204,10 @@ public:
 	bool shift_selecting() const;
 
 	bool selection_span(int& first, int& last) const {
-		if (selected < 0)
-			return false;
+		if (selected < 0) return false;
 		first = selected;
 		last = anchor >= 0 ? anchor : selected;
-		if (first > last)
-			std::swap(first, last);
+		if (first > last) std::swap(first, last);
 		return true;
 	}
 
@@ -221,8 +218,7 @@ public:
 
 	int selected_count() const {
 		int first = 0, last = 0;
-		if (!selection_span(first, last))
-			return 0;
+		if (!selection_span(first, last)) return 0;
 		return last - first + 1;
 	}
 
@@ -241,12 +237,9 @@ public:
 	}
 
 	bool in_cps_mark(const Frame& input) const {
-		if (mark_first < 0)
-			return false;
-		if (input.number < mark_first || input.number > mark_last)
-			return false;
-		if (mark_player >= 0 && input.player2 != (mark_player == 1))
-			return false;
+		if (mark_first < 0) return false;
+		if (input.number < mark_first || input.number > mark_last) return false;
+		if (mark_player >= 0 && input.player2 != (mark_player == 1)) return false;
 		return true;
 	}
 
@@ -262,8 +255,7 @@ public:
 	void sync_draft() {
 		follow_selection();
 		auto& inputs = Logic::get().inputs;
-		if (selected < 0 || selected >= (int)inputs.size())
-			return;
+		if (selected < 0 || selected >= (int)inputs.size()) return;
 		draft = inputs[selected];
 	}
 
@@ -281,19 +273,15 @@ public:
 	}
 
 	bool checkbox_setting(const char* label, bool& field) {
-		if (!EchoUI::Checkbox(label, &field))
-			return false;
+		if (!EchoUI::Checkbox(label, &field)) return false;
 		persist();
 		return true;
 	}
 
 	int pair_index(bool first, bool second) {
-		if (first && second)
-			return 0;
-		if (first)
-			return 1;
-		if (second)
-			return 2;
+		if (first && second) return 0;
+		if (first) return 1;
+		if (second) return 2;
 		return 0;
 	}
 
@@ -303,12 +291,9 @@ public:
 	}
 
 	int quad_index(bool first, bool second) {
-		if (first && second)
-			return 3;
-		if (first)
-			return 1;
-		if (second)
-			return 2;
+		if (first && second) return 3;
+		if (first) return 1;
+		if (second) return 2;
 		return 0;
 	}
 
@@ -333,8 +318,7 @@ public:
 					selected = i;
 					changed = true;
 				}
-				if (selected == i)
-					ImGui::SetItemDefaultFocus();
+				if (selected == i) ImGui::SetItemDefaultFocus();
 			}
 			ImGui::EndCombo();
 		}
@@ -343,10 +327,8 @@ public:
 
 	void drag_float_setting(const char* label, float& field, float speed, float min, float max, const char* format) {
 		float value = field;
-		if (EchoUI::DragFloat(label, &value, speed, min, max, format))
-			field = value;
-		if (ImGui::IsItemDeactivatedAfterEdit())
-			persist();
+		if (EchoUI::DragFloat(label, &value, speed, min, max, format)) field = value;
+		if (ImGui::IsItemDeactivatedAfterEdit()) persist();
 	}
 
 	float px(float at18) {

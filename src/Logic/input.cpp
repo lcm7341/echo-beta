@@ -10,9 +10,9 @@
 using namespace cocos2d;
 
 
-constexpr std::array JUMP_KEYS{ KEY_Space, KEY_W, KEY_Up };
-constexpr std::array LEFT_KEYS{ KEY_A, KEY_Left };
-constexpr std::array RIGHT_KEYS{ KEY_D, KEY_Right };
+const std::array JUMP_KEYS{ KEY_Space, KEY_W, KEY_Up };
+const std::array LEFT_KEYS{ KEY_A, KEY_Left };
+const std::array RIGHT_KEYS{ KEY_D, KEY_Right };
 
 #ifdef GEODE_IS_WINDOWS
 static int virtual_key(enumKeyCodes key) {
@@ -37,13 +37,10 @@ static bool any_down(const auto& keys) {
 }
 
 #else
-static std::array<bool, 1024>& held_keys() {
-    static std::array<bool, 1024> held{};
-    return held;
-}
+static std::array<bool, 1024> g_held_keys{};
 
 static bool any_down(const auto& keys) {
-    const auto& held = held_keys();
+    const auto& held = g_held_keys;
     return std::ranges::any_of(keys, [&](enumKeyCodes key) {
         auto idx = (size_t)key;
         return idx < held.size() && held[idx];
@@ -75,8 +72,7 @@ namespace Input {
     void note_key(enumKeyCodes key, bool down) {
 #ifndef GEODE_IS_WINDOWS
         auto idx = (size_t)key;
-        if (idx < held_keys().size())
-            held_keys()[idx] = down;
+        if (idx < g_held_keys.size()) g_held_keys[idx] = down;
 #else
         (void)key;
         (void)down;
@@ -85,7 +81,7 @@ namespace Input {
 
     void clear_keys() {
 #ifndef GEODE_IS_WINDOWS
-        held_keys().fill(false);
+        g_held_keys.fill(false);
 #endif
     }
 }

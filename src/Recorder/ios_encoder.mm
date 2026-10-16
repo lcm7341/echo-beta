@@ -17,8 +17,7 @@
 #include <vector>
 
 static std::string describe(NSError* error, const char* fallback) {
-    if (!error)
-        return fallback;
+    if (!error) return fallback;
     return std::string(fallback) + ": " + [[error localizedDescription] UTF8String];
 }
 
@@ -28,10 +27,8 @@ static NSURL* fileURL(const std::string& path) {
 
 static bool waitUntilReady(AVAssetWriterInput* input, AVAssetWriter* writer) {
     for (int i = 0; i < 10000; ++i) {
-        if (input.readyForMoreMediaData)
-            return true;
-        if (writer.status != AVAssetWriterStatusWriting)
-            return false;
+        if (input.readyForMoreMediaData) return true;
+        if (writer.status != AVAssetWriterStatusWriting) return false;
         [NSThread sleepForTimeInterval:0.001];
     }
     return false;
@@ -69,7 +66,7 @@ struct VideoWriter {
 };
 
 #if TARGET_OS_IPHONE
-constexpr size_t DIRECT_DELAY = 2;
+const size_t DIRECT_DELAY = 2;
 
 static std::string appendDirect(VideoWriter* writer, const VideoWriter::Direct& frame) {
     std::string failed;
@@ -77,30 +74,23 @@ static std::string appendDirect(VideoWriter* writer, const VideoWriter::Direct& 
         failed = describe(writer->writer.error, "The video encoder stopped taking frames");
     else if (![writer->adaptor appendPixelBuffer:frame.buffer withPresentationTime:CMTimeMake(writer->frame, writer->fps)])
         failed = describe(writer->writer.error, "A frame could not be encoded");
-    else
-        ++writer->frame;
-    if (frame.texture)
-        CFRelease(frame.texture);
-    if (frame.buffer)
-        CVPixelBufferRelease(frame.buffer);
+    else ++writer->frame;
+    if (frame.texture) CFRelease(frame.texture);
+    if (frame.buffer) CVPixelBufferRelease(frame.buffer);
     return failed;
 }
 
 static std::string flushDirect(VideoWriter* writer) {
     std::string failed;
-    if (writer->drawing.texture)
-        CFRelease(writer->drawing.texture);
-    if (writer->drawing.buffer)
-        CVPixelBufferRelease(writer->drawing.buffer);
+    if (writer->drawing.texture) CFRelease(writer->drawing.texture);
+    if (writer->drawing.buffer) CVPixelBufferRelease(writer->drawing.buffer);
     writer->drawing = {};
-    if (!writer->pending.empty())
-        glFinish();
+    if (!writer->pending.empty()) glFinish();
     while (!writer->pending.empty()) {
         auto frame = writer->pending.front();
         writer->pending.pop_front();
         auto result = appendDirect(writer, frame);
-        if (failed.empty())
-            failed = result;
+        if (failed.empty()) failed = result;
     }
     return failed;
 }
@@ -112,8 +102,7 @@ std::string open_video(VideoWriter*& out, const std::string& path, int width, in
         [[NSFileManager defaultManager] removeItemAtURL:fileURL(path) error:nil];
         NSError* error = nil;
         AVAssetWriter* writer = [AVAssetWriter assetWriterWithURL:fileURL(path) fileType:AVFileTypeMPEG4 error:&error];
-        if (!writer)
-            return describe(error, "Could not create the video file");
+        if (!writer) return describe(error, "Could not create the video file");
         NSDictionary* settings = @{
             AVVideoCodecKey : AVVideoCodecTypeH264,
             AVVideoWidthKey : @(width),
@@ -139,8 +128,7 @@ std::string open_video(VideoWriter*& out, const std::string& path, int width, in
 #endif
         };
         AVAssetWriterInputPixelBufferAdaptor* adaptor = [AVAssetWriterInputPixelBufferAdaptor assetWriterInputPixelBufferAdaptorWithAssetWriterInput:input sourcePixelBufferAttributes:pixels];
-        if (![writer canAddInput:input])
-            return "The video encoder could not be attached";
+        if (![writer canAddInput:input]) return "The video encoder could not be attached";
         [writer addInput:input];
         if (![writer startWriting])
             return describe(writer.error, "The video encoder did not start");
@@ -158,11 +146,9 @@ std::string open_video(VideoWriter*& out, const std::string& path, int width, in
 }
 
 std::string write_frame(VideoWriter* writer, const unsigned char* rgba, bool bottomUp) {
-    if (!writer || !rgba)
-        return "The video encoder is not open";
+    if (!writer || !rgba) return "The video encoder is not open";
 #if TARGET_OS_IPHONE
-    if (auto failed = flushDirect(writer); !failed.empty())
-        return failed;
+    if (auto failed = flushDirect(writer); !failed.empty()) return failed;
 #endif
     @autoreleasepool {
         if (!waitUntilReady(writer->input, writer->writer))
@@ -188,8 +174,7 @@ std::string write_frame(VideoWriter* writer, const unsigned char* rgba, bool bot
         CVPixelBufferUnlockBaseAddress(buffer, 0);
         BOOL ok = [writer->adaptor appendPixelBuffer:buffer withPresentationTime:CMTimeMake(writer->frame, writer->fps)];
         CVPixelBufferRelease(buffer);
-        if (!ok)
-            return describe(writer->writer.error, "A frame could not be encoded");
+        if (!ok) return describe(writer->writer.error, "A frame could not be encoded");
         ++writer->frame;
     }
     return {};
@@ -216,8 +201,7 @@ std::string close_video(VideoWriter* writer) {
             [writer->writer endSessionAtSourceTime:CMTimeMake(writer->frame, writer->fps)];
             failed = finish(writer->writer);
         }
-        else
-            failed = describe(writer->writer.error, "The video encoder had already stopped");
+        else failed = describe(writer->writer.error, "The video encoder had already stopped");
     }
     delete writer;
     return failed;
@@ -226,12 +210,10 @@ std::string close_video(VideoWriter* writer) {
 #if TARGET_OS_IPHONE
 std::string begin_direct_frame(VideoWriter* writer, unsigned& texture) {
     texture = 0;
-    if (!writer)
-        return "The video encoder is not open";
+    if (!writer) return "The video encoder is not open";
     if (!writer->cache) {
         EAGLContext* context = [EAGLContext currentContext];
-        if (!context)
-            return "There is no OpenGL context to draw frames with";
+        if (!context) return "There is no OpenGL context to draw frames with";
         if (CVOpenGLESTextureCacheCreate(kCFAllocatorDefault, nullptr, context, nullptr, &writer->cache) != kCVReturnSuccess || !writer->cache)
             return "Could not share memory between the GPU and the encoder";
     }
@@ -260,8 +242,7 @@ std::string begin_direct_frame(VideoWriter* writer, unsigned& texture) {
 }
 
 std::string end_direct_frame(VideoWriter* writer) {
-    if (!writer || !writer->drawing.buffer)
-        return "No frame was being drawn";
+    if (!writer || !writer->drawing.buffer) return "No frame was being drawn";
     glFlush();
     writer->pending.push_back(writer->drawing);
     writer->drawing = {};
@@ -289,30 +270,25 @@ std::string end_direct_frame(VideoWriter*) {
 #endif
 
 std::string add_audio(const std::string& video, const float* stereo, std::size_t frames, const std::string& output) {
-    if (!stereo || frames == 0)
-        return "There is no audio to add";
+    if (!stereo || frames == 0) return "There is no audio to add";
     @autoreleasepool {
         AVURLAsset* asset = [AVURLAsset URLAssetWithURL:fileURL(video) options:nil];
         AVAssetTrack* track = [[asset tracksWithMediaType:AVMediaTypeVideo] firstObject];
-        if (!track)
-            return "The rendered video could not be read";
+        if (!track) return "The rendered video could not be read";
         double seconds = CMTimeGetSeconds(asset.duration);
-        if (!(seconds > 0.0))
-            return "The rendered video has no length";
+        if (!(seconds > 0.0)) return "The rendered video has no length";
         double rate = (double)frames / seconds;
 
         NSError* error = nil;
         AVAssetReader* reader = [AVAssetReader assetReaderWithAsset:asset error:&error];
-        if (!reader)
-            return describe(error, "The rendered video could not be opened");
+        if (!reader) return describe(error, "The rendered video could not be opened");
         AVAssetReaderTrackOutput* frameSource = [AVAssetReaderTrackOutput assetReaderTrackOutputWithTrack:track outputSettings:nil];
         frameSource.alwaysCopiesSampleData = NO;
         [reader addOutput:frameSource];
 
         [[NSFileManager defaultManager] removeItemAtURL:fileURL(output) error:nil];
         AVAssetWriter* writer = [AVAssetWriter assetWriterWithURL:fileURL(output) fileType:AVFileTypeMPEG4 error:&error];
-        if (!writer)
-            return describe(error, "Could not create the video file");
+        if (!writer) return describe(error, "Could not create the video file");
         CMFormatDescriptionRef videoFormat = (__bridge CMFormatDescriptionRef)[track.formatDescriptions firstObject];
         AVAssetWriterInput* videoIn = [AVAssetWriterInput assetWriterInputWithMediaType:AVMediaTypeVideo outputSettings:nil sourceFormatHint:videoFormat];
         videoIn.expectsMediaDataInRealTime = NO;
@@ -355,7 +331,7 @@ std::string add_audio(const std::string& video, const float* stereo, std::size_t
         }
         [writer startSessionAtSourceTime:kCMTimeZero];
 
-        constexpr std::size_t CHUNK = 8192;
+        const std::size_t CHUNK = 8192;
         std::size_t sent = 0;
         bool videoDone = false;
         bool audioDone = false;
@@ -394,14 +370,11 @@ std::string add_audio(const std::string& video, const float* stereo, std::size_t
                     CMTime at = CMTimeMakeWithSeconds((double)sent / rate, 1000000);
                     if (status == noErr)
                         status = CMAudioSampleBufferCreateReadyWithPacketDescriptions(kCFAllocatorDefault, block, audioFormat, (CMItemCount)count, at, nullptr, &sample);
-                    if (status != noErr || !sample)
-                        failed = "The audio could not be prepared";
+                    if (status != noErr || !sample) failed = "The audio could not be prepared";
                     else if (![audioIn appendSampleBuffer:sample])
                         failed = describe(writer.error, "The audio could not be encoded");
-                    if (sample)
-                        CFRelease(sample);
-                    if (block)
-                        CFRelease(block);
+                    if (sample) CFRelease(sample);
+                    if (block) CFRelease(block);
                     sent += count;
                 }
                 moved = true;
@@ -412,10 +385,8 @@ std::string add_audio(const std::string& video, const float* stereo, std::size_t
             }
             if (writer.status != AVAssetWriterStatusWriting)
                 failed = describe(writer.error, "The video file could not be written");
-            else if (++idle > 10000)
-                failed = "The video encoder stopped responding";
-            else
-                [NSThread sleepForTimeInterval:0.001];
+            else if (++idle > 10000) failed = "The video encoder stopped responding";
+            else [NSThread sleepForTimeInterval:0.001];
         }
         CFRelease(audioFormat);
         if (!failed.empty()) {

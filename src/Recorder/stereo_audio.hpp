@@ -10,11 +10,9 @@
 namespace fs = std::filesystem;
 
 inline std::vector<float> read_stereo(const fs::path& path, int channels) {
-	if (channels < 1 || channels > 64)
-		throw std::runtime_error("invalid audio channel count");
+	if (channels < 1 || channels > 64) throw std::runtime_error("invalid audio channel count");
 	std::ifstream input(path, std::ios::binary | std::ios::ate);
-	if (!input)
-		throw std::runtime_error("could not open captured audio");
+	if (!input) throw std::runtime_error("could not open captured audio");
 	auto bytes = input.tellg();
 	auto frame_bytes = sizeof(float) * (size_t)channels;
 	if (bytes <= 0 || (size_t)bytes % frame_bytes != 0)
@@ -34,7 +32,6 @@ inline std::vector<float> read_stereo(const fs::path& path, int channels) {
 			stereo.push_back(clean(block[i + (channels > 1 ? 1 : 0)]));
 		}
 	}
-	if (input.bad())
-		throw std::runtime_error("could not read captured audio");
+	if (input.bad()) throw std::runtime_error("could not read captured audio");
 	return stereo;
 }

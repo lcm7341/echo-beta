@@ -12,7 +12,7 @@ namespace chrono = std::chrono;
 using namespace geode::prelude;
 
 namespace EchoUI {
-    constexpr int TOUCH_PRIORITY = -510;
+    const int TOUCH_PRIORITY = -510;
 
     static bool g_preview = false;
 
@@ -47,8 +47,7 @@ namespace EchoUI {
         }
 
         bool init() override {
-            if (!CCNode::init())
-                return false;
+            if (!CCNode::init()) return false;
             setID("floating-logo"_spr);
             setAnchorPoint({ .5f, .5f });
             m_logo = CCSprite::create("logo.png"_spr);
@@ -75,9 +74,9 @@ namespace EchoUI {
         }
 
     private:
-        static constexpr float SLOP = 8.f;
-        static constexpr double AWAKE = 2.5;
-        static constexpr double FADE = .4;
+        static inline const float SLOP = 8.f;
+        static inline const double AWAKE = 2.5;
+        static inline const double FADE = .4;
 
         float size() const {
             return std::clamp(Logic::get().floating_size, 24.f, 72.f);
@@ -85,20 +84,15 @@ namespace EchoUI {
 
         void refresh() {
             auto& logic = Logic::get();
-            if (!PlayLayer::get())
-                m_renderedIn = nullptr;
-            else if (logic.render_active() || logic.render_queued)
-                m_renderedIn = PlayLayer::get();
+            if (!PlayLayer::get()) m_renderedIn = nullptr;
+            else if (logic.render_active() || logic.render_queued) m_renderedIn = PlayLayer::get();
             bool rendered = PlayLayer::get() && PlayLayer::get() == m_renderedIn;
             bool away = in_lvl() && logic.floating_hide_in_lvl && !rendered;
             bool shown = g_preview || (touch_overlays() && !away);
-            if (!shown && m_touching)
-                m_touching = false;
-            if (shown && !isVisible())
-                m_active = now();
+            if (!shown && m_touching) m_touching = false;
+            if (shown && !isVisible()) m_active = now();
             setVisible(shown);
-            if (!shown)
-                return;
+            if (!shown) return;
 
             if (auto* themed = GUI::get().theme_logo_texture(); themed && themed != m_logo->getTexture()) {
                 m_logo->setTexture(themed);
@@ -109,13 +103,11 @@ namespace EchoUI {
             float press = m_touching ? .92f : 1.f;
             m_logo->setScale(side / m_logo->getContentWidth() * press);
             m_logo->setPosition({ side * .5f, side * .5f });
-            if (m_touching || g_preview)
-                m_active = now();
+            if (m_touching || g_preview) m_active = now();
             double idle = now() - m_active - AWAKE;
             float rest = (float)std::clamp(idle / FADE, 0.0, 1.0);
             m_logo->setOpacity((GLubyte)(240.f - (240.f - 95.f) * rest));
-            if (!m_touching)
-                setPosition(home());
+            if (!m_touching) setPosition(home());
         }
 
         CCPoint clamp_to_window(CCPoint at) const {
@@ -133,10 +125,8 @@ namespace EchoUI {
         }
 
         bool ccTouchBegan(CCTouch* touch, CCEvent*) override {
-            if (!isVisible() || g_preview)
-                return false;
-            if (ccpDistance(touch->getLocation(), getPosition()) > size() * .5f + 8.f)
-                return false;
+            if (!isVisible() || g_preview) return false;
+            if (ccpDistance(touch->getLocation(), getPosition()) > size() * .5f + 8.f) return false;
             m_touching = true;
             m_moved = false;
             m_start = touch->getLocation();
@@ -146,18 +136,15 @@ namespace EchoUI {
         }
 
         void ccTouchMoved(CCTouch* touch, CCEvent*) override {
-            if (!m_touching)
-                return;
+            if (!m_touching) return;
             auto delta = touch->getLocation() - m_start;
-            if (!m_moved && delta.getLength() < SLOP)
-                return;
+            if (!m_moved && delta.getLength() < SLOP) return;
             m_moved = true;
             setPosition(clamp_to_window(m_origin + delta));
         }
 
         void ccTouchEnded(CCTouch*, CCEvent*) override {
-            if (!m_touching)
-                return;
+            if (!m_touching) return;
             m_touching = false;
             m_active = now();
             if (m_moved) {
@@ -197,8 +184,7 @@ namespace EchoUI {
         }
 
         bool init() override {
-            if (!CCNode::init())
-                return false;
+            if (!CCNode::init()) return false;
             setID("frame-bar"_spr);
             return true;
         }
@@ -223,14 +209,11 @@ namespace EchoUI {
         void refresh() {
             auto& gui = GUI::get();
             auto& imgui = ImGuiCocos::get();
-            if (!imgui.isInitialized())
-                return;
+            if (!imgui.isInitialized()) return;
             auto& logic = Logic::get();
             bool menu = imgui.isVisible() && !gui.bar_only;
-            if (!PlayLayer::get())
-                logic.frame_bar_open = false;
-            else if (logic.frame_advance)
-                logic.frame_bar_open = true;
+            if (!PlayLayer::get()) logic.frame_bar_open = false;
+            else if (logic.frame_advance) logic.frame_bar_open = true;
             bool shown = in_lvl() && (logic.frame_advance || logic.frame_bar_open) && touch_overlays() && !menu && !logic.render_capturing();
             if (shown && !gui.bar_only) {
                 gui.bar_only = true;
@@ -253,11 +236,9 @@ namespace EchoUI {
 
         bool ccTouchBegan(CCTouch* touch, CCEvent*) override {
             auto& gui = GUI::get();
-            if (!gui.bar_only || m_down)
-                return false;
+            if (!gui.bar_only || m_down) return false;
             ImVec2 at = ImGuiCocos::cocosToFrame(touch->getLocation());
-            if (!within(gui.bar_area, at, 0.f))
-                return false;
+            if (!within(gui.bar_area, at, 0.f)) return false;
             float slack = 6.f;
             auto& logic = Logic::get();
             auto now = chrono::steady_clock::now();
@@ -293,16 +274,13 @@ namespace EchoUI {
         }
 
         void ccTouchMoved(CCTouch* touch, CCEvent*) override {
-            if (!m_dragging)
-                return;
+            if (!m_dragging) return;
             ImVec2 at = ImGuiCocos::cocosToFrame(touch->getLocation());
             ImVec2 delta(at.x - m_start.x, at.y - m_start.y);
-            if (!m_dragged && delta.x * delta.x + delta.y * delta.y < 64.f)
-                return;
+            if (!m_dragged && delta.x * delta.x + delta.y * delta.y < 64.f) return;
             m_dragged = true;
             ImVec2 display = ImGui::GetIO().DisplaySize;
-            if (display.x < 1.f || display.y < 1.f)
-                return;
+            if (display.x < 1.f || display.y < 1.f) return;
             auto& logic = Logic::get();
             logic.frame_bar_x = std::clamp((m_origin.x + delta.x) / display.x, 0.f, 1.f);
             logic.frame_bar_y = std::clamp((m_origin.y + delta.y) / display.y, 0.f, 1.f);
@@ -319,28 +297,23 @@ namespace EchoUI {
         }
 
         void release(bool onResume) {
-            if (!m_down)
-                return;
+            if (!m_down) return;
             m_down = false;
             if (m_dragging) {
                 m_dragging = false;
-                if (m_dragged)
-                    Logic::get().save_settings_file();
+                if (m_dragged) Logic::get().save_settings_file();
             }
             auto& gui = GUI::get();
             auto& logic = Logic::get();
             int which = gui.bar_pressed;
             gui.bar_pressed = 0;
-            if (which == 1)
-                logic.holding_back = false;
+            if (which == 1) logic.holding_back = false;
             if (which == 2) {
                 logic.holding_advance = false;
                 logic.disarm_length_pause_if_holding();
             }
-            if (which == 3 && onResume)
-                gui.set_frame_advance(!logic.frame_advance);
-            if (which == 4 && onResume)
-                logic.request_best_frame();
+            if (which == 3 && onResume) gui.set_frame_advance(!logic.frame_advance);
+            if (which == 4 && onResume) logic.request_best_frame();
         }
 
         bool m_down = false;
@@ -375,25 +348,21 @@ namespace EchoUI {
         bool ccTouchBegan(CCTouch* touch, CCEvent*) override {
             auto& imgui = ImGuiCocos::get();
             auto& gui = GUI::get();
-            if (!imgui.isInitialized() || !imgui.isVisible() || gui.bar_only)
-                return false;
+            if (!imgui.isInitialized() || !imgui.isVisible() || gui.bar_only) return false;
             auto* context = ImGui::GetCurrentContext();
-            if (!context)
-                return false;
+            if (!context) return false;
             ImVec2 at = ImGuiCocos::cocosToFrame(touch->getLocation());
             for (ImGuiWindow* window : context->Windows) {
                 if (!window->Active || window->Hidden || (window->Flags & ImGuiWindowFlags_ChildWindow))
                     continue;
-                if (!window->Rect().Contains(at))
-                    continue;
+                if (!window->Rect().Contains(at)) continue;
                 auto& io = ImGui::GetIO();
                 io.AddMouseSourceEvent(ImGuiMouseSource_TouchScreen);
                 io.AddMousePosEvent(at.x, at.y);
                 io.AddMouseButtonEvent(0, true);
                 return true;
             }
-            if (gui.closing)
-                return false;
+            if (gui.closing) return false;
             gui.begin_close();
             return true;
         }
@@ -408,13 +377,10 @@ namespace EchoUI {
 $on_mod(Loaded) {
     queueInMainThread([] {
         auto* overlay = OverlayManager::get();
-        if (auto* bar = EchoUI::FrameBar::create())
-            overlay->addChild(bar);
-        if (auto* logo = EchoUI::FloatingLogo::create())
-            overlay->addChild(logo);
+        if (auto* bar = EchoUI::FrameBar::create()) overlay->addChild(bar);
+        if (auto* logo = EchoUI::FloatingLogo::create()) overlay->addChild(logo);
 #ifdef GEODE_IS_MOBILE
-        if (auto* dismiss = EchoUI::MenuDismiss::create())
-            overlay->addChild(dismiss);
+        if (auto* dismiss = EchoUI::MenuDismiss::create()) overlay->addChild(dismiss);
 #endif
     });
 }

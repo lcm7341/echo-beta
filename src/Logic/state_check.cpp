@@ -11,14 +11,13 @@
 #include "Logic/state_check_walk.hpp"
 
 
-    template <class T>
-    bool vector(std::vector<T> const& items) {
-        auto const* raw = reinterpret_cast<std::uintptr_t const*>(&items);
-        auto first = raw[0], last = raw[1], end = raw[2];
-        if (!first)
-            return !last && !end;
-        return (first & 7) == 0 && first <= last && last <= end && (last - first) % sizeof(T) == 0;
-    }
+template <class T>
+static bool vector_ok(const std::vector<T>& items) {
+    const auto* raw = reinterpret_cast<const std::uintptr_t*>(&items);
+    auto first = raw[0], last = raw[1], end = raw[2];
+    if (!first) return !last && !end;
+    return (first & 7) == 0 && first <= last && last <= end && (last - first) % sizeof(T) == 0;
+}
 
 static std::string failure;
 
@@ -50,8 +49,7 @@ static bool read_object(std::uintptr_t object, ObjectFields& out) {
     __try {
         auto vtable = field<std::uintptr_t>(object, 0);
         auto base = reinterpret_cast<std::uintptr_t>(GetModuleHandleW(nullptr));
-        if (vtable < base || vtable > base + 0x1000000)
-            return false;
+        if (vtable < base || vtable > base + 0x1000000) return false;
         out.id = field<int>(object, offsetof(GameObject, m_objectID));
         out.uid = field<int>(object, offsetof(GameObject, m_uniqueID));
         out.type = (int)(field<GameObjectType>(object, offsetof(GameObject, m_objectType)));
@@ -89,12 +87,10 @@ static std::string dump_region(std::uintptr_t address, std::size_t bytes) {
 }
 
 static bool effects(const std::vector<EnterEffectInstance>& items) {
-    if (!vector_ok(items))
-        return false;
+    if (!vector_ok(items)) return false;
     for (std::size_t i = 0; i < items.size(); ++i) {
         const auto& item = items[i];
-        if (tree_ok(item.m_enterEffectAnimMap) && vector_ok(item.m_easeIndices))
-            continue;
+        if (tree_ok(item.m_enterEffectAnimMap) && vector_ok(item.m_easeIndices)) continue;
         auto head = reinterpret_cast<std::uintptr_t>(item.m_enterEffectAnimMap.end()._Ptr);
         std::uintptr_t words[4]{};
         bool read = read_words(head, words);
@@ -109,11 +105,9 @@ static bool effects(const std::vector<EnterEffectInstance>& items) {
 
 template <class Table>
 static bool effect_lists(const Table& table) {
-    if (!list_ok(table))
-        return false;
+    if (!list_ok(table)) return false;
     for (const auto& [key, items] : table) {
-        if (!effects(items))
-            return false;
+        if (!effects(items)) return false;
     }
     return true;
 }

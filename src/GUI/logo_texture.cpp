@@ -30,17 +30,12 @@ namespace EchoUI {
         float span = high - low;
         v = high;
         s = high > 0.f ? span / high : 0.f;
-        if (span <= 0.f)
-            h = 0.f;
-        else if (high == r)
-            h = std::fmod((g - b) / span, 6.f);
-        else if (high == g)
-            h = (b - r) / span + 2.f;
-        else
-            h = (r - g) / span + 4.f;
+        if (span <= 0.f) h = 0.f;
+        else if (high == r) h = std::fmod((g - b) / span, 6.f);
+        else if (high == g) h = (b - r) / span + 2.f;
+        else h = (r - g) / span + 4.f;
         h /= 6.f;
-        if (h < 0.f)
-            h += 1.f;
+        if (h < 0.f) h += 1.f;
     }
 
     static void to_rgb(float h, float s, float v, float& r, float& g, float& b) {
@@ -87,11 +82,9 @@ namespace EchoUI {
     CCTexture2D* logo_texture(const char* sprite) {
         static std::unordered_map<std::string, CCTexture2D*> loaded_by;
         auto [at, fresh] = loaded_by.try_emplace(sprite, nullptr);
-        if (!fresh)
-            return at->second;
+        if (!fresh) return at->second;
         auto* loaded = CCTextureCache::sharedTextureCache()->addImage(sprite, false);
-        if (!loaded)
-            return at->second;
+        if (!loaded) return at->second;
         smooth(loaded);
         loaded->retain();
         at->second = loaded;
@@ -113,10 +106,9 @@ namespace EchoUI {
         static CCTexture2D* kept = nullptr;
         hue -= std::floor(hue);
         int degree = (int)std::lround(hue * 360.f) % 360;
-        if (kept && degree == kept_degree)
-            return kept;
+        if (kept && degree == kept_degree) return kept;
 
-        constexpr float SOURCE_HUE = 130.f / 360.f;
+        const float SOURCE_HUE = 130.f / 360.f;
         auto path = Mod::get()->getResourcesDir() / "echo-logo-green.png";
         auto* image = new CCImage();
         if (!image->initWithImageFile(geode::utils::string::pathToString(path).c_str())) {
@@ -167,8 +159,7 @@ namespace EchoUI {
             return logo_texture("logo.png"_spr);
         }
         smooth(texture);
-        if (kept)
-            kept->release();
+        if (kept) kept->release();
         kept = texture;
         kept_degree = degree;
         return kept;

@@ -17,8 +17,7 @@ class ChildTypeCache {
 public:
 	template <class Children, class Identity, class Match>
 	bool contains(const Children& children, Identity&& identity, Match&& match) {
-		if (entries.size() != children.size())
-			entries.resize(children.size());
+		if (entries.size() != children.size()) entries.resize(children.size());
 		for (size_t i = 0; i < children.size(); ++i) {
 			auto* object = children[i];
 			auto lifetime = object ? identity(object) : 0;
@@ -26,8 +25,7 @@ public:
 			if (entry.object != object || entry.lifetime != lifetime) {
 				entry = { object, lifetime, object && match(object) };
 			}
-			if (entry.matches)
-				return true;
+			if (entry.matches) return true;
 		}
 		return false;
 	}

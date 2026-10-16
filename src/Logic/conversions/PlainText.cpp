@@ -13,20 +13,17 @@ using namespace geode::prelude;
 
 bool ReplayIO::read_plain(const fs::path& path, MacroSnap& out) {
     std::ifstream file(path);
-    if (!file)
-        return false;
+    if (!file) return false;
     float fps = 0.f;
     file >> fps;
-    if (!file)
-        return false;
+    if (!file) return false;
     std::vector<Frame> inputs;
     while (file) {
         Frame input;
         int holding = 0;
         int player2 = 0;
         file >> input.number >> holding >> player2;
-        if (!file)
-            break;
+        if (!file) break;
         input.holding = holding != 0;
         input.player2 = player2 != 0;
         inputs.push_back(input);
@@ -37,8 +34,7 @@ bool ReplayIO::read_plain(const fs::path& path, MacroSnap& out) {
 
 bool ReplayIO::write_plain(const fs::path& path, const MacroSnap& snap) {
     std::ofstream file(path);
-    if (!file)
-        return false;
+    if (!file) return false;
     file << snap.fps << "\n";
     for (const auto& input : snap.inputs) {
         file << input.number << " " << (input.holding ? 1 : 0) << " " << (input.player2 ? 1 : 0) << "\n";

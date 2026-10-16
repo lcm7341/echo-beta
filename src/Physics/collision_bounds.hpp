@@ -6,15 +6,15 @@
 
 namespace CollisionBounds {
 	void prepare();
-	inline constexpr std::uintptr_t site = 0x214b09;
-	inline constexpr std::uintptr_t miss = 0x215a18;
-	inline constexpr std::size_t size = 0x53;
+	inline const std::uintptr_t site = 0x214b09;
+	inline const std::uintptr_t miss = 0x215a18;
+	inline const std::size_t size = 0x53;
 	// cocos 2.2081 rect getters without the ret. keep the sse order (width + x, then height + y)
 	// swapping them changes how nans come out
-	inline constexpr std::array<unsigned char, 9> maxX{ 0xf3, 0x0f, 0x10, 0x41, 0x08, 0xf3, 0x0f, 0x58, 0x01 };
-	inline constexpr std::array<unsigned char, 4> minX{ 0xf3, 0x0f, 0x10, 0x01 };
-	inline constexpr std::array<unsigned char, 10> maxY{ 0xf3, 0x0f, 0x10, 0x41, 0x0c, 0xf3, 0x0f, 0x58, 0x41, 0x04 };
-	inline constexpr std::array<unsigned char, 5> minY{ 0xf3, 0x0f, 0x10, 0x41, 0x04 };
+	inline const std::array<unsigned char, 9> maxX{ 0xf3, 0x0f, 0x10, 0x41, 0x08, 0xf3, 0x0f, 0x58, 0x01 };
+	inline const std::array<unsigned char, 4> minX{ 0xf3, 0x0f, 0x10, 0x01 };
+	inline const std::array<unsigned char, 10> maxY{ 0xf3, 0x0f, 0x10, 0x41, 0x0c, 0xf3, 0x0f, 0x58, 0x41, 0x04 };
+	inline const std::array<unsigned char, 5> minY{ 0xf3, 0x0f, 0x10, 0x41, 0x04 };
 
 	inline std::array<unsigned char, size> code(std::uintptr_t address, std::uintptr_t rejected) {
 		std::array<unsigned char, size> result;

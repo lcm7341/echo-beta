@@ -31,7 +31,7 @@ struct TraceStep {
 };
 
 static_assert(sizeof(TraceStep) == 40);
-constexpr size_t TRACE_CAP = 400000;
+const size_t TRACE_CAP = 400000;
 static std::vector<TraceStep> g_trace;
 static std::vector<TraceStep> g_trace2;
 static std::string g_events;
@@ -39,7 +39,7 @@ static std::string g_pace;
 static std::string g_head;
 static unsigned g_last_ms = 0;
 static bool g_finished = false;
-constexpr const char* PREFIX[] = { "", "record-", "attempt-" };
+const char* const PREFIX[] = { "", "record-", "attempt-" };
 static int g_kind = 0;
 static bool g_began = false;
 static bool g_dead_noted = false;
@@ -78,8 +78,7 @@ static std::string head(GJBaseGameLayer* self) {
     out += "S " + text + "\n";
     size_t shown = 0;
     for (const auto& input : logic.inputs) {
-        if (++shown > 4000)
-            break;
+        if (++shown > 4000) break;
         out += fmt::format("IN frame={} down={} p2={} button={}\n", input.number, input.holding, input.player2, (int)input.button);
     }
     return out;
@@ -111,8 +110,7 @@ static void rotate_files() {
 }
 
 static void write_out() {
-    if (std::exchange(g_rotate, false))
-        rotate_files();
+    if (std::exchange(g_rotate, false)) rotate_files();
     {
         std::ofstream events(Logic::get().save_root() / "logs" / (std::string(PREFIX[g_kind]) + "buttons.txt"), std::ios::trunc);
         events << g_head << g_events << g_pace;
@@ -125,8 +123,7 @@ static int g_event_count = 0;
 static bool g_written = false;
 
 void trace_note(const std::string& line) {
-    if (Logic::get().trace_logging && g_pace.size() < 400000)
-        g_pace += line;
+    if (Logic::get().trace_logging && g_pace.size() < 400000) g_pace += line;
 }
 
 bool tracing() {
@@ -134,21 +131,18 @@ bool tracing() {
 }
 
 void trace_event(const std::string& line) {
-    if (!tracing())
-        return;
+    if (!tracing()) return;
     ++g_event_count;
     g_events += line;
 }
 
 void trace_flush() {
-    if (Logic::get().trace_logging && g_began && !g_written)
-        write_out();
+    if (Logic::get().trace_logging && g_began && !g_written) write_out();
 }
 
 void trace_button(char what, bool down, int extra) {
     auto& logic = Logic::get();
-    if (!tracing())
-        return;
+    if (!tracing()) return;
     ++g_event_count;
     g_events += fmt::format("{} frame={} down={} playback={} restoring={} extra={}\n", what, logic.step_frame + 1, down, logic.applying_playback, logic.restoring_holds, extra);
 }
@@ -156,8 +150,7 @@ void trace_button(char what, bool down, int extra) {
 void trace_step(GJBaseGameLayer* self) {
     auto& logic = Logic::get();
     auto* player = self->m_player1;
-    if (!player || !trace_logging_on())
-        return;
+    if (!player || !trace_logging_on()) return;
     // a step back replays the macro up to the frame it wants (state goes to playing for that bit). that is still the
     // same recording, w/out ts every back / best wiped the recordings trace & started a playback one D:
     int kind = logic.backstep_target >= 0 && g_began ? g_kind : logic.is_recording() ? 1 : logic.is_playing() ? 0 : 2;
@@ -180,8 +173,7 @@ void trace_step(GJBaseGameLayer* self) {
         g_text_ms = 0;
         g_head = head(self);
     }
-    if (g_written)
-        return;
+    if (g_written) return;
     auto ms = (unsigned)(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - g_start).count());
     if (g_trace.size() < TRACE_CAP) {
         g_trace.push_back({ logic.step_frame, player->getPositionX(), player->getPositionY(), player->getRotation(),
@@ -227,14 +219,11 @@ void trace_step(GJBaseGameLayer* self) {
                 player->m_isDead, other->m_isDead, other->getPositionX(), other->getPositionY(), other->m_yVelocity, other->getRotation(), other->m_isUpsideDown,
                 other->m_isShip ? "ship" : other->m_isBall ? "ball" : other->m_isBird ? "ufo" : other->m_isDart ? "wave" : other->m_isRobot ? "robot" : other->m_isSpider ? "spider" : other->m_isSwing ? "swing" : "cube");
     bool full = (g_trace.size() - g_saved >= 4000 && ms >= g_text_ms + 250) || ms >= g_text_ms + 2000;
-    if (full)
-        g_text_ms = ms;
+    if (full) g_text_ms = ms;
     // ts runs every step thru the whole death animation too. w/ m_playerDied here instead a recording rewrote
     // the whole text log every dead step, thousands of times a death at high tps
-    if (!note_death && !full && !finished)
-        return;
-    if (self->m_playerDied && g_kind != 1)
-        g_written = true;
+    if (!note_death && !full && !finished) return;
+    if (self->m_playerDied && g_kind != 1) g_written = true;
 #ifdef GEODE_IS_ANDROID64
     g_pace += fmt::format("A sort={} calls={}\n", sort_status, sort_calls);
 #endif

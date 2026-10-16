@@ -20,8 +20,7 @@ std::string ReplayIO::lower_ext(const fs::path& path) {
 }
 
 std::string ReplayIO::sanitize(std::string name) {
-    if (name.empty())
-        name = "Replay";
+    if (name.empty()) name = "Replay";
     for (char& c : name) {
         switch (c) {
         case '/':
@@ -44,25 +43,19 @@ std::string ReplayIO::sanitize(std::string name) {
 
 std::string ReplayIO::strip_numbering(const std::string& base, const std::string& format) {
     auto hash = format.find('#');
-    if (hash == std::string::npos)
-        return base;
+    if (hash == std::string::npos) return base;
     auto prefix = format.substr(0, hash);
     auto suffix = format.substr(hash + 1);
     std::string root = base;
     for (;;) {
-        if (root.size() < prefix.size() + suffix.size() + 1)
-            break;
-        if (root.compare(root.size() - suffix.size(), suffix.size(), suffix) != 0)
-            break;
+        if (root.size() < prefix.size() + suffix.size() + 1) break;
+        if (root.compare(root.size() - suffix.size(), suffix.size(), suffix) != 0) break;
         size_t number_end = root.size() - suffix.size(), number_start = number_end;
         while (number_start > 0 && std::isdigit((unsigned char)root[number_start - 1]))
             --number_start;
-        if (number_start == number_end)
-            break;
-        if (number_start < prefix.size())
-            break;
-        if (root.compare(number_start - prefix.size(), prefix.size(), prefix) != 0)
-            break;
+        if (number_start == number_end) break;
+        if (number_start < prefix.size()) break;
+        if (root.compare(number_start - prefix.size(), prefix.size(), prefix) != 0) break;
         root.resize(number_start - prefix.size());
     }
     return root.empty() ? base : root;
@@ -72,40 +65,33 @@ fs::path ReplayIO::unique_file(const fs::path& directory, const std::string& bas
     std::error_code error;
     fs::create_directories(directory, error);
     auto format = Logic::get().rename_format.empty() ? std::string("_#") : Logic::get().rename_format;
-    if (format.find('#') == std::string::npos)
-        format += "#";
+    if (format.find('#') == std::string::npos) format += "#";
     auto root = ReplayIO::strip_numbering(base, format);
     auto plain = directory / (root + ext);
-    if (!fs::exists(plain))
-        return plain;
+    if (!fs::exists(plain)) return plain;
     for (int n = 1; n < 10000; ++n) {
         auto suffix = format;
         auto hash = suffix.find('#');
         suffix.replace(hash, 1, std::to_string(n));
         auto candidate = directory / (root + suffix + ext);
-        if (!fs::exists(candidate))
-            return candidate;
+        if (!fs::exists(candidate)) return candidate;
     }
     return plain;
 }
 
 bool ReplayIO::read_boolish(const matjson::Value& json) {
-    if (json.isBool())
-        return json.asBool().unwrapOr(false);
-    if (json.isNumber())
-        return json.asInt().unwrapOr(0) != 0;
+    if (json.isBool()) return json.asBool().unwrapOr(false);
+    if (json.isNumber()) return json.asInt().unwrapOr(0) != 0;
     return false;
 }
 
 double ReplayIO::read_number(const matjson::Value& json, double fallback) {
-    if (auto number = json.asDouble())
-        return number.unwrap();
+    if (auto number = json.asDouble()) return number.unwrap();
     return fallback;
 }
 
 int ReplayIO::read_int(const matjson::Value& json, int fallback) {
-    if (auto number = json.asInt())
-        return (int)number.unwrap();
+    if (auto number = json.asInt()) return (int)number.unwrap();
     return fallback;
 }
 
@@ -124,12 +110,9 @@ std::string ReplayIO::format_name(ReplayFormat format) {
 }
 
 ReplayFormat ReplayIO::format_from_name(const std::string& name) {
-    if (name == "SIMPLE")
-        return ReplayFormat::Simple;
-    if (name == "DEBUG")
-        return ReplayFormat::Debug;
-    if (name == "METADBG")
-        return ReplayFormat::MetaDebug;
+    if (name == "SIMPLE") return ReplayFormat::Simple;
+    if (name == "DEBUG") return ReplayFormat::Debug;
+    if (name == "METADBG") return ReplayFormat::MetaDebug;
     return ReplayFormat::Meta;
 }
 
@@ -148,14 +131,12 @@ std::string ReplayIO::clock(double seconds) {
 void ReplayIO::adopt_inputs(MacroSnap& out, std::vector<Frame> inputs, float fps, std::vector<FramePose> poses) {
     out.inputs = std::move(inputs);
     out.poses = std::move(poses);
-    if (out.poses.size() != out.inputs.size())
-        out.poses.clear();
+    if (out.poses.size() != out.inputs.size()) out.poses.clear();
     out.fps = std::isfinite(fps) && fps > 0.f ? fps : 240.f;
 }
 
 double ReplayIO::snap_sample_rate(const MacroSnap& snap) {
-    float rate = std::isfinite(snap.fps) ? snap.fps : 240.f;
-    return (double)std::max(rate, step_patched ? 1.f : VANILLA_TPS);
+    return (double)std::max(snap.fps, step_patched ? 1.f : VANILLA_TPS);
 }
 
 std::vector<Frame> ReplayIO::sorted_inputs(const MacroSnap& snap) {
@@ -164,8 +145,7 @@ std::vector<Frame> ReplayIO::sorted_inputs(const MacroSnap& snap) {
         return a.number < b.number;
     });
     for (auto& input : inputs) {
-        if (input.button < 1 || input.button > 3)
-            input.button = 1;
+        if (input.button < 1 || input.button > 3) input.button = 1;
         input.number = std::max(input.number, 0);
     }
     return inputs;
@@ -174,10 +154,8 @@ std::vector<Frame> ReplayIO::sorted_inputs(const MacroSnap& snap) {
 void ReplayIO::finish_load(const std::string& detail) {
     auto& logic = Logic::get();
     logic.accuracy = 1;
-    if (logic.is_recording())
-        logic.state = RunState::Playing;
-    else if (!logic.is_playing())
-        logic.state = RunState::Playing;
+    if (logic.is_recording()) logic.state = RunState::Playing;
+    else if (!logic.is_playing()) logic.state = RunState::Playing;
     logic.replay_pos = 0;
     logic.message = detail;
     Logic::get().notify(detail, true);

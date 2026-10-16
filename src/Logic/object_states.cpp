@@ -70,22 +70,18 @@ static unsigned char put(GJBaseGameLayer* play, GameObject* object, const unsign
         }
         record += span.size;
     }
-    if (!written)
-        return 0;
+    if (!written) return 0;
     object->m_isOrientedBoxDirty = true;
-    if (moved)
-        play->updateObjectSection(object);
+    if (moved) play->updateObjectSection(object);
     return written;
 }
 
 static std::vector<GameObject*> grouped_objects(PlayLayer* play) {
     std::vector<GameObject*> out;
-    if (!play->m_objects)
-        return out;
+    if (!play->m_objects) return out;
     for (unsigned i = 0; i < play->m_objects->count(); ++i) {
         auto* obj = static_cast<GameObject*>(play->m_objects->objectAtIndex(i));
-        if (obj && obj->m_groupCount > 0)
-            out.push_back(obj);
+        if (obj && obj->m_groupCount > 0) out.push_back(obj);
     }
     return out;
 }
@@ -97,8 +93,7 @@ static std::shared_ptr<ObjectBase const> shared_base(PlayLayer* play) {
         bool same = true;
         for (unsigned i = 0; i < amt && same; ++i)
             same = play->m_objects->objectAtIndex(i) == base->objects[i];
-        if (same)
-            return base;
+        if (same) return base;
     }
     auto base = std::make_shared<ObjectBase>();
     base->objects.reserve(amt);
@@ -106,8 +101,7 @@ static std::shared_ptr<ObjectBase const> shared_base(PlayLayer* play) {
     for (unsigned i = 0; i < amt; ++i) {
         auto* obj = static_cast<GameObject*>(play->m_objects->objectAtIndex(i));
         base->objects.push_back(obj);
-        if (obj)
-            gather(obj, base->bytes.data() + (std::size_t)i * STRIDE);
+        if (obj) gather(obj, base->bytes.data() + (std::size_t)i * STRIDE);
     }
     shared = base;
     return base;
@@ -118,20 +112,17 @@ static std::shared_ptr<ObjectBase const> shared_base(PlayLayer* play) {
 static std::shared_ptr<ObjectStates> capture(PlayLayer* play, int frame) {
     auto states = std::make_shared<ObjectStates>();
     states->frame = frame;
-    if (!play->m_objects)
-        return states;
+    if (!play->m_objects) return states;
     states->base = shared_base(play);
     const auto& base = *states->base;
     auto& diff = states->diff;
     std::array<unsigned char, STRIDE> cur;
     for (unsigned i = 0; i < base.objects.size(); ++i) {
         auto* obj = base.objects[i];
-        if (!obj)
-            continue;
+        if (!obj) continue;
         const auto* slot = base.bytes.data() + (std::size_t)i * STRIDE;
         gather(obj, cur.data());
-        if (std::memcmp(slot, cur.data(), STRIDE) == 0)
-            continue;
+        if (std::memcmp(slot, cur.data(), STRIDE) == 0) continue;
         unsigned idx = i;
         std::size_t at = diff.size();
         diff.resize(at + sizeof(idx) + 1);
@@ -163,8 +154,7 @@ static void restore(PlayLayer* play, const ObjectStates& states) {
     for (unsigned i = 0; i < base.objects.size(); ++i) {
         const auto* record = base.bytes.data() + (std::size_t)i * STRIDE;
         unsigned idx = 0;
-        if (in < end)
-            std::memcpy(&idx, in, sizeof(idx));
+        if (in < end) std::memcpy(&idx, in, sizeof(idx));
         if (in < end && idx == i) {
             in += sizeof(idx);
             unsigned char mask = *in++;
@@ -183,8 +173,7 @@ static void restore(PlayLayer* play, const ObjectStates& states) {
         if (obj != base.objects[i]) {
             return;
         }
-        if (obj)
-            put(play, obj, record);
+        if (obj) put(play, obj, record);
     }
 }
 
@@ -202,24 +191,17 @@ struct Timeline {
     int saves = 0;
 };
 
-static Timeline& timeline() {
-    static Timeline value;
-    return value;
-}
+static Timeline g_timeline;
 
 static void touch_object(GameObject* object) {
-    auto& line = timeline();
-    if (!object || line.by_uid.empty() || Logic::get().predicting)
-        return;
+    auto& line = g_timeline;
+    if (!object || line.by_uid.empty() || Logic::get().predicting) return;
     auto uid = (std::size_t)object->m_uniqueID;
-    if (uid >= line.by_uid.size())
-        return;
+    if (uid >= line.by_uid.size()) return;
     auto at = line.by_uid[uid];
-    if (!at || line.objects[at - 1] != object)
-        return;
+    if (!at || line.objects[at - 1] != object) return;
     auto i = at - 1;
-    if (line.touched_stamp[i] == line.epoch)
-        return;
+    if (line.touched_stamp[i] == line.epoch) return;
     line.touched_stamp[i] = line.epoch;
     line.touched.push_back(i);
 }
@@ -228,25 +210,19 @@ static bool untracked_motion(PlayLayer* play) {
     const auto& game = play->m_gameState;
     if (!game.m_moveEffectInstances.empty() || !game.m_rotateEffectInstances.empty() || !game.m_scaleEffectInstances.empty())
         return true;
-    auto* manager = play->m_effectManager;
-    if (!manager)
-        return false;
-    for (const auto& command : manager->m_unkVector560) {
+    for (const auto& command : play->m_effectManager->m_unkVector560) {
         auto* trigger = command.m_gameObject;
         int id = trigger ? trigger->m_objectID : 0;
-        if (id != 901 && id != 1346)
-            return true;
+        if (id != 901 && id != 1346) return true;
     }
     return false;
 }
 
 static bool lvl_has_untracked_movers(PlayLayer* play) {
-    if (!play->m_objects)
-        return false;
+    if (!play->m_objects) return false;
     for (unsigned i = 0; i < play->m_objects->count(); ++i) {
         auto* obj = static_cast<GameObject*>(play->m_objects->objectAtIndex(i));
-        if (!obj)
-            continue;
+        if (!obj) continue;
         switch (obj->m_objectID) {
         case 3016:
         case 3660:
@@ -281,12 +257,10 @@ static void rewind(Timeline& line, const std::vector<unsigned char>& undo) {
 }
 
 void Logic::step_object_states(PlayLayer* play) {
-    if (!play || predicting || backstepping)
-        return;
+    if (!play || predicting || backstepping) return;
     int frame = step_frame;
-    auto& line = timeline();
-    if (!line.by_uid.empty() && !line.full && untracked_motion(play))
-        line.full = true;
+    auto& line = g_timeline;
+    if (!line.by_uid.empty() && !line.full && untracked_motion(play)) line.full = true;
     if (line.pending_frame >= 0) {
         int saved = std::exchange(line.pending_frame, -1);
         if (saved == frame && line.play == play && line.array == play->m_objects) {
@@ -297,8 +271,7 @@ void Logic::step_object_states(PlayLayer* play) {
     if (auto* obj = std::exchange(object_restore, nullptr)) {
         object_capture = nullptr;
         auto it = std::ranges::find(checkpoints, obj, &Checkpoint::object);
-        if (it == checkpoints.end() || !it->objects)
-            return;
+        if (it == checkpoints.end() || !it->objects) return;
         if (it->objects->frame != frame) {
             return;
         }
@@ -307,16 +280,14 @@ void Logic::step_object_states(PlayLayer* play) {
     }
     if (auto* obj = std::exchange(object_capture, nullptr)) {
         auto it = std::ranges::find(checkpoints, obj, &Checkpoint::object);
-        if (it == checkpoints.end())
-            return;
-        if (it->frame != frame)
-            return;
+        if (it == checkpoints.end()) return;
+        if (it->frame != frame) return;
         it->objects = capture(play, frame);
     }
 }
 
 void Logic::note_backstep_objects(PlayLayer* play) {
-    auto& line = timeline();
+    auto& line = g_timeline;
     if (line.play != play || line.array != play->m_objects) {
         line.play = play;
         line.array = play->m_objects;
@@ -330,8 +301,7 @@ void Logic::note_backstep_objects(PlayLayer* play) {
         line.by_uid.assign((std::size_t)std::max(max_uid, 0) + 1, 0);
         for (std::size_t i = 0; i < line.objects.size(); ++i) {
             auto uid = line.objects[i]->m_uniqueID;
-            if (uid >= 0)
-                line.by_uid[(std::size_t)uid] = (unsigned)(i + 1);
+            if (uid >= 0) line.by_uid[(std::size_t)uid] = (unsigned)(i + 1);
         }
         line.touched_stamp.assign(line.objects.size(), 0);
         line.touched.clear();
@@ -345,8 +315,7 @@ void Logic::note_backstep_objects(PlayLayer* play) {
         }
         return;
     }
-    if (backsteps.size() < 2)
-        return;
+    if (backsteps.size() < 2) return;
     auto& undo = backsteps[backsteps.size() - 2].object_undo;
     undo.clear();
     bool verify = !line.full && !line.always_full && (++line.saves % 32) == 0;
@@ -363,8 +332,7 @@ void Logic::note_backstep_objects(PlayLayer* play) {
             }
             offset += span.size;
         }
-        if (same)
-            return;
+        if (same) return;
         gather(line.objects[i], scratch);
         unsigned idx = (unsigned)i;
         std::size_t at = out.size();
@@ -382,8 +350,7 @@ void Logic::note_backstep_objects(PlayLayer* play) {
         }
         out[at + sizeof(idx)] = mask;
         std::memcpy(slot, scratch, STRIDE);
-        if (verify && (mask & 31) && line.touched_stamp[i] != line.epoch)
-            ++missed;
+        if (verify && (mask & 31) && line.touched_stamp[i] != line.epoch) ++missed;
     };
     int missed = 0;
     std::array<unsigned char, STRIDE> scratch;
@@ -407,8 +374,7 @@ void Logic::note_backstep_objects(PlayLayer* play) {
             thread.join();
         for (unsigned w = 0; w < workers; ++w) {
             missed += worker_misses[w];
-            if (w > 0)
-                undo.insert(undo.end(), worker_undo[w].begin(), worker_undo[w].end());
+            if (w > 0) undo.insert(undo.end(), worker_undo[w].begin(), worker_undo[w].end());
         }
     }
     else if (everything) {
@@ -429,26 +395,23 @@ void Logic::note_backstep_objects(PlayLayer* play) {
 }
 
 void Logic::pop_backstep() {
-    if (backsteps.empty())
-        return;
+    if (backsteps.empty()) return;
     release_backstep(backsteps.back());
     backsteps.pop_back();
     if (backsteps.empty()) {
         clear_backstep_objects();
         return;
     }
-    auto& line = timeline();
+    auto& line = g_timeline;
     line.full = true;
     auto& undo = backsteps.back().object_undo;
-    if (!line.baseline.empty())
-        rewind(line, undo);
+    if (!line.baseline.empty()) rewind(line, undo);
     undo.clear();
     undo.shrink_to_fit();
 }
 
 void Logic::drop_backstep(std::size_t index) {
-    if (index == 0 || index + 1 >= backsteps.size())
-        return;
+    if (index == 0 || index + 1 >= backsteps.size()) return;
     auto& older = backsteps[index - 1].object_undo;
     const auto& newer = backsteps[index].object_undo;
     if (!newer.empty()) {
@@ -463,8 +426,7 @@ void Logic::drop_backstep(std::size_t index) {
             unsigned char mask = *in++;
             have.emplace_back(obj, mask);
             for (std::size_t s = 0; s < SPANS.size(); ++s)
-                if (mask & (1u << s))
-                    in += SPANS[s].size;
+                if (mask & (1u << s)) in += SPANS[s].size;
         }
         std::ranges::sort(have);
         in = newer.data();
@@ -484,10 +446,8 @@ void Logic::drop_backstep(std::size_t index) {
                 older[at + sizeof(obj)] = add;
             }
             for (std::size_t s = 0; s < SPANS.size(); ++s) {
-                if (!(mask & (1u << s)))
-                    continue;
-                if (add & (1u << s))
-                    older.insert(older.end(), in, in + SPANS[s].size);
+                if (!(mask & (1u << s))) continue;
+                if (add & (1u << s)) older.insert(older.end(), in, in + SPANS[s].size);
                 in += SPANS[s].size;
             }
         }
@@ -498,24 +458,21 @@ void Logic::drop_backstep(std::size_t index) {
 }
 
 void Logic::clear_backstep_objects() {
-    auto& line = timeline();
+    auto& line = g_timeline;
     line = Timeline{};
 }
 
 void Logic::load_backstep_objects(int frame) {
-    auto& line = timeline();
-    if (!line.baseline.empty())
-        line.pending_frame = frame;
+    auto& line = g_timeline;
+    if (!line.baseline.empty()) line.pending_frame = frame;
     line.full = true;
 }
 
 void echo_touch_hook(bool on) {
-    if (!g_touch_hook || on == g_touch_tracking)
-        return;
+    if (!g_touch_hook || on == g_touch_tracking) return;
     if (on ? g_touch_hook->enable().isOk() : g_touch_hook->disable().isOk()) {
         g_touch_tracking = on;
-        if (on)
-            timeline().full = true;
+        if (on) g_timeline.full = true;
     }
 }
 
@@ -526,12 +483,10 @@ class $modify(BackstepTouched, GJBaseGameLayer) {
     }
 
     static void touch_all(CCArray* objects) {
-        if (!objects || timeline().by_uid.empty() || Logic::get().predicting)
-            return;
+        if (!objects || g_timeline.by_uid.empty() || Logic::get().predicting) return;
         for (unsigned n = 0; n < objects->count(); ++n) {
             auto* obj = static_cast<GameObject*>(objects->objectAtIndex(n));
-            if (!obj)
-                break;
+            if (!obj) break;
             touch_object(obj);
         }
     }

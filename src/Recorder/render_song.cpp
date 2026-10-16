@@ -18,10 +18,8 @@ static FMOD_RESULT echo_create_stream(FMOD::System* self, const char* name, FMOD
 
 static FMOD_RESULT echo_create_sound(FMOD::System* self, const char* name, FMOD_MODE mode, FMOD_CREATESOUNDEXINFO* info, FMOD::Sound** sound) {
     if (Logic::get().render_active()) {
-        if (mode & FMOD_CREATESTREAM)
-            mode = as_sample(mode);
-        else
-            mode &= ~(FMOD_MODE)FMOD_NONBLOCKING;
+        if (mode & FMOD_CREATESTREAM) mode = as_sample(mode);
+        else mode &= ~(FMOD_MODE)FMOD_NONBLOCKING;
     }
     return self->createSound(name, mode, info, sound);
 }

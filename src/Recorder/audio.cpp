@@ -24,8 +24,7 @@ static bool g_live_opening_held = false;
 static double g_live_opening_sec = 0.0;
 
 void Logic::prepare_lvl_view(PlayLayer* play) {
-    if (!play || !play->m_shaderLayer || render_holds_view())
-        return;
+    if (!play || !play->m_shaderLayer || render_holds_view()) return;
     // DONT use win size here shaders go pixelated
     play->m_shaderLayer->performCalculations();
 }
@@ -37,36 +36,25 @@ float Logic::render_step() {
 float Logic::scroll_speed_factor() {
     auto* layer = GJBaseGameLayer::get();
     auto* player = layer ? layer->m_player1 : nullptr;
-    if (!player)
-        return 1.f;
+    if (!player) return 1.f;
     static const float speeds[5] = { 251.1601f, 311.5801f, 387.4201f, 468.0002f, 576.0002f };
     float speed = player->m_playerSpeed;
     int idx = 1;
-    if (speed == 0.7f)
-        idx = 0;
-    else if (speed == 1.1f)
-        idx = 2;
-    else if (speed == 1.3f)
-        idx = 3;
-    else if (speed == 1.6f)
-        idx = 4;
-    float step = speeds[idx] / (float)std::max(sample_rate(), 1.0);
+    if (speed == 0.7f) idx = 0;
+    else if (speed == 1.1f) idx = 2;
+    else if (speed == 1.3f) idx = 3;
+    else if (speed == 1.6f) idx = 4;
+    float step = speeds[idx] / (float)sample_rate();
     float moved = (player->getPositionX() + step) - player->getPositionX();
     float factor = step > 0.f ? moved / step : 1.f;
-    if (!(factor > 0.f) || layer->m_levelEndAnimationStarted)
-        return 1.f;
+    if (!(factor > 0.f) || layer->m_levelEndAnimationStarted) return 1.f;
     return factor;
 }
 
 float Logic::render_speed() {
-    if (render_speed_locked > 0.f)
-        return render_speed_locked;
-    if (!render_speedhack)
-        return 1.f;
-    float speed = speedhack;
-    if (!std::isfinite(speed) || speed < 0.01f)
-        return 1.f;
-    return speed;
+    if (render_speed_locked > 0.f) return render_speed_locked;
+    if (!render_speedhack) return 1.f;
+    return speedhack;
 }
 
 float Logic::render_game_step() {
@@ -78,17 +66,14 @@ float Logic::render_game_step() {
         logic.render_factor_high = std::max(logic.render_factor_high, factor);
         logic.render_factor_sum += factor;
         ++logic.render_factor_count;
-        if (factor > 0.f)
-            dt /= factor;
+        if (factor > 0.f) dt /= factor;
     }
     return dt;
 }
 
 bool Logic::pause_menu_open() {
-    if (pause_known)
-        return pause_cached;
-    auto* director = CCDirector::sharedDirector();
-    auto* scene = director ? director->getRunningScene() : nullptr;
+    if (pause_known) return pause_cached;
+    auto* scene = CCDirector::sharedDirector()->getRunningScene();
 #ifdef GEODE_IS_WINDOWS
     static thread_local ChildTypeCache<CCObject> scene_types, play_types;
     auto contains_pause = [](CCNode* node, auto& cache) {
@@ -103,12 +88,10 @@ bool Logic::pause_menu_open() {
                 return typeinfo_cast<PauseLayer*>(object) != nullptr;
             });
     };
-    if (contains_pause(scene, scene_types))
-        return true;
+    if (contains_pause(scene, scene_types)) return true;
     return contains_pause(PlayLayer::get(), play_types);
 #else
-    if (scene && scene->getChildByType<PauseLayer>(0))
-        return true;
+    if (scene && scene->getChildByType<PauseLayer>(0)) return true;
     auto* play = PlayLayer::get();
     return play && play->getChildByType<PauseLayer>(0);
 #endif
@@ -116,13 +99,11 @@ bool Logic::pause_menu_open() {
 
 void Logic::sync_music_pitch() {
     auto* engine = FMODAudioEngine::sharedEngine();
-    if (!engine)
-        return;
+    if (!engine) return;
     auto* play = PlayLayer::get();
     bool rendering = render_active();
     float pitch = 1.f;
-    if (play)
-        pitch = rendering || !audio_speedhack ? 1.f : std::max(speedhack, 0.01f);
+    if (play) pitch = rendering || !audio_speedhack ? 1.f : speedhack;
 
     if (play && !play->m_started) {
         if (!g_live_opening_held) {
@@ -131,14 +112,12 @@ void Logic::sync_music_pitch() {
         }
         unsigned ms = (unsigned)std::llround(std::max(g_live_opening_sec, 0.0) * 1000.0);
         unsigned now = engine->getMusicTimeMS(0);
-        if ((now > ms ? now - ms : ms - now) > 2)
-            engine->setMusicTimeMS(ms, false, 0);
+        if ((now > ms ? now - ms : ms - now) > 2) engine->setMusicTimeMS(ms, false, 0);
         if (engine->m_backgroundMusicChannel) {
             engine->m_backgroundMusicChannel->setPitch(pitch);
             engine->m_backgroundMusicChannel->setPaused(true);
         }
-        if (engine->m_globalChannel)
-            engine->m_globalChannel->setPitch(pitch);
+        if (engine->m_globalChannel) engine->m_globalChannel->setPitch(pitch);
         return;
     }
     if (g_live_opening_held) {
@@ -151,10 +130,8 @@ void Logic::sync_music_pitch() {
         g_live_opening_sec = 0.0;
     }
 
-    if (engine->m_backgroundMusicChannel)
-        engine->m_backgroundMusicChannel->setPitch(pitch);
-    if (engine->m_globalChannel)
-        engine->m_globalChannel->setPitch(pitch);
+    if (engine->m_backgroundMusicChannel) engine->m_backgroundMusicChannel->setPitch(pitch);
+    if (engine->m_globalChannel) engine->m_globalChannel->setPitch(pitch);
     sync_audio_clock();
 }
 
@@ -164,20 +141,16 @@ struct SfxMark {
 };
 
 void sync_effect_group(FMOD::ChannelGroup* group, double level, std::unordered_map<FMOD::Channel*, SfxMark>& marks, std::unordered_set<FMOD::Channel*>& seen) {
-    if (!group)
-        return;
+    if (!group) return;
     int amt = 0;
     group->getNumChannels(&amt);
     for (int i = 0; i < amt; ++i) {
         FMOD::Channel* channel = nullptr;
-        if (group->getChannel(i, &channel) != FMOD_OK || !channel)
-            continue;
+        if (group->getChannel(i, &channel) != FMOD_OK || !channel) continue;
         bool playing = false;
-        if (channel->isPlaying(&playing) != FMOD_OK || !playing)
-            continue;
+        if (channel->isPlaying(&playing) != FMOD_OK || !playing) continue;
         unsigned pos = 0;
-        if (channel->getPosition(&pos, FMOD_TIMEUNIT_MS) != FMOD_OK)
-            continue;
+        if (channel->getPosition(&pos, FMOD_TIMEUNIT_MS) != FMOD_OK) continue;
         seen.insert(channel);
         auto it = marks.find(channel);
         bool fresh = it == marks.end() || level + 0.0005 < it->second.level || pos + 80 < it->second.pos;
@@ -186,43 +159,35 @@ void sync_effect_group(FMOD::ChannelGroup* group, double level, std::unordered_m
             continue;
         }
         double expected_d = (double)(it->second.pos) + (level - it->second.level) * 1000.0;
-        if (expected_d < 0.0)
-            expected_d = 0.0;
+        if (expected_d < 0.0) expected_d = 0.0;
         auto expected = (unsigned)std::llround(expected_d);
         int drift = (int)pos - (int)expected;
-        if (std::abs(drift) < 250)
-            continue;
-        if (channel->setPosition(expected, FMOD_TIMEUNIT_MS) == FMOD_OK)
-            it->second.pos = expected;
+        if (std::abs(drift) < 250) continue;
+        if (channel->setPosition(expected, FMOD_TIMEUNIT_MS) == FMOD_OK) it->second.pos = expected;
     }
     int groups = 0;
     group->getNumGroups(&groups);
     for (int i = 0; i < groups; ++i) {
         FMOD::ChannelGroup* child = nullptr;
-        if (group->getGroup(i, &child) == FMOD_OK)
-            sync_effect_group(child, level, marks, seen);
+        if (group->getGroup(i, &child) == FMOD_OK) sync_effect_group(child, level, marks, seen);
     }
 }
 
 void pause_group(FMOD::ChannelGroup* group) {
-    if (!group)
-        return;
+    if (!group) return;
     group->setPaused(true);
 }
 
 void release_group(FMOD::ChannelGroup* group) {
-    if (!group)
-        return;
+    if (!group) return;
     group->setDelay(0, 0, false);
     group->setPaused(false);
 }
 
 void play_group_slice(FMOD::ChannelGroup* group, unsigned long long samples) {
-    if (!group || samples == 0)
-        return;
+    if (!group || samples == 0) return;
     unsigned long long clock = 0;
-    if (group->getDSPClock(nullptr, &clock) != FMOD_OK)
-        return;
+    if (group->getDSPClock(nullptr, &clock) != FMOD_OK) return;
     unsigned long long start = 0, end = 0;
     bool stop = false;
     group->getDelay(&start, &end, &stop);
@@ -232,32 +197,26 @@ void play_group_slice(FMOD::ChannelGroup* group, unsigned long long samples) {
 }
 
 bool slice_still_running(FMOD::ChannelGroup* group) {
-    if (!group)
-        return false;
+    if (!group) return false;
     unsigned long long clock = 0;
     unsigned long long start = 0, end = 0;
     bool stop = false;
-    if (group->getDSPClock(nullptr, &clock) != FMOD_OK)
-        return false;
-    if (group->getDelay(&start, &end, &stop) != FMOD_OK)
-        return false;
+    if (group->getDSPClock(nullptr, &clock) != FMOD_OK) return false;
+    if (group->getDelay(&start, &end, &stop) != FMOD_OK) return false;
     return end > clock;
 }
 
 static bool g_song_sliced = false;
 
 static void release_song(FMODAudioEngine* engine) {
-    if (!g_song_sliced)
-        return;
+    if (!g_song_sliced) return;
     g_song_sliced = false;
-    if (engine)
-        release_group(engine->m_backgroundMusicChannel);
+    if (engine) release_group(engine->m_backgroundMusicChannel);
 }
 
 void Logic::sync_audio_clock() {
     auto* engine = FMODAudioEngine::sharedEngine();
-    if (!engine || !engine->m_system)
-        return;
+    if (!engine || !engine->m_system) return;
     bool apart = !audio_speedhack && std::fabs(speedhack - 1.f) > 0.001f;
     if (!sync_audio || render_active() || apart) {
         release_song(engine);
@@ -327,8 +286,7 @@ void Logic::sync_audio_clock() {
             anchor_music = engine->getMusicTimeMS(0);
         }
         double start_d = (double)(anchor_music) + (level - stepped - anchor_lvl) * 1000.0;
-        if (start_d < 0.0)
-            start_d = 0.0;
+        if (start_d < 0.0) start_d = 0.0;
         engine->setMusicTimeMS((unsigned)std::llround(start_d), false, 0);
         int rate = 44100;
         engine->m_system->getSoftwareFormat(&rate, nullptr, nullptr);
@@ -364,20 +322,18 @@ void Logic::sync_audio_clock() {
         anchor_music = engine->getMusicTimeMS(0);
         last_lvl = level;
         last_wall = now;
-        rate = std::max((double)(speedhack), 0.01);
+        rate = speedhack;
         return;
     }
     double wall = chrono::duration<double>(now - last_wall).count();
     last_wall = now;
     double stepped = std::max(level - last_lvl, 0.0);
-    if (wall > 0.0005 && wall < 1.0)
-        rate += (stepped / wall - rate) * std::min(wall * 4.0, 1.0);
+    if (wall > 0.0005 && wall < 1.0) rate += (stepped / wall - rate) * std::min(wall * 4.0, 1.0);
     last_lvl = level;
 
     double expected_d = (double)(anchor_music) + (level - anchor_lvl) * 1000.0;
-    if (expected_d < 0.0)
-        expected_d = 0.0;
-    float base = std::max(speedhack, 0.01f);
+    if (expected_d < 0.0) expected_d = 0.0;
+    float base = speedhack;
     auto* music = engine->m_backgroundMusicChannel;
     if (rate < base * 0.9 && music) {
         double start_d = std::max(expected_d - stepped * 1000.0, 0.0);
@@ -407,8 +363,7 @@ void Logic::sync_audio_clock() {
             drift = 0;
         }
         double correction = std::clamp(-(double)(drift) / 1000.0 * 0.5, -0.01, 0.01);
-        if (music)
-            music->setPitch((float)(base * (1.0 + correction)));
+        if (music) music->setPitch((float)(base * (1.0 + correction)));
     }
 
     std::unordered_set<FMOD::Channel*> seen;
@@ -425,9 +380,7 @@ void Logic::reset_opening_music_hold() {
 }
 
 std::string Logic::render_file_stem() const {
-    if (!render_name.empty() && render_name != "output")
-        return render_name;
-    if (!macro_name.empty())
-        return macro_name;
+    if (!render_name.empty() && render_name != "output") return render_name;
+    if (!macro_name.empty()) return macro_name;
     return "Replay";
 }
