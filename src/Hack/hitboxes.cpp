@@ -154,10 +154,6 @@ float collision_radius(GameObject* object) {
     return radius;
 }
 
-float hazard_radius(GameObject* object) {
-    return collision_radius(object);
-}
-
 // drawing a hitbox fucks with cached
 class HitboxStateGuard {
     static const size_t OBJECT_BYTES_FROM = 0x2e0, OBJECT_BYTES_TO = 0x370, BOX_BYTES_FROM = 0x140, BOX_BYTES_TO = 0x1b8;
@@ -787,7 +783,7 @@ void Hitboxes::draw_object_hitbox(CCDrawNode* node, GJBaseGameLayer* play, GameO
     case GameObjectType::Hazard:
     case GameObjectType::AnimatedHazard: {
         if (!logic.hitbox_hazard) break;
-        float radius = hazard_radius(object);
+        float radius = collision_radius(object);
         float zoom = std::max(play->m_gameState.m_cameraZoom, 0.05f);
         if (radius > 0.f) {
             unsigned segments = (unsigned)(std::max(radius, 8.f) * 2.f * std::sqrt(zoom));

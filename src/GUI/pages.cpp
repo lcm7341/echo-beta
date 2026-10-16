@@ -570,6 +570,8 @@ void GUI::main() {
         ImGui::BeginDisabled(logic.lock_delta);
         if (toggle("Real Time", logic.real_time_mode)) GUI::get().drop_carry();
         tip("Keeps the game at full speed when it lags instead of slowing it down.");
+        toggle("Skip Far Moving Objects", logic.near_movers);
+        tip("Only tests the moving objects that can reach the player. Same physics, less work.");
         if (EchoUI::Gear("##real-time-settings")) open_real_time = true;
         ImGui::EndDisabled();
         toggle("Audio Speedhack", logic.audio_speedhack);

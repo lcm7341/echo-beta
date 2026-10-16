@@ -13,7 +13,8 @@
 #include "Hack/orbs.hpp"
 #include "GUI/gui.hpp"
 #include "Hack/trajectory.hpp"
-#include "Hack/level_forecast.hpp"
+#include "Hack/predicted_world.hpp"
+#include "Physics/near_movers.hpp"
 #include "Physics/collisions.hpp"
 #include "Physics/gjbasegamelayer.hpp"
 #include "Physics/gravity.hpp"
@@ -91,13 +92,11 @@ static void add_predict_hook(auto& self, const char* name) {
     g_predict_hooks.push_back(hook.unwrap());
 }
 
-void enable_forecast_section_hook(bool on);
-
 void Logic::sync_predict_hooks() {
     bool watching = is_playing() && !is_recording();
     bool want = show_traj || pause_before_kill || traj_autoclicker || (show_death_next && !watching) || predicting;
     bool forecast_users = show_traj || pause_before_kill || traj_autoclicker || best_frame_running;
-    enable_forecast_section_hook(forecast_users && traj_moving_objects);
+    PredictedWorld::get().enable_hooks(forecast_users && traj_moving_objects);
     enable_touch_hook((backstep && !render_capturing()) || is_recording());
     if (want == g_predict_hooks_on) return;
     for (auto* hook : g_predict_hooks)
@@ -110,27 +109,32 @@ static unsigned long long g_updates_run = 0;
 void forget_camera(GJBaseGameLayer* layer);
 
 #define DASH_SPIN_TAG 12
+#define EXPLOSION_SPACING 0.5f
+#define MAX_EXPLOSION_OFFSETS 2048
+#define MAX_OPACITY 255
+#define ALMOST_DONE_PROGRESS 0.9999f
+#define MERGED_HIT_SPACING 0.5f
+#define MAX_MERGED_HITS 512
 static EffectFrame g_effect_frame;
-static int g_stacked_waves = 0;
+static int g_stacked_wave_count = 0;
 static bool g_dud_orb_active = false;
 // waves gd made for a dud ahh orb!
 static std::vector<CCCircleWave*> g_dud_orb_waves;
 struct ExplosionStack {
     std::vector<CCPoint> offsets;
     std::vector<int> weights;
-    int base = 1;
+    int base_weight = 1;
 };
 static std::unordered_map<CCSprite*, ExplosionStack> g_explosion_stacks;
-static Hook* g_stack_visit_hook = nullptr;
+static Hook* g_explosion_visit_hook = nullptr;
 struct FirstExplosion {
     CCSprite* sprite = nullptr;
-    CCPoint at;
+    CCPoint position;
 };
 static std::map<std::pair<GameObject*, PlayerObject*>, FirstExplosion> g_first_orb_explosion;
 static std::unordered_map<PlayerObject*, FirstExplosion> g_first_dash_explosion;
 static bool g_capturing_explosion = false;
 static CCSprite* g_captured_explosion = nullptr;
-#define EXPLOSION_SPACING 0.5f
 
 class $modify(EchoExplosionSprite, CCSprite) {
     static CCSprite* createWithSpriteFrameName(const char* name) {
@@ -140,12 +144,53 @@ class $modify(EchoExplosionSprite, CCSprite) {
     }
 };
 
+using ChildOpacities = std::vector<std::pair<CCRGBAProtocol*, GLubyte>>;
+
+static ChildOpacities child_opacities(CCNode* node) {
+    ChildOpacities kids;
+    for (auto* child : CCArrayExt<CCNode*>(node->getChildren())) {
+        if (auto* rgba = typeinfo_cast<CCRGBAProtocol*>(child))
+            kids.push_back({ rgba, rgba->getOpacity() });
+    }
+    return kids;
+}
+
+static GLubyte weighted_opacity(GLubyte opacity, int weight) {
+    return (GLubyte)std::min(MAX_OPACITY, (int)opacity * std::max(weight, 1));
+}
+
+static void weigh_explosion(CCSprite* sprite, GLubyte sprite_opacity, const ChildOpacities& kids, int weight) {
+    sprite->setOpacity(weighted_opacity(sprite_opacity, weight));
+    for (const auto& [kid, opacity] : kids)
+        kid->setOpacity(weighted_opacity(opacity, weight));
+}
+
+static void restore_explosion_opacity(CCSprite* sprite, GLubyte sprite_opacity, const ChildOpacities& kids) {
+    sprite->setOpacity(sprite_opacity);
+    for (const auto& [kid, opacity] : kids)
+        kid->setOpacity(opacity);
+}
+
+static int explosion_copy_weight(const ExplosionStack& stack) {
+    int total = stack.base_weight;
+    for (int weight : stack.weights)
+        total += weight;
+    return (total + (int)stack.offsets.size()) / ((int)stack.offsets.size() + 1);
+}
+
 class $modify(EchoStackNode, CCNode) {
     static void onModify(auto& self) {
         if (auto hook = self.getHook("cocos2d::CCNode::visit"); hook) {
             hook.unwrap()->setAutoEnable(false);
-            g_stack_visit_hook = hook.unwrap();
+            g_explosion_visit_hook = hook.unwrap();
         }
+    }
+
+    void visit_moved_by(const CCPoint& offset) {
+        kmGLPushMatrix();
+        kmGLTranslatef(offset.x, offset.y, 0.f);
+        CCNode::visit();
+        kmGLPopMatrix();
     }
 
     void visit() {
@@ -161,36 +206,16 @@ class $modify(EchoStackNode, CCNode) {
         // offsets are in the parents space so a plain translate works. whole visit so the outline comes too
         const auto& stack = it->second;
         auto* sprite = it->first;
-        GLubyte own = sprite->getOpacity();
-        std::vector<std::pair<CCRGBAProtocol*, GLubyte>> kids;
-        for (auto* child : CCArrayExt<CCNode*>(getChildren())) {
-            if (auto* rgba = typeinfo_cast<CCRGBAProtocol*>(child))
-                kids.push_back({ rgba, rgba->getOpacity() });
-        }
-        auto weigh = [&](int weight) {
-            auto scaled = [&](GLubyte opacity) {
-                return (GLubyte)std::min(255, (int)opacity * std::max(weight, 1));
-            };
-            sprite->setOpacity(scaled(own));
-            for (auto& [kid, opacity] : kids)
-                kid->setOpacity(scaled(opacity));
-        };
-        int total = stack.base;
-        for (int weight : stack.weights)
-            total += weight;
-        int share = (total + (int)stack.offsets.size()) / ((int)stack.offsets.size() + 1);
+        GLubyte sprite_opacity = sprite->getOpacity();
+        ChildOpacities kids = child_opacities(this);
+        int copy_weight = explosion_copy_weight(stack);
         for (size_t at = 0; at < stack.offsets.size(); ++at) {
-            weigh(share);
-            kmGLPushMatrix();
-            kmGLTranslatef(stack.offsets[at].x, stack.offsets[at].y, 0.f);
-            CCNode::visit();
-            kmGLPopMatrix();
+            weigh_explosion(sprite, sprite_opacity, kids, copy_weight);
+            visit_moved_by(stack.offsets[at]);
         }
-        weigh(share);
+        weigh_explosion(sprite, sprite_opacity, kids, copy_weight);
         CCNode::visit();
-        sprite->setOpacity(own);
-        for (auto& [kid, opacity] : kids)
-            kid->setOpacity(opacity);
+        restore_explosion_opacity(sprite, sprite_opacity, kids);
     }
 };
 
@@ -215,7 +240,16 @@ static float physics_step_seconds() {
 }
 
 static float action_progress_at(CCActionInterval* timed, float elapsed) {
-    return std::clamp(elapsed / std::max(timed->getDuration(), FLT_EPSILON), 0.f, 0.9999f);
+    return std::clamp(elapsed / std::max(timed->getDuration(), FLT_EPSILON), 0.f, ALMOST_DONE_PROGRESS);
+}
+
+static void pose_tween_at_step(CCActionInterval* timed, float elapsed, int step, int born_step, float step_time) {
+    if (!timed) return;
+    timed->update(action_progress_at(timed, elapsed - (float)(step - born_step) * step_time));
+}
+
+static float stacked_opacity(float alpha, int weight, bool additive) {
+    return additive ? std::min(alpha * (float)weight, 1.f) : 1.f - std::pow(1.f - std::clamp(alpha, 0.f, 1.f), (float)weight);
 }
 
 class $modify(EchoCaptureWaveTween, CCActionManager) {
@@ -234,22 +268,44 @@ class $modify(EchoCircleWave, CCCircleWave) {
     };
 
     struct Fields {
-        int hits = 1;
-        int born = 0, last = 0;
+        int hit_count = 1;
+        int born_step = 0;
         bool stacked = false, ages_by_step = false;
         CCAction* tween_action = nullptr;
         std::vector<MergedHit> merged_hits;
 
         ~Fields() {
-            if (stacked) --g_stacked_waves;
+            if (stacked) --g_stacked_wave_count;
             if (tween_action) tween_action->release();
         }
     };
 
+    void hold_as_dud_orb_wave() {
+        this->retain();
+        g_dud_orb_waves.push_back(this);
+    }
+
+    void adopt_wave_tween(CCAction* tween, int step) {
+        auto* fields = m_fields.self();
+        tween->retain();
+        fields->tween_action = tween;
+        fields->ages_by_step = Logic::get().render_capturing();
+        if (fields->ages_by_step && g_effect_frame.active) {
+            this->retain();
+            g_waves_born_this_frame.push_back({ this, step });
+        }
+    }
+
+    void add_to_current_effect() {
+        if (auto* record = g_effect_frame.current; record && record->wave_count < (int)record->waves.size()) {
+            this->retain();
+            record->waves[record->wave_count++] = this;
+        }
+    }
+
     bool init(float startRadius, float endRadius, float duration, bool fadeIn, bool easeOut) {
         if (g_dud_orb_active && !g_effect_frame.current) {
-            this->retain();
-            g_dud_orb_waves.push_back(this);
+            hold_as_dud_orb_wave();
             return true;
         }
         g_wave_being_created = this;
@@ -261,49 +317,43 @@ class $modify(EchoCircleWave, CCCircleWave) {
         if (!ok) return false;
         auto* fields = m_fields.self();
         int step = Logic::get().step_frame;
-        fields->born = fields->last = step;
-        if (typeinfo_cast<CCActionInterval*>(captured)) {
-            captured->retain();
-            fields->tween_action = captured;
-            fields->ages_by_step = Logic::get().render_capturing();
-            if (fields->ages_by_step && g_effect_frame.active) {
-                this->retain();
-                g_waves_born_this_frame.push_back({ this, step });
-            }
-        }
-        if (auto* seen = g_effect_frame.current; seen && seen->wave_count < (int)seen->waves.size()) {
-            this->retain();
-            seen->waves[seen->wave_count++] = this;
-        }
+        fields->born_step = step;
+        if (typeinfo_cast<CCActionInterval*>(captured)) adopt_wave_tween(captured, step);
+        add_to_current_effect();
         return true;
     }
 
     void advance_tween_by(float extra) {
         auto* timed = typeinfo_cast<CCActionInterval*>(m_fields->tween_action);
         if (!timed || timed->isDone() || !getParent()) return;
-        float elapsed = std::min(extra, timed->getDuration() * 0.9999f);
+        float elapsed = std::min(extra, timed->getDuration() * ALMOST_DONE_PROGRESS);
         ActionElapsedSetter::set_elapsed(timed, elapsed);
         timed->update(action_progress_at(timed, elapsed));
+    }
+
+    static bool repeats_last_hit(const Fields* fields, int step, const CCPoint& at) {
+        if (fields->merged_hits.empty()) return false;
+        const auto& last = fields->merged_hits.back();
+        return (!fields->ages_by_step || last.step == step) && ccpDistance(at, last.offset) < MERGED_HIT_SPACING;
     }
 
     void record_merged_hit(const CCPoint* offset) {
         auto* fields = m_fields.self();
         int step = Logic::get().step_frame;
-        fields->last = step;
         CCPoint at = offset ? *offset : CCPointZero;
-        bool same = !fields->merged_hits.empty() && (!fields->ages_by_step || fields->merged_hits.back().step == step) && ccpDistance(at, fields->merged_hits.back().offset) < 0.5f;
-        if (same || fields->merged_hits.size() >= 512) ++fields->merged_hits.back().weight;
+        bool same = repeats_last_hit(fields, step, at);
+        if (same || fields->merged_hits.size() >= MAX_MERGED_HITS) ++fields->merged_hits.back().weight;
         else
             fields->merged_hits.push_back({ step, at, 1 });
-        if (++fields->hits == 2) {
+        if (++fields->hit_count == 2) {
             fields->stacked = true;
-            ++g_stacked_waves;
+            ++g_stacked_wave_count;
         }
     }
 
     void draw_as_stacked_copies(int weight, const CCPoint& offset) {
         float alpha = m_opacity * m_opacityMod;
-        float stacked = m_blendAdditive ? std::min(alpha * (float)weight, 1.f) : 1.f - std::pow(1.f - std::clamp(alpha, 0.f, 1.f), (float)weight);
+        float stacked = stacked_opacity(alpha, weight, m_blendAdditive);
         if (m_opacityMod > 0.f) m_opacity = stacked / m_opacityMod;
         bool moved = offset.x != 0.f || offset.y != 0.f;
         if (moved) {
@@ -314,9 +364,28 @@ class $modify(EchoCircleWave, CCCircleWave) {
         if (moved) kmGLPopMatrix();
     }
 
+    static int hit_weight(const Fields* fields, std::size_t hit) {
+        return hit == 0 ? 1 : fields->merged_hits[hit - 1].weight;
+    }
+
+    static int hit_step(const Fields* fields, std::size_t hit) {
+        return hit == 0 ? fields->born_step : fields->merged_hits[hit - 1].step;
+    }
+
+    static CCPoint hit_offset(const Fields* fields, std::size_t hit) {
+        return hit == 0 ? CCPointZero : fields->merged_hits[hit - 1].offset;
+    }
+
+    static int group_weight(const Fields* fields, std::size_t from, std::size_t to) {
+        int weight = 0;
+        for (std::size_t hit = from; hit < to; ++hit)
+            weight += hit_weight(fields, hit);
+        return weight;
+    }
+
     void draw() {
         auto* fields = m_fields.self();
-        if (g_stacked_waves <= 0 || fields->hits <= 1) {
+        if (g_stacked_wave_count <= 0 || fields->hit_count <= 1) {
             CCCircleWave::draw();
             return;
         }
@@ -325,22 +394,16 @@ class $modify(EchoCircleWave, CCCircleWave) {
         if (timed && timed->isDone()) timed = nullptr;
         float elapsed = timed ? timed->getElapsed() : 0.f;
         float step_time = physics_step_seconds();
-        auto pose_at_step = [&](int step) {
-            if (!timed) return;
-            timed->update(action_progress_at(timed, elapsed - (float)(step - fields->born) * step_time));
-        };
-        const std::size_t MOST = 64;
+        const std::size_t MAX_DRAW_GROUPS = 64;
         std::size_t total = fields->merged_hits.size() + 1;
-        std::size_t groups = std::min(total, MOST);
-        for (std::size_t g = 0; g < groups; ++g) {
-            std::size_t from = g * total / groups, to = (g + 1) * total / groups;
-            int weight = 0;
-            for (std::size_t i = from; i < to; ++i)
-                weight += i == 0 ? 1 : fields->merged_hits[i - 1].weight;
+        std::size_t groups = std::min(total, MAX_DRAW_GROUPS);
+        for (std::size_t group = 0; group < groups; ++group) {
+            std::size_t from = group * total / groups, to = (group + 1) * total / groups;
+            int weight = group_weight(fields, from, to);
             std::size_t mid = (from + to - 1) / 2;
-            int step = mid == 0 ? fields->born : fields->merged_hits[mid - 1].step;
-            CCPoint offset = mid == 0 ? CCPointZero : fields->merged_hits[mid - 1].offset;
-            pose_at_step(step);
+            int step = hit_step(fields, mid);
+            CCPoint offset = hit_offset(fields, mid);
+            pose_tween_at_step(timed, elapsed, step, fields->born_step, step_time);
             if (!timed) {
                 m_radius = old_radius;
                 m_opacity = old_opacity;
@@ -353,58 +416,70 @@ class $modify(EchoCircleWave, CCCircleWave) {
     }
 };
 
+static bool effect_merging_off(const Logic& logic) {
+    return !optimize_effects || logic.predicting || logic.refreshing_visuals || logic.backstepping;
+}
+
 static EffectRecord* effect_slot(const EffectKey& key, const CCPoint* at, bool& fresh) {
     const auto& logic = Logic::get();
     fresh = false;
-    if (!optimize_effects || logic.predicting || logic.refreshing_visuals || logic.backstepping)
-        return nullptr;
-    auto* seen = g_effect_frame.find(key, fresh);
-    if (!seen || !fresh) return seen;
-    g_effect_frame.current = seen;
+    if (effect_merging_off(logic)) return nullptr;
+    auto* record = g_effect_frame.find(key, fresh);
+    if (!record || !fresh) return record;
+    g_effect_frame.current = record;
     if (at) {
-        seen->first_x = at->x;
-        seen->first_y = at->y;
-        seen->has_first = true;
+        record->first_x = at->x;
+        record->first_y = at->y;
+        record->has_first = true;
     }
-    return seen;
+    return record;
 }
 
-static void count_repeat(EffectRecord* seen, const CCPoint* at) {
+static EchoCircleWave* effect_wave(EffectRecord* record, int index) {
+    return static_cast<EchoCircleWave*>(static_cast<CCCircleWave*>(record->waves[index]));
+}
+
+static void count_repeat(EffectRecord* record, const CCPoint* at) {
     CCPoint offset;
     const CCPoint* moved = nullptr;
-    if (at && seen->has_first) {
-        offset = *at - CCPoint{ seen->first_x, seen->first_y };
+    if (at && record->has_first) {
+        offset = *at - CCPoint{ record->first_x, record->first_y };
         moved = &offset;
     }
-    for (int wave = 0; wave < seen->wave_count; ++wave)
-        static_cast<EchoCircleWave*>(static_cast<CCCircleWave*>(seen->waves[wave]))->record_merged_hit(moved);
+    for (int wave = 0; wave < record->wave_count; ++wave)
+        effect_wave(record, wave)->record_merged_hit(moved);
 }
 
 // true = already played ts shown frame. the 1st time needs an EffectScope around the call
 static bool repeated_effect(const EffectKey& key, const CCPoint* at = nullptr) {
     bool fresh = false;
-    auto* seen = effect_slot(key, at, fresh);
-    if (!seen || fresh) return false;
-    count_repeat(seen, at);
+    auto* record = effect_slot(key, at, fresh);
+    if (!record || fresh) return false;
+    count_repeat(record, at);
     return true;
 }
 
-static bool spread_effect(const EffectKey& key) {
-    const int PER_FRAME = 16;
-    auto& logic = Logic::get();
-    if (!optimize_effects || logic.predicting || logic.refreshing_visuals || logic.backstepping) return false;
-    bool fresh = false;
-    auto* seen = g_effect_frame.find(key, fresh);
-    if (!seen) return false;
+static double shown_frame_seconds(Logic& logic) {
     double interval = 1.0 / std::max(logic.render_fps, 1);
     if (!logic.render_capturing()) {
         interval = CCDirector::sharedDirector()->getAnimationInterval() * logic.speedhack;
     }
-    int gap = std::max((int)(logic.sample_rate() * interval / PER_FRAME), 1);
+    return interval;
+}
+
+static bool skip_spread_effect(const EffectKey& key) {
+    const int PLAYS_PER_SHOWN_FRAME = 16;
+    auto& logic = Logic::get();
+    if (effect_merging_off(logic)) return false;
+    bool fresh = false;
+    auto* record = g_effect_frame.find(key, fresh);
+    if (!record) return false;
+    double interval = shown_frame_seconds(logic);
+    int steps_between_plays = std::max((int)(logic.sample_rate() * interval / PLAYS_PER_SHOWN_FRAME), 1);
     int step = logic.step_frame;
-    if (fresh || (seen->play_count < PER_FRAME && step - seen->last_step >= gap)) {
-        seen->last_step = step;
-        ++seen->play_count;
+    if (fresh || (record->play_count < PLAYS_PER_SHOWN_FRAME && step - record->last_step >= steps_between_plays)) {
+        record->last_step = step;
+        ++record->play_count;
         return false;
     }
     return true;
@@ -419,11 +494,14 @@ static void drop_dud_waves() {
 }
 
 struct EffectScope {
-    EffectRecord* before = g_effect_frame.current;
+    EffectRecord* outer_record = g_effect_frame.current;
     ~EffectScope() {
-        g_effect_frame.current = before;
+        g_effect_frame.current = outer_record;
     }
 };
+
+#define GAME_MANAGER_GAME_LAYER_OFFSET 0x1f8
+#define GAME_LAYER_EFFECT_LAYER_OFFSET 0xeb8
 
 // the layer gd adds the dash afterimage to: GameManager+0x1f8 (the game layer) then +0xeb8, from stopDashing on m1
 static CCNode* effect_layer() {
@@ -431,9 +509,9 @@ static CCNode* effect_layer() {
     auto* game = GJBaseGameLayer::get();
     auto* gm = GameManager::get();
     if (!game || !gm) return nullptr;
-    if (*reinterpret_cast<GJBaseGameLayer**>(reinterpret_cast<char*>(gm) + 0x1f8) != game)
+    if (*reinterpret_cast<GJBaseGameLayer**>(reinterpret_cast<char*>(gm) + GAME_MANAGER_GAME_LAYER_OFFSET) != game)
         return nullptr;
-    auto* layer = *reinterpret_cast<CCNode**>(reinterpret_cast<char*>(game) + 0xeb8);
+    auto* layer = *reinterpret_cast<CCNode**>(reinterpret_cast<char*>(game) + GAME_LAYER_EFFECT_LAYER_OFFSET);
     for (auto* up = layer ? layer->getParent() : nullptr; up; up = up->getParent()) {
         if (up == game) return layer;
     }
@@ -443,35 +521,45 @@ static CCNode* effect_layer() {
 #endif
 }
 
-template <class F>
-static CCSprite* added_effect(F&& run) {
-    auto* layer = effect_layer();
-    unsigned before = layer ? layer->getChildrenCount() : 0;
-    run();
-    if (!layer || layer->getChildrenCount() <= before) return nullptr;
+static CCSprite* last_child_sprite(CCNode* layer) {
     return typeinfo_cast<CCSprite*>(static_cast<CCObject*>(layer->getChildren()->objectAtIndex(layer->getChildrenCount() - 1)));
 }
 
+template <class F>
+static CCSprite* added_effect(F&& run) {
+    auto* layer = effect_layer();
+    unsigned children_before = layer ? layer->getChildrenCount() : 0;
+    run();
+    if (!layer || layer->getChildrenCount() <= children_before) return nullptr;
+    return last_child_sprite(layer);
+}
+
 static void stack_explosion(const FirstExplosion& first, CCPoint now) {
-    auto offset = now - first.at;
+    auto offset = now - first.position;
     auto& stack = g_explosion_stacks[first.sprite];
-    CCPoint last = stack.offsets.empty() ? CCPointZero : stack.offsets.back();
-    if (ccpDistance(offset, last) >= EXPLOSION_SPACING && stack.offsets.size() < 2048) {
+    CCPoint last_offset = stack.offsets.empty() ? CCPointZero : stack.offsets.back();
+    if (ccpDistance(offset, last_offset) >= EXPLOSION_SPACING && stack.offsets.size() < MAX_EXPLOSION_OFFSETS) {
         stack.offsets.push_back(offset);
         stack.weights.push_back(1);
     }
-    else if (stack.weights.empty()) ++stack.base;
+    else if (stack.weights.empty()) ++stack.base_weight;
     else ++stack.weights.back();
+}
+
+static void enable_explosion_visit_hook() {
+    if (g_explosion_visit_hook && !g_explosion_visit_hook->isEnabled()) (void)g_explosion_visit_hook->enable();
+}
+
+static void disable_explosion_visit_hook() {
+    if (g_explosion_visit_hook && g_explosion_visit_hook->isEnabled()) (void)g_explosion_visit_hook->disable();
 }
 
 static void keep_first_explosion(CCSprite* sprite) {
     if (g_explosion_stacks.emplace(sprite, ExplosionStack{}).second) sprite->retain();
-    if (g_stack_visit_hook && !g_stack_visit_hook->isEnabled()) (void)g_stack_visit_hook->enable();
+    enable_explosion_visit_hook();
 }
 
-static void forget_explosions() {
-    g_first_orb_explosion.clear();
-    g_first_dash_explosion.clear();
+static void release_detached_explosions() {
     for (auto it = g_explosion_stacks.begin(); it != g_explosion_stacks.end();) {
         if (!it->first->getParent()) {
             it->first->release();
@@ -479,29 +567,36 @@ static void forget_explosions() {
         }
         else ++it;
     }
-    if (g_explosion_stacks.empty() && g_stack_visit_hook && g_stack_visit_hook->isEnabled())
-        (void)g_stack_visit_hook->disable();
+}
+
+static void forget_explosions() {
+    g_first_orb_explosion.clear();
+    g_first_dash_explosion.clear();
+    release_detached_explosions();
+    if (g_explosion_stacks.empty()) disable_explosion_visit_hook();
 }
 
 static void age_waves_born_this_frame() {
     if (g_waves_born_this_frame.empty()) return;
-    int last = Logic::get().step_frame - 1;
+    int last_step = Logic::get().step_frame - 1;
     float step_time = physics_step_seconds();
-    for (const auto& [wave, born] : g_waves_born_this_frame) {
-        static_cast<EchoCircleWave*>(wave)->advance_tween_by((float)std::max(last - born, 0) * step_time);
+    for (const auto& [wave, born_step] : g_waves_born_this_frame) {
+        static_cast<EchoCircleWave*>(wave)->advance_tween_by((float)std::max(last_step - born_step, 0) * step_time);
         wave->release();
     }
     g_waves_born_this_frame.clear();
 }
 
+static void release_effect_waves(EffectRecord& record) {
+    for (int wave = 0; wave < record.wave_count; ++wave)
+        static_cast<CCCircleWave*>(record.waves[wave])->release();
+    record.wave_count = 0;
+}
+
 static void forget_effects() {
     forget_explosions();
-    for (std::size_t at = 0; at < g_effect_frame.count; ++at) {
-        auto& seen = g_effect_frame.seen[at];
-        for (int wave = 0; wave < seen.wave_count; ++wave)
-            static_cast<CCCircleWave*>(seen.waves[wave])->release();
-        seen.wave_count = 0;
-    }
+    for (std::size_t at = 0; at < g_effect_frame.count; ++at)
+        release_effect_waves(g_effect_frame.seen[at]);
     g_effect_frame.count = 0;
     g_effect_frame.current = nullptr;
 }
@@ -857,7 +952,7 @@ class $modify(EchoPlayLayer, PlayLayer) {
     }
 
     void resetLevel() {
-        Trajectory::get().cancel_job();
+        Trajectory::get().invalidate();
         forget_effects();
         g_effect_frame.started_step = Logic::get().step_frame;
         restore_tilt(m_player1);
@@ -878,7 +973,6 @@ class $modify(EchoPlayLayer, PlayLayer) {
         bool roll_seed = !Logic::get().keep_lvl_seed && !logic.seed_override && !logic.is_playing();
         if (!roll_seed) Logic::get().plant_lvl_seed(this);
         Logic::get().end_safe_mode_attempt(this);
-        forecast::invalidate();
         reseed_variance();
         g_in_gd_reset = true;
         g_seed_applied = false;
@@ -1137,7 +1231,6 @@ GJBaseGameLayer* step_begin(GJBaseGameLayer* self) {
 void step_end(GJBaseGameLayer* self, GJBaseGameLayer* layer, bool is_half_tick) {
     auto& logic = Logic::get();
     auto* play = Logic::as_play(self);
-    if (play) forecast::note_live_step();
 
     if (!layer) {
         dash_spin_post(is_half_tick);
@@ -1174,7 +1267,6 @@ class $modify(EchoGameLayer, GJBaseGameLayer) {
     static void onModify(auto& self) {
         add_predict_hook(self, "GJBaseGameLayer::gameEventTriggered");
         add_predict_hook(self, "GJBaseGameLayer::updateObjectSection");
-        add_predict_hook(self, "GJBaseGameLayer::collisionCheckObjects");
         add_predict_hook(self, "GJBaseGameLayer::flipGravity");
         add_predict_hook(self, "GJBaseGameLayer::teleportPlayer");
         add_predict_hook(self, "GJBaseGameLayer::destroyObject");
@@ -1502,6 +1594,10 @@ class $modify(EchoGameLayer, GJBaseGameLayer) {
     }
 
     void collisionCheckObjects(PlayerObject* player, gd::vector<GameObject*>* objects, int length, float dt) {
+        if (objects == &m_calcNonEffectObjects && length > 0 && Logic::get().near_movers) {
+            objects = NearMovers::filter(player, objects, length, dt);
+            length = (int)objects->size();
+        }
         if (!Trajectory::get().isFake(player)) {
             GJBaseGameLayer::collisionCheckObjects(player, objects, length, dt);
             return;
@@ -2052,7 +2148,7 @@ class $modify(EchoPlayerObject, PlayerObject) {
         }
         bool loud = m_playEffects;
         EffectScope scope;
-        bool repeat = loud && ring && spread_effect({ this, 0, ring->m_uniqueID });
+        bool repeat = loud && ring && skip_spread_effect({ this, 0, ring->m_uniqueID });
         if (repeat && ring && !m_isDashing) {
             if (auto first = g_first_orb_explosion.find({ ring, this }); first != g_first_orb_explosion.end() && first->second.sprite)
                 stack_explosion(first->second, ring->getPosition());
@@ -2096,7 +2192,7 @@ class $modify(EchoPlayerObject, PlayerObject) {
         } dash_note{ this, was_dashing, visual_spin, tick_spin, use_tick };
         bool reduced = m_maybeReducedEffects;
         EffectScope scope;
-        bool repeat = was_dashing && !reduced && spread_effect({ this, 1, 0 });
+        bool repeat = was_dashing && !reduced && skip_spread_effect({ this, 1, 0 });
         if (repeat) {
             if (auto first = g_first_dash_explosion.find(this); first != g_first_dash_explosion.end() && first->second.sprite)
                 stack_explosion(first->second, getPosition());
@@ -2154,9 +2250,10 @@ class $modify(EchoPlayerObject, PlayerObject) {
             if (tracing()) {
                 auto* layer = GJBaseGameLayer::get();
                 const auto& value = Logic::get();
-                trace_event(fmt::format("P frame={} p2={} button={} upside_down={} buffered={} maintaining={} playback={} restoring={} injecting={} physical={}\n",
+                trace_event(fmt::format("P frame={} p2={} button={} upside_down={} buffered={} maintaining={} playback={} restoring={} injecting={} physical={} rings={} suppress_rings={} predicting={}\n",
                     value.step_frame + 1, layer && this == layer->m_player2, (int)button, m_isUpsideDown, m_jumpBuffered, value.maintaining_gravity,
-                    value.applying_playback, value.restoring_holds, value.injecting, layer ? Logic::get().physical_hold(layer, layer && this == layer->m_player2) : false));
+                    value.applying_playback, value.restoring_holds, value.injecting, layer ? Logic::get().physical_hold(layer, layer && this == layer->m_player2) : false,
+                    m_touchingRings ? (int)m_touchingRings->count() : -1, value.suppress_rings, value.predicting));
             }
         if (logic.suppress_auto_hold && button == PlayerButton::Jump && !Trajectory::get().isFake(this) && !logic.maintaining_gravity && !logic.applying_playback && !logic.injecting) {
             return false;
@@ -2520,7 +2617,13 @@ class $modify(EchoEffectObject, EffectGameObject) {
     }
 
     void triggerObject(GJBaseGameLayer* layer, int uniqueID, const gd::vector<int>* remapKeys) {
-        if (Logic::get().predicting && !forecast::firing()) return;
+        auto& world = PredictedWorld::get();
+        if (Logic::get().predicting && !world.firing()) return;
+        world.note_trigger(this);
+        if (Logic::get().trace_logging) {
+            if (world.firing()) Trajectory::log_line(fmt::format("WFIRE step={} uid={} id={} x={:.2f}", world.horizon(), m_uniqueID, m_objectID, m_positionX));
+            else if (!Logic::get().predicting) Trajectory::log_line(fmt::format("LFIRE frame={} uid={} id={} x={:.2f}", Logic::get().step_frame, m_uniqueID, m_objectID, m_positionX));
+        }
         EffectGameObject::triggerObject(layer, uniqueID, remapKeys);
     }
 
@@ -2542,7 +2645,10 @@ class $modify(EchoRandTrigger, RandTriggerGameObject) {
 
     void triggerObject(GJBaseGameLayer* layer, int uniqueID, const gd::vector<int>* remapKeys) {
         // predicting must NOT roll the real random
-        if (Logic::get().predicting && !forecast::firing()) return;
+        auto& world = PredictedWorld::get();
+        if (Logic::get().predicting && !world.firing()) return;
+        world.note_trigger(this);
+        world.note_random_roll(&m_fields->state);
         if (m_objectID != 2068) {
             if (!Logic::get().predicting)
                 trace_note(fmt::format("N frame={} uid={} rand={}\n", Logic::get().step_frame, m_uniqueID, Logic::get().game_random_state()));
@@ -2999,41 +3105,60 @@ class $modify(EchoEGLView, CCEGLView) {
 };
 #endif
 
+#define CAMERA_WORD_BYTES 4
+#define CAMERA_MOVE_X_TWEEN 1
+#define CAMERA_MOVE_Y_TWEEN 2
+#define CAMERA_DT_PER_SECOND 60.0
+#define VISIBILITY_CAMERA_GAP 0.5f
+
 // gds camera follow moves the same amt every call no matter the step length, so at a high tps it snapped.
 // physics keeps gds camera every step (lvls read it, desideration died w/o that). the picture gets its own camera,
 // run ~240 times a second on the real steps, & physics gets its values, tweens & layers back right after.
 // frames are drawn w/ the pictures
-struct CameraRegions {
-    std::vector<std::pair<unsigned, unsigned>> regions; // offset in the layer, 4 byte words
-    std::vector<unsigned> mask;
+struct WordRange {
+    unsigned start, count;
+};
+
+struct CameraWords {
+    std::vector<WordRange> regions; // offset in the layer, 4 byte words
+    std::vector<unsigned> changed_by_camera;
     std::vector<unsigned> before, shown, physics;
-    std::size_t words = 0;
+    std::size_t word_count = 0;
+
+    void add_region(GJBaseGameLayer* layer, const void* from, const void* to) {
+        auto base = reinterpret_cast<uintptr_t>(layer);
+        auto start = reinterpret_cast<uintptr_t>(from) - base, end = reinterpret_cast<uintptr_t>(to) - base;
+        regions.push_back({ (unsigned)(start / CAMERA_WORD_BYTES), (unsigned)((end - start) / CAMERA_WORD_BYTES) });
+    }
+
+    void add_camera_regions(GJBaseGameLayer* layer) {
+        auto& gs = layer->m_gameState;
+        add_region(layer, &gs, &gs.m_spawnChannelRelated0);
+        add_region(layer, &gs.m_cameraPosition, &gs.m_tweenActions);
+        add_region(layer, &gs.m_cameraEdgeValue0, &gs.m_gameObjectPhysics);
+        add_region(layer, &gs.m_unkUint10, &gs.m_activatedObjectIDs);
+        add_region(layer, &gs.m_unkUint13, &gs.m_stateObjects);
+        add_region(layer, &layer->m_cameraFlip, &layer->m_updateGroundShadows);
+        add_region(layer, &layer->m_cameraUnzoomedHeightOffset, &layer->m_targetCameraHeightOffset + 1);
+    }
+
+    void size_buffers() {
+        word_count = 0;
+        for (const auto& region : regions)
+            word_count += region.count;
+        changed_by_camera.assign(word_count, 0);
+        before.assign(word_count, 0);
+        shown.assign(word_count, 0);
+        physics.assign(word_count, 0);
+    }
 
     void build(GJBaseGameLayer* layer) {
-        auto base = reinterpret_cast<uintptr_t>(layer);
-        auto& gs = layer->m_gameState;
-        auto add = [&](const void* from, const void* to) {
-            auto start = reinterpret_cast<uintptr_t>(from) - base, end = reinterpret_cast<uintptr_t>(to) - base;
-            regions.push_back({ (unsigned)(start / 4), (unsigned)((end - start) / 4) });
-        };
-        add(&gs, &gs.m_spawnChannelRelated0);
-        add(&gs.m_cameraPosition, &gs.m_tweenActions);
-        add(&gs.m_cameraEdgeValue0, &gs.m_gameObjectPhysics);
-        add(&gs.m_unkUint10, &gs.m_activatedObjectIDs);
-        add(&gs.m_unkUint13, &gs.m_stateObjects);
-        add(&layer->m_cameraFlip, &layer->m_updateGroundShadows);
-        add(&layer->m_cameraUnzoomedHeightOffset, &layer->m_targetCameraHeightOffset + 1);
-        words = 0;
-        for (const auto& region : regions)
-            words += region.second;
-        mask.assign(words, 0);
-        before.assign(words, 0);
-        shown.assign(words, 0);
-        physics.assign(words, 0);
+        add_camera_regions(layer);
+        size_buffers();
     }
 
     template <class F>
-    void each(GJBaseGameLayer* layer, F&& visit) {
+    void for_each_word(GJBaseGameLayer* layer, F&& visit) {
         auto* raw = reinterpret_cast<unsigned*>(layer);
         std::size_t at = 0;
         for (const auto& [start, count] : regions)
@@ -3041,8 +3166,8 @@ struct CameraRegions {
                 visit(raw[start + word], at);
     }
 
-    std::size_t index_of(const void* field, GJBaseGameLayer* layer) const {
-        auto off = (unsigned)((reinterpret_cast<uintptr_t>(field) - reinterpret_cast<uintptr_t>(layer)) / 4);
+    std::size_t word_index_of(const void* field, GJBaseGameLayer* layer) const {
+        auto off = (unsigned)((reinterpret_cast<uintptr_t>(field) - reinterpret_cast<uintptr_t>(layer)) / CAMERA_WORD_BYTES);
         std::size_t at = 0;
         for (const auto& [start, count] : regions) {
             if (off >= start && off < start + count) return at + off - start;
@@ -3052,21 +3177,27 @@ struct CameraRegions {
     }
 
     void save(GJBaseGameLayer* layer, std::vector<unsigned>& into) {
-        each(layer, [&](unsigned& word, std::size_t at) { into[at] = word; });
+        for_each_word(layer, [&](unsigned& word, std::size_t at) { into[at] = word; });
     }
 
     void load(GJBaseGameLayer* layer, const std::vector<unsigned>& from) {
-        each(layer, [&](unsigned& word, std::size_t at) { word = from[at]; });
+        for_each_word(layer, [&](unsigned& word, std::size_t at) { word = from[at]; });
     }
 
-    void load_shown(GJBaseGameLayer* layer) {
-        each(layer, [&](unsigned& word, std::size_t at) {
-            if (mask[at]) word = shown[at];
+    void load_shown_changes(GJBaseGameLayer* layer) {
+        for_each_word(layer, [&](unsigned& word, std::size_t at) {
+            if (changed_by_camera[at]) word = shown[at];
         });
     }
 
-    void learn(GJBaseGameLayer* layer) {
-        each(layer, [&](unsigned& word, std::size_t at) { mask[at] |= word != before[at]; });
+    void mark_changed_since_before(GJBaseGameLayer* layer) {
+        for_each_word(layer, [&](unsigned& word, std::size_t at) { changed_by_camera[at] |= word != before[at]; });
+    }
+
+    void mark_changed_from_physics(GJBaseGameLayer* layer) {
+        for_each_word(layer, [&](unsigned& word, std::size_t at) {
+            if (word != physics[at]) changed_by_camera[at] = 1;
+        });
     }
 };
 
@@ -3076,34 +3207,36 @@ struct SavedNode {
     float scale_x, scale_y, rotation_x, rotation_y, skew_x, skew_y;
 };
 
-static void save_nodes(GJBaseGameLayer* layer, std::vector<SavedNode>& spots) {
-    spots.clear();
-    auto keep = [&](CCNode* node) {
-        if (node)
-            spots.push_back({ node, node->getPosition(), node->getScaleX(), node->getScaleY(), node->getRotationX(), node->getRotationY(),
-                node->getSkewX(), node->getSkewY() });
-    };
-    auto with_children = [&](CCNode* node) {
-        keep(node);
-        if (!node || !node->getChildren()) return;
-        for (auto* child : CCArrayExt<CCNode*>(node->getChildren())) {
-            keep(child);
-            if (!child || !child->getChildren()) continue;
-            for (auto* grandchild : CCArrayExt<CCNode*>(child->getChildren()))
-                keep(grandchild);
-        }
-    };
-    keep(layer->m_objectLayer);
-    keep(layer->m_inShaderObjectLayer);
-    keep(layer->m_aboveShaderObjectLayer);
-    keep(layer->m_background);
-    with_children(layer->m_groundLayer);
-    with_children(layer->m_groundLayer2);
-    with_children(layer->m_middleground);
+static void save_node(std::vector<SavedNode>& saved, CCNode* node) {
+    if (node)
+        saved.push_back({ node, node->getPosition(), node->getScaleX(), node->getScaleY(), node->getRotationX(), node->getRotationY(),
+            node->getSkewX(), node->getSkewY() });
 }
 
-static void restore_nodes(const std::vector<SavedNode>& spots) {
-    for (const auto& spot : spots) {
+static void save_node_and_two_levels_below(std::vector<SavedNode>& saved, CCNode* node) {
+    save_node(saved, node);
+    if (!node || !node->getChildren()) return;
+    for (auto* child : CCArrayExt<CCNode*>(node->getChildren())) {
+        save_node(saved, child);
+        if (!child || !child->getChildren()) continue;
+        for (auto* grandchild : CCArrayExt<CCNode*>(child->getChildren()))
+            save_node(saved, grandchild);
+    }
+}
+
+static void save_nodes(GJBaseGameLayer* layer, std::vector<SavedNode>& saved) {
+    saved.clear();
+    save_node(saved, layer->m_objectLayer);
+    save_node(saved, layer->m_inShaderObjectLayer);
+    save_node(saved, layer->m_aboveShaderObjectLayer);
+    save_node(saved, layer->m_background);
+    save_node_and_two_levels_below(saved, layer->m_groundLayer);
+    save_node_and_two_levels_below(saved, layer->m_groundLayer2);
+    save_node_and_two_levels_below(saved, layer->m_middleground);
+}
+
+static void restore_nodes(const std::vector<SavedNode>& saved) {
+    for (const auto& spot : saved) {
         spot.node->setPosition(spot.position);
         spot.node->setScaleX(spot.scale_x);
         spot.node->setScaleY(spot.scale_y);
@@ -3116,20 +3249,20 @@ static void restore_nodes(const std::vector<SavedNode>& spots) {
 
 struct CameraPace {
     GJBaseGameLayer* layer = nullptr;
-    CameraRegions state;
-    unsigned long long update = 0;
-    int at = 0, since = 0;
-    bool have_shown = false, shadow = false;
-    CCPoint last1, last2;
+    CameraWords words;
+    unsigned long long last_update_run = 0;
+    int step_in_update = 0, steps_since_shown = 0;
+    bool have_shown = false, in_picture_call = false;
+    CCPoint player1_last_position, player2_last_position;
     std::vector<SavedNode> shown_nodes, physics_nodes;
-    bool macro = false, have_cam = false;
-    CCPoint cam_after;
+    bool camera_jumped = false, have_camera_after = false;
+    CCPoint camera_after;
     // gd moves the camera w/ tweens (cameraMoveX/Y are keys 1 & 2) from where it is rn. the picture keeps its own
     // copy of every key its calls touched, sharing gds made it jump onto gds camera
-    std::unordered_map<int, GJValueTween> tweens;
-    std::unordered_set<int> owned{ 1, 2 };
+    std::unordered_map<int, GJValueTween> shown_tweens;
+    std::unordered_set<int> owned_tweens{ CAMERA_MOVE_X_TWEEN, CAMERA_MOVE_Y_TWEEN };
     int mirror_depth = 0;
-    std::size_t camera_word = 0;
+    std::size_t camera_position_word = 0;
 };
 static CameraPace g_camera_pace;
 
@@ -3159,138 +3292,222 @@ static void set_tween(GJBaseGameLayer* layer, int key, const GJValueTween* tween
 }
 
 static void restore_tweens(GJBaseGameLayer* layer, const TweenMap& from) {
-    std::vector<int> extra;
+    std::vector<int> extra_keys;
     for (const auto& [key, tween] : layer->m_gameState.m_tweenActions)
-        if (!from.contains(key)) extra.push_back(key);
-    for (int key : extra)
+        if (!from.contains(key)) extra_keys.push_back(key);
+    for (int key : extra_keys)
         set_tween(layer, key, nullptr);
     for (const auto& [key, tween] : from)
         set_tween(layer, key, &tween);
 }
 
 // physics' map w/ the pictures own keys swapped in
-static void install_tweens(GJBaseGameLayer* layer) {
+static void install_shown_tweens(GJBaseGameLayer* layer) {
     auto& pace = g_camera_pace;
-    for (int key : pace.owned) {
-        auto it = pace.tweens.find(key);
-        set_tween(layer, key, it == pace.tweens.end() ? nullptr : &it->second);
+    for (int key : pace.owned_tweens) {
+        auto it = pace.shown_tweens.find(key);
+        set_tween(layer, key, it == pace.shown_tweens.end() ? nullptr : &it->second);
+    }
+}
+
+static void own_changed_tweens(GJBaseGameLayer* layer, const TweenMap& before) {
+    auto& pace = g_camera_pace;
+    const auto& map = layer->m_gameState.m_tweenActions;
+    for (const auto& [key, tween] : map) {
+        auto it = before.find(key);
+        if (it == before.end() || !same_tween(it->second, tween)) pace.owned_tweens.insert(key);
+    }
+    for (const auto& [key, tween] : before)
+        if (map.find(key) == map.end()) pace.owned_tweens.insert(key);
+}
+
+static void copy_owned_tweens(GJBaseGameLayer* layer) {
+    auto& pace = g_camera_pace;
+    const auto& map = layer->m_gameState.m_tweenActions;
+    for (int key : pace.owned_tweens) {
+        if (auto it = map.find(key); it != map.end()) pace.shown_tweens[key] = it->second;
+        else pace.shown_tweens.erase(key);
     }
 }
 
 // anything a picture call started, changed or stopped is the pictures from now on
 static void keep_tweens(GJBaseGameLayer* layer, const TweenMap& before) {
-    auto& pace = g_camera_pace;
-    const auto& map = layer->m_gameState.m_tweenActions;
-    for (const auto& [key, tween] : map) {
-        auto it = before.find(key);
-        if (it == before.end() || !same_tween(it->second, tween)) pace.owned.insert(key);
-    }
-    for (const auto& [key, tween] : before)
-        if (map.find(key) == map.end()) pace.owned.insert(key);
-    for (int key : pace.owned) {
-        if (auto it = map.find(key); it != map.end()) pace.tweens[key] = it->second;
-        else pace.tweens.erase(key);
-    }
+    own_changed_tweens(layer, before);
+    copy_owned_tweens(layer);
 }
 
 static int camera_step_interval() {
     return std::max((int)std::lround(Logic::get().sample_rate() / VANILLA_TPS), 1);
 }
 
-static void run_shown_camera(GJBaseGameLayer* layer) {
+struct PlayerLastPositions {
+    CCPoint player1, player2;
+};
+
+static void remember_player_positions(GJBaseGameLayer* layer) {
     auto& pace = g_camera_pace;
-    auto& state = pace.state;
     auto* p1 = layer->m_player1;
     auto* p2 = layer->m_player2;
-    state.save(layer, state.physics);
-    save_nodes(layer, pace.physics_nodes);
-    TweenMap physics_tweens = copy_tweens(layer);
-    if (!pace.have_shown || pace.macro) {
-        state.shown = state.physics;
-        pace.shown_nodes = pace.physics_nodes;
-        pace.tweens.clear();
-        for (int key : pace.owned)
-            if (auto it = physics_tweens.find(key); it != physics_tweens.end())
-                pace.tweens.emplace(key, it->second);
-        pace.have_shown = true;
-        pace.macro = false;
-        pace.since = 0;
-        pace.last1 = p1->getPosition();
-        pace.last2 = p2 ? p2->getPosition() : CCPoint{};
-        return;
-    }
-    state.load_shown(layer);
-    install_tweens(layer);
-    float elapsed = (float)pace.since * Logic::get().physics_step();
+    pace.player1_last_position = p1->getPosition();
+    pace.player2_last_position = p2 ? p2->getPosition() : CCPoint{};
+}
+
+static void start_shown_from_physics(GJBaseGameLayer* layer, const TweenMap& physics_tweens) {
+    auto& pace = g_camera_pace;
+    pace.words.shown = pace.words.physics;
+    pace.shown_nodes = pace.physics_nodes;
+    pace.shown_tweens.clear();
+    for (int key : pace.owned_tweens)
+        if (auto it = physics_tweens.find(key); it != physics_tweens.end())
+            pace.shown_tweens.emplace(key, it->second);
+    pace.have_shown = true;
+    pace.camera_jumped = false;
+    pace.steps_since_shown = 0;
+    remember_player_positions(layer);
+}
+
+static std::vector<int> step_shown_tweens(GJBaseGameLayer* layer, float elapsed) {
+    auto& pace = g_camera_pace;
     std::vector<int> finished;
     for (auto& [key, tween] : layer->m_gameState.m_tweenActions) {
-        bool own = pace.owned.contains(key);
+        bool own = pace.owned_tweens.contains(key);
         if (own && !tween.m_finished && !tween.m_disabled) tween.step(elapsed);
         layer->m_gameState.updateTweenAction(tween.m_currentValue, key);
         if (own && tween.m_finished) finished.push_back(key);
     }
     for (int key : finished)
         set_tween(layer, key, nullptr);
-    TweenMap installed = copy_tweens(layer);
-    state.save(layer, state.before);
-    auto real1 = p1->m_lastPosition;
-    CCPoint real2 = p2 ? p2->m_lastPosition : CCPoint{};
-    p1->m_lastPosition = pace.last1;
-    if (p2) p2->m_lastPosition = pace.last2;
-    float owed = (float)(60.0 / Logic::get().sample_rate() * std::max(pace.since, 1));
-    pace.shadow = true;
+    return finished;
+}
+
+static PlayerLastPositions swap_in_shown_last_positions(GJBaseGameLayer* layer) {
+    auto& pace = g_camera_pace;
+    auto* p1 = layer->m_player1;
+    auto* p2 = layer->m_player2;
+    PlayerLastPositions real{ p1->m_lastPosition, p2 ? p2->m_lastPosition : CCPoint{} };
+    p1->m_lastPosition = pace.player1_last_position;
+    if (p2) p2->m_lastPosition = pace.player2_last_position;
+    return real;
+}
+
+static void put_back_last_positions(GJBaseGameLayer* layer, const PlayerLastPositions& real) {
+    auto* p1 = layer->m_player1;
+    auto* p2 = layer->m_player2;
+    p1->m_lastPosition = real.player1;
+    if (p2) p2->m_lastPosition = real.player2;
+}
+
+static void update_picture_camera(GJBaseGameLayer* layer) {
+    auto& pace = g_camera_pace;
+    float owed = (float)(CAMERA_DT_PER_SECOND / Logic::get().sample_rate() * std::max(pace.steps_since_shown, 1));
+    pace.in_picture_call = true;
     layer->updateCamera(owed);
-    pace.shadow = false;
-    state.learn(layer);
+    pace.in_picture_call = false;
+}
+
+static void run_shown_camera(GJBaseGameLayer* layer) {
+    auto& pace = g_camera_pace;
+    auto& words = pace.words;
+    words.save(layer, words.physics);
+    save_nodes(layer, pace.physics_nodes);
+    TweenMap physics_tweens = copy_tweens(layer);
+    if (!pace.have_shown || pace.camera_jumped) {
+        start_shown_from_physics(layer, physics_tweens);
+        return;
+    }
+    words.load_shown_changes(layer);
+    install_shown_tweens(layer);
+    float elapsed = (float)pace.steps_since_shown * Logic::get().physics_step();
+    std::vector<int> finished = step_shown_tweens(layer, elapsed);
+    TweenMap installed = copy_tweens(layer);
+    words.save(layer, words.before);
+    PlayerLastPositions real = swap_in_shown_last_positions(layer);
+    update_picture_camera(layer);
+    words.mark_changed_since_before(layer);
     keep_tweens(layer, installed);
     for (int key : finished)
-        pace.tweens.erase(key);
-    p1->m_lastPosition = real1;
-    if (p2) p2->m_lastPosition = real2;
-    pace.last1 = p1->getPosition();
-    pace.last2 = p2 ? p2->getPosition() : CCPoint{};
-    pace.since = 0;
-    state.save(layer, state.shown);
+        pace.shown_tweens.erase(key);
+    put_back_last_positions(layer, real);
+    remember_player_positions(layer);
+    pace.steps_since_shown = 0;
+    words.save(layer, words.shown);
     save_nodes(layer, pace.shown_nodes);
-    state.load(layer, state.physics);
+    words.load(layer, words.physics);
     restore_tweens(layer, physics_tweens);
     restore_nodes(pace.physics_nodes);
+}
+
+static bool skip_mirror(GJBaseGameLayer* layer) {
+    const auto& pace = g_camera_pace;
+    return pace.in_picture_call || pace.mirror_depth > 0 || pace.layer != layer || !pace.have_shown || camera_step_interval() <= 1;
+}
+
+template <class F>
+static void run_call_for_picture(GJBaseGameLayer* layer, F& call) {
+    auto& pace = g_camera_pace;
+    auto& words = pace.words;
+    words.save(layer, words.physics);
+    TweenMap physics_tweens = copy_tweens(layer);
+    std::vector<SavedNode> nodes;
+    save_nodes(layer, nodes);
+    words.load_shown_changes(layer);
+    install_shown_tweens(layer);
+    TweenMap installed = copy_tweens(layer);
+    words.save(layer, words.before);
+    pace.in_picture_call = true;
+    call();
+    pace.in_picture_call = false;
+    keep_tweens(layer, installed);
+    words.mark_changed_from_physics(layer);
+    words.save(layer, words.shown);
+    words.load(layer, words.physics);
+    restore_tweens(layer, physics_tweens);
+    restore_nodes(nodes);
 }
 
 // a camera function physics called (portal, static camera, offset, zoom) runs again for the picture, so what it
 // starts from the camera starts from the pictures. no events or dual ground on that 2nd call
 template <class F>
 static void mirror_camera(GJBaseGameLayer* layer, F&& call) {
-    auto& pace = g_camera_pace;
-    if (pace.shadow || pace.mirror_depth > 0 || pace.layer != layer || !pace.have_shown || camera_step_interval() <= 1) {
+    if (skip_mirror(layer)) {
         call();
         return;
     }
-    auto& state = pace.state;
-    ++pace.mirror_depth;
+    ++g_camera_pace.mirror_depth;
     call();
-    state.save(layer, state.physics);
-    TweenMap physics_tweens = copy_tweens(layer);
-    std::vector<SavedNode> nodes;
-    save_nodes(layer, nodes);
-    state.load_shown(layer);
-    install_tweens(layer);
-    TweenMap installed = copy_tweens(layer);
-    state.save(layer, state.before);
-    pace.shadow = true;
-    call();
-    pace.shadow = false;
-    keep_tweens(layer, installed);
-    std::size_t at = 0;
-    for (const auto& [start, count] : state.regions)
-        for (unsigned w = 0; w < count; ++w, ++at)
-            if (reinterpret_cast<unsigned*>(layer)[start + w] != state.physics[at])
-                state.mask[at] = 1;
-    state.save(layer, state.shown);
-    state.load(layer, state.physics);
-    restore_tweens(layer, physics_tweens);
-    restore_nodes(nodes);
-    --pace.mirror_depth;
+    run_call_for_picture(layer, call);
+    --g_camera_pace.mirror_depth;
+}
+
+static void start_pace_for_layer(GJBaseGameLayer* layer) {
+    auto& pace = g_camera_pace;
+    // a lvl that left w/o onQuit: its nodes are gone, releasing them crashed. let them leak
+    new std::vector<SavedNode>(std::move(pace.shown_nodes));
+    new std::vector<SavedNode>(std::move(pace.physics_nodes));
+    pace = {};
+    pace.layer = layer;
+    pace.words.build(layer);
+    pace.camera_position_word = pace.words.word_index_of(&layer->m_gameState.m_cameraPosition, layer);
+}
+
+static void count_camera_step() {
+    auto& pace = g_camera_pace;
+    if (pace.last_update_run != g_updates_run) {
+        pace.last_update_run = g_updates_run;
+        pace.step_in_update = 0;
+    }
+    ++pace.step_in_update;
+    ++pace.steps_since_shown;
+}
+
+// spread over the batch w/ the last 1 on its last step, or the shown frame lags behind
+static bool shown_camera_due(int every, int batch) {
+    const auto& pace = g_camera_pace;
+    if (batch > 1) {
+        int runs = std::clamp((int)std::lround((double)batch / every), 1, batch);
+        return (pace.step_in_update * runs) / batch != ((pace.step_in_update - 1) * runs) / batch;
+    }
+    return pace.steps_since_shown >= every;
 }
 
 class $modify(EchoCameraPace, GJBaseGameLayer) {
@@ -3298,44 +3515,25 @@ class $modify(EchoCameraPace, GJBaseGameLayer) {
         auto& pace = g_camera_pace;
         auto& logic = Logic::get();
         int every = camera_step_interval();
-        if (pace.shadow || dt == 0.f || !m_player1 || every <= 1 || !Logic::as_play(this)) {
+        if (pace.in_picture_call || dt == 0.f || !m_player1 || every <= 1 || !Logic::as_play(this)) {
             GJBaseGameLayer::updateCamera(dt);
             return;
         }
-        if (pace.layer != this) {
-            // a lvl that left w/o onQuit: its nodes are gone, releasing them crashed. let them leak
-            new std::vector<SavedNode>(std::move(pace.shown_nodes));
-            new std::vector<SavedNode>(std::move(pace.physics_nodes));
-            pace = {};
-            pace.layer = this;
-            pace.state.build(this);
-            pace.camera_word = pace.state.index_of(&m_gameState.m_cameraPosition, this);
-        }
+        if (pace.layer != this) start_pace_for_layer(this);
         if (logic.resetting || logic.refreshing_visuals) pace.have_shown = false;
-        if (pace.update != g_updates_run) {
-            pace.update = g_updates_run;
-            pace.at = 0;
-        }
-        ++pace.at;
-        ++pace.since;
-        // spread over the batch w/ the last 1 on its last step, or the shown frame lags behind
-        int batch = (int)logic.steps_this_tick;
-        bool runs_now;
-        if (batch > 1) {
-            int runs = std::clamp((int)std::lround((double)batch / every), 1, batch);
-            runs_now = (pace.at * runs) / batch != ((pace.at - 1) * runs) / batch;
-        }
-        else runs_now = pace.since >= every;
-        pace.state.save(this, pace.state.before);
+        count_camera_step();
+        bool runs_now = shown_camera_due(every, (int)logic.steps_this_tick);
+        pace.words.save(this, pace.words.before);
         // following moves it a few units a call at most. way more = gd put it there on purpose
-        const float SNAP = 60.f;
-        auto cam_before = m_gameState.m_cameraPosition;
-        if (pace.have_cam && ccpDistance(cam_before, pace.cam_after) > SNAP) pace.macro = true;
+        const float SNAP_DISTANCE = 60.f;
+        auto camera_before = m_gameState.m_cameraPosition;
+        if (pace.have_camera_after && ccpDistance(camera_before, pace.camera_after) > SNAP_DISTANCE)
+            pace.camera_jumped = true;
         GJBaseGameLayer::updateCamera(dt);
-        if (ccpDistance(m_gameState.m_cameraPosition, cam_before) > SNAP) pace.macro = true;
-        pace.cam_after = m_gameState.m_cameraPosition;
-        pace.have_cam = true;
-        pace.state.learn(this);
+        if (ccpDistance(m_gameState.m_cameraPosition, camera_before) > SNAP_DISTANCE) pace.camera_jumped = true;
+        pace.camera_after = m_gameState.m_cameraPosition;
+        pace.have_camera_after = true;
+        pace.words.mark_changed_since_before(this);
         if (runs_now) run_shown_camera(this);
     }
 };
@@ -3347,18 +3545,18 @@ void forget_camera(GJBaseGameLayer* layer) {
 
 using NodeValues = std::array<float, 8>;
 
-static std::vector<NodeValues> node_values(const std::vector<SavedNode>& spots) {
+static std::vector<NodeValues> node_values(const std::vector<SavedNode>& saved) {
     std::vector<NodeValues> out;
-    out.reserve(spots.size());
-    for (const auto& spot : spots)
+    out.reserve(saved.size());
+    for (const auto& spot : saved)
         out.push_back({ spot.position.x, spot.position.y, spot.scale_x, spot.scale_y, spot.rotation_x, spot.rotation_y, spot.skew_x, spot.skew_y });
     return out;
 }
 
-static void load_node_values(const std::vector<NodeValues>& shots, std::vector<SavedNode>& spots) {
-    for (std::size_t i = 0; i < shots.size() && i < spots.size(); ++i) {
-        const auto& from = shots[i];
-        auto& spot = spots[i];
+static void load_node_values(const std::vector<NodeValues>& values, std::vector<SavedNode>& saved) {
+    for (std::size_t i = 0; i < values.size() && i < saved.size(); ++i) {
+        const auto& from = values[i];
+        auto& spot = saved[i];
         spot.position = CCPoint{ from[0], from[1] };
         spot.scale_x = from[2];
         spot.scale_y = from[3];
@@ -3370,93 +3568,121 @@ static void load_node_values(const std::vector<NodeValues>& shots, std::vector<S
 }
 
 struct ShownCamera {
-    std::vector<NodeValues> physics;
-    bool picture = false;
-    std::vector<unsigned> shown;
-    std::vector<NodeValues> nodes;
-    std::unordered_map<int, GJValueTween> tweens;
-    std::unordered_set<int> owned;
-    int since = 0;
-    CCPoint last1, last2;
+    std::vector<NodeValues> physics_nodes;
+    bool has_picture = false;
+    std::vector<unsigned> shown_words;
+    std::vector<NodeValues> shown_nodes;
+    std::unordered_map<int, GJValueTween> shown_tweens;
+    std::unordered_set<int> owned_tweens;
+    int steps_since_shown = 0;
+    CCPoint player1_last_position, player2_last_position;
 };
+
+static void save_picture_camera(ShownCamera& out) {
+    const auto& pace = g_camera_pace;
+    out.has_picture = true;
+    out.shown_words = pace.words.shown;
+    out.shown_nodes = node_values(pace.shown_nodes);
+    out.shown_tweens = pace.shown_tweens;
+    out.owned_tweens = pace.owned_tweens;
+    out.steps_since_shown = pace.steps_since_shown;
+    out.player1_last_position = pace.player1_last_position;
+    out.player2_last_position = pace.player2_last_position;
+}
 
 std::shared_ptr<ShownCamera> save_shown_camera(GJBaseGameLayer* layer) {
     if (!layer) return nullptr;
     auto out = std::make_shared<ShownCamera>();
-    std::vector<SavedNode> spots;
-    save_nodes(layer, spots);
-    out->physics = node_values(spots);
+    std::vector<SavedNode> saved;
+    save_nodes(layer, saved);
+    out->physics_nodes = node_values(saved);
     const auto& pace = g_camera_pace;
-    if (pace.layer != layer || !pace.have_shown || pace.macro) return out;
-    out->picture = true;
-    out->shown = pace.state.shown;
-    out->nodes = node_values(pace.shown_nodes);
-    out->tweens = pace.tweens;
-    out->owned = pace.owned;
-    out->since = pace.since;
-    out->last1 = pace.last1;
-    out->last2 = pace.last2;
+    if (pace.layer != layer || !pace.have_shown || pace.camera_jumped) return out;
+    save_picture_camera(*out);
     return out;
+}
+
+static void load_saved_physics_nodes(GJBaseGameLayer* layer, const ShownCamera& saved) {
+    std::vector<SavedNode> nodes;
+    save_nodes(layer, nodes);
+    if (saved.physics_nodes.size() == nodes.size()) {
+        load_node_values(saved.physics_nodes, nodes);
+        restore_nodes(nodes);
+    }
+}
+
+static bool saved_picture_unusable(const ShownCamera* saved) {
+    const auto& pace = g_camera_pace;
+    return !saved || !saved->has_picture || saved->shown_words.size() != pace.words.shown.size() ||
+           saved->shown_nodes.size() != pace.shown_nodes.size();
+}
+
+static void load_picture_camera(const ShownCamera& saved) {
+    auto& pace = g_camera_pace;
+    pace.words.shown = saved.shown_words;
+    load_node_values(saved.shown_nodes, pace.shown_nodes);
+    pace.shown_tweens = saved.shown_tweens;
+    pace.owned_tweens = saved.owned_tweens;
+    pace.steps_since_shown = saved.steps_since_shown;
+    pace.player1_last_position = saved.player1_last_position;
+    pace.player2_last_position = saved.player2_last_position;
+    pace.have_shown = true;
 }
 
 void load_shown_camera(GJBaseGameLayer* layer, const ShownCamera* saved) {
     if (!layer) return;
-    if (saved) {
-        std::vector<SavedNode> spots;
-        save_nodes(layer, spots);
-        if (saved->physics.size() == spots.size()) {
-            load_node_values(saved->physics, spots);
-            restore_nodes(spots);
-        }
-    }
+    if (saved) load_saved_physics_nodes(layer, *saved);
     auto& pace = g_camera_pace;
     if (pace.layer != layer) return;
-    pace.macro = false;
-    pace.have_cam = true;
-    pace.cam_after = layer->m_gameState.m_cameraPosition;
-    if (!saved || !saved->picture || saved->shown.size() != pace.state.shown.size() || saved->nodes.size() != pace.shown_nodes.size()) {
+    pace.camera_jumped = false;
+    pace.have_camera_after = true;
+    pace.camera_after = layer->m_gameState.m_cameraPosition;
+    if (saved_picture_unusable(saved)) {
         pace.have_shown = false;
         return;
     }
-    pace.state.shown = saved->shown;
-    load_node_values(saved->nodes, pace.shown_nodes);
-    pace.tweens = saved->tweens;
-    pace.owned = saved->owned;
-    pace.since = saved->since;
-    pace.last1 = saved->last1;
-    pace.last2 = saved->last2;
-    pace.have_shown = true;
+    load_picture_camera(*saved);
+}
+
+static bool skip_shown_camera(GJBaseGameLayer* layer) {
+    const auto& pace = g_camera_pace;
+    auto& logic = Logic::get();
+    return pace.layer != layer || !pace.have_shown || !layer->m_player1 || camera_step_interval() <= 1 || logic.resetting || logic.refreshing_visuals;
+}
+
+static CCPoint physics_camera_position() {
+    const auto& pace = g_camera_pace;
+    const auto& physics = pace.words.physics;
+    return CCPoint{ std::bit_cast<float>(physics[pace.camera_position_word]), std::bit_cast<float>(physics[pace.camera_position_word + 1]) };
 }
 
 class $modify(EchoCameraShow, GJBaseGameLayer) {
     void visit() {
         auto& pace = g_camera_pace;
-        auto& logic = Logic::get();
-        if (pace.layer != this || !pace.have_shown || !m_player1 || camera_step_interval() <= 1 || logic.resetting || logic.refreshing_visuals) {
+        if (skip_shown_camera(this)) {
             GJBaseGameLayer::visit();
             return;
         }
-        if (pace.since > 0) run_shown_camera(this);
-        std::vector<SavedNode> now;
-        save_nodes(this, now);
-        auto& state = pace.state;
-        state.save(this, state.physics);
-        state.load_shown(this);
+        if (pace.steps_since_shown > 0) run_shown_camera(this);
+        std::vector<SavedNode> physics_nodes;
+        save_nodes(this, physics_nodes);
+        auto& words = pace.words;
+        words.save(this, words.physics);
+        words.load_shown_changes(this);
         restore_nodes(pace.shown_nodes);
         // enter effects come from the camera in updateVisibility, so the picture gets a pass w/ its camera & physics
         // gets its own back after drawing. dt 0 so nothing animates twice
         auto* play = Logic::as_play(this);
-        bool visibility = play && ccpDistance(m_gameState.m_cameraPosition,
-                                      CCPoint{ std::bit_cast<float>(state.physics[pace.camera_word]), std::bit_cast<float>(state.physics[pace.camera_word + 1]) }) > 0.5f;
-        if (visibility) {
-            pace.shadow = true;
+        bool camera_moved = play && ccpDistance(m_gameState.m_cameraPosition, physics_camera_position()) > VISIBILITY_CAMERA_GAP;
+        if (camera_moved) {
+            pace.in_picture_call = true;
             play->updateVisibility(0.f);
-            pace.shadow = false;
+            pace.in_picture_call = false;
         }
         GJBaseGameLayer::visit();
-        state.load(this, state.physics);
-        restore_nodes(now);
-        if (visibility) play->updateVisibility(0.f);
+        words.load(this, words.physics);
+        restore_nodes(physics_nodes);
+        if (camera_moved) play->updateVisibility(0.f);
     }
 };
 
@@ -3500,12 +3726,12 @@ class $modify(EchoCameraMirror, GJBaseGameLayer) {
 
     // the pictures 2nd call cant fire anything
     void gameEventTriggered(GJGameEvent event, int material, int playerID) {
-        if (g_camera_pace.shadow) return;
+        if (g_camera_pace.in_picture_call) return;
         GJBaseGameLayer::gameEventTriggered(event, material, playerID);
     }
 
     void updateDualGround(PlayerObject* object, int mode, bool instant, float duration) {
-        if (g_camera_pace.shadow) return;
+        if (g_camera_pace.in_picture_call) return;
         GJBaseGameLayer::updateDualGround(object, mode, instant, duration);
     }
 };

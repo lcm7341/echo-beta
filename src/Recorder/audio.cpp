@@ -1,6 +1,5 @@
 #include <chrono>
 #include "Logic/logic.hpp"
-#include "Logic/child_type_cache.hpp"
 #include <Geode/binding/FMODAudioEngine.hpp>
 #include <Geode/binding/GJBaseGameLayer.hpp>
 #include <Geode/binding/LevelEditorLayer.hpp>
@@ -74,27 +73,9 @@ float Logic::render_game_step() {
 bool Logic::pause_menu_open() {
     if (pause_known) return pause_cached;
     auto* scene = CCDirector::sharedDirector()->getRunningScene();
-#ifdef GEODE_IS_WINDOWS
-    static thread_local ChildTypeCache<CCObject> scene_child_types, play_child_types;
-    auto has_pause_layer = [](CCNode* node, auto& cache) {
-        auto* children = node ? node->getChildren() : nullptr;
-        std::span<CCObject*> objects;
-        if (children && children->data)
-            objects = { children->data->arr, children->data->num };
-        return cache.contains(objects, [](CCObject* object) {
-            return object->m_uID;
-        },
-            [](CCObject* object) {
-                return typeinfo_cast<PauseLayer*>(object) != nullptr;
-            });
-    };
-    if (has_pause_layer(scene, scene_child_types)) return true;
-    return has_pause_layer(PlayLayer::get(), play_child_types);
-#else
     if (scene && scene->getChildByType<PauseLayer>(0)) return true;
     auto* play = PlayLayer::get();
     return play && play->getChildByType<PauseLayer>(0);
-#endif
 }
 
 void Logic::sync_music_pitch() {

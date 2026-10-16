@@ -1,5 +1,6 @@
 #include "Logic/perf.hpp"
 #include "Logic/logic.hpp"
+#include <Geode/binding/HardStreak.hpp>
 #include "GUI/gui.hpp"
 #include "Physics/checkpoint.hpp"
 #include "Logic/state_check.hpp"
@@ -270,6 +271,34 @@ void Logic::clear_backsteps() {
     if (!backstep_swapped) backstep_inputs.clear();
 }
 
+struct UntimedScope {
+    chrono::steady_clock::time_point from;
+    ~UntimedScope() { Logic::get().note_untimed(chrono::duration<double>(chrono::steady_clock::now() - from).count()); }
+};
+
+static std::shared_ptr<BackstepGdData> capture_gd_data(PlayLayer* play) {
+    auto extra = std::make_shared<BackstepGdData>();
+    if (play->m_player1) extra->player1 = SavedPlayerCheckpoint::create(play->m_player1);
+    if (play->m_player2) {
+        extra->player2 = SavedPlayerCheckpoint::create(play->m_player2);
+        extra->has_player2 = true;
+    }
+    if (play->m_effectManager)
+        extra->persistent_items = play->m_effectManager->m_persistentItemCountMap;
+    extra->calc_non_effect = play->m_calcNonEffectObjects;
+    extra->calc_non_effect_size = play->m_calcNonEffectObjectsSize;
+    extra->used = used_objects(play);
+    extra->camera = CameraState::of(play);
+    extra->shown_camera = save_shown_camera(play);
+    return extra;
+}
+
+static bool on_held_ladder(int ahead, int step) {
+    for (int distance = step; distance <= ahead; distance *= 2)
+        if (distance == ahead) return true;
+    return false;
+}
+
 void Logic::save_backstep(PlayLayer* play) {
     if (!play || predicting || backstepping) return;
     bool resim = backstep_target >= 0;
@@ -291,41 +320,25 @@ void Logic::save_backstep(PlayLayer* play) {
     bool shown = save_shown_step;
     save_shown_step = false;
     int close_by = std::max(1, (int)std::lround(sample_rate() / 60.0));
-    if (resim) {
-        bool repeating = holding_back && chrono::steady_clock::now() >= back_hold_start + chrono::milliseconds(advance_hold_ms);
-        close_by = repeating ? 0 : std::min(close_by, 60);
-    }
+    bool repeating = resim && holding_back && chrono::steady_clock::now() >= back_hold_start + chrono::milliseconds(advance_hold_ms);
+    if (resim) close_by = repeating ? 0 : std::min(close_by, 60);
     bool close = resim && close_by > 0 && backstep_target - frame <= close_by;
     bool dense = close || shown;
     int gap = backstep_interval();
     if (resim && !close) gap = std::max(close_by, (int)std::lround(sample_rate()));
-    if (!dense && !backsteps.empty() && frame - backsteps.back().checkpoint.frame < gap) return;
+    if (repeating && !shown && !on_held_ladder(backstep_target - frame, held_step)) return;
+    if (!dense && !repeating && !backsteps.empty() && frame - backsteps.back().checkpoint.frame < gap) return;
     if (!backsteps.empty() && backsteps.back().checkpoint.frame >= frame) return;
     auto saving = chrono::steady_clock::now();
     PerfScope save_time(PERF_BACKSTEP);
     perf_count_backstep_save();
-    struct Untimed {
-        chrono::steady_clock::time_point from;
-        ~Untimed() { Logic::get().note_untimed(chrono::duration<double>(chrono::steady_clock::now() - from).count()); }
-    } untimed{ saving };
+    UntimedScope untimed{ saving };
     // createCheckpoint must NOT change the object counters
     auto* obj = play->createCheckpoint();
     auto gd_done = chrono::steady_clock::now();
     if (!obj) return;
     obj->retain();
-    auto extra = std::make_shared<BackstepGdData>();
-    if (play->m_player1) extra->player1 = SavedPlayerCheckpoint::create(play->m_player1);
-    if (play->m_player2) {
-        extra->player2 = SavedPlayerCheckpoint::create(play->m_player2);
-        extra->has_player2 = true;
-    }
-    if (play->m_effectManager)
-        extra->persistent_items = play->m_effectManager->m_persistentItemCountMap;
-    extra->calc_non_effect = play->m_calcNonEffectObjects;
-    extra->calc_non_effect_size = play->m_calcNonEffectObjectsSize;
-    extra->used = used_objects(play);
-    extra->camera = CameraState::of(play);
-    extra->shown_camera = save_shown_camera(play);
+    auto extra = capture_gd_data(play);
     backsteps.push_back({ obj, capture_checkpoint(play, obj, frame), std::move(extra), {} });
     auto extra_done = chrono::steady_clock::now();
     note_backstep_objects(play);
@@ -342,7 +355,7 @@ void Logic::save_backstep(PlayLayer* play) {
     };
     perf_note_save_parts(ms(saving, gd_done), ms(gd_done, extra_done), ms(extra_done, objects_done), ms(objects_done, trim_done));
     double took = chrono::duration<double>(chrono::steady_clock::now() - saving).count();
-    if (took > 0.0)
+    if (took > 0.0 && backsteps.size() > 1)
         backstep_save_sec = backstep_save_sec > 0.0 ? backstep_save_sec + (took - backstep_save_sec) * 0.2 : took;
 }
 
@@ -395,6 +408,7 @@ bool Logic::step_to(PlayLayer* play, int target, int keep_up_to) {
     }
     auto save = backsteps.back();
     bool resim = save.checkpoint.frame < target;
+    held_step = std::max(1, step_frame - target);
     trace_note(fmt::format("BACK from={} target={} save={} resim={} state={} inputs={} queued={}\n", step_frame, target, save.checkpoint.frame, resim,
         (int)state, inputs.size(), play->m_queuedButtons.size()));
     if (state == RunState::Idle && !backstep_swapped) {
@@ -506,6 +520,10 @@ bool Logic::step_to(PlayLayer* play, int target, int keep_up_to) {
 
 void Logic::finish_backstep(PlayLayer* play) {
     if (backstep_target < 0) return;
+    if (play) {
+        for (auto* body : { play->m_player1, play->m_player2 })
+            if (body && body->m_waveTrail) body->m_waveTrail->reset();
+    }
     if (play && step_frame == backstep_target && !play->m_playerDied) pin_camera(play);
     backstep_target = -1;
     state = backstep_state;

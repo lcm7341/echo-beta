@@ -66,6 +66,19 @@ namespace MovingObjects {
 		return same_section(layer, object, read<double>(object, OBJECT_POSITION_X), read<double>(object, OBJECT_POSITION_Y));
 	}
 
+	inline void prefetch_object(const void* object) {
+#if defined(__SSE2__) || defined(_M_X64)
+		auto* bytes = static_cast<const char*>(object);
+		for (size_t offset : { OBJECT_OUTER_SECTION, OBJECT_MIDDLE_SECTION + 3, OBJECT_TEMP_OFFSET_X, OBJECT_POSITION_DIRTY, OBJECT_ORIENTED_BOX_DIRTY,
+				 OBJECT_POSITION_X, OBJECT_POSITION_Y + 7, OBJECT_LAST_POSITION_X, OBJECT_LAST_POSITION_COMMAND + 3, OBJECT_IS_DECORATION_2 })
+			_mm_prefetch(bytes + offset, _MM_HINT_T0);
+#else
+		(void)object;
+#endif
+	}
+
+	const unsigned PREFETCH_AHEAD = 8;
+
 	inline bool move_object(void* layer, void* object, double dx, double dy, bool move_x, bool move_y) {
 		double x = read<double>(object, OBJECT_POSITION_X), y = read<double>(object, OBJECT_POSITION_Y);
 		if (!read<bool>(object, OBJECT_IS_DECORATION_2) && read<int>(object, OBJECT_LAST_POSITION_COMMAND) != read<int>(layer, LAYER_COMMAND_INDEX)) {
@@ -198,8 +211,12 @@ namespace MovingObjects {
 					unsigned begin = next_index.fetch_add(CHUNK, std::memory_order_relaxed);
 					if (begin >= object_count) return;
 					unsigned end = std::min(begin + CHUNK, object_count);
-					for (unsigned i = begin; i < end; ++i)
+					for (unsigned i = begin; i < end && i < begin + PREFETCH_AHEAD; ++i)
+						prefetch_object(objects[i]);
+					for (unsigned i = begin; i < end; ++i) {
+						if (i + PREFETCH_AHEAD < end) prefetch_object(objects[i + PREFETCH_AHEAD]);
 						section_changed[i] = move_object(layer, objects[i], dx, dy, move_x, move_y);
+					}
 				}
 			};
 			threads.run(move_chunks);
@@ -212,8 +229,12 @@ namespace MovingObjects {
 		unsigned object_count = 0;
 		while (object_count < size && objects[object_count])
 			++object_count;
-		for (unsigned i = 0; i < object_count; ++i)
+		for (unsigned i = 0; i < object_count && i < PREFETCH_AHEAD; ++i)
+			prefetch_object(objects[i]);
+		for (unsigned i = 0; i < object_count; ++i) {
+			if (i + PREFETCH_AHEAD < object_count) prefetch_object(objects[i + PREFETCH_AHEAD]);
 			if (move_object(layer, objects[i], dx, dy, move_x, move_y)) update_section(objects[i]);
+		}
 		finish(array);
 	}
 }

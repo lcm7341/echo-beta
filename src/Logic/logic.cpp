@@ -480,6 +480,7 @@ void Logic::pull_settings() {
                 traj_click_lookahead = std::max((int)number.unwrap(), 1);
             if (auto flag = json["trajectory_moving_objects"].asBool())
                 traj_moving_objects = flag.unwrap();
+            if (auto flag = json["near_movers"].asBool()) near_movers = flag.unwrap();
             if (auto flag = json["backstep"].asBool()) backstep = flag.unwrap();
             if (auto flag = json["velocity_unrounding"].asBool())
                 velocity_unrounding = flag.unwrap();
@@ -905,6 +906,7 @@ void Logic::save_settings_file() {
     json["trajectory_autoclicker"] = traj_autoclicker;
     json["trajectory_click_lookahead"] = traj_click_lookahead;
     json["trajectory_moving_objects"] = traj_moving_objects;
+    json["near_movers"] = near_movers;
     json["backstep"] = backstep;
     json["velocity_unrounding"] = velocity_unrounding;
     json["backstep_percent"] = backstep_percent;

@@ -44,7 +44,7 @@ class $modify(EchoMovingObjects, GJBaseGameLayer) {
 
     void moveObjects(CCArray* objects, double dx, double dy, bool lockPlayerY) {
 #ifdef GEODE_IS_WINDOWS
-        if (no_other_hooks && objects && Logic::as_play(this) && !Logic::get().predicting) {
+        if (no_other_hooks && objects && Logic::as_play(this)) {
             MovingObjects::move(this, objects, dx, dy, [](void* array) {
                 return static_cast<CCArray*>(array)->count();
             },

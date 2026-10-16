@@ -81,7 +81,6 @@ void Logic::toggle_recording() {
         break;
     }
     message = state_name(state);
-    // small buffer NOT 8mb per recording
     if (is_recording() && !was_recording && inputs.capacity() < 4096) inputs.reserve(4096);
     if (was_recording && !is_recording()) autosave_replay();
 }
@@ -324,104 +323,110 @@ void Logic::match_live_holds(PlayLayer* play) {
         bool held = physical_hold(play, icon2);
         if (maintain_gravity && body->m_isDart && records_player(icon2))
             held = held != body->m_isUpsideDown;
-        match(JUMP, held);
+        if (!autoclicker_drives(icon2)) match(JUMP, held);
         if (!play->m_isPlatformer) continue;
         match(LEFT, icon2 ? key_left_p2 || physical_left_p2 : key_left_p1 || physical_left_p1);
         match(RIGHT, icon2 ? key_right_p2 || physical_right_p2 : key_right_p1 || physical_right_p1);
     }
 }
 
+#define GRAVITY_FIX_TRIES 8
+
+static bool gravity_fix_allowed(Logic& logic, GJBaseGameLayer* play, PlayerObject* body, bool icon2) {
+    bool two = play->m_levelSettings && play->m_levelSettings->m_twoPlayerMode;
+    bool dual = play->m_gameState.m_isDualMode || two;
+    if (!body || !body->m_isDart || logic.plays_player(icon2) || (icon2 && !dual) || body->m_controlsDisabled)
+        return false;
+    if (logic.records_player(icon2)) return true;
+    bool one_dual = play->m_gameState.m_isDualMode && !two;
+    return one_dual && !icon2 && logic.records_player(true);
+}
+
+static bool wrong_gravity(Logic& logic, GJBaseGameLayer* play, PlayerObject* body, bool icon2, bool& push) {
+    push = false;
+    if (!gravity_fix_allowed(logic, play, body, icon2)) return false;
+    bool physical = logic.physical_hold(play, icon2);
+    if (body->m_isUpsideDown != (physical == body->m_jumpBuffered)) return false;
+    push = physical != body->m_isUpsideDown;
+    return true;
+}
+
+static void click_for_gravity(Logic& logic, GJBaseGameLayer* play, PlayerObject* body, bool icon2, bool push, bool record) {
+    if (!body) return;
+    if (record) {
+        Frame input;
+        input.number = logic.step_frame + 1;
+        input.holding = push;
+        input.player2 = icon2;
+        input.button = (unsigned char)JUMP;
+        size_t at = logic.add_input(input);
+        if (logic.save_debug) logic.set_pose_at(at, logic.capture_pose(body));
+    }
+    body->m_isLocked = false;
+    if (!record) logic.mirror_click = true;
+    logic.play_input(play, icon2, push, JUMP);
+    logic.mirror_click = false;
+}
+
+static void fix_gravity(Logic& logic, GJBaseGameLayer* play, PlayerObject* body, bool icon2) {
+    logic.maintaining_gravity = true;
+    for (int step = 0; step < GRAVITY_FIX_TRIES; ++step) {
+        bool push = false;
+        if (!wrong_gravity(logic, play, body, icon2, push)) break;
+        bool flip = body->m_isUpsideDown, buffer = body->m_jumpBuffered;
+        click_for_gravity(logic, play, body, icon2, push, true);
+        if (body->m_isUpsideDown == flip && body->m_jumpBuffered == buffer) break;
+    }
+    logic.maintaining_gravity = false;
+}
+
+static void fix_gravity_mirrored(Logic& logic, GJBaseGameLayer* play) {
+    auto* body = play->m_player1;
+    logic.maintaining_gravity = true;
+    for (int step = 0; step < GRAVITY_FIX_TRIES; ++step) {
+        bool push = false;
+        if (!wrong_gravity(logic, play, body, false, push)) break;
+        bool flip = body->m_isUpsideDown, buffer = body->m_jumpBuffered;
+        click_for_gravity(logic, play, body, false, push, true);
+        if (body->m_isUpsideDown == flip && body->m_jumpBuffered == buffer) break;
+        click_for_gravity(logic, play, play->m_player2, true, push, false);
+    }
+    logic.maintaining_gravity = false;
+}
+
+static void fix_gravity_both(Logic& logic, GJBaseGameLayer* play) {
+    auto* body1 = play->m_player1;
+    auto* body2 = play->m_player2;
+    logic.maintaining_gravity = true;
+    for (int step = 0; step < GRAVITY_FIX_TRIES; ++step) {
+        bool push1 = false, push2 = false;
+        bool need1 = wrong_gravity(logic, play, body1, false, push1), need2 = wrong_gravity(logic, play, body2, true, push2);
+        if (!need1 && !need2) break;
+        bool flip1 = body1 && body1->m_isUpsideDown, buffer1 = body1 && body1->m_jumpBuffered;
+        bool flip2 = body2 && body2->m_isUpsideDown, buffer2 = body2 && body2->m_jumpBuffered;
+        if (need1) click_for_gravity(logic, play, body1, false, push1, true);
+        if (need2) click_for_gravity(logic, play, body2, true, push2, true);
+        bool changed1 = need1 && body1 && (body1->m_isUpsideDown != flip1 || body1->m_jumpBuffered != buffer1);
+        bool changed2 = need2 && body2 && (body2->m_isUpsideDown != flip2 || body2->m_jumpBuffered != buffer2);
+        if (!changed1 && !changed2) break;
+    }
+    logic.maintaining_gravity = false;
+}
+
 void Logic::apply_maintain_gravity(GJBaseGameLayer* play) {
     if (!play || !play->m_uiLayer || play->m_levelEndAnimationStarted || applying_playback || restoring_holds)
         return;
     if (!maintain_gravity) return;
+    if (!is_recording()) return;
     bool two = play->m_levelSettings && play->m_levelSettings->m_twoPlayerMode;
     bool dual = play->m_gameState.m_isDualMode || two;
-    auto eligible = [&](PlayerObject* body, bool icon2) {
-        if (!body || !body->m_isDart || plays_player(icon2) || (icon2 && !dual) || body->m_controlsDisabled)
-            return false;
-        if (records_player(icon2)) return true;
-        bool one_dual = play->m_gameState.m_isDualMode && !two;
-        return one_dual && !icon2 && records_player(true);
-    };
-    auto mismatch = [&](PlayerObject* body, bool icon2, bool& push) {
-        push = false;
-        if (!eligible(body, icon2)) return false;
-        bool physical = physical_hold(play, icon2);
-        if (body->m_isUpsideDown != (physical == body->m_jumpBuffered)) return false;
-        push = physical != body->m_isUpsideDown;
-        return true;
-    };
-    auto apply = [&](PlayerObject* body, bool icon2, bool push, bool record) {
-        if (!body) return;
-        if (record) {
-            Frame input;
-            input.number = step_frame + 1;
-            input.holding = push;
-            input.player2 = icon2;
-            input.button = (unsigned char)JUMP;
-            size_t at = add_input(input);
-            if (save_debug) set_pose_at(at, capture_pose(body));
-        }
-        body->m_isLocked = false;
-        if (!record) mirror_click = true;
-        play_input(play, icon2, push, JUMP);
-        mirror_click = false;
-    };
-    auto correct = [&](PlayerObject* body, bool icon2) {
-        maintaining_gravity = true;
-        int limit = 8;
-        for (int step = 0; step < limit; ++step) {
-            bool push = false;
-            if (!mismatch(body, icon2, push)) break;
-            bool before_flip = body->m_isUpsideDown, before_buffer = body->m_jumpBuffered;
-            apply(body, icon2, push, true);
-            if (body->m_isUpsideDown == before_flip && body->m_jumpBuffered == before_buffer) break;
-        }
-        maintaining_gravity = false;
-    };
-    if (!is_recording()) return;
     if (click_both && dual) physical_hold(play, false);
-    bool one_dual = play->m_gameState.m_isDualMode && !two;
-    if (one_dual) {
-        maintaining_gravity = true;
-        int limit = 8;
-        for (int step = 0; step < limit; ++step) {
-            bool push = false;
-            if (!mismatch(play->m_player1, false, push)) break;
-            bool before_flip = play->m_player1->m_isUpsideDown;
-            bool before_buffer = play->m_player1->m_jumpBuffered;
-            apply(play->m_player1, false, push, true);
-            if (play->m_player1->m_isUpsideDown == before_flip && play->m_player1->m_jumpBuffered == before_buffer)
-                break;
-            apply(play->m_player2, true, push, false);
-        }
-        maintaining_gravity = false;
-        return;
+    if (play->m_gameState.m_isDualMode && !two) fix_gravity_mirrored(*this, play);
+    else if (click_both && dual && !two) fix_gravity_both(*this, play);
+    else {
+        fix_gravity(*this, play, play->m_player1, false);
+        fix_gravity(*this, play, play->m_player2, true);
     }
-    bool paired = click_both && dual && !two;
-    if (!paired) {
-        correct(play->m_player1, false);
-        correct(play->m_player2, true);
-        return;
-    }
-    maintaining_gravity = true;
-    int limit = 8;
-    for (int step = 0; step < limit; ++step) {
-        bool push1 = false, push2 = false;
-        bool need1 = mismatch(play->m_player1, false, push1), need2 = mismatch(play->m_player2, true, push2);
-        if (!need1 && !need2) break;
-        bool flip1 = play->m_player1 && play->m_player1->m_isUpsideDown;
-        bool buffer1 = play->m_player1 && play->m_player1->m_jumpBuffered;
-        bool flip2 = play->m_player2 && play->m_player2->m_isUpsideDown;
-        bool buffer2 = play->m_player2 && play->m_player2->m_jumpBuffered;
-        if (need1) apply(play->m_player1, false, push1, true);
-        if (need2) apply(play->m_player2, true, push2, true);
-        bool changed1 = need1 && play->m_player1 && (play->m_player1->m_isUpsideDown != flip1 || play->m_player1->m_jumpBuffered != buffer1);
-        bool changed2 = need2 && play->m_player2 && (play->m_player2->m_isUpsideDown != flip2 || play->m_player2->m_jumpBuffered != buffer2);
-        if (!changed1 && !changed2) break;
-    }
-    maintaining_gravity = false;
 }
 
 void Logic::sync_same_gravity(GJBaseGameLayer* play) {
@@ -1177,50 +1182,180 @@ void Logic::on_reset(PlayLayer* play) {
     }
 }
 
+static void set_jump_hold(PlayerObject* body, bool held) {
+    if (!body) return;
+    body->m_holdingButtons[JUMP] = held;
+    body->m_jumpBuffered = held;
+    if (!held) {
+        body->m_wasJumpBuffered = false;
+        body->m_stateJumpBuffered = 0;
+    }
+}
+
+static void reset_holds_when_idle(Logic& logic, PlayLayer* play) {
+    logic.restart_hold_captured = false;
+    logic.death_jump_p1 = logic.death_jump_p2 = false;
+    logic.death_left_p1 = logic.death_right_p1 = false;
+    logic.death_left_p2 = logic.death_right_p2 = false;
+    logic.key_jump_p1 = logic.key_jump_p2 = false;
+    logic.physical_jump_p1 = logic.physical_jump_p2 = false;
+    logic.routed_keys.clear();
+    bool p1 = false, p2 = false;
+    if (auto* ui = play->m_uiLayer) {
+        p1 = ui->m_p1Jumping || ui->m_p1TouchId != -1;
+        p2 = ui->m_p2Jumping || ui->m_p2TouchId != -1;
+    }
+#ifdef GEODE_IS_WINDOWS
+    if (!Input::jump_key_down() && !Input::mouse_down()) p1 = p2 = false;
+#endif
+    play->m_queuedButtons.clear();
+    if (play->m_player1) play->m_player1->releaseAllButtons();
+    if (play->m_player2) play->m_player2->releaseAllButtons();
+    bool checkpoint = logic.get_latest_checkpoint(play);
+    bool two = play->m_levelSettings && play->m_levelSettings->m_twoPlayerMode;
+    bool shared = play->m_gameState.m_isDualMode && !two;
+    bool allow = checkpoint && !logic.suppress_auto_hold;
+    set_jump_hold(play->m_player1, allow && p1);
+    set_jump_hold(play->m_player2, allow && (shared ? p1 : two && p2));
+    if (auto* ui = play->m_uiLayer) {
+        ui->m_p1Jumping = allow && p1;
+        ui->m_p2Jumping = allow && (shared ? p1 : two && p2);
+        if (!ui->m_p1Jumping) ui->m_p1TouchId = -1;
+        if (!ui->m_p2Jumping) ui->m_p2TouchId = -1;
+    }
+}
+
+static void put_hold(Logic& logic, PlayLayer* play, bool icon2, int button, bool want) {
+    auto* body = logic.icon_player(play, icon2);
+    if (!body) return;
+    bool have = Logic::button_held(body, button);
+    bool wave = button == JUMP && body->m_isDart && logic.maintain_gravity && logic.records_player(icon2);
+    if (!want && button == JUMP) body->m_jumpBuffered = false;
+    if (!want && button == LEFT) body->m_holdingLeft = false;
+    if (!want && button == RIGHT) body->m_holdingRight = false;
+    if (have == want && !(wave && body->m_jumpBuffered != want)) return;
+    body->m_holdingButtons[button] = want;
+    if (button == JUMP) body->m_jumpBuffered = want;
+    if (button == LEFT) body->m_holdingLeft = want;
+    if (button == RIGHT) body->m_holdingRight = want;
+}
+
+static bool live_jump_held(Logic& logic, PlayLayer* play, bool icon2) {
+    bool ui_down = false;
+    if (auto* ui = play->m_uiLayer) {
+        if (icon2) ui_down = ui->m_p2Jumping || ui->m_p2TouchId != -1;
+        else ui_down = ui->m_p1Jumping || ui->m_p1TouchId != -1;
+    }
+    bool& key = icon2 ? logic.key_jump_p2 : logic.key_jump_p1;
+    bool& physical = icon2 ? logic.physical_jump_p2 : logic.physical_jump_p1;
+    if (logic.suppress_auto_hold) {
+        if (!Input::jump_key_down() && !ui_down) {
+            logic.key_jump_p1 = logic.key_jump_p2 = false;
+            logic.physical_jump_p1 = logic.physical_jump_p2 = false;
+            logic.suppress_auto_hold = false;
+        }
+        return false;
+    }
+    if (ui_down) return true;
+    if (!Input::jump_key_down() && !Input::mouse_down()) {
+        key = false;
+        physical = false;
+        return false;
+    }
+    if (key) return true;
+    if (physical) return true;
+    bool sticky = logic.restart_hold_captured && (icon2 ? logic.death_jump_p2 : logic.death_jump_p1);
+    return sticky && Input::jump_key_down();
+}
+
+static bool live_direction_held(Logic& logic, bool sticky, bool& key, bool& physical, bool down) {
+    if (logic.suppress_auto_hold) return false;
+#ifdef GEODE_IS_MOBILE
+    down = down || physical;
+#endif
+    if (!down) {
+        key = false;
+        physical = false;
+        return false;
+    }
+    if (key || physical) return true;
+    return logic.restart_hold_captured && sticky;
+}
+
+static void restore_recorded_button(Logic& logic, PlayLayer* play, bool icon2, bool one_dual, int button, bool held, std::vector<PlayerButtonCommand>& deferred) {
+    bool stored = logic.held_at(icon2 && !one_dual, logic.step_frame, button);
+    logic.restoring_holds = true;
+    put_hold(logic, play, icon2, button, stored);
+    logic.restoring_holds = false;
+    if (held == stored) return;
+    if (button == JUMP && logic.autoclicker_drives(icon2)) return;
+    PlayerButtonCommand cmd;
+    cmd.m_button = (PlayerButton)button;
+    cmd.m_isPush = held;
+    cmd.m_isPlayer2 = icon2;
+    cmd.m_step = logic.step_frame + 1;
+    cmd.m_timestamp = 0.0;
+    deferred.push_back(cmd);
+}
+
+static void restore_recording_holds(Logic& logic, PlayLayer* play, bool icon2, bool one_dual, std::vector<PlayerButtonCommand>& deferred) {
+    if (logic.suppress_auto_hold) {
+        logic.restoring_holds = true;
+        put_hold(logic, play, icon2, JUMP, false);
+        logic.restoring_holds = false;
+        if (auto* body = logic.icon_player(play, icon2)) body->releaseAllButtons();
+        return;
+    }
+    if (!logic.records_player(icon2)) {
+        if (!one_dual || logic.plays_player(icon2) || !logic.records_player(!icon2)) return;
+        logic.restoring_holds = true;
+        put_hold(logic, play, icon2, JUMP, logic.held_at(false, logic.step_frame, JUMP));
+        if (play->m_isPlatformer) {
+            put_hold(logic, play, icon2, LEFT, logic.held_at(false, logic.step_frame, LEFT));
+            put_hold(logic, play, icon2, RIGHT, logic.held_at(false, logic.step_frame, RIGHT));
+        }
+        logic.restoring_holds = false;
+        return;
+    }
+    if (logic.plays_player(icon2)) return;
+    bool physical_jump_held = live_jump_held(logic, play, icon2);
+    bool jump_held = physical_jump_held;
+    auto* body = logic.icon_player(play, icon2);
+    if (icon2 && !one_dual ? logic.inverse_p2 : logic.inverse_p1) jump_held = !jump_held;
+    if (logic.maintain_gravity && body && body->m_isDart) jump_held = jump_held != body->m_isUpsideDown;
+    bool left_held = live_direction_held(logic, icon2 ? logic.death_left_p2 : logic.death_left_p1, icon2 ? logic.key_left_p2 : logic.key_left_p1,
+        icon2 ? logic.physical_left_p2 : logic.physical_left_p1, Input::left_key_down());
+    bool right_held = live_direction_held(logic, icon2 ? logic.death_right_p2 : logic.death_right_p1, icon2 ? logic.key_right_p2 : logic.key_right_p1,
+        icon2 ? logic.physical_right_p2 : logic.physical_right_p1, Input::right_key_down());
+    restore_recorded_button(logic, play, icon2, one_dual, JUMP, jump_held, deferred);
+    if (!physical_jump_held && play->m_uiLayer) {
+        if (icon2) {
+            play->m_uiLayer->m_p2Jumping = false;
+            play->m_uiLayer->m_p2TouchId = -1;
+        }
+        else {
+            play->m_uiLayer->m_p1Jumping = false;
+            play->m_uiLayer->m_p1TouchId = -1;
+        }
+    }
+    if (!play->m_isPlatformer) return;
+    restore_recorded_button(logic, play, icon2, one_dual, LEFT, left_held, deferred);
+    restore_recorded_button(logic, play, icon2, one_dual, RIGHT, right_held, deferred);
+}
+
+static void restore_playback_hold(Logic& logic, PlayLayer* play, bool player2, int button, int frame) {
+    if (!logic.plays_player(player2)) return;
+    bool want = logic.held_at(player2, frame, button);
+    logic.applying_playback = !logic.records_player(player2);
+    put_hold(logic, play, player2, button, want);
+    logic.applying_playback = false;
+}
+
 void Logic::restore_holds(PlayLayer* play) {
     if (!play) return;
     if (is_playing()) repair_player_order(play);
     if (!is_playing() && !is_recording()) {
-        restart_hold_captured = false;
-        death_jump_p1 = death_jump_p2 = false;
-        death_left_p1 = death_right_p1 = false;
-        death_left_p2 = death_right_p2 = false;
-        key_jump_p1 = key_jump_p2 = false;
-        physical_jump_p1 = physical_jump_p2 = false;
-        routed_keys.clear();
-        bool p1 = false, p2 = false;
-        if (auto* ui = play->m_uiLayer) {
-            p1 = ui->m_p1Jumping || ui->m_p1TouchId != -1;
-            p2 = ui->m_p2Jumping || ui->m_p2TouchId != -1;
-        }
-#ifdef GEODE_IS_WINDOWS
-        if (!Input::jump_key_down() && !Input::mouse_down()) p1 = p2 = false;
-#endif
-        play->m_queuedButtons.clear();
-        if (play->m_player1) play->m_player1->releaseAllButtons();
-        if (play->m_player2) play->m_player2->releaseAllButtons();
-        bool checkpoint = get_latest_checkpoint(play);
-        bool two = play->m_levelSettings && play->m_levelSettings->m_twoPlayerMode;
-        bool shared = play->m_gameState.m_isDualMode && !two;
-        bool allow = checkpoint && !suppress_auto_hold;
-        auto restore = [allow](PlayerObject* body, bool held) {
-            if (!body) return;
-            held = allow && held;
-            body->m_holdingButtons[JUMP] = held;
-            body->m_jumpBuffered = held;
-            if (!held) {
-                body->m_wasJumpBuffered = false;
-                body->m_stateJumpBuffered = 0;
-            }
-        };
-        restore(play->m_player1, p1);
-        restore(play->m_player2, shared ? p1 : two && p2);
-        if (auto* ui = play->m_uiLayer) {
-            ui->m_p1Jumping = allow && p1;
-            ui->m_p2Jumping = allow && (shared ? p1 : two && p2);
-            if (!ui->m_p1Jumping) ui->m_p1TouchId = -1;
-            if (!ui->m_p2Jumping) ui->m_p2TouchId = -1;
-        }
+        reset_holds_when_idle(*this, play);
         return;
     }
     for (const auto& cmd : play->m_queuedButtons)
@@ -1232,26 +1367,10 @@ void Logic::restore_holds(PlayLayer* play) {
     bool recording = is_recording();
     bool checkpoint = get_latest_checkpoint(play);
     if (checkpoint && !playing && !recording) return;
-    if (playing && !recording) {
-        if (checkpoints.empty()) {
-            if (play->m_player1) play->m_player1->releaseAllButtons();
-            if (play->m_player2) play->m_player2->releaseAllButtons();
-        }
+    if (playing && !recording && checkpoints.empty()) {
+        if (play->m_player1) play->m_player1->releaseAllButtons();
+        if (play->m_player2) play->m_player2->releaseAllButtons();
     }
-    auto put_hold = [&](bool icon2, int button, bool want) {
-        auto* body = icon_player(play, icon2);
-        if (!body) return;
-        bool have = Logic::button_held(body, button);
-        bool wave = button == JUMP && body->m_isDart && maintain_gravity && records_player(icon2);
-        if (!want && button == JUMP) body->m_jumpBuffered = false;
-        if (!want && button == LEFT) body->m_holdingLeft = false;
-        if (!want && button == RIGHT) body->m_holdingRight = false;
-        if (have == want && !(wave && body->m_jumpBuffered != want)) return;
-        body->m_holdingButtons[button] = want;
-        if (button == JUMP) body->m_jumpBuffered = want;
-        if (button == LEFT) body->m_holdingLeft = want;
-        if (button == RIGHT) body->m_holdingRight = want;
-    };
     std::vector<PlayerButtonCommand> deferred;
     bool one_dual = play->m_gameState.m_isDualMode && !(play->m_levelSettings && play->m_levelSettings->m_twoPlayerMode);
     if (recording) {
@@ -1265,148 +1384,31 @@ void Logic::restore_holds(PlayLayer* play) {
                 ui->m_p2TouchId = -1;
             }
         }
-        auto live_jump = [&](bool icon2) {
-            bool ui_down = false;
-            if (auto* ui = play->m_uiLayer) {
-                if (icon2) ui_down = ui->m_p2Jumping || ui->m_p2TouchId != -1;
-                else ui_down = ui->m_p1Jumping || ui->m_p1TouchId != -1;
-            }
-            bool down = ui_down || (icon2 ? key_jump_p2 : key_jump_p1) || (icon2 ? physical_jump_p2 : physical_jump_p1) || Input::jump_key_down();
-            if (suppress_auto_hold) {
-                if (!Input::jump_key_down() && !ui_down) {
-                    key_jump_p1 = key_jump_p2 = false;
-                    physical_jump_p1 = physical_jump_p2 = false;
-                    suppress_auto_hold = false;
-                }
-                return false;
-            }
-            if (ui_down) return true;
-            if (!Input::jump_key_down() && !Input::mouse_down()) {
-                (icon2 ? key_jump_p2 : key_jump_p1) = false;
-                (icon2 ? physical_jump_p2 : physical_jump_p1) = false;
-                return false;
-            }
-            if (icon2 ? key_jump_p2 : key_jump_p1) return true;
-            if (icon2 ? physical_jump_p2 : physical_jump_p1) return true;
-            bool sticky = restart_hold_captured && (icon2 ? death_jump_p2 : death_jump_p1);
-            return sticky && Input::jump_key_down();
-        };
-        auto live_side = [&](bool icon2, bool sticky, bool& key, bool& physical, bool down) {
-            if (suppress_auto_hold) return false;
-#ifdef GEODE_IS_MOBILE
-            down = down || physical;
-#endif
-            if (!down) {
-                key = false;
-                physical = false;
-                return false;
-            }
-            if (key || physical) return true;
-            return restart_hold_captured && sticky;
-        };
-        auto live = [&](bool icon2) {
-            if (suppress_auto_hold) {
-                restoring_holds = true;
-                put_hold(icon2, JUMP, false);
-                restoring_holds = false;
-                if (auto* body = icon_player(play, icon2)) body->releaseAllButtons();
-                return;
-            }
-            if (!records_player(icon2)) {
-                if (!one_dual || plays_player(icon2) || !records_player(!icon2)) return;
-                auto follow = [&](int button) {
-                    put_hold(icon2, button, held_at(false, step_frame, button));
-                };
-                restoring_holds = true;
-                follow(JUMP);
-                if (play->m_isPlatformer) {
-                    follow(LEFT);
-                    follow(RIGHT);
-                }
-                restoring_holds = false;
-                return;
-            }
-            if (plays_player(icon2)) return;
-            bool physical_jump_held = live_jump(icon2);
-            bool jump_held = physical_jump_held;
-            auto* body = icon_player(play, icon2);
-            if (icon2 && !one_dual ? inverse_p2 : inverse_p1) jump_held = !jump_held;
-            if (maintain_gravity && body && body->m_isDart)
-                jump_held = jump_held != body->m_isUpsideDown;
-            bool left_held = live_side(
-                icon2,
-                icon2 ? death_left_p2 : death_left_p1,
-                icon2 ? key_left_p2 : key_left_p1,
-                icon2 ? physical_left_p2 : physical_left_p1,
-                Input::left_key_down());
-            bool right_held = live_side(
-                icon2,
-                icon2 ? death_right_p2 : death_right_p1,
-                icon2 ? key_right_p2 : key_right_p1,
-                icon2 ? physical_right_p2 : physical_right_p1,
-                Input::right_key_down());
-            auto note = [&](int button, bool held) {
-                bool stored = held_at(icon2 && !one_dual, step_frame, button);
-                restoring_holds = true;
-                put_hold(icon2, button, stored);
-                restoring_holds = false;
-                if (held == stored) return;
-                PlayerButtonCommand cmd;
-                cmd.m_button = (PlayerButton)button;
-                cmd.m_isPush = held;
-                cmd.m_isPlayer2 = icon2;
-                cmd.m_step = step_frame + 1;
-                cmd.m_timestamp = 0.0;
-                deferred.push_back(cmd);
-            };
-            note(JUMP, jump_held);
-            if (!physical_jump_held && play->m_uiLayer) {
-                if (icon2) {
-                    play->m_uiLayer->m_p2Jumping = false;
-                    play->m_uiLayer->m_p2TouchId = -1;
-                }
-                else {
-                    play->m_uiLayer->m_p1Jumping = false;
-                    play->m_uiLayer->m_p1TouchId = -1;
-                }
-            }
-            if (!play->m_isPlatformer) return;
-            note(LEFT, left_held);
-            note(RIGHT, right_held);
-        };
-        live(false);
-        live(true);
+        restore_recording_holds(*this, play, false, one_dual, deferred);
+        restore_recording_holds(*this, play, true, one_dual, deferred);
     }
     if (checkpoint && playing) {
         restoring_holds = true;
         int frame = step_frame;
-        auto ensure = [&](bool stored2, int button) {
-            if (!plays_player(stored2)) return;
-            bool want = held_at(stored2, frame, button);
-            applying_playback = !records_player(stored2);
-            put_hold(stored2, button, want);
-            applying_playback = false;
-        };
-        ensure(false, JUMP);
+        restore_playback_hold(*this, play, false, JUMP, frame);
         if (play->m_isPlatformer) {
-            ensure(false, LEFT);
-            ensure(false, RIGHT);
+            restore_playback_hold(*this, play, false, LEFT, frame);
+            restore_playback_hold(*this, play, false, RIGHT, frame);
         }
         if (play->m_levelSettings && play->m_levelSettings->m_twoPlayerMode) {
-            ensure(true, JUMP);
+            restore_playback_hold(*this, play, true, JUMP, frame);
             if (play->m_isPlatformer) {
-                ensure(true, LEFT);
-                ensure(true, RIGHT);
+                restore_playback_hold(*this, play, true, LEFT, frame);
+                restore_playback_hold(*this, play, true, RIGHT, frame);
             }
         }
     }
     // NOT while a step back is loading
     if ((playing || recording) && !backstepping) play_macro(play, play, 0.f, true);
-    std::ranges::for_each(deferred, [play, this](const PlayerButtonCommand& cmd) {
-        if (cmd.m_button == PlayerButton::Jump)
-            ++restored_clicks[cmd.m_isPlayer2 ? 1 : 0][cmd.m_isPush ? 1 : 0];
+    for (const auto& cmd : deferred) {
+        if (cmd.m_button == PlayerButton::Jump) ++restored_clicks[cmd.m_isPlayer2 ? 1 : 0][cmd.m_isPush ? 1 : 0];
         play->m_queuedButtons.push_back(cmd);
-    });
+    }
     if (recording && checkpoint) sort_inputs();
     restoring_holds = false;
     restart_hold_captured = false;
@@ -1567,6 +1569,23 @@ static void drop_ignored_inputs(GJBaseGameLayer* play) {
     if (!logic.is_recording()) user.clear();
 }
 
+struct MacroEnds {
+    unsigned long long version = ~0ull;
+    const Frame* data = nullptr;
+    size_t size = 0;
+    int last[2] = { -1, -1 };
+};
+
+static MacroEnds g_macro_ends;
+
+struct DualStart {
+    int frame = -1, began = -1;
+    bool dual = false;
+    std::array<bool, 3> acted{};
+};
+
+static DualStart g_dual_start;
+
 void Logic::prepare_buttons(GJBaseGameLayer* play) {
     bool paused = editor_paused;
     if (auto* live = Logic::as_play(play)) paused = paused || live->m_isPaused;
@@ -1600,11 +1619,7 @@ void Logic::prepare_buttons(GJBaseGameLayer* play) {
     int frame = step_frame + 1;
     std::array<char, 6> queued{};
     bool two_player = play->m_levelSettings && play->m_levelSettings->m_twoPlayerMode;
-    static struct {
-        int frame = -1, began = -1;
-        bool dual = false;
-        std::array<bool, 3> acted{};
-    } p2;
+    auto& p2 = g_dual_start;
     bool dual_now = play->m_gameState.m_isDualMode;
     if (frame != p2.frame + 1 || !dual_now) p2.began = -1;
     else if (!p2.dual) {
@@ -1647,22 +1662,14 @@ void Logic::prepare_buttons(GJBaseGameLayer* play) {
         queue(input.holding, button, input.player2);
     }
 
-    static struct {
-        unsigned long long revision = ~0ull;
-        const Frame* data = nullptr;
-        size_t size = 0;
-        int first[2] = { -1, -1 }, last[2] = { -1, -1 };
-    } ends;
-
-    if (ends.revision != inputs_version || ends.data != inputs.data() || ends.size != inputs.size()) {
-        ends.revision = inputs_version;
+    auto& ends = g_macro_ends;
+    if (ends.version != inputs_version || ends.data != inputs.data() || ends.size != inputs.size()) {
+        ends.version = inputs_version;
         ends.data = inputs.data();
         ends.size = inputs.size();
-        ends.first[0] = ends.first[1] = std::numeric_limits<int>::max();
         ends.last[0] = ends.last[1] = -1;
         for (const auto& input : inputs) {
             int side = input.player2 ? 1 : 0;
-            ends.first[side] = std::min(ends.first[side], input.number);
             ends.last[side] = std::max(ends.last[side], input.number);
         }
     }
@@ -1799,11 +1806,11 @@ void Logic::play_macro(GJBaseGameLayer* play, GJBaseGameLayer* layer, float dt, 
         return;
     }
 #endif
-    SmallSnapshot<PlayerButtonCommand, 8> queued(play->m_queuedButtons);
+    std::vector<PlayerButtonCommand> queued(play->m_queuedButtons.begin(), play->m_queuedButtons.end());
     if (is_recording() && maintain_gravity && !restoring_holds) {
         // only a wave gets its button from maintain gravity. deleting every JUMP ate all my clicks on a ball or cube
         // (only w/ physics locked to steps, so only w/ the trajectory autoclicker or prevent death on)
-        queued.removeIf([&](const PlayerButtonCommand& cmd) {
+        std::erase_if(queued, [&](const PlayerButtonCommand& cmd) {
             int button = (int)cmd.m_button;
             bool jump_button = button == 0 || button == JUMP;
             auto* body = icon_player(play, cmd.m_isPlayer2);
@@ -1844,7 +1851,7 @@ void Logic::play_macro(GJBaseGameLayer* play, GJBaseGameLayer* layer, float dt, 
     if (is_recording() && maintain_gravity && same_gravity && !restoring_holds)
         sync_same_gravity(play);
     if (!clear_input_queue && replay == 0) {
-        play->m_queuedButtons.assign(queued.begin(), queued.end());
+        play->m_queuedButtons.assign(queued.data(), queued.data() + queued.size());
     }
     buttons_prepared = false;
 }
@@ -2075,37 +2082,37 @@ static bool same_rates(const std::vector<RateChange>& a, const std::vector<RateC
     });
 }
 
-static double burst_peak(const Logic& logic, const std::deque<int>& clicks) {
+static double burst_highest_lead(const Logic& logic, const std::deque<int>& clicks) {
     struct BurstCache {
         const std::deque<int>* owner = nullptr;
         unsigned long long clicks_version_seen = 0;
         float macro_fps = 0.f;
         std::vector<RateChange> rates;
-        size_t covered = 0;
-        double best = 0.0;
+        size_t scanned = 0;
+        double highest_lead = 0.0;
     };
 
     thread_local std::array<BurstCache, 2> burst_caches;
-    auto& state = &clicks == &logic.click_frames_p2 ? burst_caches[1] : burst_caches[0];
-    bool kept = state.owner == &clicks && state.clicks_version_seen == logic.clicks_version && state.covered <= clicks.size() &&
-                state.macro_fps == logic.macro_fps && same_rates(state.rates, logic.rates);
+    auto& cache = &clicks == &logic.click_frames_p2 ? burst_caches[1] : burst_caches[0];
+    bool kept = cache.owner == &clicks && cache.clicks_version_seen == logic.clicks_version && cache.scanned <= clicks.size() &&
+                cache.macro_fps == logic.macro_fps && same_rates(cache.rates, logic.rates);
     if (!kept) {
-        state = {};
-        state.owner = &clicks;
-        state.clicks_version_seen = logic.clicks_version;
-        state.macro_fps = logic.macro_fps;
-        state.rates = logic.rates;
+        cache = {};
+        cache.owner = &clicks;
+        cache.clicks_version_seen = logic.clicks_version;
+        cache.macro_fps = logic.macro_fps;
+        cache.rates = logic.rates;
     }
-    int amt = (int)clicks.size();
-    int target = amt - Logic::MIN_BURST_CLICKS;
-    if (target < 0) return 0.0;
+    int count = (int)clicks.size();
+    int last_start = count - Logic::MIN_BURST_CLICKS;
+    if (last_start < 0) return 0.0;
     double rate = (double)Logic::MAX_BURST_RATE;
-    while (state.covered <= (size_t)target) {
-        double lead = rate * logic.seconds_at(clicks[state.covered]) - (double)state.covered;
-        state.best = state.covered == 0 ? lead : std::max(state.best, lead);
-        ++state.covered;
+    while (cache.scanned <= (size_t)last_start) {
+        double burst_lead = rate * logic.seconds_at(clicks[cache.scanned]) - (double)cache.scanned;
+        cache.highest_lead = cache.scanned == 0 ? burst_lead : std::max(cache.highest_lead, burst_lead);
+        ++cache.scanned;
     }
-    return state.best;
+    return cache.highest_lead;
 }
 
 unsigned Logic::count_presses_in_last_second(bool player2) {
@@ -2128,11 +2135,11 @@ bool Logic::player_cps_broken(const std::deque<int>& clicks, int now, float max_
     int n = (int)clicks.size();
     double back_t = seconds_at(clicks.back());
     if (n < Logic::MIN_BURST_CLICKS || seconds_at(now) - back_t > 1.0) return false;
-    double need = (double)Logic::MAX_BURST_RATE * back_t - (double)n;
-    double slack = 1e-6 + 1e-12 * std::abs(need);
-    double top = burst_peak(*this, clicks);
-    if (top > need + slack) return true;
-    if (top <= need - slack) return false;
+    double lead_needed = (double)Logic::MAX_BURST_RATE * back_t - (double)n;
+    double rounding = Logic::burst_rounding(lead_needed);
+    double highest_lead = burst_highest_lead(*this, clicks);
+    if (highest_lead > lead_needed + rounding) return true;
+    if (highest_lead <= lead_needed - rounding) return false;
     for (int start = 0; start <= n - Logic::MIN_BURST_CLICKS; ++start) {
         if (Logic::burst_too_fast(n - start, back_t - seconds_at(clicks[(size_t)start])))
             return true;

@@ -41,8 +41,7 @@ static bool is_live_pointer(void const* pointer) {
 
 static bool is_player2_icon(PlayerObject* player) {
     auto const& trajectory = Trajectory::get();
-    if (player == trajectory.fake2) return true;
-    if (player == trajectory.fake1) return false;
+    if (trajectory.isFake(player)) return trajectory.is_second_fake(player);
     auto* layer = GJBaseGameLayer::get();
     return layer && player == layer->m_player2;
 }
@@ -208,14 +207,7 @@ struct StepPads {
 static StepPads step_pads_p1, step_pads_p2;
 static std::unordered_set<int> spent_pad_ids_p1, spent_pad_ids_p2, spent_blue_orb_ids_p1, spent_blue_orb_ids_p2;
 
-struct PredictedPads {
-    bool pending = false;
-    bool black_clicked_by_assist = false;
-    bool unknown_pad = false;
-    std::vector<GameObject*> black_orbs;
-    std::vector<GameObject*> blue_orbs;
-    std::vector<int> pad_ids;
-};
+using Orbs::PredictedPads;
 
 static PredictedPads predicted_pads_p1, predicted_pads_p2;
 static std::unordered_set<int> predicted_spent_pad_ids_p1, predicted_spent_pad_ids_p2, predicted_spent_blue_ids_p1, predicted_spent_blue_ids_p2;
@@ -579,6 +571,17 @@ static void gather_prediction_orbs(GJBaseGameLayer* play, PlayerObject* player, 
         if (overlaps_now(player, object) || player->getObjectRect().intersectsRect(object->getObjectRect()))
             take(object);
     });
+}
+
+void Orbs::swap_prediction_pads(PadPrediction& state) {
+    std::swap(predicted_pads_p1, state.p1);
+    std::swap(predicted_pads_p2, state.p2);
+    std::swap(predicted_spent_pad_ids_p1, state.spent_pads_p1);
+    std::swap(predicted_spent_pad_ids_p2, state.spent_pads_p2);
+    std::swap(predicted_spent_blue_ids_p1, state.spent_blue_p1);
+    std::swap(predicted_spent_blue_ids_p2, state.spent_blue_p2);
+    std::swap(predicted_spent_black_ids_p1, state.spent_black_p1);
+    std::swap(predicted_spent_black_ids_p2, state.spent_black_p2);
 }
 
 void Orbs::reset_prediction_pads() {

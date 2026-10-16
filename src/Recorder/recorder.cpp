@@ -228,9 +228,14 @@ public:
     std::string ffmpeg_path();
     std::string run_hidden(std::string command, const fs::path& log_path);
     bool setup_nv12();
+    void create_nv12_targets();
     void close_nv12();
     void convert_nv12();
+    void draw_nv12_plane(GLuint framebuffer, GLuint program, int plane_width, int plane_height);
     void draw_full_quad();
+    void read_into_pixel_buffer();
+    void read_nv12_planes();
+    bool wait_and_delete_fence(int slot, bool wait);
     bool mux_audio();
 #endif
 #ifdef GEODE_IS_MACOS
@@ -238,13 +243,21 @@ public:
     bool write_all(int fd, const void* data, size_t size);
     bool mux_audio();
 #endif
+#if defined(GEODE_IS_WINDOWS) || defined(GEODE_IS_MACOS)
+    void open_gpu_readback();
+    void close_gpu_readback();
+    void copy_pixel_buffer_to_queue(int slot);
+    void close_ffmpeg_process();
+#endif
 #ifdef ECHO_FFMPEG_API
     std::string open_api_encoder(int fps);
+    bool send_to_api_encoder(const std::vector<unsigned char>& frame);
 #endif
     static bool api_available();
     static bool prefer_api();
     bool idle() const;
     void start_capturing();
+    const char* rendering_message() const;
     bool send_to_encoder(const std::vector<unsigned char>& frame);
     void save_api_render();
     void silent_change_size(CCSize size);
@@ -253,8 +266,13 @@ public:
     void hold_view();
     void release_view();
     bool open_capture_target();
+    bool create_capture_framebuffer();
+    void create_overlay_sprites();
     void close_capture_target();
+    void release_overlay_sprites();
     void draw_and_read_frame();
+    void draw_scene_into_capture(CCDirector* director);
+    void read_into_frame();
     void show_overlay();
     void draw_preview(CCSize pixels);
 #ifdef GEODE_IS_IOS
@@ -266,6 +284,9 @@ public:
     void queue_frame(std::vector<unsigned char> frame);
     std::vector<unsigned char> acquire_frame();
     void encode_loop();
+    bool take_queued_frame(std::vector<unsigned char>& frame);
+    void recycle_frame(std::vector<unsigned char>& frame);
+    void stop_encode_thread();
     void finish_video();
 #if defined(GEODE_IS_WINDOWS) || defined(GEODE_IS_MACOS)
     bool collect_pixel_buffer(bool wait);
@@ -283,6 +304,7 @@ public:
 #else
     static const size_t MAX_QUEUED_FRAMES = 4;
 #endif
+    static const size_t MAX_SPARE_FRAMES = MAX_QUEUED_FRAMES + 1;
 
     bool active = false;
     bool paused = false;
@@ -1569,14 +1591,7 @@ static std::string rate_control_args(const std::string& codec, int bitrate, cons
     if (sets_own_rate) return encoder_speed_args(codec, extra, false);
     if (bitrate > 0)
         return encoder_speed_args(codec, extra, true) + fmt::format(" -b:v {}", bitrate);
-    std::string flags;
-    if (!has_arg("-preset") && !has_arg("-quality")) {
-        if (codec.find("nvenc") != std::string::npos) flags += " -preset p1";
-        else if (codec.find("amf") != std::string::npos) flags += " -quality speed";
-        else if (codec.find("qsv") != std::string::npos) flags += " -preset veryfast";
-        else if (codec == "libx264" || codec == "libx265")
-            flags += " -preset " + Logic::get().render_preset;
-    }
+    std::string flags = encoder_speed_args(codec, extra, false);
     if (codec.find("nvenc") != std::string::npos) flags += " -rc constqp -qp 0";
     else if (codec.find("amf") != std::string::npos) flags += " -rc cqp -qp_i 0 -qp_p 0";
     else if (codec.find("qsv") != std::string::npos) flags += " -global_quality 1";
@@ -1600,15 +1615,14 @@ void Recorder::draw_full_quad() {
     glEnd();
 }
 
-bool Recorder::setup_nv12() {
-    static const char* vertex = R"(
+static const char* nv12_vertex_shader = R"(
 #version 120
 void main() {
 	gl_Position = gl_Vertex;
 	gl_TexCoord[0].xy = vec2(gl_MultiTexCoord0.x, 1.0 - gl_MultiTexCoord0.y);
 }
 )";
-    static const char* luma = R"(
+static const char* nv12_luma_shader = R"(
 #version 120
 uniform sampler2D u_texture;
 void main() {
@@ -1618,7 +1632,7 @@ void main() {
 	gl_FragColor = vec4(y, 0.0, 0.0, 1.0);
 }
 )";
-    static const char* chroma = R"(
+static const char* nv12_chroma_shader = R"(
 #version 120
 uniform sampler2D u_texture;
 void main() {
@@ -1630,9 +1644,8 @@ void main() {
 	gl_FragColor = vec4(u, v, 0.0, 1.0);
 }
 )";
-    y_program = link_program(vertex, luma);
-    uv_program = link_program(vertex, chroma);
-    if (!y_program || !uv_program) return false;
+
+void Recorder::create_nv12_targets() {
     GLint old_texture = 0, old_fbo = 0;
     glGetIntegerv(GL_TEXTURE_BINDING_2D, &old_texture);
     glGetIntegerv(GL_FRAMEBUFFER_BINDING, &old_fbo);
@@ -1642,6 +1655,13 @@ void main() {
     uv_fbo = make_framebuffer(uv_texture);
     glBindFramebuffer(GL_FRAMEBUFFER, old_fbo);
     glBindTexture(GL_TEXTURE_2D, old_texture);
+}
+
+bool Recorder::setup_nv12() {
+    y_program = link_program(nv12_vertex_shader, nv12_luma_shader);
+    uv_program = link_program(nv12_vertex_shader, nv12_chroma_shader);
+    if (!y_program || !uv_program) return false;
+    create_nv12_targets();
     return y_texture && uv_texture && y_fbo && uv_fbo;
 }
 
@@ -1661,6 +1681,14 @@ void Recorder::close_nv12() {
     nv12 = false;
 }
 
+void Recorder::draw_nv12_plane(GLuint framebuffer, GLuint program, int plane_width, int plane_height) {
+    glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
+    glViewport(0, 0, plane_width, plane_height);
+    glUseProgram(program);
+    glUniform1i(glGetUniformLocation(program, "u_texture"), 0);
+    draw_full_quad();
+}
+
 void Recorder::convert_nv12() {
     GLint old_program = 0, old_texture = 0, old_fbo = 0;
     GLint viewport[4] = {};
@@ -1674,16 +1702,8 @@ void Recorder::convert_nv12() {
     if (depth_was_on) glDisable(GL_DEPTH_TEST);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, capture_texture);
-    glBindFramebuffer(GL_FRAMEBUFFER, y_fbo);
-    glViewport(0, 0, width, height);
-    glUseProgram(y_program);
-    glUniform1i(glGetUniformLocation(y_program, "u_texture"), 0);
-    draw_full_quad();
-    glBindFramebuffer(GL_FRAMEBUFFER, uv_fbo);
-    glViewport(0, 0, width / 2, height / 2);
-    glUseProgram(uv_program);
-    glUniform1i(glGetUniformLocation(uv_program, "u_texture"), 0);
-    draw_full_quad();
+    draw_nv12_plane(y_fbo, y_program, width, height);
+    draw_nv12_plane(uv_fbo, uv_program, width / 2, height / 2);
     glUseProgram(old_program);
     glBindTexture(GL_TEXTURE_2D, old_texture);
     glBindFramebuffer(GL_FRAMEBUFFER, old_fbo);
@@ -1693,11 +1713,13 @@ void Recorder::convert_nv12() {
 }
 #endif
 
+#define UNCAPPED_ANIMATION_INTERVAL (1.f / 10000.f)
+
 void Recorder::uncap_frame_rate() {
     if (frame_rate_uncapped) return;
     auto* director = CCDirector::sharedDirector();
     saved_animation_interval = director->getAnimationInterval();
-    director->setAnimationInterval(1.f / 10000.f);
+    director->setAnimationInterval(UNCAPPED_ANIMATION_INTERVAL);
 #ifdef GEODE_IS_WINDOWS
     saved_swap_interval = 1;
     if (auto get_swap = reinterpret_cast<GetSwapIntervalFunction>(wglGetProcAddress("wglGetSwapIntervalEXT")))
@@ -1732,7 +1754,7 @@ void Recorder::restore_frame_rate() {
 #endif
 }
 
-bool Recorder::open_capture_target() {
+bool Recorder::create_capture_framebuffer() {
     GLint old_fbo = 0, old_texture = 0;
     glGetIntegerv(GL_FRAMEBUFFER_BINDING, &old_fbo);
     glGetIntegerv(GL_TEXTURE_BINDING_2D, &old_texture);
@@ -1753,8 +1775,11 @@ bool Recorder::open_capture_target() {
     bool complete = glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
     glBindFramebuffer(GL_FRAMEBUFFER, old_fbo);
     glBindTexture(GL_TEXTURE_2D, old_texture);
+    return complete;
+}
 
 #ifdef GEODE_IS_WINDOWS
+void Recorder::open_gpu_readback() {
     nv12 = !use_api && Recorder::get().setup_nv12();
     if (!nv12) Recorder::get().close_nv12();
     auto bytes = (GLsizeiptr)Recorder::get().frame_bytes();
@@ -1767,9 +1792,11 @@ bool Recorder::open_capture_target() {
     fences.fill(nullptr);
     buffers_in_flight.clear();
     next_slot = 0;
+}
 #endif
 
 #ifdef GEODE_IS_MACOS
+void Recorder::open_gpu_readback() {
     buffered_capture = !use_api;
     if (buffered_capture) {
         glGenBuffers(READBACK_RING_SIZE, pixel_buffers.data());
@@ -1791,8 +1818,10 @@ bool Recorder::open_capture_target() {
     }
     buffers_in_flight.clear();
     next_slot = 0;
+}
 #endif
 
+void Recorder::create_overlay_sprites() {
     fade_shade = CCLayerColor::create(ccc4(0, 0, 0, 0));
     fade_shade->retain();
     bar_background = CCSprite::create("slidergroove2.png");
@@ -1810,17 +1839,28 @@ bool Recorder::open_capture_target() {
     if (bar_text) bar_text->retain();
     bar_text_shown.clear();
     bar_text_updated_at = {};
+}
+
+bool Recorder::open_capture_target() {
+    bool complete = create_capture_framebuffer();
+#if defined(GEODE_IS_WINDOWS) || defined(GEODE_IS_MACOS)
+    open_gpu_readback();
+#endif
+    create_overlay_sprites();
     return complete;
 }
 
-void Recorder::close_capture_target() {
 #ifdef GEODE_IS_MACOS
+void Recorder::close_gpu_readback() {
     buffers_in_flight.clear();
     if (pixel_buffers[0]) glDeleteBuffers(READBACK_RING_SIZE, pixel_buffers.data());
     pixel_buffers.fill(0);
     buffered_capture = false;
+}
 #endif
+
 #ifdef GEODE_IS_WINDOWS
+void Recorder::close_gpu_readback() {
     for (auto& fence : fences) {
         if (fence) glDeleteSync(fence);
         fence = nullptr;
@@ -1829,6 +1869,23 @@ void Recorder::close_capture_target() {
     if (pixel_buffers[0]) glDeleteBuffers(READBACK_RING_SIZE, pixel_buffers.data());
     pixel_buffers.fill(0);
     Recorder::get().close_nv12();
+}
+#endif
+
+void Recorder::release_overlay_sprites() {
+    if (fade_shade) fade_shade->release();
+    fade_shade = nullptr;
+    if (bar_background) bar_background->release();
+    if (bar_fill) bar_fill->release();
+    if (bar_text) bar_text->release();
+    bar_background = nullptr;
+    bar_fill = nullptr;
+    bar_text = nullptr;
+}
+
+void Recorder::close_capture_target() {
+#if defined(GEODE_IS_WINDOWS) || defined(GEODE_IS_MACOS)
+    close_gpu_readback();
 #endif
 #ifdef GEODE_IS_IOS
     if (direct_fbo) glDeleteFramebuffers(1, &direct_fbo);
@@ -1839,14 +1896,7 @@ void Recorder::close_capture_target() {
     if (capture_texture) glDeleteTextures(1, &capture_texture);
     capture_fbo = 0;
     capture_texture = 0;
-    if (fade_shade) fade_shade->release();
-    fade_shade = nullptr;
-    if (bar_background) bar_background->release();
-    if (bar_fill) bar_fill->release();
-    if (bar_text) bar_text->release();
-    bar_background = nullptr;
-    bar_fill = nullptr;
-    bar_text = nullptr;
+    release_overlay_sprites();
 }
 
 #ifdef GEODE_IS_MACOS
@@ -1866,10 +1916,7 @@ bool Recorder::capture_bgra_buffered() {
 }
 #endif
 
-void Recorder::draw_and_read_frame() {
-    auto* director = CCDirector::sharedDirector();
-    GLint window_fbo = 0;
-    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &window_fbo);
+void Recorder::draw_scene_into_capture(CCDirector* director) {
     glBindFramebuffer(GL_FRAMEBUFFER, capture_fbo);
     glViewport(0, 0, width, height);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
@@ -1882,44 +1929,35 @@ void Recorder::draw_and_read_frame() {
         fade_shade->visit();
     }
     kmGLPopMatrix();
+}
 
-#ifdef GEODE_IS_MACOS
-    if (capture_bgra_buffered()) {
-        glBindFramebuffer(GL_FRAMEBUFFER, window_fbo);
-        return;
-    }
-#endif
 #ifdef GEODE_IS_WINDOWS
+void Recorder::read_nv12_planes() {
+    glBindFramebuffer(GL_FRAMEBUFFER, y_fbo);
+    glReadPixels(0, 0, width, height, GL_RED, GL_UNSIGNED_BYTE, nullptr);
+    glBindFramebuffer(GL_FRAMEBUFFER, uv_fbo);
+    auto offset = (uintptr_t)width * (uintptr_t)height;
+    glReadPixels(0, 0, width / 2, height / 2, GL_RG, GL_UNSIGNED_BYTE, reinterpret_cast<void*>(offset));
+}
+
+void Recorder::read_into_pixel_buffer() {
     if (nv12) Recorder::get().convert_nv12();
     int slot = next_slot;
     while (fences[slot] && Recorder::get().collect_pixel_buffer(true)) {
     }
     glBindBuffer(GL_PIXEL_PACK_BUFFER, pixel_buffers[slot]);
     glPixelStorei(GL_PACK_ALIGNMENT, 1);
-    if (nv12) {
-        glBindFramebuffer(GL_FRAMEBUFFER, y_fbo);
-        glReadPixels(0, 0, width, height, GL_RED, GL_UNSIGNED_BYTE, nullptr);
-        glBindFramebuffer(GL_FRAMEBUFFER, uv_fbo);
-        auto offset = (uintptr_t)width * (uintptr_t)height;
-        glReadPixels(0, 0, width / 2, height / 2, GL_RG, GL_UNSIGNED_BYTE, reinterpret_cast<void*>(offset));
-    }
-    else {
-        glReadPixels(0, 0, width, height, GL_BGRA, GL_UNSIGNED_BYTE, nullptr);
-    }
+    if (nv12) read_nv12_planes();
+    else glReadPixels(0, 0, width, height, GL_BGRA, GL_UNSIGNED_BYTE, nullptr);
     glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
     fences[slot] = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
     buffers_in_flight.push_back(slot);
     next_slot = (slot + 1) % READBACK_RING_SIZE;
     while (Recorder::get().collect_pixel_buffer(false)) {
     }
+}
 #else
-#ifdef GEODE_IS_IOS
-    if (Recorder::get().draw_direct_frame()) {
-        glBindFramebuffer(GL_FRAMEBUFFER, window_fbo);
-        return;
-    }
-    glBindFramebuffer(GL_FRAMEBUFFER, capture_fbo);
-#endif
+void Recorder::read_into_frame() {
     auto frame = Recorder::get().acquire_frame();
     glPixelStorei(GL_PACK_ALIGNMENT, 1);
     {
@@ -1932,6 +1970,32 @@ void Recorder::draw_and_read_frame() {
             glReadPixels(0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE, frame.data());
     }
     Recorder::get().queue_frame(std::move(frame));
+}
+#endif
+
+void Recorder::draw_and_read_frame() {
+    auto* director = CCDirector::sharedDirector();
+    GLint window_fbo = 0;
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &window_fbo);
+    draw_scene_into_capture(director);
+
+#ifdef GEODE_IS_MACOS
+    if (capture_bgra_buffered()) {
+        glBindFramebuffer(GL_FRAMEBUFFER, window_fbo);
+        return;
+    }
+#endif
+#ifdef GEODE_IS_WINDOWS
+    read_into_pixel_buffer();
+#else
+#ifdef GEODE_IS_IOS
+    if (Recorder::get().draw_direct_frame()) {
+        glBindFramebuffer(GL_FRAMEBUFFER, window_fbo);
+        return;
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, capture_fbo);
+#endif
+    read_into_frame();
 #endif
     glBindFramebuffer(GL_FRAMEBUFFER, window_fbo);
 }
@@ -2121,19 +2185,19 @@ void Recorder::draw_progress() {
 }
 
 #if defined(GEODE_IS_WINDOWS) || defined(GEODE_IS_MACOS)
-bool Recorder::collect_pixel_buffer(bool wait) {
-    if (buffers_in_flight.empty()) return false;
-    int slot = buffers_in_flight.front();
 #ifdef GEODE_IS_WINDOWS
-    GLenum wait_result = glClientWaitSync(fences[slot], wait ? GL_SYNC_FLUSH_COMMANDS_BIT : 0, wait ? 5'000'000'000ull : 0);
+#define FENCE_WAIT_TIMEOUT_NS 5'000'000'000ull
+
+bool Recorder::wait_and_delete_fence(int slot, bool wait) {
+    GLenum wait_result = glClientWaitSync(fences[slot], wait ? GL_SYNC_FLUSH_COMMANDS_BIT : 0, wait ? FENCE_WAIT_TIMEOUT_NS : 0);
     if (!wait && wait_result != GL_ALREADY_SIGNALED && wait_result != GL_CONDITION_SATISFIED) return false;
     glDeleteSync(fences[slot]);
     fences[slot] = nullptr;
-#else
-    if (!wait && (int)buffers_in_flight.size() < READBACK_RING_SIZE - 1) return false;
-    ScopedTimer timer{ g_render_timing.read_back_ns };
+    return true;
+}
 #endif
-    buffers_in_flight.pop_front();
+
+void Recorder::copy_pixel_buffer_to_queue(int slot) {
     glBindBuffer(GL_PIXEL_PACK_BUFFER, pixel_buffers[slot]);
     if (const auto* data = static_cast<const unsigned char*>(glMapBuffer(GL_PIXEL_PACK_BUFFER, GL_READ_ONLY))) {
         auto frame = Recorder::get().acquire_frame();
@@ -2142,15 +2206,30 @@ bool Recorder::collect_pixel_buffer(bool wait) {
             Recorder::get().queue_frame(std::move(frame));
         }
         else {
+            std::lock_guard guard(lock);
             failure_reason = "The captured frame buffer was invalid";
             encoding_broken = true;
         }
     }
     else {
+        std::lock_guard guard(lock);
         failure_reason = "Could not read the captured frame buffer";
         encoding_broken = true;
     }
     glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+}
+
+bool Recorder::collect_pixel_buffer(bool wait) {
+    if (buffers_in_flight.empty()) return false;
+    int slot = buffers_in_flight.front();
+#ifdef GEODE_IS_WINDOWS
+    if (!wait_and_delete_fence(slot, wait)) return false;
+#else
+    if (!wait && (int)buffers_in_flight.size() < READBACK_RING_SIZE - 1) return false;
+    ScopedTimer timer{ g_render_timing.read_back_ns };
+#endif
+    buffers_in_flight.pop_front();
+    copy_pixel_buffer_to_queue(slot);
     return true;
 }
 #endif
@@ -2181,35 +2260,39 @@ void Recorder::queue_frame(std::vector<unsigned char> frame) {
     queue_changed.notify_all();
 }
 
+bool Recorder::take_queued_frame(std::vector<unsigned char>& frame) {
+    std::unique_lock guard(lock);
+    queue_changed.wait(guard, [this] {
+        return closing || !frame_queue.empty();
+    });
+    if (frame_queue.empty()) return false;
+    frame = std::move(frame_queue.front());
+    frame_queue.pop_front();
+    return true;
+}
+
+void Recorder::recycle_frame(std::vector<unsigned char>& frame) {
+    std::lock_guard guard(lock);
+    if (spare_frames.size() < MAX_SPARE_FRAMES) spare_frames.push_back(std::move(frame));
+}
+
 void Recorder::encode_loop() {
     while (true) {
         std::vector<unsigned char> frame;
-        {
-            std::unique_lock guard(lock);
-            queue_changed.wait(guard, [this] {
-                return closing || !frame_queue.empty();
-            });
-            if (frame_queue.empty()) return;
-            frame = std::move(frame_queue.front());
-            frame_queue.pop_front();
-        }
+        if (!take_queued_frame(frame)) return;
         queue_changed.notify_all();
         if (!encoding_broken && !Recorder::get().send_to_encoder(frame)) {
-            encoding_broken = true;
+            {
+                std::lock_guard guard(lock);
+                encoding_broken = true;
+            }
             queue_changed.notify_all();
         }
-        {
-            std::lock_guard guard(lock);
-            if (spare_frames.size() < MAX_QUEUED_FRAMES + 1) spare_frames.push_back(std::move(frame));
-        }
+        recycle_frame(frame);
     }
 }
 
-void Recorder::finish_video() {
-#if defined(GEODE_IS_WINDOWS) || defined(GEODE_IS_MACOS)
-    while (Recorder::get().collect_pixel_buffer(true)) {
-    }
-#endif
+void Recorder::stop_encode_thread() {
     if (encode_thread.joinable()) {
         {
             std::lock_guard guard(lock);
@@ -2221,31 +2304,54 @@ void Recorder::finish_video() {
     frame_queue.clear();
     spare_frames.clear();
     closing = false;
-#ifdef ECHO_FFMPEG_API
-    if (api_encoder) api_encoder->stop();
-    api_encoder.reset();
-#endif
+}
+
 #ifdef GEODE_IS_WINDOWS
+#define FFMPEG_EXIT_TIMEOUT_MS 30000
+
+void Recorder::close_ffmpeg_process() {
     Recorder::get().close_handle(video_pipe);
     if (ffmpeg_process) {
-        if (WaitForSingleObject(ffmpeg_process, 30000) != WAIT_OBJECT_0) TerminateProcess(ffmpeg_process, 0);
+        if (WaitForSingleObject(ffmpeg_process, FFMPEG_EXIT_TIMEOUT_MS) != WAIT_OBJECT_0) TerminateProcess(ffmpeg_process, 0);
         CloseHandle(ffmpeg_process);
         ffmpeg_process = nullptr;
     }
+}
 #endif
+
 #ifdef GEODE_IS_MACOS
+#define FFMPEG_EXIT_TIMEOUT_SECONDS 60.0
+#define FFMPEG_ERROR_LINE_LIMIT 160
+#define PIPE_ERROR_LOG_DELAY_MS 100
+
+void Recorder::close_ffmpeg_process() {
     if (video_pipe >= 0) close(video_pipe);
     video_pipe = -1;
     if (ffmpeg_process) {
-        int code = wait_tool(ffmpeg_process, 60.0);
+        int code = wait_tool(ffmpeg_process, FFMPEG_EXIT_TIMEOUT_SECONDS);
         ffmpeg_process = 0;
         if (code != 0) {
-            encode_error = last_log_line(ffmpeg_log, 160);
+            encode_error = last_log_line(ffmpeg_log, FFMPEG_ERROR_LINE_LIMIT);
             if (encode_error.empty()) encode_error = "ffmpeg did not finish the video";
         }
     }
     std::error_code ignored;
     if (encode_error.empty() && !ffmpeg_log.empty()) fs::remove(ffmpeg_log, ignored);
+}
+#endif
+
+void Recorder::finish_video() {
+#if defined(GEODE_IS_WINDOWS) || defined(GEODE_IS_MACOS)
+    while (Recorder::get().collect_pixel_buffer(true)) {
+    }
+#endif
+    stop_encode_thread();
+#ifdef ECHO_FFMPEG_API
+    if (api_encoder) api_encoder->stop();
+    api_encoder.reset();
+#endif
+#if defined(GEODE_IS_WINDOWS) || defined(GEODE_IS_MACOS)
+    close_ffmpeg_process();
 #endif
 }
 
@@ -2283,29 +2389,44 @@ bool Recorder::idle() const {
 #endif
 }
 
+#ifdef ECHO_FFMPEG_API
+bool Recorder::send_to_api_encoder(const std::vector<unsigned char>& frame) {
+    auto result = api_encoder->writeFrame(frame);
+    if (result.isErr()) {
+        std::lock_guard guard(lock);
+        failure_reason = result.unwrapErr();
+    }
+    return result.isOk();
+}
+#endif
+
 bool Recorder::send_to_encoder(const std::vector<unsigned char>& frame) {
     ScopedTimer timer{ g_render_timing.encoder_write_ns };
 #ifdef ECHO_FFMPEG_API
-    if (api_encoder) {
-        auto result = api_encoder->writeFrame(frame);
-        if (result.isErr()) {
-            std::lock_guard guard(lock);
-            failure_reason = result.unwrapErr();
-        }
-        return result.isOk();
-    }
+    if (api_encoder) return send_to_api_encoder(frame);
 #endif
 #ifdef GEODE_IS_WINDOWS
     return Recorder::get().write_all(video_pipe, frame.data(), frame.size());
 #elif defined(GEODE_IS_MACOS)
     if (Recorder::get().write_all(video_pipe, frame.data(), frame.size())) return true;
-    std::this_thread::sleep_for(chrono::milliseconds(100));
-    auto reason = last_log_line(ffmpeg_log, 160);
+    std::this_thread::sleep_for(chrono::milliseconds(PIPE_ERROR_LOG_DELAY_MS));
+    auto reason = last_log_line(ffmpeg_log, FFMPEG_ERROR_LINE_LIMIT);
     std::lock_guard guard(lock);
     failure_reason = reason;
     return false;
 #else
     return false;
+#endif
+}
+
+const char* Recorder::rendering_message() const {
+#if defined(GEODE_IS_IOS)
+    return "Rendering";
+#elif defined(ECHO_FFMPEG_API)
+    return use_api ? "Rendering (FFmpeg API)" : nv12 ? "Rendering (GPU)"
+                                                     : "Rendering";
+#else
+    return nv12 ? "Rendering (GPU)" : "Rendering";
 #endif
 }
 
@@ -2317,14 +2438,7 @@ void Recorder::start_capturing() {
     uncap_frame_rate();
     active = true;
     logic.render_speed_locked = audio_speed;
-#if defined(GEODE_IS_IOS)
-    logic.message = "Rendering";
-#elif defined(ECHO_FFMPEG_API)
-    logic.message = use_api ? "Rendering (FFmpeg API)" : nv12 ? "Rendering (GPU)"
-                                                              : "Rendering";
-#else
-    logic.message = nv12 ? "Rendering (GPU)" : "Rendering";
-#endif
+    logic.message = rendering_message();
     if (!AudioCapture::get().attach(logic.render_music, logic.render_sfx, raw_audio_path)) {
         logic.message = "Rendering (audio capture failed, video only)";
     }
@@ -2861,6 +2975,43 @@ void Logic::show_render_overlay() {
     Recorder::get().show_overlay();
 }
 
+#define RENDER_NOTE_EVERY_SECONDS 5
+#define MAX_RENDER_NOTES_SIZE 60000
+
+static float render_fade_amount(const Logic& logic, const Recorder& recorder, PlayLayer* play, float dt) {
+    float fade_in = logic.render_fade_in <= 0.f ? 1.f : std::clamp((float)(recorder.frames) * dt / logic.render_fade_in, 0.f, 1.f);
+    float fade_out = 1.f;
+    if (play->m_hasCompletedLevel && logic.render_fade_out > 0.f) {
+        fade_out = std::clamp((logic.render_after_end - recorder.time_since_end) / logic.render_fade_out, 0.f, 1.f);
+    }
+    return std::min(fade_in, fade_out);
+}
+
+static void append_render_note(Logic& logic, const Recorder& recorder, PlayLayer* play, float dt) {
+    auto* engine = FMODAudioEngine::get();
+    auto& audio_capture = AudioCapture::get();
+    unsigned raw_song = 0;
+    if (auto* channel = engine ? engine->getActiveMusicChannel(0) : nullptr)
+        channel->getPosition(&raw_song, FMOD_TIMEUNIT_MS);
+    g_render_notes += fmt::format("at video={:.3f}s level_time={:.4f}s song={}ms raw_song={}ms audio_written={:.3f}s x={:.3f} tps={:g} step_frame={}\n",
+        (double)recorder.frames * dt, play->m_gameState.m_levelTime, engine ? engine->getMusicTimeMS(0) : 0, raw_song,
+        audio_capture.sample_rate > 0 ? (double)audio_capture.frames_written / audio_capture.sample_rate : 0.0, play->m_player1 ? play->m_player1->getPositionX() : 0.f,
+        logic.sample_rate(), logic.step_frame);
+}
+
+static std::string encoding_failure_message(Recorder& recorder) {
+    std::string failure;
+    {
+        std::lock_guard guard(recorder.lock);
+        failure = recorder.failure_reason;
+    }
+    std::string reason = recorder.use_api ? "Encoding failed: " + failure : std::string("The render pipe closed");
+#ifdef GEODE_IS_MACOS
+    if (!recorder.use_api && !failure.empty()) reason = "Encoding failed: " + failure;
+#endif
+    return reason;
+}
+
 bool Logic::capture_frame() {
     auto& recorder = Recorder::get();
     auto* play = PlayLayer::get();
@@ -2879,32 +3030,16 @@ bool Logic::capture_frame() {
             return false;
         }
     }
-    float fade_in = render_fade_in <= 0.f ? 1.f : std::clamp((float)(recorder.frames) * dt / render_fade_in, 0.f, 1.f);
-    float fade_out = 1.f;
-    if (play->m_hasCompletedLevel && render_fade_out > 0.f) {
-        fade_out = std::clamp((render_after_end - recorder.time_since_end) / render_fade_out, 0.f, 1.f);
-    }
-    recorder.fade = std::min(fade_in, fade_out);
+    recorder.fade = render_fade_amount(*this, recorder, play, dt);
     if (recorder.start_progress < 0.f) recorder.start_progress = level_progress(play, recorder.last_input_frame);
     AudioCapture::get().advance(dt * recorder.audio_speed, recorder.fade);
     recorder.draw_and_read_frame();
-    if (recorder.frames % (std::max(render_fps, 1) * 5) == 0 && g_render_notes.size() < 60000) {
-        auto* engine = FMODAudioEngine::get();
-        auto& audio_capture = AudioCapture::get();
-        unsigned raw_song = 0;
-        if (auto* channel = engine ? engine->getActiveMusicChannel(0) : nullptr)
-            channel->getPosition(&raw_song, FMOD_TIMEUNIT_MS);
-        g_render_notes += fmt::format("at video={:.3f}s level_time={:.4f}s song={}ms raw_song={}ms audio_written={:.3f}s x={:.3f} tps={:g} step_frame={}\n",
-            (double)recorder.frames * dt, play->m_gameState.m_levelTime, engine ? engine->getMusicTimeMS(0) : 0, raw_song,
-            audio_capture.sample_rate > 0 ? (double)audio_capture.frames_written / audio_capture.sample_rate : 0.0, play->m_player1 ? play->m_player1->getPositionX() : 0.f,
-            sample_rate(), step_frame);
-    }
+    bool note_due = recorder.frames % (std::max(render_fps, 1) * RENDER_NOTE_EVERY_SECONDS) == 0;
+    if (note_due && g_render_notes.size() < MAX_RENDER_NOTES_SIZE)
+        append_render_note(*this, recorder, play, dt);
     ++recorder.frames;
     if (recorder.encoding_broken) {
-        std::string reason = recorder.use_api ? "Encoding failed: " + recorder.failure_reason : std::string("The render pipe closed");
-#ifdef GEODE_IS_MACOS
-        if (!recorder.use_api && !recorder.failure_reason.empty()) reason = "Encoding failed: " + recorder.failure_reason;
-#endif
+        std::string reason = encoding_failure_message(recorder);
         stop_render();
         notify(reason, false);
     }
@@ -2938,43 +3073,45 @@ bool Logic::ffmpeg_ready() {
 #endif
 }
 
+static void write_render_log(const Recorder& recorder) {
+    double frames = (double)(recorder.frames);
+    double wall_seconds = chrono::duration<double>(chrono::steady_clock::now() - g_render_timing.started_at).count();
+    auto ms_per_frame = [frames](const std::atomic<long long>& ns) {
+        return (double)(ns.load()) / 1e6 / frames;
+    };
+    auto& logic = Logic::get();
+    auto& audio_capture = AudioCapture::get();
+    std::error_code error;
+    fs::create_directories(logic.save_root() / "logs", error);
+    std::ofstream render_log(logic.save_root() / "logs" / "render.txt", std::ios::trunc);
+    render_log << fmt::format("echo {} build {}\n", Mod::get()->getVersion().toVString(), build_id());
+    render_log << fmt::format("render {}x{} @{}fps codec={} platform={} capture={}\n", recorder.width, recorder.height, logic.render_fps, logic.render_codec,
+        GEODE_PLATFORM_NAME, recorder.use_api ? "api" : recorder.nv12 ? "nv12 ring" : recorder.buffered_capture ? "bgra ring" : "bgra direct");
+    render_log << fmt::format("frames={} video={:.3f}s wall={:.3f}s speed={:.2f} fps ({:.2f}x real time)\n", recorder.frames, frames / std::max(logic.render_fps, 1), wall_seconds,
+        frames / std::max(wall_seconds, 1e-6), frames / std::max(logic.render_fps, 1) / std::max(wall_seconds, 1e-6));
+    render_log << fmt::format("per frame: total={:.2f}ms read_back={:.2f}ms waiting_on_encoder={:.2f}ms encoder_write={:.2f}ms (encoder is on its own thread)\n",
+        wall_seconds * 1000.0 / frames, ms_per_frame(g_render_timing.read_back_ns), ms_per_frame(g_render_timing.encoder_wait_ns), ms_per_frame(g_render_timing.encoder_write_ns));
+    render_log << fmt::format("physics={:.2f}ms per frame ({:.0f}% of the frame) steps_per_frame={:.0f}\n", logic.render_physics * 1000.0 / frames,
+        logic.render_physics / std::max(wall_seconds, 1e-6) * 100.0, logic.sample_rate() / std::max(logic.render_fps, 1));
+    render_log << fmt::format("ssb_fix={} factor low={:.6f} high={:.6f} mean={:.6f} samples={} tps={:g} render_speed={:g}\n", logic.render_ssb_fix, logic.render_factor_low,
+        logic.render_factor_high, logic.render_factor_count > 0 ? logic.render_factor_sum / logic.render_factor_count : 1.0, logic.render_factor_count,
+        logic.sample_rate(), recorder.audio_speed);
+    render_log << fmt::format("audio rate={} channels={} written={} ({:.3f}s) stray_blocks={}\n", audio_capture.sample_rate, audio_capture.channels, audio_capture.frames_written,
+        audio_capture.sample_rate > 0 ? (double)audio_capture.frames_written / audio_capture.sample_rate : 0.0, audio_capture.stray_blocks);
+    {
+        auto* play = PlayLayer::get();
+        auto* engine = FMODAudioEngine::get();
+        auto* manager = GameManager::get();
+        render_log << fmt::format("level song_offset={:.4f}s gd_music_offset={}ms gd_time_offset={:.4f} song_at_start={}ms\n",
+            play && play->m_levelSettings ? play->m_levelSettings->m_songOffset : -1.f, engine ? engine->m_musicOffset : 0,
+            manager ? manager->m_timeOffset : 0.f, audio_capture.song_start_ms);
+    }
+    render_log << g_render_notes;
+}
+
 void Logic::stop_render() {
     auto& recorder = Recorder::get();
-    if (recorder.active && recorder.frames > 0) {
-        double frames = (double)(recorder.frames);
-        double wall_seconds = chrono::duration<double>(chrono::steady_clock::now() - g_render_timing.started_at).count();
-        auto ms_per_frame = [frames](const std::atomic<long long>& ns) {
-            return (double)(ns.load()) / 1e6 / frames;
-        };
-        auto& logic = Logic::get();
-        auto& audio_capture = AudioCapture::get();
-        std::error_code error;
-        fs::create_directories(logic.save_root() / "logs", error);
-        std::ofstream render_log(logic.save_root() / "logs" / "render.txt", std::ios::trunc);
-        render_log << fmt::format("echo {} build {}\n", Mod::get()->getVersion().toVString(), build_id());
-        render_log << fmt::format("render {}x{} @{}fps codec={} platform={} capture={}\n", recorder.width, recorder.height, logic.render_fps, logic.render_codec,
-            GEODE_PLATFORM_NAME, recorder.use_api ? "api" : recorder.nv12 ? "nv12 ring" : recorder.buffered_capture ? "bgra ring" : "bgra direct");
-        render_log << fmt::format("frames={} video={:.3f}s wall={:.3f}s speed={:.2f} fps ({:.2f}x real time)\n", recorder.frames, frames / std::max(logic.render_fps, 1), wall_seconds,
-            frames / std::max(wall_seconds, 1e-6), frames / std::max(logic.render_fps, 1) / std::max(wall_seconds, 1e-6));
-        render_log << fmt::format("per frame: total={:.2f}ms read_back={:.2f}ms waiting_on_encoder={:.2f}ms encoder_write={:.2f}ms (encoder is on its own thread)\n",
-            wall_seconds * 1000.0 / frames, ms_per_frame(g_render_timing.read_back_ns), ms_per_frame(g_render_timing.encoder_wait_ns), ms_per_frame(g_render_timing.encoder_write_ns));
-        render_log << fmt::format("physics={:.2f}ms per frame ({:.0f}% of the frame) steps_per_frame={:.0f}\n", logic.render_physics * 1000.0 / frames,
-            logic.render_physics / std::max(wall_seconds, 1e-6) * 100.0, logic.sample_rate() / std::max(logic.render_fps, 1));
-        render_log << fmt::format("ssb_fix={} factor low={:.6f} high={:.6f} mean={:.6f} samples={} tps={:g} render_speed={:g}\n", logic.render_ssb_fix, logic.render_factor_low,
-            logic.render_factor_high, logic.render_factor_count > 0 ? logic.render_factor_sum / logic.render_factor_count : 1.0, logic.render_factor_count,
-            logic.sample_rate(), recorder.audio_speed);
-        render_log << fmt::format("audio rate={} channels={} written={} ({:.3f}s) stray_blocks={}\n", audio_capture.sample_rate, audio_capture.channels, audio_capture.frames_written,
-            audio_capture.sample_rate > 0 ? (double)audio_capture.frames_written / audio_capture.sample_rate : 0.0, audio_capture.stray_blocks);
-        {
-            auto* play = PlayLayer::get();
-            auto* engine = FMODAudioEngine::get();
-            auto* manager = GameManager::get();
-            render_log << fmt::format("level song_offset={:.4f}s gd_music_offset={}ms gd_time_offset={:.4f} song_at_start={}ms\n",
-                play && play->m_levelSettings ? play->m_levelSettings->m_songOffset : -1.f, engine ? engine->m_musicOffset : 0,
-                manager ? manager->m_timeOffset : 0.f, audio_capture.song_start_ms);
-        }
-        render_log << g_render_notes;
-    }
+    if (recorder.active && recorder.frames > 0) write_render_log(recorder);
 #ifdef GEODE_IS_WINDOWS
     if (recorder.starting && !recorder.active) {
         recorder.cancel = true;
@@ -3014,6 +3151,156 @@ void Logic::stop_render() {
 #endif
 }
 
+#define MAX_RENDER_WIDTH 7680
+#define MAX_RENDER_HEIGHT 4320
+
+static void reset_for_new_render(Logic& logic, Recorder& recorder, const fs::path& output, const fs::path& folder) {
+    recorder.output = output;
+    recorder.raw_audio_path = folder / (output.stem().string() + ".audio.raw");
+    recorder.paused = false;
+    recorder.frames = 0;
+    g_render_timing.reset();
+    g_render_notes.clear();
+    recorder.recent_speed = 0.0;
+    recorder.speed_samples.clear();
+    {
+        logic.render_game_seconds = 0.0;
+        logic.render_factor_sum = 0.0;
+        logic.render_factor_low = logic.render_factor_high = 1.f;
+        logic.render_factor_count = 0;
+    }
+    recorder.seen_frames = 0;
+    recorder.time_since_end = 0.f;
+    recorder.fade = 1.f;
+    recorder.cancel = false;
+    recorder.encoding_broken = false;
+    recorder.failure_reason.clear();
+    recorder.ticked = false;
+    recorder.wall_delta = 0.f;
+    recorder.busy_seconds = 0.0;
+    recorder.start_progress = -1.f;
+    recorder.last_input_frame = logic.inputs.empty() ? 0 : std::ranges::max(logic.inputs, {}, &Frame::number).number;
+    logic.ffmpeg_missing = false;
+    logic.render_queued = false;
+    logic.frame_advance = false;
+    logic.holding_advance = false;
+    logic.advance_queued = false;
+}
+
+#ifdef GEODE_IS_WINDOWS
+#define PIPE_BUFFER_FRAMES 4
+#define MAX_PIPE_BUFFER_BYTES (256u << 20)
+
+static HANDLE open_video_pipe(const std::string& video_name, size_t frame_bytes) {
+    DWORD pipe_mode = PIPE_ACCESS_OUTBOUND | FILE_FLAG_OVERLAPPED;
+    DWORD pipe_buffer_size = (DWORD)std::min(std::max(frame_bytes * PIPE_BUFFER_FRAMES, frame_bytes), (size_t)MAX_PIPE_BUFFER_BYTES);
+    return CreateNamedPipeA(video_name.c_str(), pipe_mode, PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT, 1, pipe_buffer_size, 0, 0, nullptr);
+}
+
+static std::string ffmpeg_command(const Logic& logic, const Recorder& recorder, const std::string& video_name, int width, int height, int fps, const fs::path& output) {
+    std::string codec = logic.render_codec.empty() ? "libx264" : logic.render_codec;
+    bool hardware_encoder = codec.find("nvenc") != std::string::npos || codec.find("amf") != std::string::npos || codec.find("qsv") != std::string::npos;
+    const char* output_pixel_format = logic.render_bitrate <= 0 && !hardware_encoder ? "yuv444p" : "yuv420p";
+    // shader already did bt709 DONT do it twice
+    std::string color_fix = logic.render_color_fix && !recorder.nv12 ? "-vf colorspace=all=bt709:iall=bt470bg:fast=1 " : "";
+    auto has_arg = [&](const char* key) {
+        return logic.render_args.find(key) != std::string::npos;
+    };
+    std::string pixel_format_args = has_arg("-pix_fmt") ? std::string() : fmt::format(" -pix_fmt {}", output_pixel_format);
+    std::string colorspace_args = has_arg("-colorspace") || has_arg("-color_primaries") || has_arg("-color_trc") || has_arg("-color_range")
+                            ? std::string()
+                            : " -colorspace bt709 -color_primaries bt709 -color_trc bt709 -color_range tv";
+    std::string extra = logic.render_args.empty() ? std::string() : " " + logic.render_args;
+    return fmt::format(
+        "\"{}\" -y -nostdin -loglevel error -f rawvideo -pix_fmt {} -s {}x{} -r {} -probesize 32 -analyzeduration 0 -fflags nobuffer -i {} -an "
+        "{}-c:v {}{}{}{}{} \"{}\"",
+        Recorder::get().ffmpeg_path(),
+        recorder.nv12 ? "nv12" : "bgra",
+        width,
+        height,
+        fps,
+        video_name,
+        color_fix,
+        codec,
+        rate_control_args(codec, logic.render_bitrate, logic.render_args),
+        pixel_format_args,
+        colorspace_args,
+        extra,
+        output.string());
+}
+
+static bool launch_hidden(const std::string& command, PROCESS_INFORMATION& process) {
+    STARTUPINFOA startup{};
+    startup.cb = sizeof(startup);
+    startup.dwFlags = STARTF_USESHOWWINDOW;
+    startup.wShowWindow = SW_HIDE;
+    std::vector<char> mutable_command(command.begin(), command.end());
+    mutable_command.push_back('\0');
+    return CreateProcessA(nullptr, mutable_command.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, nullptr, &startup, &process);
+}
+
+static void finish_starting_render(bool connected) {
+    auto& recorder = Recorder::get();
+    bool canceled = recorder.cancel;
+    recorder.starting = false;
+    recorder.cancel = false;
+    if (!connected || canceled) {
+        Logic::get().stop_render();
+        if (!connected && !canceled) {
+            Logic::get().message = "ffmpeg did not connect";
+            Logic::get().notify("ffmpeg did not connect", false);
+        }
+        return;
+    }
+    if (!PlayLayer::get()) {
+        Logic::get().stop_render();
+        Logic::get().notify("The level closed before the render started", false);
+        return;
+    }
+    recorder.start_capturing();
+}
+
+static void connect_ffmpeg_then_start() {
+    bool connected = Recorder::get().connect_pipe(Recorder::get().video_pipe);
+    Loader::get()->queueInMainThread([connected] {
+        finish_starting_render(connected);
+    });
+}
+#endif
+
+#ifdef GEODE_IS_MACOS
+static std::vector<std::string> ffmpeg_args(const Logic& logic, const fs::path& ffmpeg, int width, int height, int fps, const fs::path& output) {
+    std::string codec = logic.render_codec.empty() ? "libx264" : logic.render_codec;
+    bool hardware_encoder = codec.find("videotoolbox") != std::string::npos;
+    auto has_arg = [&](const char* key) {
+        return logic.render_args.find(key) != std::string::npos;
+    };
+    std::string filters = "vflip";
+    if (logic.render_color_fix) filters += ",colorspace=all=bt709:iall=bt470bg:fast=1";
+    std::vector<std::string> args{
+        ffmpeg.string(), "-y", "-loglevel", "error", "-f", "rawvideo", "-pix_fmt", "bgra",
+        "-s", fmt::format("{}x{}", width, height), "-r", std::to_string(fps), "-i", "pipe:0", "-an",
+        "-vf", filters, "-c:v", codec
+    };
+    auto rate_args = rate_control_args(codec, logic.render_bitrate, logic.render_args, (long long)width * height * fps);
+    args.insert(args.end(), rate_args.begin(), rate_args.end());
+    if (!has_arg("-pix_fmt"))
+        args.insert(args.end(), { "-pix_fmt", logic.render_bitrate <= 0 && !hardware_encoder ? "yuv444p" : "yuv420p" });
+    if (!has_arg("-colorspace") && !has_arg("-color_primaries") && !has_arg("-color_trc") && !has_arg("-color_range"))
+        args.insert(args.end(), { "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709", "-color_range", "tv" });
+    auto extra = split_args(logic.render_args);
+    args.insert(args.end(), extra.begin(), extra.end());
+    args.push_back(output.string());
+    return args;
+}
+
+static void set_render_pipe_flags(const int* pipe_ends) {
+    fcntl(pipe_ends[0], F_SETFD, FD_CLOEXEC);
+    fcntl(pipe_ends[1], F_SETFD, FD_CLOEXEC);
+    fcntl(pipe_ends[1], F_SETNOSIGPIPE, 1);
+}
+#endif
+
 void Logic::start_render() {
     auto& recorder = Recorder::get();
     if (recorder.active || recorder.starting) return;
@@ -3029,7 +3316,7 @@ void Logic::start_render() {
     }
     int height = std::max(render_height, 2) & ~1;
     int width = std::max(render_width_for(render_width, height), 2) & ~1;
-    if (width > 7680 || height > 4320) {
+    if (width > MAX_RENDER_WIDTH || height > MAX_RENDER_HEIGHT) {
         notify("Render size is too large. Use 7680x4320 or smaller.", false);
         return;
     }
@@ -3062,38 +3349,6 @@ void Logic::start_render() {
         notify("Could not create the render target", false);
         return;
     }
-    auto reset_for_new_render = [&] {
-        recorder.output = output;
-        recorder.raw_audio_path = folder / (output.stem().string() + ".audio.raw");
-        recorder.paused = false;
-        recorder.frames = 0;
-        g_render_timing.reset();
-        g_render_notes.clear();
-        recorder.recent_speed = 0.0;
-        recorder.speed_samples.clear();
-        {
-            render_game_seconds = 0.0;
-            render_factor_sum = 0.0;
-            render_factor_low = render_factor_high = 1.f;
-            render_factor_count = 0;
-        }
-        recorder.seen_frames = 0;
-        recorder.time_since_end = 0.f;
-        recorder.fade = 1.f;
-        recorder.cancel = false;
-        recorder.encoding_broken = false;
-        recorder.failure_reason.clear();
-        recorder.ticked = false;
-        recorder.wall_delta = 0.f;
-        recorder.busy_seconds = 0.0;
-        recorder.start_progress = -1.f;
-        recorder.last_input_frame = inputs.empty() ? 0 : std::ranges::max(inputs, {}, &Frame::number).number;
-        ffmpeg_missing = false;
-        render_queued = false;
-        frame_advance = false;
-        holding_advance = false;
-        advance_queued = false;
-    };
 #ifdef ECHO_FFMPEG_API
     if (recorder.use_api) {
         recorder.output = output;
@@ -3103,7 +3358,7 @@ void Logic::start_render() {
             notify(message, false);
             return;
         }
-        reset_for_new_render();
+        reset_for_new_render(*this, recorder, output, folder);
         recorder.start_capturing();
         return;
     }
@@ -3111,52 +3366,15 @@ void Logic::start_render() {
 #ifdef GEODE_IS_WINDOWS
     DWORD pipe_id = GetTickCount();
     std::string video_name = fmt::format("\\\\.\\pipe\\echo-film-v-{}", pipe_id);
-    DWORD pipe_mode = PIPE_ACCESS_OUTBOUND | FILE_FLAG_OVERLAPPED;
-    size_t frame_bytes = recorder.frame_bytes();
-    DWORD pipe_buffer_size = (DWORD)std::min(std::max(frame_bytes * 4, frame_bytes), (size_t)(256u << 20));
-    recorder.video_pipe = CreateNamedPipeA(video_name.c_str(), pipe_mode, PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT, 1, pipe_buffer_size, 0, 0, nullptr);
+    recorder.video_pipe = open_video_pipe(video_name, recorder.frame_bytes());
     if (recorder.video_pipe == INVALID_HANDLE_VALUE) {
         recorder.close_capture_target();
         notify("Could not open the render pipe", false);
         return;
     }
-    std::string codec = render_codec.empty() ? "libx264" : render_codec;
-    bool hardware_encoder = codec.find("nvenc") != std::string::npos || codec.find("amf") != std::string::npos || codec.find("qsv") != std::string::npos;
-    const char* output_pixel_format = render_bitrate <= 0 && !hardware_encoder ? "yuv444p" : "yuv420p";
-    // shader already did bt709 DONT do it twice
-    std::string color_fix = render_color_fix && !recorder.nv12 ? "-vf colorspace=all=bt709:iall=bt470bg:fast=1 " : "";
-    auto has_arg = [&](const char* key) {
-        return render_args.find(key) != std::string::npos;
-    };
-    std::string pixel_format_args = has_arg("-pix_fmt") ? std::string() : fmt::format(" -pix_fmt {}", output_pixel_format);
-    std::string colorspace_args = has_arg("-colorspace") || has_arg("-color_primaries") || has_arg("-color_trc") || has_arg("-color_range")
-                            ? std::string()
-                            : " -colorspace bt709 -color_primaries bt709 -color_trc bt709 -color_range tv";
-    std::string extra = render_args.empty() ? std::string() : " " + render_args;
-    std::string command = fmt::format(
-        "\"{}\" -y -nostdin -loglevel error -f rawvideo -pix_fmt {} -s {}x{} -r {} -probesize 32 -analyzeduration 0 -fflags nobuffer -i {} -an "
-        "{}-c:v {}{}{}{}{} \"{}\"",
-        Recorder::get().ffmpeg_path(),
-        recorder.nv12 ? "nv12" : "bgra",
-        width,
-        height,
-        fps,
-        video_name,
-        color_fix,
-        codec,
-        rate_control_args(codec, render_bitrate, render_args),
-        pixel_format_args,
-        colorspace_args,
-        extra,
-        output.string());
-    STARTUPINFOA startup{};
-    startup.cb = sizeof(startup);
-    startup.dwFlags = STARTF_USESHOWWINDOW;
-    startup.wShowWindow = SW_HIDE;
+    std::string command = ffmpeg_command(*this, recorder, video_name, width, height, fps, output);
     PROCESS_INFORMATION process{};
-    std::vector<char> mutable_command(command.begin(), command.end());
-    mutable_command.push_back('\0');
-    if (!CreateProcessA(nullptr, mutable_command.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, nullptr, &startup, &process)) {
+    if (!launch_hidden(command, process)) {
         recorder.close_capture_target();
         Recorder::get().close_handle(recorder.video_pipe);
         ffmpeg_missing = true;
@@ -3167,32 +3385,10 @@ void Logic::start_render() {
     }
     CloseHandle(process.hThread);
     recorder.ffmpeg_process = process.hProcess;
-    reset_for_new_render();
+    reset_for_new_render(*this, recorder, output, folder);
     recorder.starting = true;
     message = "Starting render...";
-    std::thread([] {
-        bool ok = Recorder::get().connect_pipe(Recorder::get().video_pipe);
-        Loader::get()->queueInMainThread([ok] {
-            auto& recorder = Recorder::get();
-            bool canceled = recorder.cancel;
-            recorder.starting = false;
-            recorder.cancel = false;
-            if (!ok || canceled) {
-                Logic::get().stop_render();
-                if (!ok && !canceled) {
-                    Logic::get().message = "ffmpeg did not connect";
-                    Logic::get().notify("ffmpeg did not connect", false);
-                }
-                return;
-            }
-            if (!PlayLayer::get()) {
-                Logic::get().stop_render();
-                Logic::get().notify("The level closed before the render started", false);
-                return;
-            }
-            recorder.start_capturing();
-        });
-    }).detach();
+    std::thread(connect_ffmpeg_then_start).detach();
 #elif defined(GEODE_IS_MACOS)
     auto ffmpeg = Recorder::ffmpeg_path();
     if (ffmpeg.empty()) {
@@ -3203,36 +3399,14 @@ void Logic::start_render() {
         GUI::get().reveal_menu();
         return;
     }
-    std::string codec = render_codec.empty() ? "libx264" : render_codec;
-    bool hardware_encoder = codec.find("videotoolbox") != std::string::npos;
-    auto has_arg = [&](const char* key) {
-        return render_args.find(key) != std::string::npos;
-    };
-    std::string filters = "vflip";
-    if (render_color_fix) filters += ",colorspace=all=bt709:iall=bt470bg:fast=1";
-    std::vector<std::string> args{
-        ffmpeg.string(), "-y", "-loglevel", "error", "-f", "rawvideo", "-pix_fmt", "bgra",
-        "-s", fmt::format("{}x{}", width, height), "-r", std::to_string(fps), "-i", "pipe:0", "-an",
-        "-vf", filters, "-c:v", codec
-    };
-    auto rate_args = rate_control_args(codec, render_bitrate, render_args, (long long)width * height * fps);
-    args.insert(args.end(), rate_args.begin(), rate_args.end());
-    if (!has_arg("-pix_fmt"))
-        args.insert(args.end(), { "-pix_fmt", render_bitrate <= 0 && !hardware_encoder ? "yuv444p" : "yuv420p" });
-    if (!has_arg("-colorspace") && !has_arg("-color_primaries") && !has_arg("-color_trc") && !has_arg("-color_range"))
-        args.insert(args.end(), { "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709", "-color_range", "tv" });
-    auto extra = split_args(render_args);
-    args.insert(args.end(), extra.begin(), extra.end());
-    args.push_back(output.string());
+    auto args = ffmpeg_args(*this, ffmpeg, width, height, fps, output);
     int pipe_ends[2] = { -1, -1 };
     if (pipe(pipe_ends) != 0) {
         recorder.close_capture_target();
         notify("Could not open the render pipe", false);
         return;
     }
-    fcntl(pipe_ends[0], F_SETFD, FD_CLOEXEC);
-    fcntl(pipe_ends[1], F_SETFD, FD_CLOEXEC);
-    fcntl(pipe_ends[1], F_SETNOSIGPIPE, 1);
+    set_render_pipe_flags(pipe_ends);
     recorder.ffmpeg_log = folder / (output.stem().string() + ".ffmpeg.log");
     pid_t pid = spawn_tool(args, pipe_ends[0], {}, recorder.ffmpeg_log);
     close(pipe_ends[0]);
@@ -3245,7 +3419,7 @@ void Logic::start_render() {
     recorder.ffmpeg_process = pid;
     recorder.video_pipe = pipe_ends[1];
     recorder.encode_error.clear();
-    reset_for_new_render();
+    reset_for_new_render(*this, recorder, output, folder);
     recorder.start_capturing();
 #else
     recorder.close_capture_target();

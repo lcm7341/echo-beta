@@ -589,8 +589,7 @@ void triggerObject(EffectGameObject* object, GJBaseGameLayer* pl,
                 break;
             }
 
-            bool isP2 =
-                Trajectory::get().fake2 == player;
+            bool isP2 = Trajectory::get().is_second_fake(player);
             if (!object->m_targetPlayer2 && !isP2) {
                 player->m_gravityMod = object->m_gravityValue;
             }
@@ -649,61 +648,5 @@ void triggerObject(EffectGameObject* object, GJBaseGameLayer* pl,
     }
 
     phys::activateForTrajectory(object, player);
-}
-
-void checkSpawnObjects(GJBaseGameLayer* pl, PlayerObject* player) {
-    CCPoint position = player->getPosition();
-
-    cocos2d::CCArray* objects =
-        (cocos2d::CCArray*)pl->m_spawnObjects->objectForKey(
-            pl->m_gameState.m_currentChannel);
-    if (!objects) {
-        return;
-    }
-
-    const int channel = pl->m_gameState.m_currentChannel;
-    const auto& related0 = pl->m_gameState.m_spawnChannelRelated0;
-    const auto& related1 = pl->m_gameState.m_spawnChannelRelated1;
-
-    auto startIt = related0.find(channel);
-    auto backIt = related1.find(channel);
-
-    int startingIndex = startIt == related0.end() ? 0 : startIt->second;
-    bool goingBack = backIt == related1.end() ? false : backIt->second;
-
-    for (int i = startingIndex; (unsigned int)i < objects->count();
-         i++) {
-        SpawnTriggerGameObject* object =
-            (SpawnTriggerGameObject*)objects->objectAtIndex(i);
-        if (object->m_objectID != 2066 && object->m_objectID != 2900 &&
-            object->m_objectID != 3022 && object->m_objectID != 901) {
-            continue;
-        }
-
-        CCPoint objectPos = object->m_speedStart;
-
-        if (player->m_isSideways) {
-            if (goingBack) {
-                if (objectPos.y < position.y) break;
-            } else {
-                if (objectPos.y > position.y) break;
-            }
-        } else {
-            if (goingBack) {
-                if (objectPos.x < position.x) break;
-            } else {
-                if (objectPos.x > position.x) break;
-            }
-        }
-
-        if (object->m_isGroupDisabled) continue;
-        if (Trajectory::get().fakeActivated(player, object) ||
-            Trajectory::get().realActivated(player, object))
-            continue;
-
-        if (!object->m_isTouchTriggered) {
-            phys::triggerObject(object, pl, player);
-        }
-    }
 }
 }

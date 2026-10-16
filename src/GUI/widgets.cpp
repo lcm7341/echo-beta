@@ -1175,6 +1175,38 @@ namespace EchoUI {
         draw->AddRect(body.Min, body.Max, ImGui::ColorConvertFloat4ToU32(faded(edge, (.45f + .45f * hot) * alpha)), rounding, 0, 1.f);
     }
 
+    static ImDrawVert mix_vertex(const ImDrawVert& a, const ImDrawVert& b, float t) {
+        ImDrawVert out;
+        out.pos = ImVec2(a.pos.x + (b.pos.x - a.pos.x) * t, a.pos.y + (b.pos.y - a.pos.y) * t);
+        out.uv = ImVec2(a.uv.x + (b.uv.x - a.uv.x) * t, a.uv.y + (b.uv.y - a.uv.y) * t);
+        ImU32 mixed = 0;
+        for (int shift = 0; shift < 32; shift += 8) {
+            float ca = (float)((a.col >> shift) & 255), cb = (float)((b.col >> shift) & 255);
+            mixed |= ((ImU32)std::lround(ca + (cb - ca) * t) & 255) << shift;
+        }
+        out.col = mixed;
+        return out;
+    }
+
+    static void clip_to_edge(std::vector<ImDrawVert>& poly, std::vector<ImDrawVert>& next, ImVec2 a, ImVec2 b, float side) {
+        auto inside = [&](ImVec2 p) {
+            return side * ((b.x - a.x) * (p.y - a.y) - (b.y - a.y) * (p.x - a.x)) >= 0.f;
+        };
+        next.clear();
+        for (std::size_t k = 0; k < poly.size(); ++k) {
+            const ImDrawVert& p = poly[k];
+            const ImDrawVert& q = poly[(k + 1) % poly.size()];
+            bool p_in = inside(p.pos), q_in = inside(q.pos);
+            if (p_in) next.push_back(p);
+            if (p_in != q_in) {
+                float dp = (b.x - a.x) * (p.pos.y - a.y) - (b.y - a.y) * (p.pos.x - a.x);
+                float dq = (b.x - a.x) * (q.pos.y - a.y) - (b.y - a.y) * (q.pos.x - a.x);
+                next.push_back(mix_vertex(p, q, dp / (dp - dq)));
+            }
+        }
+        poly.swap(next);
+    }
+
     static void round_off(ImDrawList* draw, int idx_from, int cmd_from, const ImRect& box, float rounding) {
         if (rounding < .5f || draw->CmdBuffer.Size == 0) return;
         draw->PathRect(box.Min, box.Max, rounding);
@@ -1187,20 +1219,8 @@ namespace EchoUI {
             turn += (b.x - a.x) * (b.y + a.y);
         }
         float side = turn < 0.f ? 1.f : -1.f;
-        auto plain = [&](ImVec2 p) {
+        auto corner_free_band = [&](ImVec2 p) {
             return (p.x >= box.Min.x + rounding && p.x <= box.Max.x - rounding) ? 1 : (p.y >= box.Min.y + rounding && p.y <= box.Max.y - rounding) ? 2 : 0;
-        };
-        auto lerp_vert = [](const ImDrawVert& a, const ImDrawVert& b, float t) {
-            ImDrawVert out;
-            out.pos = ImVec2(a.pos.x + (b.pos.x - a.pos.x) * t, a.pos.y + (b.pos.y - a.pos.y) * t);
-            out.uv = ImVec2(a.uv.x + (b.uv.x - a.uv.x) * t, a.uv.y + (b.uv.y - a.uv.y) * t);
-            ImU32 mixed = 0;
-            for (int shift = 0; shift < 32; shift += 8) {
-                float ca = (float)((a.col >> shift) & 255), cb = (float)((b.col >> shift) & 255);
-                mixed |= ((ImU32)std::lround(ca + (cb - ca) * t) & 255) << shift;
-            }
-            out.col = mixed;
-            return out;
         };
         ImVector<ImDrawIdx> indices;
         indices.reserve(draw->IdxBuffer.Size);
@@ -1215,33 +1235,16 @@ namespace EchoUI {
             for (unsigned i = start; i + 3 <= end; i += 3) {
                 ImDrawIdx tri[3] = { draw->IdxBuffer[i], draw->IdxBuffer[i + 1], draw->IdxBuffer[i + 2] };
                 const ImDrawVert* at[3] = { &draw->VtxBuffer[cmd.VtxOffset + tri[0]], &draw->VtxBuffer[cmd.VtxOffset + tri[1]], &draw->VtxBuffer[cmd.VtxOffset + tri[2]] };
-                int band = plain(at[0]->pos);
-                if (band != 0 && plain(at[1]->pos) == band && plain(at[2]->pos) == band) {
+                int band = corner_free_band(at[0]->pos);
+                if (band != 0 && corner_free_band(at[1]->pos) == band && corner_free_band(at[2]->pos) == band) {
                     indices.push_back(tri[0]);
                     indices.push_back(tri[1]);
                     indices.push_back(tri[2]);
                     continue;
                 }
                 poly = { *at[0], *at[1], *at[2] };
-                for (std::size_t e = 0; e < outline.size() && !poly.empty(); ++e) {
-                    ImVec2 a = outline[e], b = outline[(e + 1) % outline.size()];
-                    auto inside = [&](ImVec2 p) {
-                        return side * ((b.x - a.x) * (p.y - a.y) - (b.y - a.y) * (p.x - a.x)) >= 0.f;
-                    };
-                    next.clear();
-                    for (std::size_t k = 0; k < poly.size(); ++k) {
-                        const ImDrawVert& p = poly[k];
-                        const ImDrawVert& q = poly[(k + 1) % poly.size()];
-                        bool p_in = inside(p.pos), q_in = inside(q.pos);
-                        if (p_in) next.push_back(p);
-                        if (p_in != q_in) {
-                            float dp = (b.x - a.x) * (p.pos.y - a.y) - (b.y - a.y) * (p.pos.x - a.x);
-                            float dq = (b.x - a.x) * (q.pos.y - a.y) - (b.y - a.y) * (q.pos.x - a.x);
-                            next.push_back(lerp_vert(p, q, dp / (dp - dq)));
-                        }
-                    }
-                    poly.swap(next);
-                }
+                for (std::size_t e = 0; e < outline.size() && !poly.empty(); ++e)
+                    clip_to_edge(poly, next, outline[e], outline[(e + 1) % outline.size()], side);
                 if (poly.size() < 3) continue;
                 // the new points need indices that still fit after this cmds vertex offset
                 if (sizeof(ImDrawIdx) == 2 && draw->VtxBuffer.Size - (int)cmd.VtxOffset + (int)poly.size() >= (1 << 16)) {

@@ -494,6 +494,9 @@ public:
 	bool black_orb_assist() const {
 		return click_black_orbs || easy_black_ufo;
 	}
+	bool autoclicker_drives(bool player2) const {
+		return autoclicker && (player2 ? autoclick_p2 : autoclick_p1);
+	}
 	bool death_next_p1 = false, noclip_dead_p1 = false, noclip_dead_p2 = false, death_next_p2 = false;
 	float traj_alive_p1 = 0.f, traj_alive_p2 = 0.f;
 	bool traj_dies_p1 = false, traj_dies_p2 = false;
@@ -518,9 +521,11 @@ public:
 	bool best_frame_click_p1 = true, best_frame_auto = false, best_frame_running = false;
 	bool best_frame_step_first = false;
 	bool traj_moving_objects = true;
+	bool near_movers = true;
 	bool backstep = false;
 	int backstep_percent = 100;
 	double backstep_save_sec = 0.0;
+	int held_step = 1;
 	bool pause_at_traj_length = false;
 	unsigned pause_traj_ms = 500;
 	bool pause_kill_armed = true, pause_length_armed = true;
@@ -742,6 +747,11 @@ public:
 	static const int MAX_PER_SECOND = 16, MAX_PER_FRAME = 3;
 	static inline const float MAX_BURST_RATE = 48.f;
 	static const int MIN_BURST_CLICKS = 5;
+	static inline const double BURST_ROUNDING = 1e-6, BURST_ROUNDING_SCALE = 1e-12;
+
+	static double burst_rounding(double lead_needed) {
+		return BURST_ROUNDING + BURST_ROUNDING_SCALE * std::abs(lead_needed);
+	}
 
 	static Logic& get();
 	const char* state_name(RunState state);

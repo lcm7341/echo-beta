@@ -147,6 +147,23 @@ static void place_deferred_player_art(GJBaseGameLayer* play) {
     }
 }
 
+static void run_steps(Logic& logic, GJBaseGameLayer* play, int count, const std::function<void(float)>& tick) {
+    float step_dt = logic.physics_step();
+    logic.steps_left = count;
+    logic.steps_this_tick = (unsigned)count;
+    logic.frame_steps += count;
+    logic.defer_player_art = count > 1 && phys::can_defer_player_art();
+    time_update([&] {
+        play->update(step_dt * (float)count);
+    });
+    logic.defer_player_art = false;
+    place_deferred_player_art(play);
+    logic.steps_left = 0;
+    logic.skip_physics = true;
+    tick(step_dt * (float)count);
+    logic.skip_physics = false;
+}
+
 static bool g_single_path = false;
 static double g_single_cost = 0.0;
 
@@ -393,20 +410,7 @@ void Logic::run_frame(GJBaseGameLayer* play, float dt, const std::function<void(
             if (died()) break;
             int batch = std::min(steps, steps_until_rate_change());
             float left = (float)(steps - batch) * physics_step();
-            float step_dt = physics_step();
-            steps_left = batch;
-            steps_this_tick = (unsigned)batch;
-            frame_steps += batch;
-            defer_player_art = batch > 1 && phys::can_defer_player_art();
-            time_update([&] {
-                play->update(step_dt * (float)batch);
-            });
-            defer_player_art = false;
-            place_deferred_player_art(play);
-            steps_left = 0;
-            skip_physics = true;
-            tick(step_dt * (float)batch);
-            skip_physics = false;
+            run_steps(*this, play, batch, tick);
             if (died() || batch == steps) break;
             double leftover = leftover_time;
             leftover_time = 0.f;
@@ -449,23 +453,8 @@ void Logic::run_frame(GJBaseGameLayer* play, float dt, const std::function<void(
                     finished = true;
                     break;
                 }
-                int chunk = 1;
-                float step_dt = physics_step();
-                steps_left = chunk;
-                steps_this_tick = (unsigned)chunk;
-                frame_steps += chunk;
-                defer_player_art = chunk > 1 && phys::can_defer_player_art();
-                time_update([&] {
-                    play->update(step_dt * (float)chunk);
-                });
-                defer_player_art = false;
-                place_deferred_player_art(play);
-                steps_left = 0;
-                skip_physics = true;
-                tick(step_dt * (float)chunk);
-                skip_physics = false;
-                ran += chunk;
-                i += chunk - 1;
+                run_steps(*this, play, 1, tick);
+                ++ran;
                 if (died()) {
                     finished = true;
                     break;
@@ -517,21 +506,8 @@ void Logic::run_frame(GJBaseGameLayer* play, float dt, const std::function<void(
         if (died()) break;
         if (batched) {
             apply_rate(step_frame);
-            float step_dt = physics_step();
             int batch = std::clamp(steps_until_rate_change(), 1, limit - taken);
-            steps_left = batch;
-            steps_this_tick = (unsigned)batch;
-            frame_steps += batch;
-            defer_player_art = batch > 1 && phys::can_defer_player_art();
-            time_update([&] {
-                play->update(step_dt * (float)batch);
-            });
-            defer_player_art = false;
-            place_deferred_player_art(play);
-            steps_left = 0;
-            skip_physics = true;
-            tick(step_dt * (float)batch);
-            skip_physics = false;
+            run_steps(*this, play, batch, tick);
             steps_this_tick = 0;
             taken += batch - 1;
             continue;

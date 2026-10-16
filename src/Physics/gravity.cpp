@@ -12,7 +12,7 @@ namespace phys {
 void flipGravityInner(PlayerObject* player, bool gravity) {
     bool icon2 = false;
     if (auto* layer = GJBaseGameLayer::get()) {
-        icon2 = player == layer->m_player2 || player == Trajectory::get().fake2;
+        icon2 = player == layer->m_player2 || Trajectory::get().is_second_fake(player);
     }
     bool ignoreUpsideDown = player->m_isDart && Logic::get().maintain_gravity && Logic::get().records_player(icon2);
 

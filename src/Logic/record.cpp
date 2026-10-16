@@ -420,24 +420,6 @@ void Logic::clear_physical_holds() {
     physical_left_p2 = physical_right_p2 = false;
 }
 
-struct HeldLane {
-    std::vector<int> frames;
-    std::vector<char> held;
-    mutable PrefixCursor cursor;
-};
-
-struct InputIndex {
-    const std::vector<Frame>* owner = nullptr;
-    const Frame* data = nullptr;
-    size_t count = 0;
-    unsigned long long revision = 0;
-    Frame last;
-    bool sorted = true;
-    int holds = 0;
-    int releases = 0;
-    std::array<HeldLane, 9> lanes;
-};
-
 static int channel_index(bool player2, int button) {
     int slot = Logic::button_slot(button);
     if (slot < 0) return -1;
@@ -448,100 +430,94 @@ static bool same_input(const Frame& a, const Frame& b) {
     return a.number == b.number && a.holding == b.holding && a.player2 == b.player2 && a.button == b.button;
 }
 
-static bool append_input(InputIndex& index, const Frame& input) {
-    int lane = channel_index(input.player2, input.button);
-    if (lane >= 0) {
-        auto& at = index.lanes[(size_t)lane];
-        auto& both = index.lanes[(size_t)(6 + lane % 3)];
-        if (!at.frames.empty() && input.number < at.frames.back()) return false;
-        if (!both.frames.empty() && input.number < both.frames.back()) return false;
-        at.frames.push_back(input.number);
-        at.held.push_back(input.holding ? 1 : 0);
-        both.frames.push_back(input.number);
-        both.held.push_back(input.holding ? 1 : 0);
-    }
-    if (index.count > 0 && input.number < index.last.number) index.sorted = false;
-    (input.holding ? index.holds : index.releases) += 1;
-    index.last = input;
-    ++index.count;
-    return true;
-}
+struct ChannelHistory {
+    std::vector<int> frames;
+    std::vector<char> held;
+};
 
-static void rebuild_index(InputIndex& index, const std::vector<Frame>& inputs) {
-    auto reset = [&] {
-        for (auto& lane : index.lanes) {
-            lane.frames.clear();
-            lane.held.clear();
-            lane.cursor = {};
-        }
-        index.count = 0;
-        index.sorted = true;
-        index.holds = 0;
-        index.releases = 0;
-        index.last = Frame{};
-    };
-    reset();
-    bool in_order = std::ranges::all_of(inputs, [&](const Frame& input) {
-        return append_input(index, input);
-    });
-    if (in_order) return;
+struct HoldHistory {
+    const std::vector<Frame>* inputs = nullptr;
+    const Frame* data = nullptr;
+    size_t count = 0;
+    unsigned long long version = 0;
+    Frame last;
+    std::array<ChannelHistory, 9> channels;
+};
 
-    reset();
+static thread_local HoldHistory g_hold_history;
+
+static void rebuild_hold_history(HoldHistory& history, const std::vector<Frame>& inputs) {
     std::array<std::vector<size_t>, 9> members;
     for (size_t i = 0; i < inputs.size(); ++i) {
-        const auto& input = inputs[i];
-        int lane = channel_index(input.player2, input.button);
-        if (lane >= 0) {
-            members[(size_t)lane].push_back(i);
-            members[(size_t)(6 + lane % 3)].push_back(i);
-        }
-        if (i > 0 && input.number < inputs[i - 1].number) index.sorted = false;
-        (input.holding ? index.holds : index.releases) += 1;
+        int channel = channel_index(inputs[i].player2, inputs[i].button);
+        if (channel < 0) continue;
+        members[(size_t)channel].push_back(i);
+        members[(size_t)(6 + channel % 3)].push_back(i);
     }
-    for (size_t lane = 0; lane < members.size(); ++lane) {
-        auto& order = members[lane];
+    for (size_t channel = 0; channel < members.size(); ++channel) {
+        auto& order = members[channel];
         std::ranges::stable_sort(order, {}, [&](size_t i) {
             return inputs[i].number;
         });
-        auto& at = index.lanes[lane];
-        at.frames.reserve(order.size());
-        at.held.reserve(order.size());
+        auto& out = history.channels[channel];
+        out.frames.clear();
+        out.held.clear();
+        out.frames.reserve(order.size());
+        out.held.reserve(order.size());
         size_t newest = 0;
         for (size_t k = 0; k < order.size(); ++k) {
             newest = k == 0 ? order[k] : std::max(newest, order[k]);
-            at.frames.push_back(inputs[order[k]].number);
-            at.held.push_back(inputs[newest].holding ? 1 : 0);
+            out.frames.push_back(inputs[order[k]].number);
+            out.held.push_back(inputs[newest].holding ? 1 : 0);
         }
     }
-    index.count = inputs.size();
-    if (!inputs.empty()) index.last = inputs.back();
+    history.inputs = &inputs;
+    history.data = inputs.data();
+    history.count = inputs.size();
+    history.last = inputs.empty() ? Frame{} : inputs.back();
 }
 
-static InputIndex& held_index() {
-    thread_local InputIndex idx;
-    return idx;
+static bool append_to_hold_history(HoldHistory& history, const Frame& input) {
+    int channel = channel_index(input.player2, input.button);
+    if (channel >= 0) {
+        auto& own = history.channels[(size_t)channel];
+        auto& both = history.channels[(size_t)(6 + channel % 3)];
+        if (!own.frames.empty() && input.number < own.frames.back()) return false;
+        if (!both.frames.empty() && input.number < both.frames.back()) return false;
+        own.frames.push_back(input.number);
+        own.held.push_back(input.holding ? 1 : 0);
+        both.frames.push_back(input.number);
+        both.held.push_back(input.holding ? 1 : 0);
+    }
+    history.last = input;
+    ++history.count;
+    return true;
 }
 
-static InputIndex& synced_index(const Logic& logic) {
-    auto& idx = held_index();
+static const HoldHistory& current_hold_history(const Logic& logic) {
+    auto& history = g_hold_history;
     const auto& inputs = logic.inputs;
-    bool kept = idx.owner == &inputs && idx.revision == logic.inputs_version && idx.count <= inputs.size();
-    if (kept && idx.count > 0) kept = same_input(inputs[idx.count - 1], idx.last);
-    if (kept && idx.count == inputs.size()) kept = idx.data == inputs.data();
-    if (!kept) rebuild_index(idx, inputs);
-    for (size_t i = idx.count; i < inputs.size(); ++i) {
-        if (append_input(idx, inputs[i])) continue;
-        rebuild_index(idx, inputs);
+    bool same = history.inputs == &inputs && history.version == logic.inputs_version && history.count <= inputs.size();
+    if (same && history.count > 0) same = same_input(inputs[history.count - 1], history.last);
+    if (same && history.count == inputs.size()) same = history.data == inputs.data();
+    if (!same) rebuild_hold_history(history, inputs);
+    for (size_t i = history.count; i < inputs.size(); ++i) {
+        if (append_to_hold_history(history, inputs[i])) continue;
+        rebuild_hold_history(history, inputs);
         break;
     }
-    idx.owner = &inputs;
-    idx.data = inputs.data();
-    idx.revision = logic.inputs_version;
-    return idx;
+    history.data = inputs.data();
+    history.version = logic.inputs_version;
+    return history;
+}
+
+static bool held_in_channel(const ChannelHistory& channel, int frame) {
+    size_t after = (size_t)(std::upper_bound(channel.frames.begin(), channel.frames.end(), frame) - channel.frames.begin());
+    return after > 0 && channel.held[after - 1] != 0;
 }
 
 void Logic::release_replay_index() {
-    held_index() = {};
+    g_hold_history = {};
 }
 
 bool Logic::held_at(bool player2, int frame, int button) {
@@ -561,9 +537,7 @@ bool Logic::held_at(bool player2, int frame, int button) {
     if (is_playing() && !is_recording()) {
         auto* play = PlayLayer::get();
         if (play && !(play->m_levelSettings && play->m_levelSettings->m_twoPlayerMode)) {
-            const auto& both = synced_index(*this).lanes[6 + slot % 3];
-            size_t after = both.cursor.seek(both.frames, frame);
-            return after > 0 && both.held[after - 1] != 0;
+            return held_in_channel(current_hold_history(*this).channels[6 + slot % 3], frame);
         }
     }
     if (!is_playing()) {
@@ -575,9 +549,7 @@ bool Logic::held_at(bool player2, int frame, int button) {
         }
         return false;
     }
-    const auto& at = synced_index(*this).lanes[slot];
-    size_t after = at.cursor.seek(at.frames, frame);
-    return after > 0 && at.held[after - 1] != 0;
+    return held_in_channel(current_hold_history(*this).channels[slot], frame);
 }
 
 std::pair<int, int> Logic::count_holds() {
@@ -730,69 +702,74 @@ static void add_cps_break(std::vector<CpsBreak>& notes, int first, int last, std
     notes.push_back({ first, last, std::move(text) });
 }
 
-static void check_player_cps(CpsScan& scan, const std::vector<int>& presses, bool player2) {
-    auto& notes = player2 ? scan.notes_p2 : scan.notes_p1;
-    const char* who = player2 ? "P2" : "P1";
-    if (presses.empty()) return;
-    std::vector<double> times(presses.size());
-    std::ranges::transform(presses, times.begin(), [&](int frame) {
-        return scan.seconds_at(frame);
-    });
-
-    int idx = 0;
-    while (idx < (int)presses.size()) {
-        int frame = presses[idx];
-        int end = idx;
+static void check_rule_2(std::vector<CpsBreak>& notes, const std::vector<int>& presses) {
+    int index = 0;
+    while (index < (int)presses.size()) {
+        int frame = presses[index];
+        int end = index;
         while (end < (int)presses.size() && presses[end] == frame)
             ++end;
-        if (end - idx > Logic::MAX_PER_FRAME) add_cps_break(notes, frame, frame, "Rule 2");
-        idx = end;
+        if (end - index > Logic::MAX_PER_FRAME) add_cps_break(notes, frame, frame, "Rule 2");
+        index = end;
     }
+}
 
+static std::pair<int, std::string> check_rule_1(CpsScan& scan, std::vector<CpsBreak>& notes, const std::vector<int>& presses,
+    const std::vector<double>& press_seconds, const char* who) {
     int best = 0;
     std::string best_text = fmt::format("{}: 0", who);
     int left = 0;
     for (int right = 0; right < (int)presses.size(); ++right) {
-        double end = times[(size_t)right];
-        while (left <= right && end - times[(size_t)left] > 1.0)
+        double end = press_seconds[(size_t)right];
+        while (left <= right && end - press_seconds[(size_t)left] > 1.0)
             ++left;
-        int amt = right - left + 1;
-        if (amt > best) {
-            best = amt;
-            best_text = fmt::format(
-                "{}: {} ({} to {})",
-                who,
-                amt,
-                presses[left],
-                presses[right]);
+        int count = right - left + 1;
+        if (count > best) {
+            best = count;
+            best_text = fmt::format("{}: {} ({} to {})", who, count, presses[left], presses[right]);
         }
-        if (amt > scan.max_cps) add_cps_break(notes, presses[left], presses[right], "Rule 1");
+        if (count > scan.max_cps) add_cps_break(notes, presses[left], presses[right], "Rule 1");
     }
+    return { best, best_text };
+}
 
+static void check_rule_3(CpsScan& scan, std::vector<CpsBreak>& notes, const std::vector<int>& presses, const std::vector<double>& press_seconds) {
     int n = (int)presses.size();
     double rate = (double)Logic::MAX_BURST_RATE;
-    std::vector<double> lead(presses.size());
-    std::vector<double> peak(presses.size());
+    std::vector<double> burst_lead(presses.size());
+    std::vector<double> highest_lead(presses.size());
     for (size_t s = 0; s < presses.size(); ++s) {
-        lead[s] = rate * times[s] - (double)s;
-        peak[s] = s == 0 ? lead[s] : std::max(peak[s - 1], lead[s]);
+        burst_lead[s] = rate * press_seconds[s] - (double)s;
+        highest_lead[s] = s == 0 ? burst_lead[s] : std::max(highest_lead[s - 1], burst_lead[s]);
     }
     for (int end = Logic::MIN_BURST_CLICKS - 1; end < n; ++end) {
-        int last_start = end - (Logic::MIN_BURST_CLICKS - 1);
-        double need = rate * times[(size_t)end] - (double)end - 1.0;
-        double slack = 1e-6 + 1e-12 * std::abs(need);
-        auto first = std::upper_bound(peak.begin(), peak.begin() + last_start + 1, need - slack);
-        for (int start = (int)std::distance(peak.begin(), first); start <= last_start; ++start) {
-            double margin = lead[(size_t)start] - need;
-            if (margin <= -slack) continue;
-            int amt = end - start + 1;
-            if (margin > slack || Logic::burst_too_fast(amt, scan.seconds_at(presses[end]) - scan.seconds_at(presses[start]))) {
+        int latest_start = end - (Logic::MIN_BURST_CLICKS - 1);
+        double lead_needed = rate * press_seconds[(size_t)end] - (double)end - 1.0;
+        double rounding = Logic::burst_rounding(lead_needed);
+        auto first_possible = std::upper_bound(highest_lead.begin(), highest_lead.begin() + latest_start + 1, lead_needed - rounding);
+        for (int start = (int)std::distance(highest_lead.begin(), first_possible); start <= latest_start; ++start) {
+            double margin = burst_lead[(size_t)start] - lead_needed;
+            if (margin <= -rounding) continue;
+            int count = end - start + 1;
+            if (margin > rounding || Logic::burst_too_fast(count, scan.seconds_at(presses[end]) - scan.seconds_at(presses[start]))) {
                 add_cps_break(notes, presses[start], presses[end], "Rule 3");
                 break;
             }
         }
     }
+}
 
+static void check_player_cps(CpsScan& scan, const std::vector<int>& presses, bool player2) {
+    auto& notes = player2 ? scan.notes_p2 : scan.notes_p1;
+    const char* who = player2 ? "P2" : "P1";
+    if (presses.empty()) return;
+    std::vector<double> press_seconds(presses.size());
+    std::ranges::transform(presses, press_seconds.begin(), [&](int frame) {
+        return scan.seconds_at(frame);
+    });
+    check_rule_2(notes, presses);
+    auto [best, best_text] = check_rule_1(scan, notes, presses, press_seconds, who);
+    check_rule_3(scan, notes, presses, press_seconds);
     int current_best = 0;
     auto colon = scan.highest.find(": ");
     if (colon != std::string::npos) current_best = std::atoi(scan.highest.c_str() + colon + 2);
@@ -825,21 +802,21 @@ void Logic::recompute_cps() {
     scan.macro_fps = macro_fps;
     scan.rates = rates;
     scan.max_cps = std::max(max_cps, 1);
-    static std::atomic<unsigned long long> ticket{ 0 };
-    unsigned long long mine = ticket.fetch_add(1) + 1;
+    static std::atomic<unsigned long long> latest_scan{ 0 };
+    unsigned long long this_scan = latest_scan.fetch_add(1) + 1;
     cps_notes_p1.clear();
     cps_notes_p2.clear();
     highest_cps = "Checking CPS...";
     try {
-        std::thread([scan, p1 = std::move(p1), p2 = std::move(p2), mine]() mutable {
+        std::thread([scan, p1 = std::move(p1), p2 = std::move(p2), this_scan]() mutable {
             try {
                 scan_cps(scan, p1, p2);
             }
             catch (...) {
                 return;
             }
-            geode::queueInMainThread([scan = std::move(scan), mine]() mutable {
-                if (mine != ticket.load()) return;
+            geode::queueInMainThread([scan = std::move(scan), this_scan]() mutable {
+                if (this_scan != latest_scan.load()) return;
                 apply_cps_scan(Logic::get(), scan);
             });
         }).detach();
