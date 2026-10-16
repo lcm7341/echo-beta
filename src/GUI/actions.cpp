@@ -12,7 +12,7 @@ void GUI::rewrite_selected(const std::function<void(Frame&)>& edit) {
     std::ranges::for_each(inputs.begin() + first, inputs.begin() + last + 1, edit);
     if (selected >= first && selected <= last) draft = inputs[(size_t)selected];
     if (selected >= 0) selected_id = Logic::get().input_id((size_t)selected);
-    Logic::get().touch_inputs();
+    Logic::get().mark_inputs_changed();
     Logic::get().refresh_live_hold();
     Logic::get().autosave_replay();
 }
@@ -38,7 +38,7 @@ void GUI::move_selected(int dir) {
     selected_id = Logic::get().input_id((size_t)selected);
     if (anchor >= 0) anchor_id = Logic::get().input_id((size_t)anchor);
     sync_draft();
-    Logic::get().touch_inputs();
+    Logic::get().mark_inputs_changed();
     Logic::get().refresh_live_hold();
     Logic::get().autosave_replay();
 }
@@ -47,7 +47,7 @@ void GUI::add_input(int frame) {
     auto& logic = Logic::get();
     auto& inputs = logic.inputs;
     Frame created;
-    unsigned long long created_id = Logic::get().mint_input_id();
+    unsigned long long created_id = Logic::get().new_input_id();
     created.number = frame;
     created.holding = true;
     created.player2 = !show_editor_p1 && show_editor_p2;
@@ -69,7 +69,7 @@ void GUI::add_input(int frame) {
     }
     else {
         inputs.insert(inputs.begin() + idx, created);
-        Logic::get().touch_inputs();
+        Logic::get().mark_inputs_changed();
     }
     insert_side(logic.poses, FramePose{}, true);
     insert_side(logic.input_ids, 0ull, false);
@@ -95,7 +95,7 @@ void GUI::delete_selected() {
     erase_span(logic.poses);
     erase_span(logic.input_ids);
     inputs.erase(inputs.begin() + first, inputs.begin() + last + 1);
-    Logic::get().touch_inputs();
+    Logic::get().mark_inputs_changed();
     Logic::get().refresh_live_hold();
     select_input(std::min(first, (int)inputs.size() - 1));
     Logic::get().autosave_replay();
@@ -149,7 +149,7 @@ void GUI::set_speed(float speed, bool settle) {
     auto& logic = Logic::get();
     logic.speedhack = std::clamp(speed, 0.01f, 100.f);
     bool normal = std::abs(logic.speedhack - 1.f) < .00001f;
-    if (!normal) logic.speedhack_memory = logic.speedhack;
+    if (!normal) logic.saved_speedhack = logic.speedhack;
     Logic::get().sync_time_scale();
     Logic::get().sync_playback_fps();
     if (settle) persist();
@@ -162,7 +162,7 @@ void GUI::set_playback_fps(float fps) {
 }
 
 void GUI::drop_carry() {
-    Logic::get().carry = 0.f;
+    Logic::get().leftover_time = 0.f;
     if (auto* play = PlayLayer::get()) play->m_extraDelta = 0.0;
 }
 

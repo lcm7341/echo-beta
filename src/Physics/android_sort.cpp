@@ -10,8 +10,8 @@
 //
 // gd calls qsort in spiderTestJumpX/Y, sortAllGroupsX, sortGroups & createObjectsFromSetupFinished. it doesnt
 // call it directly tho, it goes thru a slot in a table of addresses that gets filled in when the game loads.
-// so if i put my_qsort's address in that slot every qsort the game does comes to me, & nothing else on the
-// phone changes since only gd uses its own slot. its not a geode patch so disable bot doesnt undo it, my_qsort
+// so if i put consistent_qsort's address in that slot every qsort the game does comes to me, & nothing else on the
+// phone changes since only gd uses its own slot. its not a geode patch so disable bot doesnt undo it, consistent_qsort
 // just hands it back to the real qsort while the bot is off.
 //
 // 0x1228de8 is from the arm64 lib off my phone so its only right for that gd version. it only writes there if
@@ -24,7 +24,7 @@ using namespace geode::prelude;
 const char* sort_status = "not tried";
 unsigned long sort_calls = 0;
 
-static void my_qsort(void* array, size_t count, size_t item_size, int (*compare)(const void*, const void*)) {
+static void consistent_qsort(void* array, size_t count, size_t item_size, int (*compare)(const void*, const void*)) {
     sort_calls++;
     if (array == nullptr || compare == nullptr || count < 2 || item_size == 0) return;
     if (Logic::bot_disabled()) qsort(array, count, item_size, compare);
@@ -39,7 +39,7 @@ static void* read_slot(void** slot) {
 
 $execute {
     void** slot = (void**)(geode::base::get() + 0x1228de8);
-    void* mine = (void*)&my_qsort;
+    void* mine = (void*)&consistent_qsort;
 
     if (read_slot(slot) != (void*)&qsort) {
         sort_status = "slot is not qsort";

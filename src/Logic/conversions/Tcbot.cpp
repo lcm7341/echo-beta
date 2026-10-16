@@ -39,7 +39,7 @@ public:
         inputs.push_back(input);
     }
 
-    bool read_v1(ByteCursor& in) {
+    bool read_v1(ByteReader& in) {
         auto amt = in.leb128();
         for (unsigned long long i = 0; i < amt && !in.failed; ++i) {
             auto frame = 1 + in.leb128();
@@ -53,7 +53,7 @@ public:
         return !in.failed;
     }
 
-    static unsigned long long read_delta(ByteCursor& in, unsigned char info, unsigned long long& last_delta) {
+    static unsigned long long read_delta(ByteReader& in, unsigned char info, unsigned long long& last_delta) {
         bool magic = info & 1;
         int blob = info >> 1;
         unsigned long long base = magic ? last_delta : 0;
@@ -64,7 +64,7 @@ public:
         return res;
     }
 
-    bool read_v2(ByteCursor& in) {
+    bool read_v2(ByteReader& in) {
         unsigned long long frame = 1 + in.leb128();
         if (in.failed) return false;
         unsigned long long last_delta = 0;
@@ -131,7 +131,7 @@ public:
         return 3 << 1;
     }
 
-    static void write_v2(ByteSink& out, const std::vector<Frame>& inputs) {
+    static void write_v2(ByteWriter& out, const std::vector<Frame>& inputs) {
         out.leb128(inputs.empty() ? 0 : (unsigned long long)std::max(inputs.front().number - 1, 0));
         unsigned long long last_delta = 0;
         for (size_t i = 0; i < inputs.size(); ++i) {
@@ -152,8 +152,8 @@ public:
     }
 };
 
-bool ReplayIO::read_tcbot(const fs::path& path, MacroSnap& out) {
-    ByteCursor in{ ReplayIO::read_all(path) };
+bool ReplayIO::read_tcbot(const fs::path& path, MacroData& out) {
+    ByteReader in{ ReplayIO::read_all(path) };
     if (in.data.size() < TcbotReplay::header.size() + TcbotReplay::meta_size) return false;
     if (std::memcmp(in.data.data(), TcbotReplay::header.data(), TcbotReplay::header.size()) != 0)
         return false;
@@ -179,16 +179,16 @@ bool ReplayIO::read_tcbot(const fs::path& path, MacroSnap& out) {
     return true;
 }
 
-bool ReplayIO::write_tcbot(const fs::path& path, const MacroSnap& snap) {
-    ByteSink out;
+bool ReplayIO::write_tcbot(const fs::path& path, const MacroData& macro) {
+    ByteWriter out;
     out.data.assign(TcbotReplay::header.begin(), TcbotReplay::header.end());
     size_t meta = out.data.size();
     out.data.resize(meta + TcbotReplay::meta_size, 0);
     out.data[meta] = 2;
     out.data[meta + 2] = TcbotReplay::tps_flag;
-    float tps = snap.fps;
+    float tps = macro.fps;
     std::memcpy(out.data.data() + meta + 4, &tps, sizeof(tps));
-    auto inputs = ReplayIO::sorted_inputs(snap);
+    auto inputs = ReplayIO::sorted_inputs(macro);
     for (auto& input : inputs) {
         long long shifted = (long long)input.number + 2;
         if (shifted > std::numeric_limits<int>::max()) shifted = std::numeric_limits<int>::max();

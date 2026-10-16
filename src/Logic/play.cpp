@@ -106,20 +106,20 @@ void Logic::toggle_playing() {
     message = state_name(state);
 }
 
-bool Logic::steer_player(bool& player1) {
+bool Logic::route_to_recorded_player(bool& player1) {
     bool record1 = records_player(false), record2 = records_player(true);
     if (record1 == record2) return false;
     player1 = !record2;
     return true;
 }
 
-PlayerObject* Logic::icon_body(GJBaseGameLayer* play, bool icon2) {
+PlayerObject* Logic::icon_player(GJBaseGameLayer* play, bool icon2) {
     if (!play) return nullptr;
     return icon2 ? play->m_player2 : play->m_player1;
 }
 
 bool Logic::play_input(GJBaseGameLayer* play, bool icon2, bool down, int button) {
-    PlayerObject* body = icon_body(play, icon2);
+    PlayerObject* body = icon_player(play, icon2);
     if (!body || body->m_isDead || body->m_controlsDisabled) return false;
     if (button == 0) button = JUMP;
     auto key = (PlayerButton)button;
@@ -148,10 +148,10 @@ bool Logic::physical_hold(GJBaseGameLayer* play, bool icon2) {
     if (restart_hold_captured && ((death_jump_p1 && (ui->m_p1Jumping || ui->m_p1TouchId != -1)) || (death_jump_p2 && (ui->m_p2Jumping || ui->m_p2TouchId != -1)))) {
         restart_hold_captured = false;
     }
-    held_raw_p1 = p1;
-    held_raw_p2 = p2;
-    if (traj_flip_p1 && p1 != traj_flip_raw_p1) traj_flip_p1 = false;
-    if (traj_flip_p2 && p2 != traj_flip_raw_p2) traj_flip_p2 = false;
+    jump_held_p1 = p1;
+    jump_held_p2 = p2;
+    if (traj_flip_p1 && p1 != traj_flip_hold_p1) traj_flip_p1 = false;
+    if (traj_flip_p2 && p2 != traj_flip_hold_p2) traj_flip_p2 = false;
     bool record1 = records_player(false), record2 = records_player(true);
     bool one_player_dual = play->m_gameState.m_isDualMode && !(play->m_levelSettings && play->m_levelSettings->m_twoPlayerMode);
     auto mine = [&] {
@@ -170,15 +170,15 @@ bool Logic::physical_hold(GJBaseGameLayer* play, bool icon2) {
     return held;
 }
 
-bool Logic::steer_key(GJBaseGameLayer* play, enumKeyCodes key, bool down, double timestamp) {
-    if (!play || resetting || refresh_only) return false;
+bool Logic::route_key(GJBaseGameLayer* play, enumKeyCodes key, bool down, double timestamp) {
+    if (!play || resetting || refreshing_visuals) return false;
     int code = (int)key;
-    auto held = steered_keys.find(code);
-    if (!down && held != steered_keys.end()) {
+    auto held = routed_keys.find(code);
+    if (!down && held != routed_keys.end()) {
         int button = held->second & 15;
         bool icon2 = (held->second >> 4) != 0;
-        steered_keys.erase(held);
-        bool still = std::ranges::any_of(steered_keys, [&](const auto& entry) {
+        routed_keys.erase(held);
+        bool still = std::ranges::any_of(routed_keys, [&](const auto& entry) {
             return entry.second == ((icon2 ? 1 : 0) << 4 | button);
         });
         if (button == JUMP) (icon2 ? key_jump_p2 : key_jump_p1) = still;
@@ -201,7 +201,7 @@ bool Logic::steer_key(GJBaseGameLayer* play, enumKeyCodes key, bool down, double
         }
     }
     bool target1 = true;
-    if (!steer_player(target1)) return false;
+    if (!route_to_recorded_player(target1)) return false;
     bool icon2 = !target1;
     int button = 0;
     switch (key) {
@@ -222,12 +222,12 @@ bool Logic::steer_key(GJBaseGameLayer* play, enumKeyCodes key, bool down, double
         break;
     }
     if (button == 0) return false;
-    if (held != steered_keys.end()) return true;
+    if (held != routed_keys.end()) return true;
     int tag = (icon2 ? 1 : 0) << 4 | button;
-    bool already = std::ranges::any_of(steered_keys, [&](const auto& entry) {
+    bool already = std::ranges::any_of(routed_keys, [&](const auto& entry) {
         return entry.second == tag;
     });
-    steered_keys[code] = tag;
+    routed_keys[code] = tag;
     if (button == JUMP) {
         (icon2 ? key_jump_p2 : key_jump_p1) = true;
     }
@@ -245,8 +245,8 @@ void Logic::set_routed_hold(bool icon2, int button, bool down) {
 void Logic::reinforce_routed_hold(PlayerObject* body) {
     auto* layer = GJBaseGameLayer::get();
     if (!layer || !body || maintain_gravity || suppress_auto_hold) return;
-    bool icon2 = body == icon_body(layer, true);
-    if (!icon2 && body != icon_body(layer, false)) return;
+    bool icon2 = body == icon_player(layer, true);
+    if (!icon2 && body != icon_player(layer, false)) return;
     if (!records_player(icon2)) return;
     body->m_controlsDisabled = false;
     auto hold = [&](bool want, PlayerButton key) {
@@ -268,10 +268,10 @@ void Logic::reinforce_routed_hold(PlayerObject* body) {
 void Logic::capture_restart_holds(PlayLayer* play) {
     restart_hold_captured = false;
     traj_flip_p1 = traj_flip_p2 = false;
-    traj_flip_raw_p1 = traj_flip_raw_p2 = false;
+    traj_flip_hold_p1 = traj_flip_hold_p2 = false;
     if (!play) return;
     for (const auto& cmd : play->m_queuedButtons)
-        remember_move(cmd);
+        note_direction_press(cmd);
     bool from_checkpoint = get_latest_checkpoint(play);
     if (from_checkpoint) {
         suppress_auto_hold = false;
@@ -309,7 +309,7 @@ void Logic::match_live_holds(PlayLayer* play) {
     bool two = play->m_levelSettings && play->m_levelSettings->m_twoPlayerMode;
     for (bool icon2 : { false, true }) {
         if (icon2 && !two) continue;
-        auto* body = icon_body(play, icon2);
+        auto* body = icon_player(play, icon2);
         if (!body || plays_player(icon2)) continue;
         auto match = [&](int button, bool want) {
             if (want == button_held(body, button)) return;
@@ -381,11 +381,7 @@ void Logic::apply_maintain_gravity(GJBaseGameLayer* play) {
         maintaining_gravity = false;
     };
     if (!is_recording()) return;
-    if (click_both && dual) {
-        bool held = physical_hold(play, false);
-        Trajectory::get().note_button(true, held);
-        Trajectory::get().note_button(false, held);
-    }
+    if (click_both && dual) physical_hold(play, false);
     bool one_dual = play->m_gameState.m_isDualMode && !two;
     if (one_dual) {
         maintaining_gravity = true;
@@ -522,11 +518,11 @@ void Logic::poll_advance_hold() {
     auto now = chrono::steady_clock::now();
     auto start = advance_hold_start + chrono::milliseconds(advance_hold_ms);
     if (now < start) {
-        advance_owed = 0.0;
+        advance_steps_owed = 0.0;
         return;
     }
     if (advance_queued) return;
-    int steps = owed_hold_steps(advance_owed, unlocked_step_cap());
+    int steps = owed_hold_steps(advance_steps_owed, unlocked_step_cap());
     if (steps == 0) return;
     last_advance_step = now;
     advance_steps = steps;
@@ -621,12 +617,12 @@ void Logic::sync_time_scale() {
 
 void Logic::set_level_interval(float interval) {
     auto* director = CCDirector::sharedDirector();
-    if (!(level_interval_held > 0.f)) level_interval_held = (float)director->getAnimationInterval();
+    if (!(interval_before_level_fps > 0.f)) interval_before_level_fps = (float)director->getAnimationInterval();
     director->setAnimationInterval(interval);
 }
 
 void Logic::release_level_interval() {
-    float held = std::exchange(level_interval_held, 0.f);
+    float held = std::exchange(interval_before_level_fps, 0.f);
     if (held > 0.f) CCDirector::sharedDirector()->setAnimationInterval(held);
 }
 
@@ -635,14 +631,14 @@ void Logic::sync_playback_fps() {
     auto* director = CCDirector::sharedDirector();
     if (playback_fps >= 1.f) {
         if (!playback_fps_held)
-            held_interval = level_interval_held > 0.f ? level_interval_held : director->getAnimationInterval();
+            interval_before_playback_fps = interval_before_level_fps > 0.f ? interval_before_level_fps : director->getAnimationInterval();
         playback_fps_held = true;
         director->setAnimationInterval(1.f / playback_fps);
         return;
     }
     if (!playback_fps_held) return;
     playback_fps_held = false;
-    director->setAnimationInterval(held_interval > 0.f ? held_interval : 1.f / 60.f);
+    director->setAnimationInterval(interval_before_playback_fps > 0.f ? interval_before_playback_fps : 1.f / 60.f);
 }
 
 void Logic::begin_editor_playtest() {
@@ -653,8 +649,8 @@ void Logic::begin_editor_playtest() {
     clear_macrobuff_samples();
     step_frame = 0;
     progress_base_set = false;
-    carry = 0.f;
-    respawn_frames = 0;
+    leftover_time = 0.f;
+    respawn_single_steps = 0;
     follow_log.clear();
     buttons_prepared = false;
     replay_clicks_left = 0;
@@ -668,7 +664,7 @@ void Logic::end_editor_playtest(GJBaseGameLayer* editor) {
     editor_testing = false;
     capture_macrobuff_baseline(editor);
     editor_paused = false;
-    carry = 0.f;
+    leftover_time = 0.f;
     steps_left = 0;
     sync_time_scale();
 }
@@ -676,8 +672,7 @@ void Logic::end_editor_playtest(GJBaseGameLayer* editor) {
 void Logic::resume_attempt(PlayLayer* play) {
     if (!play) return;
     resume_pending = true;
-    carry = 0.f;
-    present = true;
+    leftover_time = 0.f;
     play->m_extraDelta = 0.0;
     play->m_resumeTimer = 0;
     bool menu = pause_menu_open();
@@ -692,7 +687,7 @@ void Logic::retain_playback_hold(PlayLayer* play) {
     if (!play || !is_playing()) return;
     auto hold = [&](bool icon2) {
         if (!plays_player(icon2)) return;
-        auto* body = icon_body(play, icon2);
+        auto* body = icon_player(play, icon2);
         if (!body) return;
         auto keep = [&](int button, bool want) {
             if (!want) return;
@@ -712,8 +707,7 @@ void Logic::retain_playback_hold(PlayLayer* play) {
 }
 
 void Logic::on_focus_change() {
-    carry = 0.f;
-    present = true;
+    leftover_time = 0.f;
     CCDirector::sharedDirector()->setNextDeltaTimeZero(true);
     if (auto* play = PlayLayer::get()) {
         play->m_extraDelta = 0.0;
@@ -725,7 +719,7 @@ void Logic::on_focus_change() {
     sync_time_scale();
 }
 
-struct HeldLook {
+struct VisibleBeforeHide {
     bool held = false;
     bool wave = false;
     bool regular = false;
@@ -735,35 +729,35 @@ struct HeldLook {
     bool dash = false;
 };
 
-static HeldLook g_held_looks[2]{};
+static VisibleBeforeHide g_visible_before_hide[2]{};
 
-static HeldLook& held_look(PlayerObject* player) {
+static VisibleBeforeHide& visible_before_hide(PlayerObject* player) {
     auto* play = PlayLayer::get();
     bool second = play && player == play->m_player2;
-    return g_held_looks[second ? 1 : 0];
+    return g_visible_before_hide[second ? 1 : 0];
 }
 
-static void take_node(CCNode* node, bool& saved, bool already) {
+static void hide_node(CCNode* node, bool& saved, bool already) {
     if (!node) return;
     if (!already) saved = node->isVisible();
     node->setVisible(false);
 }
 
-static void give_node(CCNode* node, bool saved) {
+static void reshow_node(CCNode* node, bool saved) {
     if (node) node->setVisible(saved);
 }
 
-static void stop_particle(CCParticleSystemQuad* system) {
+static void hide_particles(CCParticleSystemQuad* system) {
     if (!system) return;
     system->setVisible(false);
     system->stopSystem();
 }
 
-static void show_particle(CCParticleSystemQuad* system) {
+static void show_particles(CCParticleSystemQuad* system) {
     if (system) system->setVisible(true);
 }
 
-static void restore_player(PlayerObject* player, const HeldLook& held) {
+static void unhide_player(PlayerObject* player, const VisibleBeforeHide& held) {
     player->m_playEffects = true;
     if (!player->m_isDead) {
         player->setVisible(true);
@@ -774,25 +768,25 @@ static void restore_player(PlayerObject* player, const HeldLook& held) {
         if (player->m_hasGlow && player->m_isSpider && player->m_spiderSprite)
             player->m_spiderSprite->showGlow();
     }
-    give_node(player->m_waveTrail, held.wave);
-    give_node(player->m_regularTrail, held.regular);
-    give_node(player->m_shipStreak, held.ship);
-    give_node(player->m_ghostTrail, held.ghost);
-    give_node(player->m_swingFireMiddle, held.fire_mid);
-    give_node(player->m_swingFireBottom, held.fire_bot);
-    give_node(player->m_swingFireTop, held.fire_top);
-    give_node(player->m_dashSpritesContainer, held.dash);
-    show_particle(player->m_playerGroundParticles);
-    show_particle(player->m_trailingParticles);
-    show_particle(player->m_shipClickParticles);
-    show_particle(player->m_vehicleGroundParticles);
-    show_particle(player->m_ufoClickParticles);
-    show_particle(player->m_robotBurstParticles);
-    show_particle(player->m_dashParticles);
-    show_particle(player->m_swingBurstParticles1);
-    show_particle(player->m_swingBurstParticles2);
-    show_particle(player->m_landParticles0);
-    show_particle(player->m_landParticles1);
+    reshow_node(player->m_waveTrail, held.wave);
+    reshow_node(player->m_regularTrail, held.regular);
+    reshow_node(player->m_shipStreak, held.ship);
+    reshow_node(player->m_ghostTrail, held.ghost);
+    reshow_node(player->m_swingFireMiddle, held.fire_mid);
+    reshow_node(player->m_swingFireBottom, held.fire_bot);
+    reshow_node(player->m_swingFireTop, held.fire_top);
+    reshow_node(player->m_dashSpritesContainer, held.dash);
+    show_particles(player->m_playerGroundParticles);
+    show_particles(player->m_trailingParticles);
+    show_particles(player->m_shipClickParticles);
+    show_particles(player->m_vehicleGroundParticles);
+    show_particles(player->m_ufoClickParticles);
+    show_particles(player->m_robotBurstParticles);
+    show_particles(player->m_dashParticles);
+    show_particles(player->m_swingBurstParticles1);
+    show_particles(player->m_swingBurstParticles2);
+    show_particles(player->m_landParticles0);
+    show_particles(player->m_landParticles1);
 }
 
 bool Logic::player_hidden(PlayerObject* player) const {
@@ -815,39 +809,39 @@ bool Logic::traj_player_hidden(bool player2) const {
 
 void Logic::conceal_player(PlayerObject* player, bool hide) {
     if (!player) return;
-    auto& held = held_look(player);
+    auto& held = visible_before_hide(player);
     if (!hide) {
         if (!held.held) return;
-        HeldLook saved = held;
+        VisibleBeforeHide saved = held;
         held = {};
-        restore_player(player, saved);
+        unhide_player(player, saved);
         return;
     }
     bool already = held.held;
     held.held = true;
     player->setVisible(false);
     player->m_playEffects = false;
-    take_node(player->m_waveTrail, held.wave, already);
-    take_node(player->m_regularTrail, held.regular, already);
-    take_node(player->m_shipStreak, held.ship, already);
-    take_node(player->m_ghostTrail, held.ghost, already);
-    take_node(player->m_swingFireMiddle, held.fire_mid, already);
-    take_node(player->m_swingFireBottom, held.fire_bot, already);
-    take_node(player->m_swingFireTop, held.fire_top, already);
-    take_node(player->m_dashSpritesContainer, held.dash, already);
+    hide_node(player->m_waveTrail, held.wave, already);
+    hide_node(player->m_regularTrail, held.regular, already);
+    hide_node(player->m_shipStreak, held.ship, already);
+    hide_node(player->m_ghostTrail, held.ghost, already);
+    hide_node(player->m_swingFireMiddle, held.fire_mid, already);
+    hide_node(player->m_swingFireBottom, held.fire_bot, already);
+    hide_node(player->m_swingFireTop, held.fire_top, already);
+    hide_node(player->m_dashSpritesContainer, held.dash, already);
     if (player->m_robotSprite) player->m_robotSprite->hideGlow();
     if (player->m_spiderSprite) player->m_spiderSprite->hideGlow();
-    stop_particle(player->m_playerGroundParticles);
-    stop_particle(player->m_trailingParticles);
-    stop_particle(player->m_shipClickParticles);
-    stop_particle(player->m_vehicleGroundParticles);
-    stop_particle(player->m_ufoClickParticles);
-    stop_particle(player->m_robotBurstParticles);
-    stop_particle(player->m_dashParticles);
-    stop_particle(player->m_swingBurstParticles1);
-    stop_particle(player->m_swingBurstParticles2);
-    stop_particle(player->m_landParticles0);
-    stop_particle(player->m_landParticles1);
+    hide_particles(player->m_playerGroundParticles);
+    hide_particles(player->m_trailingParticles);
+    hide_particles(player->m_shipClickParticles);
+    hide_particles(player->m_vehicleGroundParticles);
+    hide_particles(player->m_ufoClickParticles);
+    hide_particles(player->m_robotBurstParticles);
+    hide_particles(player->m_dashParticles);
+    hide_particles(player->m_swingBurstParticles1);
+    hide_particles(player->m_swingBurstParticles2);
+    hide_particles(player->m_landParticles0);
+    hide_particles(player->m_landParticles1);
 }
 
 void Logic::after_frame(PlayLayer* play, float dt) {
@@ -870,25 +864,24 @@ void Logic::after_frame(PlayLayer* play, float dt) {
         });
     }
     if (!render_capturing()) update_cps(play);
-    if (!present) return;
     apply_layout(play);
     if (!in_scheduler) draw_hitboxes(play);
     draw_overlay(play);
 }
 
 void Logic::on_play_init(PlayLayer* play) {
-    g_held_looks[0] = {};
-    g_held_looks[1] = {};
+    g_visible_before_hide[0] = {};
+    g_visible_before_hide[1] = {};
     replay_pos = 0;
     replay_index = 0;
     sequence_order.clear();
     step_frame = 0;
     progress_base_set = false;
     removed_frames = 0;
-    carry = 0.f;
-    respawn_frames = 0;
-    ignore_record_frames = 0;
-    refresh_only = false;
+    leftover_time = 0.f;
+    respawn_single_steps = 0;
+    skip_record_frames = 0;
+    refreshing_visuals = false;
     refresh_queued = false;
     in_scheduler = false;
     buttons_prepared = false;
@@ -896,15 +889,14 @@ void Logic::on_play_init(PlayLayer* play) {
     cancel_steps();
     clear_click_hitbox();
     apply_rate(0);
-    present = true;
     layout_styled = false;
     clear_stuck_death(play);
     clear_physical_holds();
     checkpoints.clear();
     restored_checkpoint = nullptr;
-    clicks_p1.clear();
-    clicks_p2.clear();
-    ++clicks_revision;
+    click_frames_p1.clear();
+    click_frames_p2.clear();
+    ++clicks_version;
     attempts = 1;
     trail_p1.clear();
     trail_p2.clear();
@@ -935,19 +927,19 @@ void Logic::on_play_init(PlayLayer* play) {
     arm_immediate_restart = immediate_restart;
 }
 
-struct LiveRand {
+struct RandomTrigger {
     int unique_id = 0;
     unsigned long long* state = nullptr;
 };
 
-static std::vector<LiveRand> g_live_rand;
+static std::vector<RandomTrigger> g_random_triggers;
 
-struct VarianceLock {
-    bool held = false;
+struct KeptVariance {
+    bool active = false;
     std::array<float, 2000> values{};
 };
 
-static VarianceLock g_variance_lock;
+static KeptVariance g_kept_variance;
 
 static void fill_variance(PlayLayer* play, unsigned long long seed) {
     unsigned long long state = seed;
@@ -967,18 +959,18 @@ void Logic::set_game_random_state(unsigned long long state) {
 
 void Logic::note_rand_trigger(int unique_id, unsigned long long* state) {
     if (!state) return;
-    for (const auto& trigger : g_live_rand) {
+    for (const auto& trigger : g_random_triggers) {
         if (trigger.state == state) return;
     }
-    g_live_rand.push_back({ unique_id, state });
+    g_random_triggers.push_back({ unique_id, state });
 }
 
 void Logic::clear_rand_triggers() {
-    g_live_rand.clear();
+    g_random_triggers.clear();
 }
 
 void Logic::reseed_rand_triggers(unsigned long long seed) {
-    for (auto& trigger : g_live_rand) {
+    for (auto& trigger : g_random_triggers) {
         if (!trigger.state) continue;
         *trigger.state = seed ^ ((unsigned long long)trigger.unique_id * 2137ull);
     }
@@ -988,7 +980,7 @@ void Logic::roll_live_seed(PlayLayer* play) {
     static std::mt19937_64 rng{ std::random_device{}() };
     unsigned long long rolled = rng();
     if (rolled == 0) rolled = 1;
-    g_variance_lock.held = false;
+    g_kept_variance.active = false;
     if (!lvl_seed_from_file || is_recording()) {
         lvl_seed = rolled;
         lvl_seed_known = true;
@@ -1008,16 +1000,16 @@ void Logic::roll_live_seed(PlayLayer* play) {
 void Logic::apply_attempt_variance(PlayLayer* play, unsigned long long seed) {
     if (!play) return;
     fill_variance(play, seed);
-    auto& lock = g_variance_lock;
-    lock.held = true;
-    std::copy(play->m_varianceValues.begin(), play->m_varianceValues.end(), lock.values.begin());
+    auto& kept = g_kept_variance;
+    kept.active = true;
+    std::copy(play->m_varianceValues.begin(), play->m_varianceValues.end(), kept.values.begin());
 }
 
 void Logic::keep_variance(PlayLayer* play) {
-    auto& lock = g_variance_lock;
-    if (!play || !lock.held) return;
+    auto& kept = g_kept_variance;
+    if (!play || !kept.active) return;
     if (!seed_override && !is_playing()) return;
-    restore_variance(play->m_varianceValues, lock.values);
+    restore_variance(play->m_varianceValues, kept.values);
 }
 
 void Logic::plant_lvl_seed(PlayLayer* play) {
@@ -1046,12 +1038,12 @@ void Logic::restore_checkpoint_random(PlayLayer* play) {
     teleport_random = checkpoint.teleport_random;
     if (checkpoint.variance.size() == play->m_varianceValues.size()) {
         std::copy(checkpoint.variance.begin(), checkpoint.variance.end(), play->m_varianceValues.begin());
-        auto& lock = g_variance_lock;
-        lock.held = true;
-        std::copy(play->m_varianceValues.begin(), play->m_varianceValues.end(), lock.values.begin());
+        auto& kept = g_kept_variance;
+        kept.active = true;
+        std::copy(play->m_varianceValues.begin(), play->m_varianceValues.end(), kept.values.begin());
     }
     for (const auto& saved : checkpoint.rand_states) {
-        for (auto& trigger : g_live_rand) {
+        for (auto& trigger : g_random_triggers) {
             if (trigger.unique_id == saved.first && trigger.state) *trigger.state = saved.second;
         }
     }
@@ -1094,7 +1086,7 @@ void Logic::on_reset(PlayLayer* play) {
     if (sequence_enabled && !is_recording() && !backstepping) {
         auto use_clip = [&](const Replay& clip) {
             inputs = clip.actions;
-            clear_sides();
+            clear_input_extras();
             macro_name = clip.name;
             macro_name_typed = false;
             macro_fps = clip.fps;
@@ -1140,15 +1132,14 @@ void Logic::on_reset(PlayLayer* play) {
     auto replayed = [this](int frame) {
         return frame >= step_frame;
     };
-    std::erase_if(clicks_p1, replayed);
-    std::erase_if(clicks_p2, replayed);
+    std::erase_if(click_frames_p1, replayed);
+    std::erase_if(click_frames_p2, replayed);
     rewind_follow(play);
-    ++clicks_revision;
+    ++clicks_version;
     play->m_extraDelta = 0.0;
     play->m_resumeTimer = 0;
     CCDirector::sharedDirector()->setNextDeltaTimeZero(false);
     clear_stuck_death(play);
-    present = true;
 
     if (sort_automatically && is_recording() && is_playing()) sort_inputs();
     if (from_checkpoint) {
@@ -1196,7 +1187,7 @@ void Logic::restore_holds(PlayLayer* play) {
         death_left_p2 = death_right_p2 = false;
         key_jump_p1 = key_jump_p2 = false;
         physical_jump_p1 = physical_jump_p2 = false;
-        steered_keys.clear();
+        routed_keys.clear();
         bool p1 = false, p2 = false;
         if (auto* ui = play->m_uiLayer) {
             p1 = ui->m_p1Jumping || ui->m_p1TouchId != -1;
@@ -1233,7 +1224,7 @@ void Logic::restore_holds(PlayLayer* play) {
         return;
     }
     for (const auto& cmd : play->m_queuedButtons)
-        remember_move(cmd);
+        note_direction_press(cmd);
     play->m_queuedButtons.clear();
     std::memset(restored_clicks, 0, sizeof(restored_clicks));
 
@@ -1248,7 +1239,7 @@ void Logic::restore_holds(PlayLayer* play) {
         }
     }
     auto put_hold = [&](bool icon2, int button, bool want) {
-        auto* body = icon_body(play, icon2);
+        auto* body = icon_player(play, icon2);
         if (!body) return;
         bool have = Logic::button_held(body, button);
         bool wave = button == JUMP && body->m_isDart && maintain_gravity && records_player(icon2);
@@ -1318,7 +1309,7 @@ void Logic::restore_holds(PlayLayer* play) {
                 restoring_holds = true;
                 put_hold(icon2, JUMP, false);
                 restoring_holds = false;
-                if (auto* body = icon_body(play, icon2)) body->releaseAllButtons();
+                if (auto* body = icon_player(play, icon2)) body->releaseAllButtons();
                 return;
             }
             if (!records_player(icon2)) {
@@ -1338,7 +1329,7 @@ void Logic::restore_holds(PlayLayer* play) {
             if (plays_player(icon2)) return;
             bool physical_jump_held = live_jump(icon2);
             bool jump_held = physical_jump_held;
-            auto* body = icon_body(play, icon2);
+            auto* body = icon_player(play, icon2);
             if (icon2 && !one_dual ? inverse_p2 : inverse_p1) jump_held = !jump_held;
             if (maintain_gravity && body && body->m_isDart)
                 jump_held = jump_held != body->m_isUpsideDown;
@@ -1454,7 +1445,7 @@ Checkpoint Logic::capture_checkpoint(PlayLayer* play, CheckpointObject* object, 
     checkpoint.shake_random = shake_random;
     checkpoint.teleport_random = teleport_random;
     checkpoint.variance.assign(play->m_varianceValues.begin(), play->m_varianceValues.end());
-    for (const auto& trigger : g_live_rand) {
+    for (const auto& trigger : g_random_triggers) {
         if (trigger.state) checkpoint.rand_states.emplace_back(trigger.unique_id, *trigger.state);
     }
     return checkpoint;
@@ -1518,7 +1509,6 @@ void Logic::clear_stuck_death(PlayLayer* play) {
     noclip_dead_p2 = false;
     if (play->m_player1) play->m_player1->m_isDead = false;
     if (play->m_player2) play->m_player2->m_isDead = false;
-    present = true;
 }
 
 bool Logic::should_noclip(PlayLayer* play, PlayerObject* player) {
@@ -1527,7 +1517,7 @@ bool Logic::should_noclip(PlayLayer* play, PlayerObject* player) {
     return false;
 }
 
-bool Logic::cbf_enabled() const {
+bool Logic::click_between_frames_enabled() const {
     const char* ids[] = { "syzzi.click_between_frames", "zmx.cbf-lite" };
     for (const char* id : ids) {
         auto* mod = Loader::get()->getLoadedMod(id);
@@ -1544,25 +1534,26 @@ bool Logic::vanilla_click_physics() const {
     }
     else if (GameManager::get()->getGameVariable("0177") || GameManager::get()->getGameVariable("0176"))
         return true;
-    return cbf_enabled();
+    return click_between_frames_enabled();
 }
 
 bool Logic::defer_physics() {
-    if (refresh_only) return false;
+    if (refreshing_visuals) return false;
     if (auto* play = PlayLayer::get(); play && !play->m_started && !render_capturing()) return true;
     if (physics_locked()) return false;
     if (render_capturing()) return false;
+    if (std::abs(speedhack - 1.f) >= .00001f || sample_rate() != VANILLA_TPS) return false;
     return vanilla_click_physics();
 }
 
 void Logic::flatten_click_times(GJBaseGameLayer* play) {
-    if (!play || predicting || cbf_enabled()) return;
+    if (!play || predicting || click_between_frames_enabled()) return;
     for (auto& cmd : play->m_queuedButtons)
         cmd.m_timestamp = 0.0;
 }
 
 double Logic::click_stamp() const {
-    return cbf_enabled() ? std::numeric_limits<double>::min() : 0.0;
+    return click_between_frames_enabled() ? std::numeric_limits<double>::min() : 0.0;
 }
 
 static void drop_ignored_inputs(GJBaseGameLayer* play) {
@@ -1579,20 +1570,20 @@ static void drop_ignored_inputs(GJBaseGameLayer* play) {
 void Logic::prepare_buttons(GJBaseGameLayer* play) {
     bool paused = editor_paused;
     if (auto* live = Logic::as_play(play)) paused = paused || live->m_isPaused;
-    if (!play || buttons_prepared || resetting || refresh_only || paused || !physics_locked())
+    if (!play || buttons_prepared || resetting || refreshing_visuals || paused || !physics_locked())
         return;
     buttons_prepared = true;
 
     auto& user = play->m_queuedButtons;
     for (const auto& cmd : user)
-        remember_move(cmd);
+        note_direction_press(cmd);
 
     bool playing = is_playing();
     bool recording = is_recording();
     if (recording && !restoring_holds) {
         auto steer = [&](PlayerButtonCommand& cmd) {
             bool player1 = !cmd.m_isPlayer2;
-            if (steer_player(player1)) cmd.m_isPlayer2 = !player1;
+            if (route_to_recorded_player(player1)) cmd.m_isPlayer2 = !player1;
         };
         for (auto& cmd : user)
             steer(cmd);
@@ -1600,7 +1591,7 @@ void Logic::prepare_buttons(GJBaseGameLayer* play) {
     if (!restoring_holds && playing && ignore_inputs) {
         drop_ignored_inputs(play);
     }
-    else if (!restoring_holds && recording && ignore_record_frames > 0) {
+    else if (!restoring_holds && recording && skip_record_frames > 0) {
         user.clear();
     }
 
@@ -1663,8 +1654,8 @@ void Logic::prepare_buttons(GJBaseGameLayer* play) {
         int first[2] = { -1, -1 }, last[2] = { -1, -1 };
     } ends;
 
-    if (ends.revision != inputs_revision || ends.data != inputs.data() || ends.size != inputs.size()) {
-        ends.revision = inputs_revision;
+    if (ends.revision != inputs_version || ends.data != inputs.data() || ends.size != inputs.size()) {
+        ends.revision = inputs_version;
         ends.data = inputs.data();
         ends.size = inputs.size();
         ends.first[0] = ends.first[1] = std::numeric_limits<int>::max();
@@ -1680,7 +1671,7 @@ void Logic::prepare_buttons(GJBaseGameLayer* play) {
         if (!ignore_inputs && frame > ends.last[side]) return;
         int slot = Logic::button_slot(button);
         if (slot >= 0 && queued[(size_t)((stored2 ? 3 : 0) + slot)]) return;
-        auto* body = icon_body(play, stored2);
+        auto* body = icon_player(play, stored2);
         if (!body || !plays_player(stored2)) return;
         if (slot > 0 && body->m_controlsDisabled) return;
         if (stored2 && two_player && p2.began >= 0 && slot >= 0 && !p2.acted[(size_t)slot]) return;
@@ -1703,7 +1694,7 @@ void Logic::prepare_buttons(GJBaseGameLayer* play) {
     }
 }
 
-void Logic::remember_move(const PlayerButtonCommand& cmd) {
+void Logic::note_direction_press(const PlayerButtonCommand& cmd) {
     bool player2 = cmd.m_isPlayer2;
     if (cmd.m_button == PlayerButton::Left) {
         (player2 ? physical_left_p2 : physical_left_p1) = cmd.m_isPush;
@@ -1717,7 +1708,6 @@ void run_orb_clicks(GJBaseGameLayer* play, GJBaseGameLayer* layer, float dt) {
     auto* live = Logic::as_play(play);
     if (!live || !layer || Logic::get().predicting) return;
     if (!Orbs::has_pending_pads()) {
-        Orbs::commit_tool_hits();
         Logic::get().suppress_click_hitbox = false;
         return;
     }
@@ -1736,7 +1726,6 @@ void run_orb_clicks(GJBaseGameLayer* play, GJBaseGameLayer* layer, float dt) {
         layer->GJBaseGameLayer::processQueuedButtons(dt, true);
         logic.injecting = false;
     }
-    Orbs::commit_tool_hits();
     logic.suppress_click_hitbox = false;
     play->m_queuedButtons = std::move(saved);
 }
@@ -1744,12 +1733,11 @@ void run_orb_clicks(GJBaseGameLayer* play, GJBaseGameLayer* layer, float dt) {
 void Logic::play_macro(GJBaseGameLayer* play, GJBaseGameLayer* layer, float dt, bool clear_input_queue) {
     bool paused = editor_paused;
     if (auto* live = Logic::as_play(play)) paused = paused || live->m_isPaused;
-    if (!play || !layer || resetting || refresh_only || paused || !physics_locked()) {
+    if (!play || !layer || resetting || refreshing_visuals || paused || !physics_locked()) {
         if (layer) {
             drop_ignored_inputs(play);
             gd::vector<PlayerButtonCommand> orbs;
             if (auto* live = Logic::as_play(play); live && !predicting) {
-                Orbs::note_jump_presses(live);
                 size_t before = play->m_queuedButtons.size();
                 Orbs::flush_pads(live);
                 for (size_t i = before; i < play->m_queuedButtons.size(); ++i)
@@ -1770,14 +1758,12 @@ void Logic::play_macro(GJBaseGameLayer* play, GJBaseGameLayer* layer, float dt, 
                 injecting = false;
                 suppress_click_hitbox = false;
             }
-            Orbs::commit_tool_hits();
             if (is_recording() && maintain_gravity && same_gravity && !restoring_holds && !resetting)
                 sync_same_gravity(play);
         }
         return;
     }
     prepare_buttons(play);
-    if (auto* live = Logic::as_play(play)) Orbs::note_jump_presses(live);
     int replay = replay_clicks_left;
     if (play->m_queuedButtons.empty()) {
         applying_playback = false;
@@ -1797,7 +1783,6 @@ void Logic::play_macro(GJBaseGameLayer* play, GJBaseGameLayer* layer, float dt, 
         !correct_gravity && (replay == 0 || !single_dual) && !Orbs::has_pending_pads()) {
         applying_playback = false;
         if (replay == 1) {
-            Orbs::commit_tool_hits();
             suppress_click_hitbox = false;
             applying_playback = true;
         }
@@ -1821,7 +1806,7 @@ void Logic::play_macro(GJBaseGameLayer* play, GJBaseGameLayer* layer, float dt, 
         queued.removeIf([&](const PlayerButtonCommand& cmd) {
             int button = (int)cmd.m_button;
             bool jump_button = button == 0 || button == JUMP;
-            auto* body = icon_body(play, cmd.m_isPlayer2);
+            auto* body = icon_player(play, cmd.m_isPlayer2);
             return jump_button && body && body->m_isDart && records_player(cmd.m_isPlayer2) && !plays_player(cmd.m_isPlayer2);
         });
     }
@@ -1848,9 +1833,9 @@ void Logic::play_macro(GJBaseGameLayer* play, GJBaseGameLayer* layer, float dt, 
             play->m_queuedButtons.push_back(next);
             layer->GJBaseGameLayer::processQueuedButtons(dt, true);
         };
-        unsigned partner_before = partner_presses;
+        unsigned partner_before = other_icon_presses;
         apply(cmd.m_isPlayer2);
-        bool partner_clicked = partner_presses != partner_before;
+        bool partner_clicked = other_icon_presses != partner_before;
         if (one_dual && !cmd.m_isPlayer2 && !partner_clicked && play->m_player2 && !play->m_player2->m_isDead && !play->m_player2->m_controlsDisabled) {
             apply(true);
         }
@@ -1882,7 +1867,7 @@ void Logic::offset_frames(int delta, int first, int last) {
             change.frame = std::max(change.frame + delta, 0);
         normalize_rates();
     }
-    touch_inputs();
+    mark_inputs_changed();
     sort_inputs();
     message = fmt::format("Shifted inputs by {}", delta);
     autosave_replay();
@@ -1905,7 +1890,7 @@ void Logic::offset_inputs(int magnitude, int first, int last) {
         int next = inputs[(size_t)i].number + dist(rng);
         inputs[(size_t)i].number = std::max(next, 0);
     }
-    touch_inputs();
+    mark_inputs_changed();
     sort_inputs();
     message = fmt::format("Randomly offset inputs by +/- {}", magnitude);
     autosave_replay();
@@ -1919,7 +1904,7 @@ void Logic::remove_player_inputs(bool player2) {
     inputs.shrink_to_fit();
     poses.shrink_to_fit();
     input_ids.shrink_to_fit();
-    touch_inputs();
+    mark_inputs_changed();
     refresh_live_hold();
     recompute_cps();
     message = player2 ? "Removed player 2 inputs" : "Removed player 1 inputs";
@@ -1949,7 +1934,7 @@ void Logic::sort_inputs() {
     if (std::is_sorted(inputs.begin(), inputs.end(), [](const Frame& a, const Frame& b) {
             return a.number < b.number;
         })) {
-        touch_inputs();
+        mark_inputs_changed();
         refresh_live_hold();
         recompute_cps();
         return;
@@ -1975,12 +1960,12 @@ void Logic::sort_inputs() {
             sorted_ids.push_back(input_ids[i]);
         input_ids = std::move(sorted_ids);
     }
-    touch_inputs();
+    mark_inputs_changed();
     refresh_live_hold();
     recompute_cps();
 }
 
-unsigned long long Logic::mint_input_id() {
+unsigned long long Logic::new_input_id() {
     return ++next_input_id;
 }
 
@@ -1997,7 +1982,7 @@ void Logic::identify_inputs(bool force) {
     };
 
     thread_local Seen seen;
-    bool kept = seen.owner == &inputs && seen.revision == inputs_revision && seen.count <= inputs.size() && next_input_id >= seen.next;
+    bool kept = seen.owner == &inputs && seen.revision == inputs_version && seen.count <= inputs.size() && next_input_id >= seen.next;
     if (kept && seen.count > 0) kept = input_id(seen.count - 1) == seen.last_id;
     if (kept && seen.count == inputs.size()) kept = seen.data == inputs.data();
     size_t from = kept ? seen.count : 0;
@@ -2011,18 +1996,18 @@ void Logic::identify_inputs(bool force) {
         if (input_id(i) != 0) continue;
         set_input_id(i, ++next_input_id);
     }
-    seen = { &inputs, inputs.data(), inputs.size(), inputs_revision, next_input_id, inputs.empty() ? 0 : input_id(inputs.size() - 1) };
+    seen = { &inputs, inputs.data(), inputs.size(), inputs_version, next_input_id, inputs.empty() ? 0 : input_id(inputs.size() - 1) };
 }
 
 void Logic::clear_inputs() {
-    clear_sides();
+    clear_input_extras();
     macro_unrounded = velocity_unrounding;
     macro_silicate_variance = false;
     std::vector<Frame>().swap(inputs);
     std::vector<FramePose>().swap(poses);
     std::vector<unsigned long long>().swap(input_ids);
     release_replay_index();
-    touch_inputs();
+    mark_inputs_changed();
     rates.clear();
     replay_pos = 0;
     lvl_seed_from_file = false;
@@ -2044,7 +2029,7 @@ void Logic::notify(const std::string& text, bool success) {
 
 void Logic::note_click(PlayLayer* play, bool down, bool player1, int button) {
     if (!down || !play) return;
-    if (resetting || refresh_only || ignore_record_frames > 0) return;
+    if (resetting || refreshing_visuals || skip_record_frames > 0) return;
     if (button != 0 && button != JUMP && button != LEFT && button != RIGHT) return;
     if (button == 0) button = JUMP;
     PlayerObject* body = player1 ? play->m_player1 : play->m_player2;
@@ -2057,7 +2042,7 @@ void Logic::note_click(PlayLayer* play, bool down, bool player1, int button) {
     if (one_dual) player1 = true;
     bool player2 = !player1;
     if (player2 && !(two && dual)) return;
-    auto& clicks = player2 ? clicks_p2 : clicks_p1;
+    auto& clicks = player2 ? click_frames_p2 : click_frames_p1;
     int now = step_frame + 1;
     clicks.push_back(now);
     double now_t = seconds_at(now);
@@ -2066,7 +2051,7 @@ void Logic::note_click(PlayLayer* play, bool down, bool player1, int button) {
         clicks.pop_front();
     while (clicks.size() > (1u << 20))
         clicks.pop_front();
-    if (clicks.size() != before) ++clicks_revision;
+    if (clicks.size() != before) ++clicks_version;
 }
 
 struct RecentClicks {
@@ -2091,23 +2076,23 @@ static bool same_rates(const std::vector<RateChange>& a, const std::vector<RateC
 }
 
 static double burst_peak(const Logic& logic, const std::deque<int>& clicks) {
-    struct State {
+    struct BurstCache {
         const std::deque<int>* owner = nullptr;
-        unsigned long long revision = 0;
+        unsigned long long clicks_version_seen = 0;
         float macro_fps = 0.f;
         std::vector<RateChange> rates;
         size_t covered = 0;
         double best = 0.0;
     };
 
-    thread_local std::array<State, 2> caches;
-    auto& state = &clicks == &logic.clicks_p2 ? caches[1] : caches[0];
-    bool kept = state.owner == &clicks && state.revision == logic.clicks_revision && state.covered <= clicks.size() &&
+    thread_local std::array<BurstCache, 2> burst_caches;
+    auto& state = &clicks == &logic.click_frames_p2 ? burst_caches[1] : burst_caches[0];
+    bool kept = state.owner == &clicks && state.clicks_version_seen == logic.clicks_version && state.covered <= clicks.size() &&
                 state.macro_fps == logic.macro_fps && same_rates(state.rates, logic.rates);
     if (!kept) {
         state = {};
         state.owner = &clicks;
-        state.revision = logic.clicks_revision;
+        state.clicks_version_seen = logic.clicks_version;
         state.macro_fps = logic.macro_fps;
         state.rates = logic.rates;
     }
@@ -2125,7 +2110,7 @@ static double burst_peak(const Logic& logic, const std::deque<int>& clicks) {
 
 unsigned Logic::count_presses_in_last_second(bool player2) {
     int now = PlayLayer::get() ? get_frame(PlayLayer::get()) : 0;
-    const auto& clicks = player2 ? clicks_p2 : clicks_p1;
+    const auto& clicks = player2 ? click_frames_p2 : click_frames_p1;
     return (unsigned)recent_clicks(*this, clicks, now).in_second;
 }
 
@@ -2292,17 +2277,17 @@ void Logic::update_cps(PlayLayer* play) {
     currently_pressing = holding(play->m_player1) || (play->m_gameState.m_isDualMode && holding(play->m_player2));
     bool two_player = play->m_levelSettings && play->m_levelSettings->m_twoPlayerMode;
     bool two_dual = two_player && play->m_gameState.m_isDualMode;
-    if (!two_dual && !clicks_p2.empty()) {
-        clicks_p2.clear();
-        ++clicks_revision;
+    if (!two_dual && !click_frames_p2.empty()) {
+        click_frames_p2.clear();
+        ++clicks_version;
     }
     unsigned p1 = count_presses_in_last_second(false);
     unsigned p2 = two_dual ? count_presses_in_last_second(true) : 0;
     current_cps = (float)(two_dual ? std::max(p1, p2) : p1);
     int now = get_frame(play);
     float limit = std::max((float)max_cps, 1.f);
-    cps_breaking = player_cps_broken(clicks_p1, now, limit);
-    if (two_dual) cps_breaking = cps_breaking || player_cps_broken(clicks_p2, now, limit);
+    cps_breaking = player_cps_broken(click_frames_p1, now, limit);
+    if (two_dual) cps_breaking = cps_breaking || player_cps_broken(click_frames_p2, now, limit);
     if (cps_breaking) over_max_cps = true;
 }
 

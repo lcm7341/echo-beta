@@ -8,7 +8,7 @@
 
 using namespace geode::prelude;
 
-static bool& off() {
+static bool& disabled_flag() {
     static bool value = Mod::get()->getSavedValue<bool>("bot-disabled", false);
     return value;
 }
@@ -16,7 +16,7 @@ static bool& off() {
 static std::vector<Patch*> g_patches;
 static std::vector<Hook*> g_hooks;
 
-static void apply(bool disable) {
+static void apply_disabled(bool disable) {
     if (disable) {
         for (auto* patch : Mod::get()->getPatches()) {
             if (!patch->isEnabled()) continue;
@@ -40,16 +40,16 @@ static void apply(bool disable) {
         g_hooks.clear();
     }
 #ifdef GEODE_IS_WINDOWS
-    echo_raw_hooks(!disable);
+    enable_raw_hooks(!disable);
 #endif
 }
 
 bool Logic::bot_disabled() {
-    return off();
+    return disabled_flag();
 }
 
 void Logic::set_bot_disabled(bool on) {
-    if (on == off()) return;
+    if (on == disabled_flag()) return;
     auto& logic = Logic::get();
     // half a level played by echo & half not is a mess. same rule silicate has
     if (PlayLayer::get()) {
@@ -58,8 +58,8 @@ void Logic::set_bot_disabled(bool on) {
         return;
     }
     if (on) logic.state = RunState::Idle;
-    off() = on;
-    apply(on);
+    disabled_flag() = on;
+    apply_disabled(on);
     Mod::get()->setSavedValue("bot-disabled", on);
     (void)Mod::get()->saveData();
     logic.message = on ? "Echo is off" : "Echo is back on";
@@ -69,7 +69,7 @@ void Logic::repair_player_order(PlayLayer* play) {
     static unsigned long long checked = ~0ull;
     static const Frame* owner = nullptr;
     if (!play || (play->m_levelSettings && play->m_levelSettings->m_twoPlayerMode)) return;
-    if (checked == inputs_revision && owner == inputs.data()) return;
+    if (checked == inputs_version && owner == inputs.data()) return;
     auto button = [&](const Frame& input) {
         return input.button == 0 ? JUMP : (int)input.button;
     };
@@ -89,8 +89,8 @@ void Logic::repair_player_order(PlayLayer* play) {
         changed = true;
         ++i;
     }
-    if (changed) touch_inputs();
-    checked = inputs_revision;
+    if (changed) mark_inputs_changed();
+    checked = inputs_version;
     owner = inputs.data();
 }
 
@@ -104,7 +104,7 @@ void Logic::set_macro_ldm(bool on) {
 }
 
 $on_mod(Loaded) {
-    if (off()) apply(true);
+    if (disabled_flag()) apply_disabled(true);
 }
 
 // TODO remove. TEMPORARY, like step_trace.cpp. same file layout so the 2 can be compared

@@ -1,4 +1,4 @@
 #pragma once
 
 // switches for the bigger speedups
-inline bool opt_effects = true;
+inline bool optimize_effects = true;

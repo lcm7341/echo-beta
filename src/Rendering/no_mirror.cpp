@@ -18,7 +18,7 @@ struct ScreenFlip {
 
 static std::vector<ScreenFlip> g_screen_flips;
 
-static std::vector<Ref<GameObject>> g_slid;
+static std::vector<Ref<GameObject>> g_slid_objects;
 
 #if defined(GEODE_IS_WINDOWS)
 #define ECHO_NO_MIRROR_DRAW
@@ -120,11 +120,11 @@ class $modify(NoMirrorObjects, PlayLayer) {
     void updateVisibility(float dt) {
         g_screen_flips.clear();
         std::vector<Ref<GameObject>> before;
-        before.swap(g_slid);
+        before.swap(g_slid_objects);
         PlayLayer::updateVisibility(dt);
         if (before.empty()) return;
         std::unordered_set<GameObject*> still;
-        for (const auto& object : g_slid)
+        for (const auto& object : g_slid_objects)
             still.insert(object.data());
         for (const auto& object : before) {
             if (!still.contains(object.data())) object->setPosition(object->getRealPosition());
@@ -132,7 +132,7 @@ class $modify(NoMirrorObjects, PlayLayer) {
     }
 
     void screenFlipObject(GameObject* object) {
-        if (object) g_slid.push_back(object);
+        if (object) g_slid_objects.push_back(object);
         if (!Logic::get().no_mirror_portals || !object) {
             PlayLayer::screenFlipObject(object);
             return;

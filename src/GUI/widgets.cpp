@@ -86,7 +86,7 @@ namespace EchoUI {
 
     static void button_skin(ImDrawList* draw, const ImRect& body, float rounding, ImGuiID id, float hot, float down, float keep = 1.f, const ImVec4* own = nullptr, float own_amount = 1.f);
 
-    struct Grade {
+    struct ColorGrade {
         float turn = 0.f;
         float saturation = 1.f;
         float brightness = 1.f;
@@ -96,7 +96,7 @@ namespace EchoUI {
         }
     };
 
-    static Grade body_turn, accent_turn;
+    static ColorGrade body_turn, accent_turn;
 
     // a light theme turned down doesnt get grey, it goes to its night look. night = how far the sky is (0-1),
     // night_menu = how far the menu itself is: it fades to dark w/ light text from NIGHT_TOP down to NIGHT_LOW
@@ -109,7 +109,7 @@ namespace EchoUI {
         return t * t * (3.f - 2.f * t);
     }
 
-    static ImVec4 turned(ImVec4 tint, const Grade& grade) {
+    static ImVec4 turned(ImVec4 tint, const ColorGrade& grade) {
         if (grade.plain()) return tint;
         float h, sat, val;
         ImGui::ColorConvertRGBtoHSV(tint.x, tint.y, tint.z, h, sat, val);
@@ -122,7 +122,7 @@ namespace EchoUI {
         return tint;
     }
 
-    static void turn_verts(ImDrawList* draw, int from, const Grade& turn) {
+    static void turn_verts(ImDrawList* draw, int from, const ColorGrade& turn) {
         if (turn.plain()) return;
         for (int v = from; v < draw->VtxBuffer.Size; ++v) {
             auto& vert = draw->VtxBuffer[v];
@@ -152,13 +152,13 @@ namespace EchoUI {
         return 1.f - std::pow(2.f, -10.f * t);
     }
 
-    struct Entrance {
+    struct EntranceAnimation {
         ImDrawList* list = nullptr;
         int start = 0;
         float t = 1.f;
     };
 
-    static Entrance g_entrance;
+    static EntranceAnimation g_entrance;
 
     void BeginEntrance(float t) {
         g_entrance.list = ImGui::GetWindowDrawList();
@@ -910,13 +910,13 @@ namespace EchoUI {
         Scene which = g_scene;
         if (which == Scene::None || keep <= .01f) return;
 
-        struct Look {
+        struct LiquidLook {
             ImVec4 top, bottom;
             ImVec4 glow;
             ImVec4 edge;
         };
 
-        static const Look LOOKS[] = {
+        static const LiquidLook LIQUID_LOOKS[] = {
             {},
             { { .30f, .15f, .44f, 1.f }, { .13f, .06f, .21f, 1.f }, { 1.f, .5f, .08f, 1.f }, { 1.f, .55f, .12f, 1.f } },
             { { .44f, .07f, .04f, 1.f }, { .15f, .02f, .02f, 1.f }, { 1.f, .45f, .05f, 1.f }, { 1.f, .4f, .08f, 1.f } },
@@ -925,8 +925,8 @@ namespace EchoUI {
             { { .1f, .5f, .62f, 1.f }, { .03f, .19f, .37f, 1.f }, { .65f, 1.f, .95f, 1.f }, { .35f, .9f, .85f, 1.f } },
             { { .64f, .3f, .48f, 1.f }, { .33f, .13f, .3f, 1.f }, { 1.f, .82f, .9f, 1.f }, { 1.f, .62f, .8f, 1.f } },
         };
-        Look look = LOOKS[(int)(which)];
-        Grade dim{ 0.f, 1.f, body_turn.brightness };
+        LiquidLook look = LIQUID_LOOKS[(int)(which)];
+        ColorGrade dim{ 0.f, 1.f, body_turn.brightness };
         look.top = turned(turned(look.top, accent_turn), dim);
         look.bottom = turned(turned(look.bottom, accent_turn), dim);
         if (night_menu > 0.f) {
@@ -1332,13 +1332,13 @@ namespace EchoUI {
 
     static std::unordered_map<ImGuiID, FieldState> g_field_states;
 
-    struct OpenField {
+    struct FocusedField {
         ImGuiID id = 0;
         ImRect bb;
         ImGuiWindow* window = nullptr;
     };
 
-    static OpenField g_field;
+    static FocusedField g_field;
 
     static void draw_field(ImGuiWindow* window, ImGuiID id, const ImRect& bb, float fill, const FieldState& state) {
         const ImGuiStyle& style = ImGui::GetStyle();
@@ -1979,7 +1979,7 @@ namespace EchoUI {
 
     static bool close_button(ImGuiWindow* window, const ImRect& bb, const char* id_text);
 
-    struct Tiling {
+    struct TileLayout {
         bool on = false;
         float left = 0.f, top = 0.f;
         float column = 0.f;
@@ -2000,7 +2000,7 @@ namespace EchoUI {
         int born = 0;
     };
 
-    static Tiling g_tiles;
+    static TileLayout g_tiles;
 
     static std::unordered_map<ImGuiID, float> g_tile_widths;
 
@@ -2637,7 +2637,7 @@ namespace EchoUI {
     }
 
     void sync_scene_turn(const Palette& palette) {
-        body_turn = accent_turn = Grade{};
+        body_turn = accent_turn = ColorGrade{};
         night = 0.f;
         auto ratio = [](float now, float own) {
             return own > .001f ? std::max(now, 0.f) / own : 1.f;
@@ -2669,11 +2669,11 @@ namespace EchoUI {
         float d = palette.depth;
         float as = palette.accent_saturation;
         float av = palette.accent_value;
-        struct Set {
+        struct ColorSet {
             ImVec4 background, panel, raised, line, text, muted, accent, accent_hot, button, button_hot, button_down;
         };
         auto light_set = [&](float lift) {
-            return Set{ hsv(h, .05f * s, .93f * lift, .98f), hsv(h, .05f * s, .97f * lift), hsv(h, .06f * s, .85f * lift), hsv(h, .08f * s, .68f * lift, .8f),
+            return ColorSet{ hsv(h, .05f * s, .93f * lift, .98f), hsv(h, .05f * s, .97f * lift), hsv(h, .06f * s, .85f * lift), hsv(h, .08f * s, .68f * lift, .8f),
                 hsv(h, .25f * s, .12f), hsv(h, .12f * s, .42f), hsv(ha, as, .24f), hsv(ha, as, .38f),
                 hsv(ha, as * .4f, .80f), hsv(ha, as * .4f, .73f), hsv(ha, as * .4f, .65f) };
         };
@@ -2685,17 +2685,17 @@ namespace EchoUI {
             auto pressed = [dd](float base, float floor) {
                 return dd >= .5f ? base * std::sqrt(dd) : floor + (base * std::sqrt(.5f) - floor) * dd / .5f;
             };
-            return Set{ hsv(h, .50f * s, value(.10f, 0.f), .98f), hsv(h, .50f * s, value(.145f, .025f)), hsv(h, .51f * s, value(.21f, .06f)), hsv(h, .50f * s, value(.33f, .14f), .8f),
+            return ColorSet{ hsv(h, .50f * s, value(.10f, 0.f), .98f), hsv(h, .50f * s, value(.145f, .025f)), hsv(h, .51f * s, value(.21f, .06f)), hsv(h, .50f * s, value(.33f, .14f), .8f),
                 hsv(h, .09f * s, 1.f), hsv(h, .27f * s, .68f), hsv(ha, as, av), hsv(ha, as * .7f, std::min(1.f, av * 1.08f)),
                 hsv(ha, std::min(1.f, as * 1.28f), pressed(.33f, .1f)), hsv(ha, std::min(1.f, as * 1.25f), pressed(.44f, .16f)), hsv(ha, std::min(1.f, as * 1.22f), pressed(.54f, .22f)) };
         };
-        Set look;
+        ColorSet look;
         night_menu = 0.f;
         if (!palette.light) look = dark_set(d);
         else {
             float fade = night_fade(d);
-            Set day = light_set(std::min(1.f, .85f + .15f * (d - NIGHT_LOW) / (1.f - NIGHT_LOW)));
-            Set dark = dark_set(.8f + (std::min(d, NIGHT_TOP) - .5f) / (NIGHT_TOP - .5f) * .7f);
+            ColorSet day = light_set(std::min(1.f, .85f + .15f * (d - NIGHT_LOW) / (1.f - NIGHT_LOW)));
+            ColorSet dark = dark_set(.8f + (std::min(d, NIGHT_TOP) - .5f) / (NIGHT_TOP - .5f) * .7f);
             ImVec4 under = mix(day.panel, dark.panel, fade);
             auto linear = [](float c) {
                 return std::pow(c, 2.2f);

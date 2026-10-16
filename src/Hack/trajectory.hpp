@@ -26,31 +26,25 @@ public:
 	void detach();
 	void sync_seat(PlayLayer* play);
 
-	CCDrawNode* overlay_node() const {
-		return node;
-	}
-
 	bool attached() const {
-		return node != nullptr;
+		return draw_node != nullptr;
 	}
 
 	bool drawing() const {
-		return busy;
+		return simulating;
 	}
 
 	void set_delta(float dt) {
-		delta = dt;
+		real_step_delta = dt;
 	}
 
-	void note_button(bool player1, bool down);
 	void refresh(PlayLayer* play);
 	void lookahead(PlayLayer* play);
 	void autoclick(PlayLayer* play);
-	int batchable_steps() const { return safe_steps; }
 	int flip_survival(PlayLayer* play, bool player1, int& full, std::vector<CCPoint>* path = nullptr, int limit = 0);
 
 	bool held_next(PlayLayer* play, bool player1) const {
-		return next_click(play, player1) == Click::Hold;
+		return next_click(play, player1) == ClickType::Hold;
 	}
 
 	void invalidate();
@@ -60,7 +54,6 @@ public:
 	}
 	void cancel_job();
 
-	bool survives(PlayLayer* play, bool player1, bool press, int delay);
 
 	bool isFake(PlayerObject* player) const {
 		return player && (player == fake1 || player == fake2);
@@ -78,16 +71,16 @@ public:
 	void dualPortal(GJBaseGameLayer* layer, PlayerObject* player, EffectGameObject* portal, bool on);
 
 private:
-	enum class Click {
+	enum class ClickType {
 		Hold,
 		Swift,
 		Release,
 		Replay
 	};
 
-	struct Key {
+	struct CacheKey {
 		int frame = -1;
-		float p1[6] = {}, p2[6] = {};
+		float player1_state[6] = {}, player2_state[6] = {};
 		bool dual = false;
 		bool held_p1 = false, held_p2 = false;
 		bool dead = false;
@@ -105,67 +98,65 @@ private:
 		float width = 0.f;
 		float zoom = 0.f;
 		float color[4] = {}, swift_color[4] = {}, release_color[4] = {};
-		bool operator==(Key const&) const = default;
+		bool operator==(CacheKey const&) const = default;
 	};
 
-	CCDrawNode* node = nullptr;
-	CCDrawNode* back_node = nullptr;
-	bool busy = false;
-	bool cached = false;
-	Key last_key;
-	float delta = 0.f;
+	CCDrawNode* draw_node = nullptr;
+	CCDrawNode* back_draw_node = nullptr;
+	bool simulating = false;
+	bool drawing_valid = false;
+	CacheKey last_cache_key;
+	float real_step_delta = 0.f;
 	PlayerObject* colliding_fake = nullptr;
 	bool dead_p1 = false, dead_p2 = false;
-	PlayerObject* join_real = nullptr;
-	bool joinable = false;
-	bool pairing = false;
-	bool joined = false;
-	bool parted = false;
-	bool held_p1 = false, held_p2 = false;
+	PlayerObject* dual_partner_real = nullptr;
+	bool can_start_dual = false;
+	bool running_pair = false;
+	bool dual_started = false;
+	bool dual_ended = false;
 	int clicked_frame = -1;
-	int safe_steps = 1;
-	int measured[2] = {}, measured_full = 0;
-	std::vector<CCPoint>* path_sink = nullptr;
-	bool label_only = false;
-	std::unordered_set<EnhancedGameObject*> used_p1, used_p2;
+	int measured_alive_steps[2] = {}, measured_total_steps = 0;
+	std::vector<CCPoint>* survival_path_out = nullptr;
+	bool death_label_only = false;
+	std::unordered_set<EnhancedGameObject*> activated_by_fake1, activated_by_fake2;
 
-	struct SliceHook {
+	struct SliceStateHooks {
 		std::function<void()> save, pause, resume;
 	};
-	std::vector<SliceHook*> slice_hooks;
+	std::vector<SliceStateHooks*> slice_state_hooks;
 	void* job_fiber = nullptr;
 	void* main_fiber = nullptr;
-	bool job_running = false, job_done = false, job_cancel = false, in_job = false, job_swapped = false;
+	bool job_running = false, job_done = false, job_cancel_requested = false, inside_job = false, job_swapped_nodes = false;
 	PlayLayer* job_play = nullptr;
 	int job_frame = -1;
-	unsigned job_drawn = 0;
-	std::chrono::steady_clock::time_point slice_began{};
-	double slice_budget = 0.0;
-	unsigned slice_counter = 0;
+	unsigned job_last_drawn_frame = 0;
+	std::chrono::steady_clock::time_point slice_start{};
+	double slice_budget_seconds = 0.0;
+	unsigned slice_point_count = 0;
 
-	static void job_entry(void* self);
+	static void job_fiber_main(void* self);
 	bool want_slicing(PlayLayer* play) const;
 	void run_slice();
 	void finish_job();
 	void abandon_job();
-	void slice_point();
+	void yield_if_slice_over();
 	void refresh_now(PlayLayer* play);
 
-	void park(PlayerObject* player);
+	void park_fake(PlayerObject* player);
 	PlayerObject* spawn_fake(PlayLayer* play, char const* id);
-	Key make_key(PlayLayer* play) const;
-	void seed(PlayerObject* fake, PlayerObject* real);
+	CacheKey make_cache_key(PlayLayer* play) const;
+	void copy_real_into_fake(PlayerObject* fake, PlayerObject* real);
 	// how many steps the icon lives w/ ts click made right now
-	int click_survival(PlayLayer* play, bool player1, Click click, int& full, int limit = 0);
-	void press(PlayLayer* play, PlayerObject* fake, Click click);
-	Click next_click(PlayLayer* play, bool player1) const;
+	int click_survival(PlayLayer* play, bool player1, ClickType click, int& full, int limit = 0);
+	void press_fake(PlayLayer* play, PlayerObject* fake, ClickType click);
+	ClickType next_click(PlayLayer* play, bool player1) const;
 	template <class F>
-	void predicting(PlayLayer* play, F&& predict);
-	void simulate(PlayLayer* play, bool player1, Click click, bool both, bool draw, int limit, int measure);
-	bool advance(PlayLayer* play, PlayerObject* fake, float step_delta, bool draw, Click click);
-	std::vector<CCPoint> paths[2];
-	void flush_path(PlayLayer* play, PlayerObject* fake, Click click);
+	void run_prediction(PlayLayer* play, F&& predict);
+	void simulate(PlayLayer* play, bool player1, ClickType click, bool both, bool draw, int limit, int measure);
+	bool step_fake(PlayLayer* play, PlayerObject* fake, float step_delta, bool draw, ClickType click);
+	std::vector<CCPoint> unflushed_paths[2];
+	void flush_path(PlayLayer* play, PlayerObject* fake, ClickType click);
 	void draw_death(PlayerObject* fake);
-	ccColor4F color_for(PlayerObject* fake, Click click) const;
-	float lineWidth(PlayLayer* play) const;
+	ccColor4F path_color(PlayerObject* fake, ClickType click) const;
+	float line_width(PlayLayer* play) const;
 };

@@ -18,7 +18,7 @@ bool ReplayIO::read_pod(const std::vector<unsigned char>& data, size_t& cursor, 
     return true;
 }
 
-bool ReplayIO::parse_legacy(const std::vector<unsigned char>& data, int string_bytes, bool with_meta, MacroSnap& out) {
+bool ReplayIO::parse_legacy(const std::vector<unsigned char>& data, int string_bytes, bool with_meta, MacroData& out) {
     if (string_bytes != 24 && string_bytes != 32) return false;
     size_t cursor = 0;
     if (data.size() < (size_t)string_bytes + 8) return false;
@@ -54,7 +54,7 @@ bool ReplayIO::parse_legacy(const std::vector<unsigned char>& data, int string_b
     if (!std::isfinite(end_x) || !std::isfinite(seconds)) return false;
     if (attempts < 0 || attempts > 100000000 || clicks < 0) return false;
     bool debug = name == "DEBUG" || name == "METADBG";
-    MacroSnap parsed;
+    MacroData parsed;
     parsed.format = ReplayIO::format_from_name(name);
     parsed.fps = fps;
     parsed.end_x = end_x;
@@ -100,7 +100,7 @@ std::vector<unsigned char> ReplayIO::read_all(const fs::path& path) {
     return std::vector<unsigned char>(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
 }
 
-bool ReplayIO::read_legacy_echo(const fs::path& path, MacroSnap& out) {
+bool ReplayIO::read_legacy_echo(const fs::path& path, MacroData& out) {
     auto data = ReplayIO::read_all(path);
     const int widths[] = { 32, 24 };
     const bool metas[] = { true, false };

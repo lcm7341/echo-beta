@@ -56,7 +56,7 @@ public:
         return line + "}";
     }
 
-    static void read_seed_and_flags(const matjson::Value& json, MacroSnap& out) {
+    static void read_seed_and_flags(const matjson::Value& json, MacroData& out) {
         if (json.contains("seed")) {
             if (auto text = json["seed"].asString()) {
                 out.lvl_seed = std::strtoull(text.unwrap().c_str(), nullptr, 10);
@@ -78,7 +78,7 @@ public:
         return json["format"].asString().unwrapOr("") == "echo";
     }
 
-    static bool read_current(const matjson::Value& json, MacroSnap& out) {
+    static bool read_current(const matjson::Value& json, MacroData& out) {
         bool debug = json["debug"].asBool().unwrapOr(false);
         std::vector<Frame> inputs;
         std::vector<FramePose> poses;
@@ -117,7 +117,7 @@ public:
         return true;
     }
 
-    static bool read_old(const matjson::Value& json, MacroSnap& out) {
+    static bool read_old(const matjson::Value& json, MacroData& out) {
         auto format = ReplayFormat::Meta;
         if (auto name = json["version"].asString())
             format = ReplayIO::format_from_name(name.unwrap());
@@ -155,10 +155,10 @@ public:
     }
 };
 
-bool ReplayIO::write_echo_json(const fs::path& path, const MacroSnap& snap) {
-    bool debug = snap.save_debug && snap.poses.size() == snap.inputs.size();
-    auto inputs = snap.inputs;
-    auto poses = debug ? snap.poses : std::vector<FramePose>{};
+bool ReplayIO::write_echo_json(const fs::path& path, const MacroData& macro) {
+    bool debug = macro.save_debug && macro.poses.size() == macro.inputs.size();
+    auto inputs = macro.inputs;
+    auto poses = debug ? macro.poses : std::vector<FramePose>{};
     std::vector<size_t> order(inputs.size());
     for (size_t i = 0; i < order.size(); ++i)
         order[i] = i;
@@ -183,24 +183,24 @@ bool ReplayIO::write_echo_json(const fs::path& path, const MacroSnap& snap) {
     file << "{\n";
     file << "\t\"format\": \"echo\",\n";
     file << fmt::format("\t\"version\": {},\n", EchoJson::version);
-    file << fmt::format("\t\"fps\": {},\n", EchoJson::number(snap.fps));
-    if (!snap.rates.empty()) {
+    file << fmt::format("\t\"fps\": {},\n", EchoJson::number(macro.fps));
+    if (!macro.rates.empty()) {
         file << "\t\"rates\": [\n";
-        for (size_t i = 0; i < snap.rates.size(); ++i) {
-            file << fmt::format("\t\t{{\"frame\": {}, \"fps\": {}}}", snap.rates[i].frame, EchoJson::number(snap.rates[i].fps));
-            file << (i + 1 == snap.rates.size() ? "\n" : ",\n");
+        for (size_t i = 0; i < macro.rates.size(); ++i) {
+            file << fmt::format("\t\t{{\"frame\": {}, \"fps\": {}}}", macro.rates[i].frame, EchoJson::number(macro.rates[i].fps));
+            file << (i + 1 == macro.rates.size() ? "\n" : ",\n");
         }
         file << "\t],\n";
     }
-    file << fmt::format("\t\"endX\": {},\n", EchoJson::number(snap.end_x));
-    file << fmt::format("\t\"recordingSeconds\": {},\n", EchoJson::number(snap.recording_seconds));
-    file << fmt::format("\t\"attempts\": {},\n", snap.attempts);
-    if (snap.lvl_seed_known)
-        file << fmt::format("\t\"seed\": \"{}\",\n", snap.lvl_seed);
-    if (snap.unrounded) file << "\t\"velocity_unrounding\": true,\n";
-    if (snap.silicate_variance) file << "\t\"silicate_variance\": true,\n";
-    if (snap.ldm_known)
-        file << fmt::format("\t\"low_detail_mode\": {},\n", snap.ldm);
+    file << fmt::format("\t\"endX\": {},\n", EchoJson::number(macro.end_x));
+    file << fmt::format("\t\"recordingSeconds\": {},\n", EchoJson::number(macro.recording_seconds));
+    file << fmt::format("\t\"attempts\": {},\n", macro.attempts);
+    if (macro.lvl_seed_known)
+        file << fmt::format("\t\"seed\": \"{}\",\n", macro.lvl_seed);
+    if (macro.unrounded) file << "\t\"velocity_unrounding\": true,\n";
+    if (macro.silicate_variance) file << "\t\"silicate_variance\": true,\n";
+    if (macro.ldm_known)
+        file << fmt::format("\t\"low_detail_mode\": {},\n", macro.ldm);
     file << fmt::format("\t\"debug\": {},\n", debug);
     file << "\t\"inputs\": [";
     for (size_t i = 0; i < inputs.size(); ++i) {
@@ -210,7 +210,7 @@ bool ReplayIO::write_echo_json(const fs::path& path, const MacroSnap& snap) {
     return (bool)file;
 }
 
-bool ReplayIO::read_echo_json(const fs::path& path, MacroSnap& out) {
+bool ReplayIO::read_echo_json(const fs::path& path, MacroData& out) {
     std::ifstream file(path);
     auto parsed = matjson::Value::parse(file);
     if (!parsed) return false;

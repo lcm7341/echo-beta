@@ -12,7 +12,7 @@
 
 using namespace geode::prelude;
 
-class $modify(EchoQuietLayer, GJBaseGameLayer) {
+class $modify(EchoNoEffectsBaseLayer, GJBaseGameLayer) {
     void playExitDualEffect(PlayerObject* player) {
         auto& logic = Logic::get();
         if (logic.no_effects || (m_playerDied && logic.disable_death_effect)) return;
@@ -20,35 +20,35 @@ class $modify(EchoQuietLayer, GJBaseGameLayer) {
     }
 };
 
-class $modify(EchoQuietPlay, PlayLayer) {
+class $modify(EchoNoEffectsPlayLayer, PlayLayer) {
     void playGravityEffect(bool flip) {
         if (Logic::get().no_effects) return;
         PlayLayer::playGravityEffect(flip);
     }
 };
 
-class $modify(EchoQuietTrigger, EffectGameObject) {
+class $modify(EchoNoEffectsTrigger, EffectGameObject) {
     void playTriggerEffect() {
         if (Logic::get().no_effects) return;
         EffectGameObject::playTriggerEffect();
     }
 };
 
-class $modify(EchoQuietWave, CCCircleWave) {
+class $modify(EchoNoEffectsCircleWave, CCCircleWave) {
     void draw() {
         if (Logic::get().no_effects && PlayLayer::get()) return;
         CCCircleWave::draw();
     }
 };
 
-class $modify(EchoQuietParticle, ParticleGameObject) {
+class $modify(EchoNoEffectsParticle, ParticleGameObject) {
     void updateParticle() {
         ParticleGameObject::updateParticle();
         if (Logic::get().no_effects && PlayLayer::get()) this->setVisible(false);
     }
 };
 
-class $modify(EchoEndLayer, EndLevelLayer) {
+class $modify(EchoHideEndscreen, EndLevelLayer) {
     void showLayer(bool instant) {
         if (Logic::get().hide_endscreen) return;
         EndLevelLayer::showLayer(instant);

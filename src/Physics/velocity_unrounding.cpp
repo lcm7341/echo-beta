@@ -12,17 +12,17 @@ using namespace geode::prelude;
 // changes physics so the macro remembers if it was on (Logic::macro_unrounded)
 #ifdef GEODE_IS_WINDOWS
 // each block rounds xmm to 1/1000. nop it & the register keeps the real value
-struct Site {
+struct PatchSite {
     std::uintptr_t rva;
     std::size_t size;
 };
 
 const std::array SITES{
-    Site{ 0x38c329, 0x24 }, // updateJump
-    Site{ 0x213ea2, 0x32 }, // checkCollisions
-    Site{ 0x38dac7, 0x38 }, // postCollision
-    Site{ 0x39323b, 0x40 }, // collidedWithObjectInternal
-    Site{ 0x39ff18, 0x32 }, // boostPlayer
+    PatchSite{ 0x38c329, 0x24 }, // updateJump
+    PatchSite{ 0x213ea2, 0x32 }, // checkCollisions
+    PatchSite{ 0x38dac7, 0x38 }, // postCollision
+    PatchSite{ 0x39323b, 0x40 }, // collidedWithObjectInternal
+    PatchSite{ 0x39ff18, 0x32 }, // boostPlayer
 };
 #endif
 static std::vector<Patch*> patches;

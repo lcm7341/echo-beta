@@ -9,8 +9,8 @@ using namespace cocos2d;
 namespace Orbs {
 	struct Pose {
 		GameObject* object = nullptr;
-		CCPoint pos;
-		float rotation = 0.f, rotationX = 0.f, rotationY = 0.f;
+		CCPoint position;
+		float rotation = 0.f, rotation_x = 0.f, rotation_y = 0.f;
 	};
 
 	// where each orb near a player is, so the trajectory can tell when one moved
@@ -24,12 +24,10 @@ namespace Orbs {
 	int claim_click(GJBaseGameLayer* layer, PlayerObject* player, bool player2);
 	void begin_push(PlayerObject* player);
 	void end_push(PlayerObject* player);
-	void note_jump_presses(PlayLayer* play);
 	void begin_step();
 	void arm_tool(bool on);
-	void commit_tool_hits();
 	bool blockHoldRing(PlayerObject* player, GameObject* object);
-	void click_pads(PlayLayer* play, PlayerObject* player, int objectType, GameObject* pad);
+	void click_pads(PlayLayer* play, PlayerObject* player, int object_type, GameObject* pad);
 	void flush_pads(PlayLayer* play);
 	void note_dash(PlayLayer* play, PlayerObject* player, GameObject* ring);
 	void click_fake_dash(PlayerObject* player, bool player2);

@@ -8,7 +8,7 @@ using namespace geode::prelude;
 static bool g_cheated = false;
 static bool g_applied = false;
 static bool g_saved_test_mode = false;
-static std::vector<std::string_view> g_used;
+static std::vector<std::string_view> g_used_cheats;
 
 std::vector<std::string_view> Logic::active_cheats() const {
     std::vector<std::string_view> out;
@@ -52,7 +52,7 @@ std::vector<std::string_view> Logic::active_cheats() const {
 }
 
 const std::vector<std::string_view>& Logic::attempt_cheats() const {
-    return g_used;
+    return g_used_cheats;
 }
 
 bool Logic::attempt_cheated() const {
@@ -64,7 +64,7 @@ void Logic::update_safe_mode(PlayLayer* play) {
     if (!safe_mode) return;
     for (auto name : active_cheats()) {
         g_cheated = true;
-        if (std::ranges::find(g_used, name) == g_used.end()) g_used.push_back(name);
+        if (std::ranges::find(g_used_cheats, name) == g_used_cheats.end()) g_used_cheats.push_back(name);
     }
 }
 
@@ -77,14 +77,14 @@ void Logic::hold_safe_mode_test_mode(PlayLayer* play) {
 
 void Logic::end_safe_mode_attempt(PlayLayer* play) {
     g_cheated = false;
-    g_used.clear();
+    g_used_cheats.clear();
     if (g_applied && play) play->m_isTestMode = g_saved_test_mode;
     g_applied = false;
 }
 
 void Logic::reset_safe_mode() {
     g_cheated = false;
-    g_used.clear();
+    g_used_cheats.clear();
     g_applied = false;
 }
 

@@ -8,33 +8,35 @@
 
 using namespace geode::prelude;
 
-namespace phys {
-    static bool fast_pos = false, fast_live = false;
+#define PLAYER_SET_POSITION 0x39c640
 
-    bool fast_prediction_pos() {
-        return fast_pos;
+namespace phys {
+    static bool skip_prediction_art = false, skip_live_art = false;
+
+    bool can_skip_prediction_art() {
+        return skip_prediction_art;
     }
 
-    bool fast_live_pos() {
-        return fast_live;
+    bool can_defer_player_art() {
+        return skip_live_art;
     }
 
     void prepare_prediction_art() {
 #ifdef GEODE_IS_WINDOWS
-        fast_pos = fast_live = true;
-        const std::string_view VISUAL_ONLY[] = { "cvolton.misc_bugfixes" };
+        skip_prediction_art = skip_live_art = true;
+        const std::string_view VISUAL_ONLY_MODS[] = { "cvolton.misc_bugfixes" };
         for (auto* mod : Loader::get()->getAllMods()) {
             if (mod == Mod::get()) continue;
-            bool visual = std::ranges::find(VISUAL_ONLY, mod->getID()) != std::end(VISUAL_ONLY);
+            bool visual_only = std::ranges::find(VISUAL_ONLY_MODS, mod->getID()) != std::end(VISUAL_ONLY_MODS);
             for (auto* hook : mod->getHooks()) {
-                if (hook->isEnabled() && hook->getAddress() == geode::base::get() + 0x39c640) {
-                    fast_live = false;
-                    if (!visual) fast_pos = false;
+                if (hook->isEnabled() && hook->getAddress() == geode::base::get() + PLAYER_SET_POSITION) {
+                    skip_live_art = false;
+                    if (!visual_only) skip_prediction_art = false;
                 }
             }
         }
 #else
-        fast_pos = fast_live = false;
+        skip_prediction_art = skip_live_art = false;
 #endif
     }
 }

@@ -22,22 +22,22 @@ $execute {
     using namespace GamePatches;
 #ifdef GEODE_IS_ANDROID64
     // fuck it we ball
-    if (matches(point_address, point_original)) {
-        (void)install(point_address, point_replacement);
+    if (matches(point_copy_address, point_copy_original)) {
+        (void)install(point_copy_address, point_copy_replacement);
     }
-    if (matches(rings_address, rings_original)) {
+    if (matches(ring_clear_address, ring_clear_original)) {
         // +4 because only the cbz changes
-        (void)install(rings_address + 4, rings_replacement);
+        (void)install(ring_clear_address + 4, ring_clear_replacement);
     }
 #endif
 #ifdef GEODE_IS_WINDOWS
     if (matches(event_lookup_signature_address, event_lookup_original)) {
         (void)install(event_lookup_address, event_lookup_replacement);
     }
-    if (matches(queue_address, queue_original) && matches(queue_cave_address, queue_cave_original)) {
+    if (matches(queue_move_address, queue_move_original) && matches(queue_move_cave_address, queue_move_cave_original)) {
         // cave goes in first or the call would land on int3s
-        auto cave = install(queue_cave_address, queue_cave_replacement);
-        if (cave && !install(queue_address, queue_replacement)) {
+        auto cave = install(queue_move_cave_address, queue_move_cave_replacement);
+        if (cave && !install(queue_move_address, queue_move_replacement)) {
             // the call didnt go in, so take the cave back out
             (void)cave.unwrap()->disable();
         }

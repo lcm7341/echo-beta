@@ -9,7 +9,7 @@ using namespace geode::prelude;
 
 #ifdef GEODE_IS_WINDOWS
 template <class T>
-static T* resolve(std::uintptr_t site, std::size_t operand, std::size_t length, std::initializer_list<unsigned char> prefix, std::uintptr_t expected) {
+static T* address_from_instruction(std::uintptr_t site, std::size_t operand, std::size_t length, std::initializer_list<unsigned char> prefix, std::uintptr_t expected) {
     const auto* code = reinterpret_cast<const unsigned char*>(geode::base::get() + site);
     std::size_t i = 0;
     for (auto byte : prefix) {
@@ -25,7 +25,7 @@ static T* resolve(std::uintptr_t site, std::size_t operand, std::size_t length, 
 
 #ifdef GEODE_IS_ANDROID64
 template <class T>
-static T* known(std::uintptr_t data, std::initializer_list<std::pair<std::uintptr_t, unsigned>> code) {
+static T* address_if_code_matches(std::uintptr_t data, std::initializer_list<std::pair<std::uintptr_t, unsigned>> code) {
     auto base = geode::base::get();
     for (const auto& [offset, word] : code) {
         if (*reinterpret_cast<const unsigned*>(base + offset) != word) return nullptr;
@@ -37,10 +37,10 @@ const unsigned long long VARIANCE_SEED = 0;
 
 int* unique_id_counter() {
 #ifdef GEODE_IS_WINDOWS
-    static int* const counter = resolve<int>(0x18de5b, 2, 6, { 0x8b, 0x05 }, 0x6ba158);
+    static int* const counter = address_from_instruction<int>(0x18de5b, 2, 6, { 0x8b, 0x05 }, 0x6ba158);
     return counter;
 #elif defined(GEODE_IS_ANDROID64)
-    static int* const counter = known<int>(0x122f018, { { 0x64225c, 0xb0005f62 }, { 0x642260, 0xb9401841 }, { 0x642270, 0xb9001843 } });
+    static int* const counter = address_if_code_matches<int>(0x122f018, { { 0x64225c, 0xb0005f62 }, { 0x642260, 0xb9401841 }, { 0x642270, 0xb9001843 } });
     return counter;
 #else
     return nullptr;
@@ -49,10 +49,10 @@ int* unique_id_counter() {
 
 unsigned long long* variance_generator() {
 #ifdef GEODE_IS_WINDOWS
-    static unsigned long long* const generator = resolve<unsigned long long>(0x18ddec, 3, 11, { 0x48, 0x69, 0x05 }, 0x6c2ee0);
+    static unsigned long long* const generator = address_from_instruction<unsigned long long>(0x18ddec, 3, 11, { 0x48, 0x69, 0x05 }, 0x6c2ee0);
     return generator;
 #elif defined(GEODE_IS_ANDROID64)
-    static unsigned long long* const generator = known<unsigned long long>(0x1242080,
+    static unsigned long long* const generator = address_if_code_matches<unsigned long long>(0x1242080,
         { { 0x64336c, 0xf0005fe3 }, { 0x643374, 0x9101a063 }, { 0x64338c, 0xf9400c62 }, { 0x6433cc, 0xf9000c62 } });
     return generator;
 #else

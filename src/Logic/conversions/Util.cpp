@@ -128,19 +128,19 @@ std::string ReplayIO::clock(double seconds) {
     return fmt::format("{:02}:{:02}:{:02}", hours, minutes, secs);
 }
 
-void ReplayIO::adopt_inputs(MacroSnap& out, std::vector<Frame> inputs, float fps, std::vector<FramePose> poses) {
+void ReplayIO::adopt_inputs(MacroData& out, std::vector<Frame> inputs, float fps, std::vector<FramePose> poses) {
     out.inputs = std::move(inputs);
     out.poses = std::move(poses);
     if (out.poses.size() != out.inputs.size()) out.poses.clear();
     out.fps = std::isfinite(fps) && fps > 0.f ? fps : 240.f;
 }
 
-double ReplayIO::snap_sample_rate(const MacroSnap& snap) {
-    return (double)std::max(snap.fps, step_patched ? 1.f : VANILLA_TPS);
+double ReplayIO::macro_sample_rate(const MacroData& macro) {
+    return (double)std::max(macro.fps, step_patched ? 1.f : VANILLA_TPS);
 }
 
-std::vector<Frame> ReplayIO::sorted_inputs(const MacroSnap& snap) {
-    auto inputs = snap.inputs;
+std::vector<Frame> ReplayIO::sorted_inputs(const MacroData& macro) {
+    auto inputs = macro.inputs;
     std::stable_sort(inputs.begin(), inputs.end(), [](const Frame& a, const Frame& b) {
         return a.number < b.number;
     });
@@ -153,7 +153,6 @@ std::vector<Frame> ReplayIO::sorted_inputs(const MacroSnap& snap) {
 
 void ReplayIO::finish_load(const std::string& detail) {
     auto& logic = Logic::get();
-    logic.accuracy = 1;
     if (logic.is_recording()) logic.state = RunState::Playing;
     else if (!logic.is_playing()) logic.state = RunState::Playing;
     logic.replay_pos = 0;

@@ -835,11 +835,11 @@ bool Logic::dispatch_setting_key(std::string_view key, bool down) {
     }
     else if (key == "key-speedhack") {
         if (std::abs(speedhack - 1.f) > 0.05f) {
-            speedhack_memory = speedhack;
+            saved_speedhack = speedhack;
             speedhack = 1.f;
         }
         else {
-            float back = speedhack_memory;
+            float back = saved_speedhack;
             if (!(back >= 0.01f) || std::abs(back - 1.f) <= 0.05f) return false;
             speedhack = back;
         }
@@ -984,7 +984,7 @@ $execute {
         if (!imgui.isInitialized() || !imgui.isVisible()) return false;
         auto& io = ImGui::GetIO();
         if (!io.WantCaptureMouse) return false;
-        double scale = echo_scroll_is_precise() ? .1 : 1.;
+        double scale = scroll_is_precise() ? .1 : 1.;
         io.AddMouseSourceEvent(ImGuiMouseSource_Mouse);
         io.AddMouseWheelEvent((float)(x * scale), (float)(y * scale));
         return true;
@@ -999,7 +999,7 @@ $execute {
     });
 }
 
-PickerState& GUI::picker() {
+ReplayPicker& GUI::picker() {
     return GUI::get().replay_picker;
 }
 

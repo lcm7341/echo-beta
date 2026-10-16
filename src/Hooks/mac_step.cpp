@@ -37,7 +37,7 @@ static void begin_step(GJBaseGameLayer* self) {
     auto& logic = Logic::get();
     g_step.open = self;
     g_step.half_tick = *(reinterpret_cast<const unsigned char*>(self) + HALF_TICK_OFFSET) != 0;
-    g_step.ran = !logic.refresh_only && !logic.predicting;
+    g_step.ran = !logic.refreshing_visuals && !logic.predicting;
     g_step.layer = nullptr;
     if (!g_step.ran) return;
     g_step.layer = step_begin(self);

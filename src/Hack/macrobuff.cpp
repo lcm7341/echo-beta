@@ -15,152 +15,150 @@ using namespace geode::prelude;
 OBB2D* live_oriented_box(GameObject* object);
 bool rotation_is_right_angle(GameObject* object);
 
-namespace {
-    const int RED_TINT_TAG = 60464;
-    const int RECHECK_EVERY_FRAMES = 10;
+static const int RED_TINT_TAG = 60464;
+static const int RECHECK_EVERY_FRAMES = 10;
 
-    using Corners = std::array<CCPoint, 4>;
+using BoxCorners = std::array<CCPoint, 4>;
 
-    struct PlayerHitbox {
-        CCRect outer, inner;
-        Corners rotated{};
-        bool is_wave = false;
-        bool dies_on_head_hit = false;
-        bool is_upside_down = false;
-    };
+struct PlayerHitbox {
+    CCRect outer, inner;
+    BoxCorners rotated{};
+    bool is_wave = false;
+    bool dies_on_head_hit = false;
+    bool is_upside_down = false;
+};
 
-    struct Placement {
-        CCRect hitbox;
-        float rotation = 0.f;
-    };
+struct MacrobuffPlacement {
+    CCRect hitbox;
+    float rotation = 0.f;
+};
 
-    struct MacrobuffState {
-        std::vector<PlayerHitbox> recording;
-        std::vector<PlayerHitbox> path;
-        std::map<GameObject*, Placement> placed_during_playtest;
-        CCRect path_bounds;
-        LevelEditorLayer* editor = nullptr;
-        bool player_died = false;
-        bool tint_on = false;
-        int frames_until_recheck = 0;
-    };
+struct MacrobuffState {
+    std::vector<PlayerHitbox> recording;
+    std::vector<PlayerHitbox> path;
+    std::map<GameObject*, MacrobuffPlacement> placed_during_playtest;
+    CCRect path_bounds;
+    LevelEditorLayer* editor = nullptr;
+    bool player_died = false;
+    bool tint_on = false;
+    int frames_until_recheck = 0;
+};
 
-    static MacrobuffState g_macrobuff;
+static MacrobuffState g_macrobuff;
 
-    bool is_hazard(GameObject* object) {
-        return object->m_objectType == GameObjectType::Hazard || object->m_objectType == GameObjectType::AnimatedHazard;
-    }
+static bool is_hazard(GameObject* object) {
+    return object->m_objectType == GameObjectType::Hazard || object->m_objectType == GameObjectType::AnimatedHazard;
+}
 
-    bool is_solid_block(GameObject* object) {
-        return object->m_objectType == GameObjectType::Solid && !object->m_isPassable;
-    }
+static bool is_solid_block(GameObject* object) {
+    return object->m_objectType == GameObjectType::Solid && !object->m_isPassable;
+}
 
-    bool can_kill_player(GameObject* object) {
-        if (!object || object->m_isDisabled || object->m_isGroupDisabled || object->m_isNoTouch)
-            return false;
-        return is_hazard(object) || is_solid_block(object);
-    }
-
-    Corners corners_of(CCRect const& rect) {
-        return { rect.origin, ccp(rect.getMaxX(), rect.getMinY()), ccp(rect.getMaxX(), rect.getMaxY()), ccp(rect.getMinX(), rect.getMaxY()) };
-    }
-
-    bool rotated_box_touches(Corners const& box, Corners const& player) {
-        for (int side = 0; side < 4; ++side) {
-            CCPoint edge = box[(side + 1) % 4] - box[side];
-            CCPoint normal{ edge.y, -edge.x };
-            float boxMin = INFINITY, boxMax = -INFINITY, playerMin = INFINITY, playerMax = -INFINITY;
-            for (int corner = 0; corner < 4; ++corner) {
-                float b = ccpDot(box[corner], normal);
-                float p = ccpDot(player[corner], normal);
-                boxMin = std::min(boxMin, b);
-                boxMax = std::max(boxMax, b);
-                playerMin = std::min(playerMin, p);
-                playerMax = std::max(playerMax, p);
-            }
-            if (boxMax < playerMin || playerMax < boxMin) return false;
-        }
-        return true;
-    }
-
-    bool circle_touches_rect(CCPoint center, float radius, CCRect const& rect) {
-        float dx = center.x - std::clamp(center.x, rect.getMinX(), rect.getMaxX());
-        float dy = center.y - std::clamp(center.y, rect.getMinY(), rect.getMaxY());
-        return dx * dx + dy * dy <= radius * radius;
-    }
-
-    bool is_rotated(GameObject* object) {
-        return object->m_shouldUseOuterOb || !rotation_is_right_angle(object);
-    }
-
-    float scaled_radius(GameObject* object) {
-        return object->m_objectRadius * std::max(std::abs(object->m_scaleX), std::abs(object->m_scaleY));
-    }
-
-    bool rotated_box_also_touches(GameObject* object, Corners const& player) {
-        if (!is_rotated(object)) return true;
-        auto* box = live_oriented_box(object);
-        if (!box) return true;
-        return rotated_box_touches({ box->m_corners[0], box->m_corners[1], box->m_corners[2], box->m_corners[3] }, player);
-    }
-
-    bool hazard_touches(GameObject* object, CCRect const& hitbox, PlayerHitbox const& player, bool fix_radius) {
-        if (object->m_objectRadius > 0.f) {
-            CCPoint center = object->getPosition();
-            float radius = scaled_radius(object);
-            bool touching = fix_radius ? ccpDistance(center, ccp(player.outer.getMidX(), player.outer.getMidY())) <= radius + std::abs(player.outer.size.width) * 0.5f
-                                       : circle_touches_rect(center, radius, player.outer);
-            if (!touching) return false;
-            return fix_radius || rotated_box_also_touches(object, player.rotated);
-        }
-        return hitbox.intersectsRect(player.outer) && rotated_box_also_touches(object, player.rotated);
-    }
-
-    bool block_kills(GameObject* object, CCRect const& hitbox, PlayerHitbox const& player) {
-        if (hitbox.intersectsRect(player.inner))
-            return rotated_box_also_touches(object, corners_of(player.inner));
-        if (!player.dies_on_head_hit || !hitbox.intersectsRect(player.outer)) return false;
-        bool above_head = player.is_upside_down ? hitbox.getMaxY() < player.outer.getMidY() : hitbox.getMinY() > player.outer.getMidY();
-        return above_head && rotated_box_also_touches(object, player.rotated);
-    }
-
-    bool would_kill_player(GameObject* object, CCRect const& hitbox, PlayerHitbox const& player, bool fix_radius) {
-        if (is_hazard(object) || player.is_wave)
-            return hazard_touches(object, hitbox, player, fix_radius);
-        return block_kills(object, hitbox, player);
-    }
-
-    bool kills_somewhere_on_path(GameObject* object, std::vector<PlayerHitbox> const& path, bool fix_radius) {
-        CCRect hitbox = Logic::object_hitbox(object);
-        float reach = object->m_objectRadius > 0.f ? scaled_radius(object) : 0.f;
-        CCRect nearby(hitbox.getMinX() - reach, hitbox.getMinY() - reach, hitbox.size.width + reach * 2.f, hitbox.size.height + reach * 2.f);
-        for (auto const& player : path) {
-            if (nearby.intersectsRect(player.outer) && would_kill_player(object, hitbox, player, fix_radius))
-                return true;
-        }
+static bool can_kill_player(GameObject* object) {
+    if (!object || object->m_isDisabled || object->m_isGroupDisabled || object->m_isNoTouch)
         return false;
-    }
+    return is_hazard(object) || is_solid_block(object);
+}
 
-    bool moved_since_playtest(GameObject* object, MacrobuffState const& state) {
-        auto before = state.placed_during_playtest.find(object);
-        if (before == state.placed_during_playtest.end()) return true;
-        CCRect now = Logic::object_hitbox(object);
-        return !now.equals(before->second.hitbox) || object->getRotation() != before->second.rotation;
-    }
+static BoxCorners corners_of(CCRect const& rect) {
+    return { rect.origin, ccp(rect.getMaxX(), rect.getMinY()), ccp(rect.getMaxX(), rect.getMaxY()), ccp(rect.getMinX(), rect.getMaxY()) };
+}
 
-    void show_red_tint(bool on) {
-        auto* scene = CCDirector::sharedDirector()->getRunningScene();
-        auto* tint = scene ? scene->getChildByTag(RED_TINT_TAG) : nullptr;
-        if (!on) {
-            if (tint) tint->removeFromParent();
-            return;
+static bool rotated_box_touches(BoxCorners const& box, BoxCorners const& player) {
+    for (int side = 0; side < 4; ++side) {
+        CCPoint edge = box[(side + 1) % 4] - box[side];
+        CCPoint normal{ edge.y, -edge.x };
+        float box_min = INFINITY, box_max = -INFINITY, player_min = INFINITY, player_max = -INFINITY;
+        for (int corner = 0; corner < 4; ++corner) {
+            float b = ccpDot(box[corner], normal);
+            float p = ccpDot(player[corner], normal);
+            box_min = std::min(box_min, b);
+            box_max = std::max(box_max, b);
+            player_min = std::min(player_min, p);
+            player_max = std::max(player_max, p);
         }
-        if (!scene || tint) return;
-        auto win = CCDirector::sharedDirector()->getWinSize();
-        auto* layer = CCLayerColor::create({ 255, 0, 0, 70 }, win.width, win.height);
-        layer->setTag(RED_TINT_TAG);
-        scene->addChild(layer, 1000);
+        if (box_max < player_min || player_max < box_min) return false;
     }
+    return true;
+}
+
+static bool circle_touches_rect(CCPoint center, float radius, CCRect const& rect) {
+    float dx = center.x - std::clamp(center.x, rect.getMinX(), rect.getMaxX());
+    float dy = center.y - std::clamp(center.y, rect.getMinY(), rect.getMaxY());
+    return dx * dx + dy * dy <= radius * radius;
+}
+
+static bool is_rotated(GameObject* object) {
+    return object->m_shouldUseOuterOb || !rotation_is_right_angle(object);
+}
+
+static float scaled_radius(GameObject* object) {
+    return object->m_objectRadius * std::max(std::abs(object->m_scaleX), std::abs(object->m_scaleY));
+}
+
+static bool rotated_box_also_touches(GameObject* object, BoxCorners const& player) {
+    if (!is_rotated(object)) return true;
+    auto* box = live_oriented_box(object);
+    if (!box) return true;
+    return rotated_box_touches({ box->m_corners[0], box->m_corners[1], box->m_corners[2], box->m_corners[3] }, player);
+}
+
+static bool hazard_touches(GameObject* object, CCRect const& hitbox, PlayerHitbox const& player, bool fix_radius) {
+    if (object->m_objectRadius > 0.f) {
+        CCPoint center = object->getPosition();
+        float radius = scaled_radius(object);
+        bool touching = fix_radius ? ccpDistance(center, ccp(player.outer.getMidX(), player.outer.getMidY())) <= radius + std::abs(player.outer.size.width) * 0.5f
+                                   : circle_touches_rect(center, radius, player.outer);
+        if (!touching) return false;
+        return fix_radius || rotated_box_also_touches(object, player.rotated);
+    }
+    return hitbox.intersectsRect(player.outer) && rotated_box_also_touches(object, player.rotated);
+}
+
+static bool block_kills(GameObject* object, CCRect const& hitbox, PlayerHitbox const& player) {
+    if (hitbox.intersectsRect(player.inner))
+        return rotated_box_also_touches(object, corners_of(player.inner));
+    if (!player.dies_on_head_hit || !hitbox.intersectsRect(player.outer)) return false;
+    bool above_head = player.is_upside_down ? hitbox.getMaxY() < player.outer.getMidY() : hitbox.getMinY() > player.outer.getMidY();
+    return above_head && rotated_box_also_touches(object, player.rotated);
+}
+
+static bool would_kill_player(GameObject* object, CCRect const& hitbox, PlayerHitbox const& player, bool fix_radius) {
+    if (is_hazard(object) || player.is_wave)
+        return hazard_touches(object, hitbox, player, fix_radius);
+    return block_kills(object, hitbox, player);
+}
+
+static bool kills_somewhere_on_path(GameObject* object, std::vector<PlayerHitbox> const& path, bool fix_radius) {
+    CCRect hitbox = Logic::object_hitbox(object);
+    float reach = object->m_objectRadius > 0.f ? scaled_radius(object) : 0.f;
+    CCRect nearby(hitbox.getMinX() - reach, hitbox.getMinY() - reach, hitbox.size.width + reach * 2.f, hitbox.size.height + reach * 2.f);
+    for (auto const& player : path) {
+        if (nearby.intersectsRect(player.outer) && would_kill_player(object, hitbox, player, fix_radius))
+            return true;
+    }
+    return false;
+}
+
+static bool moved_since_playtest(GameObject* object, MacrobuffState const& state) {
+    auto before = state.placed_during_playtest.find(object);
+    if (before == state.placed_during_playtest.end()) return true;
+    CCRect now = Logic::object_hitbox(object);
+    return !now.equals(before->second.hitbox) || object->getRotation() != before->second.rotation;
+}
+
+static void show_red_tint(bool on) {
+    auto* scene = CCDirector::sharedDirector()->getRunningScene();
+    auto* tint = scene ? scene->getChildByTag(RED_TINT_TAG) : nullptr;
+    if (!on) {
+        if (tint) tint->removeFromParent();
+        return;
+    }
+    if (!scene || tint) return;
+    auto win = CCDirector::sharedDirector()->getWinSize();
+    auto* layer = CCLayerColor::create({ 255, 0, 0, 70 }, win.width, win.height);
+    layer->setTag(RED_TINT_TAG);
+    scene->addChild(layer, 1000);
 }
 
 void Logic::clear_macrobuff_samples() {

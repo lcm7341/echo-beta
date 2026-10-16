@@ -13,7 +13,7 @@
 
 namespace fs = std::filesystem;
 
-struct MacroSnap {
+struct MacroData {
 	std::string name;
 	std::vector<Frame> inputs;
 	std::vector<FramePose> poses;
@@ -30,10 +30,10 @@ struct MacroSnap {
 	bool ldm = false, ldm_known = false;
 	std::vector<RateChange> rates;
 	std::string highest_cps = "P1: 0";
-	std::vector<CpsNote> cps_notes_p1, cps_notes_p2;
+	std::vector<CpsBreak> cps_notes_p1, cps_notes_p2;
 };
 
-class ByteCursor {
+class ByteReader {
 public:
 	std::vector<unsigned char> data;
 	size_t at = 0;
@@ -80,7 +80,7 @@ public:
 	}
 };
 
-class ByteSink {
+class ByteWriter {
 public:
 	std::vector<unsigned char> data;
 
@@ -130,39 +130,39 @@ public:
 	static bool debug_format(ReplayFormat format);
 	static std::string clock(double seconds);
 	static void finish_load(const std::string& detail);
-	static bool write_echo_json(const fs::path& path, const MacroSnap& snap);
-	static bool read_echo_json(const fs::path& path, MacroSnap& out);
+	static bool write_echo_json(const fs::path& path, const MacroData& macro);
+	static bool read_echo_json(const fs::path& path, MacroData& out);
 	template <typename T>
 	static bool read_pod(const std::vector<unsigned char>& data, size_t& cursor, T& value);
-	static bool parse_legacy(const std::vector<unsigned char>& data, int string_bytes, bool with_meta, MacroSnap& out);
+	static bool parse_legacy(const std::vector<unsigned char>& data, int string_bytes, bool with_meta, MacroData& out);
 	static std::vector<unsigned char> read_all(const fs::path& path);
-	static bool read_legacy_echo(const fs::path& path, MacroSnap& out);
-	static std::optional<MacroSnap> load_snap(const fs::path& path);
-	static bool read_any(const fs::path& path, MacroSnap& out);
-	static bool save_as(const fs::path& path, bool (*write)(const fs::path&, const MacroSnap&));
-	static bool save_snap(const fs::path& path, MacroSnap snap, bool (*write)(const fs::path&, const MacroSnap&));
+	static bool read_legacy_echo(const fs::path& path, MacroData& out);
+	static std::optional<MacroData> load_macro(const fs::path& path);
+	static bool read_any(const fs::path& path, MacroData& out);
+	static bool save_as(const fs::path& path, bool (*write)(const fs::path&, const MacroData&));
+	static bool save_macro(const fs::path& path, MacroData macro, bool (*write)(const fs::path&, const MacroData&));
 	static bool is_autosave(const fs::path& path);
-	static MacroSnap capture_macro();
-	static void restore_macro(const MacroSnap& snap);
+	static MacroData capture_macro();
+	static void restore_macro(const MacroData& macro);
 	static bool is_echo_file(const fs::path& path);
 	static std::string import_stem(const fs::path& path);
-	static void adopt_inputs(MacroSnap& out, std::vector<Frame> inputs, float fps, std::vector<FramePose> poses = {});
-	static std::vector<Frame> sorted_inputs(const MacroSnap& snap);
-	static double snap_sample_rate(const MacroSnap& snap);
+	static void adopt_inputs(MacroData& out, std::vector<Frame> inputs, float fps, std::vector<FramePose> poses = {});
+	static std::vector<Frame> sorted_inputs(const MacroData& macro);
+	static double macro_sample_rate(const MacroData& macro);
 	static int button_code(int button);
 	static int code_button(int code);
 	template <typename T>
 	static void write_pod(std::ostream& file, const T& value);
 	template <typename T>
 	static bool read_pod(std::istream& file, T& value);
-	static bool write_echo(const fs::path& path, const MacroSnap& snap);
-	static bool read_echo(const fs::path& path, MacroSnap& out);
-	static bool read_plain(const fs::path& path, MacroSnap& out);
-	static bool write_plain(const fs::path& path, const MacroSnap& snap);
-	static bool read_silicate(const fs::path& path, MacroSnap& out);
-	static bool write_silicate(const fs::path& path, const MacroSnap& snap);
-	static bool read_tcbot(const fs::path& path, MacroSnap& out);
-	static bool write_tcbot(const fs::path& path, const MacroSnap& snap);
-	static bool read_gdr(const fs::path& path, MacroSnap& out);
-	static bool write_gdr(const fs::path& path, const MacroSnap& snap);
+	static bool write_echo(const fs::path& path, const MacroData& macro);
+	static bool read_echo(const fs::path& path, MacroData& out);
+	static bool read_plain(const fs::path& path, MacroData& out);
+	static bool write_plain(const fs::path& path, const MacroData& macro);
+	static bool read_silicate(const fs::path& path, MacroData& out);
+	static bool write_silicate(const fs::path& path, const MacroData& macro);
+	static bool read_tcbot(const fs::path& path, MacroData& out);
+	static bool write_tcbot(const fs::path& path, const MacroData& macro);
+	static bool read_gdr(const fs::path& path, MacroData& out);
+	static bool write_gdr(const fs::path& path, const MacroData& macro);
 };

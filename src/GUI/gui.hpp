@@ -20,7 +20,7 @@ namespace fs = std::filesystem;
 using namespace cocos2d;
 
 #ifdef GEODE_IS_MACOS
-bool echo_scroll_is_precise();
+bool scroll_is_precise();
 #endif
 
 enum class Slide {
@@ -43,7 +43,7 @@ struct ShelfMotion {
 	bool placed = false;
 };
 
-struct PickerState {
+struct ReplayPicker {
 	bool want_open = false;
 	bool sequence = false;
 	bool merge = false;
@@ -263,7 +263,7 @@ public:
 	bool plain = false;
 	int input_offset = 0;
 	std::string plain_text;
-	PickerState replay_picker;
+	ReplayPicker replay_picker;
 	ThemePicker theme_picker;
 	ClickpackPicker clickpack_picker;
 	RenderPicker render_picker;
@@ -399,7 +399,7 @@ public:
 	std::string stored_bind(const char* setting);
 	void store_bind(const char* setting, enumKeyCodes key, bool ctrl, bool shift, bool alt);
 	void flip_setting(bool& field, const char* setting);
-	PickerState& picker();
+	ReplayPicker& picker();
 	std::string lower_copy(std::string text);
 	ShownReplay shown_replay(const fs::path& path);
 	void refresh_files();

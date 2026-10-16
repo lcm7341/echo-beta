@@ -29,35 +29,35 @@
 namespace GamePatches {
 	// 2.2081 ONLY. checked on the windows exe & the arm64 lib off my phone
 	// android: rob calls a whole other function just to copy a CCPoint
-	inline const uintptr_t point_address = 0xace648;
-	inline const std::array<unsigned, 11> point_original = {
+	inline const uintptr_t point_copy_address = 0xace648;
+	inline const std::array<unsigned, 11> point_copy_original = {
 		0xa9be7bfd, 0x910003fd, 0xbd400020, 0xf9000bf3, 0xbd400421,
 		0xaa0003f3, 0x97fffff7, 0xaa1303e0, 0xf9400bf3, 0xa8c27bfd, 0xd65f03c0
 	};
-	inline const std::array<unsigned, 5> point_replacement = {
+	inline const std::array<unsigned, 5> point_copy_replacement = {
 		0xbd400020, 0xbd400421, 0xbd000000, 0xbd000401, 0xd65f03c0
 	};
-	inline const uintptr_t rings_address = 0x623e2c;
-	inline const std::array<unsigned, 13> rings_original = {
+	inline const uintptr_t ring_clear_address = 0x623e2c;
+	inline const std::array<unsigned, 13> ring_clear_original = {
 		0xf9451680, 0xb40000a0, 0xf9400013, 0x941aa02e, 0xaa1303e0,
 		0xb5ffffb3, 0xf94006a2, 0x52800001, 0xf9450e80, 0xd37df042,
 		0x97fad3df, 0xf9000ebf, 0xf9000abf
 	};
 	// longer cbz so an empty set skips the memset too
-	inline const std::array<unsigned, 1> rings_replacement = { 0xb4000140 };
-	inline const uintptr_t queue_address = 0x231daa;
-	inline const std::array<unsigned char, 16> queue_original = {
+	inline const std::array<unsigned, 1> ring_clear_replacement = { 0xb4000140 };
+	inline const uintptr_t queue_move_address = 0x231daa;
+	inline const std::array<unsigned char, 16> queue_move_original = {
 		0xe8, 0x87, 0xfa, 0x29, 0x00, 0x48, 0x83, 0x83,
 		0x08, 0x33, 0x00, 0x00, 0xe8, 0x48, 0x8b, 0xc6
 	};
 	// call the cave instead of memmove
-	inline const std::array<unsigned char, 5> queue_replacement = { 0xe8, 0x44, 0, 0, 0 };
-	inline const uintptr_t queue_cave_address = 0x231df3;
-	inline const std::array<unsigned char, 13> queue_cave_original = {
+	inline const std::array<unsigned char, 5> queue_move_replacement = { 0xe8, 0x44, 0, 0, 0 };
+	inline const uintptr_t queue_move_cave_address = 0x231df3;
+	inline const std::array<unsigned char, 13> queue_move_cave_original = {
 		0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc
 	};
 	// test r8, r8; je ret; jmp memmove; ret
-	inline const std::array<unsigned char, 11> queue_cave_replacement = {
+	inline const std::array<unsigned char, 11> queue_move_cave_replacement = {
 		0x4d, 0x85, 0xc0, 0x74, 0x05, 0xe9, 0x39, 0xfa, 0x29, 0x00, 0xc3
 	};
 

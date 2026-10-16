@@ -209,11 +209,11 @@ int Logic::affordable_steps() const {
 int Logic::count_unlocked_steps(GJBaseGameLayer* play, double dt) {
     apply_rate(step_frame);
     float wanted = physics_step();
-    if (respawn_frames > 0) {
-        carry = 0.f;
+    if (respawn_single_steps > 0) {
+        leftover_time = 0.f;
         play->m_extraDelta = 0.0;
     }
-    double pending = carry + dt;
+    double pending = leftover_time + dt;
     double requested = std::floor(pending / wanted);
     int steps = (int)std::min(requested, double(std::numeric_limits<int>::max()));
     bool capped = false;
@@ -231,11 +231,11 @@ int Logic::count_unlocked_steps(GJBaseGameLayer* play, double dt) {
         steps = std::min(steps, cap);
     }
     const double REAL_TIME_BACKLOG = 0.1;
-    carry = capped && !real_time ? 0.f : pending - (double)steps * wanted;
-    if (capped && real_time) carry = std::min((double)carry, REAL_TIME_BACKLOG);
-    if (carry < 0.f) carry = 0.f;
-    if (respawn_frames > 0) {
-        --respawn_frames;
+    leftover_time = capped && !real_time ? 0.f : pending - (double)steps * wanted;
+    if (capped && real_time) leftover_time = std::min((double)leftover_time, REAL_TIME_BACKLOG);
+    if (leftover_time < 0.f) leftover_time = 0.f;
+    if (respawn_single_steps > 0) {
+        --respawn_single_steps;
         steps = std::min(steps, 1);
     }
     return steps;
@@ -258,18 +258,18 @@ void Logic::run_frame(GJBaseGameLayer* play, float dt, const std::function<void(
     bool paused = editor_paused;
     if (auto* live = Logic::as_play(play)) paused = paused || live->m_isPaused;
     if (auto* live = Logic::as_play(play); live && !live->m_started && !render_capturing()) {
-        carry = 0.f;
+        leftover_time = 0.f;
         steps_left = 0;
         tick(dt);
         return;
     }
     if (paused) {
-        carry = 0.f;
+        leftover_time = 0.f;
         tick(dt);
         return;
     }
     if (auto* live = Logic::as_play(play); live && live->m_playerDied) {
-        carry = 0.f;
+        leftover_time = 0.f;
         steps_left = 0;
         steps_this_tick = 0;
         if (advance_paused(play)) {
@@ -283,7 +283,7 @@ void Logic::run_frame(GJBaseGameLayer* play, float dt, const std::function<void(
         return;
     }
     if (defer_physics()) {
-        carry = 0.f;
+        leftover_time = 0.f;
         tick(dt);
         Trajectory::get().refresh(PlayLayer::get());
         return;
@@ -291,8 +291,8 @@ void Logic::run_frame(GJBaseGameLayer* play, float dt, const std::function<void(
 
     bool force_step = false;
     if (advance_paused(play)) {
-        carry = 0.f;
-        respawn_frames = 0;
+        leftover_time = 0.f;
+        respawn_single_steps = 0;
         play->m_extraDelta = 0.0;
         if (find_best_queued) {
             find_best_queued = false;
@@ -364,7 +364,6 @@ void Logic::run_frame(GJBaseGameLayer* play, float dt, const std::function<void(
         bool plain = !force_step && !(frame_advance && !rendering) && !pause_kill && !traj_click;
         if (plain) {
             traj.refresh(Logic::as_play(play));
-            present = true;
             return;
         }
         traj.cancel_job();
@@ -387,7 +386,6 @@ void Logic::run_frame(GJBaseGameLayer* play, float dt, const std::function<void(
         steps = std::min(steps, pause_kill_safe_steps());
         if (steps <= 0) {
             check_advance_pause(PlayLayer::get());
-            present = true;
             Trajectory::get().refresh(PlayLayer::get());
             return;
         }
@@ -399,7 +397,7 @@ void Logic::run_frame(GJBaseGameLayer* play, float dt, const std::function<void(
             steps_left = batch;
             steps_this_tick = (unsigned)batch;
             frame_steps += batch;
-            defer_player_art = batch > 1 && phys::fast_live_pos();
+            defer_player_art = batch > 1 && phys::can_defer_player_art();
             time_update([&] {
                 play->update(step_dt * (float)batch);
             });
@@ -410,8 +408,8 @@ void Logic::run_frame(GJBaseGameLayer* play, float dt, const std::function<void(
             tick(step_dt * (float)batch);
             skip_physics = false;
             if (died() || batch == steps) break;
-            double leftover = carry;
-            carry = 0.f;
+            double leftover = leftover_time;
+            leftover_time = 0.f;
             steps = count_unlocked_steps(play, left + leftover);
             steps = std::min(steps, pause_kill_safe_steps());
         }
@@ -419,7 +417,6 @@ void Logic::run_frame(GJBaseGameLayer* play, float dt, const std::function<void(
         frame_steps = 0;
         steps_left = 0;
         steps_this_tick = 0;
-        present = true;
         Trajectory::get().refresh(PlayLayer::get());
         return;
     }
@@ -431,7 +428,6 @@ void Logic::run_frame(GJBaseGameLayer* play, float dt, const std::function<void(
         int ran = 0;
         if (steps <= 0) {
             check_advance_pause(PlayLayer::get());
-            present = true;
             Trajectory::get().refresh(PlayLayer::get());
             return;
         }
@@ -458,7 +454,7 @@ void Logic::run_frame(GJBaseGameLayer* play, float dt, const std::function<void(
                 steps_left = chunk;
                 steps_this_tick = (unsigned)chunk;
                 frame_steps += chunk;
-                defer_player_art = chunk > 1 && phys::fast_live_pos();
+                defer_player_art = chunk > 1 && phys::can_defer_player_art();
                 time_update([&] {
                     play->update(step_dt * (float)chunk);
                 });
@@ -490,8 +486,8 @@ void Logic::run_frame(GJBaseGameLayer* play, float dt, const std::function<void(
                 }
             }
             if (finished || batch == steps) break;
-            double leftover = carry;
-            carry = 0.f;
+            double leftover = leftover_time;
+            leftover_time = 0.f;
             steps = count_unlocked_steps(play, left + leftover);
             steps = std::min(steps, pause_kill_safe_steps());
         }
@@ -505,7 +501,6 @@ void Logic::run_frame(GJBaseGameLayer* play, float dt, const std::function<void(
         frame_steps = 0;
         steps_left = 0;
         steps_this_tick = 0;
-        present = true;
         Trajectory::get().refresh(PlayLayer::get());
         return;
     }
@@ -513,7 +508,7 @@ void Logic::run_frame(GJBaseGameLayer* play, float dt, const std::function<void(
     int limit = std::max(advance_steps, 1);
     advance_queued = false;
     advance_steps = 1;
-    carry = 0.f;
+    leftover_time = 0.f;
     play->m_extraDelta = 0.0;
     steps_left = 0;
     // held w/ nothing to check between steps it goes in batches like playing. 1 whole update a step never got near the speedhack
@@ -527,7 +522,7 @@ void Logic::run_frame(GJBaseGameLayer* play, float dt, const std::function<void(
             steps_left = batch;
             steps_this_tick = (unsigned)batch;
             frame_steps += batch;
-            defer_player_art = batch > 1 && phys::fast_live_pos();
+            defer_player_art = batch > 1 && phys::can_defer_player_art();
             time_update([&] {
                 play->update(step_dt * (float)batch);
             });
@@ -561,7 +556,6 @@ void Logic::run_frame(GJBaseGameLayer* play, float dt, const std::function<void(
         finish_backstep(Logic::as_play(play));
         click_best_frame(Logic::as_play(play));
     }
-    present = true;
 
     Trajectory::get().refresh(PlayLayer::get());
 }
@@ -647,7 +641,6 @@ void Logic::find_best_frame(PlayLayer* play, const std::function<void(float)>& t
         return !play->m_playerDied && !play->m_hasCompletedLevel;
     };
     if (std::exchange(best_frame_step_first, false) && !step()) {
-        present = true;
         stop_best_frame(play->m_hasCompletedLevel ? "Level complete" : "Find Best Frame stopped");
         return;
     }
@@ -685,7 +678,6 @@ void Logic::find_best_frame(PlayLayer* play, const std::function<void(float)>& t
         bool dies = player1 ? death_next_p1 || (!two_player && death_next_p2) : death_next_p2;
         if (dies || !step()) break;
     }
-    present = true;
     if (best.score <= 0) {
         stop_best_frame();
         message = "No frame found";
@@ -734,13 +726,13 @@ void Logic::click_best_frame(PlayLayer* play) {
 
 void Logic::cancel_steps() {
     steps_left = 0;
-    carry = 0.f;
+    leftover_time = 0.f;
 }
 
 void Logic::flush_visual_refresh() {
     if (!refresh_queued) return;
     refresh_queued = false;
-    refresh_only = true;
+    refreshing_visuals = true;
     CCDirector::sharedDirector()->getScheduler()->update(0.f);
-    refresh_only = false;
+    refreshing_visuals = false;
 }

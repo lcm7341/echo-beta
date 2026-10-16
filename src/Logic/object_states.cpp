@@ -18,17 +18,17 @@ static bool g_touch_tracking = true;
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Winvalid-offsetof"
 
-struct Span {
+struct ObjectSpan {
     unsigned short begin;
     unsigned short size;
-    bool moves;
+    bool moves_object;
 };
 
-#define ECHO_SPAN(first, last, moves)                                                                                        \
-Span {                                                                                                                          \
+#define ECHO_SPAN(first, last, moves_object)                                                                                        \
+ObjectSpan {                                                                                                                          \
     (unsigned short)offsetof(GameObject, first),                                                             \
         (unsigned short)(offsetof(GameObject, last) + sizeof(GameObject::last) - offsetof(GameObject, first)), \
-        moves                                                                                                            \
+        moves_object                                                                                                            \
 }
 constexpr std::array SPANS = {
     ECHO_SPAN(m_positionXOffset, m_scaleYOffset, true),
@@ -42,14 +42,14 @@ constexpr std::array SPANS = {
 #pragma clang diagnostic pop
 static_assert(SPANS.size() <= 8, "a record's span mask is one byte");
 
-constexpr std::size_t STRIDE = [] {
+constexpr std::size_t OBJECT_BYTES = [] {
     std::size_t total = 0;
     for (const auto& span : SPANS)
         total += span.size;
     return total;
 }();
 
-static void gather(const GameObject* object, unsigned char* out) {
+static void read_object_bytes(const GameObject* object, unsigned char* out) {
     const auto* raw = reinterpret_cast<const unsigned char*>(object);
     for (const auto& span : SPANS) {
         std::memcpy(out, raw + span.begin, span.size);
@@ -57,7 +57,7 @@ static void gather(const GameObject* object, unsigned char* out) {
     }
 }
 
-static unsigned char put(GJBaseGameLayer* play, GameObject* object, const unsigned char* record) {
+static unsigned char write_object_bytes(GJBaseGameLayer* play, GameObject* object, const unsigned char* record) {
     auto* raw = reinterpret_cast<unsigned char*>(object);
     unsigned char written = 0;
     bool moved = false;
@@ -66,7 +66,7 @@ static unsigned char put(GJBaseGameLayer* play, GameObject* object, const unsign
         if (std::memcmp(raw + span.begin, record, span.size) != 0) {
             std::memcpy(raw + span.begin, record, span.size);
             written |= (unsigned char)(1u << i);
-            moved = moved || span.moves;
+            moved = moved || span.moves_object;
         }
         record += span.size;
     }
@@ -74,6 +74,44 @@ static unsigned char put(GJBaseGameLayer* play, GameObject* object, const unsign
     object->m_isOrientedBoxDirty = true;
     if (moved) play->updateObjectSection(object);
     return written;
+}
+
+#define SPANS_EXCEPT_DIRTY_FLAGS 31
+
+static unsigned char append_record(std::vector<unsigned char>& out, unsigned index, const unsigned char* before, const unsigned char* now, const unsigned char* keep) {
+    std::size_t at = out.size();
+    out.resize(at + sizeof(index) + 1);
+    std::memcpy(out.data() + at, &index, sizeof(index));
+    unsigned char mask = 0;
+    std::size_t offset = 0;
+    for (std::size_t s = 0; s < SPANS.size(); ++s) {
+        auto size = SPANS[s].size;
+        if (std::memcmp(before + offset, now + offset, size) != 0) {
+            mask |= (unsigned char)(1u << s);
+            out.insert(out.end(), keep + offset, keep + offset + size);
+        }
+        offset += size;
+    }
+    out[at + sizeof(index)] = mask;
+    return mask;
+}
+
+static unsigned record_index(const unsigned char* in) {
+    unsigned index = 0;
+    std::memcpy(&index, in, sizeof(index));
+    return index;
+}
+
+static void apply_record(const unsigned char*& in, unsigned char* bytes) {
+    in += sizeof(unsigned);
+    unsigned char mask = *in++;
+    for (std::size_t s = 0; s < SPANS.size(); ++s) {
+        if (mask & (1u << s)) {
+            std::memcpy(bytes, in, SPANS[s].size);
+            in += SPANS[s].size;
+        }
+        bytes += SPANS[s].size;
+    }
 }
 
 static std::vector<GameObject*> grouped_objects(PlayLayer* play) {
@@ -86,8 +124,8 @@ static std::vector<GameObject*> grouped_objects(PlayLayer* play) {
     return out;
 }
 
-static std::shared_ptr<ObjectBase const> shared_base(PlayLayer* play) {
-    static std::weak_ptr<ObjectBase const> shared;
+static std::shared_ptr<ObjectsFullCopy const> shared_full_copy(PlayLayer* play) {
+    static std::weak_ptr<ObjectsFullCopy const> shared;
     unsigned amt = play->m_objects->count();
     if (auto base = shared.lock(); base && base->objects.size() == amt) {
         bool same = true;
@@ -95,13 +133,13 @@ static std::shared_ptr<ObjectBase const> shared_base(PlayLayer* play) {
             same = play->m_objects->objectAtIndex(i) == base->objects[i];
         if (same) return base;
     }
-    auto base = std::make_shared<ObjectBase>();
+    auto base = std::make_shared<ObjectsFullCopy>();
     base->objects.reserve(amt);
-    base->bytes.resize((std::size_t)amt * STRIDE);
+    base->bytes.resize((std::size_t)amt * OBJECT_BYTES);
     for (unsigned i = 0; i < amt; ++i) {
         auto* obj = static_cast<GameObject*>(play->m_objects->objectAtIndex(i));
         base->objects.push_back(obj);
-        if (obj) gather(obj, base->bytes.data() + (std::size_t)i * STRIDE);
+        if (obj) read_object_bytes(obj, base->bytes.data() + (std::size_t)i * OBJECT_BYTES);
     }
     shared = base;
     return base;
@@ -109,111 +147,93 @@ static std::shared_ptr<ObjectBase const> shared_base(PlayLayer* play) {
 
 // a full copy was 31mb per checkpoint on big levels :/
 // so 1 full copy (base) & each checkpoint only keeps what is different
-static std::shared_ptr<ObjectStates> capture(PlayLayer* play, int frame) {
-    auto states = std::make_shared<ObjectStates>();
+static std::shared_ptr<CheckpointObjects> capture_objects(PlayLayer* play, int frame) {
+    auto states = std::make_shared<CheckpointObjects>();
     states->frame = frame;
     if (!play->m_objects) return states;
-    states->base = shared_base(play);
-    const auto& base = *states->base;
-    auto& diff = states->diff;
-    std::array<unsigned char, STRIDE> cur;
+    states->full_copy = shared_full_copy(play);
+    const auto& base = *states->full_copy;
+    auto& diff = states->changes;
+    std::array<unsigned char, OBJECT_BYTES> now;
     for (unsigned i = 0; i < base.objects.size(); ++i) {
         auto* obj = base.objects[i];
         if (!obj) continue;
-        const auto* slot = base.bytes.data() + (std::size_t)i * STRIDE;
-        gather(obj, cur.data());
-        if (std::memcmp(slot, cur.data(), STRIDE) == 0) continue;
-        unsigned idx = i;
-        std::size_t at = diff.size();
-        diff.resize(at + sizeof(idx) + 1);
-        std::memcpy(diff.data() + at, &idx, sizeof(idx));
-        unsigned char mask = 0;
-        std::size_t offset = 0;
-        for (std::size_t s = 0; s < SPANS.size(); ++s) {
-            auto size = SPANS[s].size;
-            if (std::memcmp(slot + offset, cur.data() + offset, size) != 0) {
-                mask |= (unsigned char)(1u << s);
-                diff.insert(diff.end(), cur.data() + offset, cur.data() + offset + size);
-            }
-            offset += size;
-        }
-        diff[at + sizeof(idx)] = mask;
+        const auto* before = base.bytes.data() + (std::size_t)i * OBJECT_BYTES;
+        read_object_bytes(obj, now.data());
+        if (std::memcmp(before, now.data(), OBJECT_BYTES) == 0) continue;
+        append_record(diff, i, before, now.data(), now.data());
     }
     diff.shrink_to_fit();
     return states;
 }
 
-static void restore(PlayLayer* play, const ObjectStates& states) {
-    if (!states.base || !play->m_objects || play->m_objects->count() != states.base->objects.size()) {
+static void restore_objects(PlayLayer* play, const CheckpointObjects& states) {
+    if (!states.full_copy || !play->m_objects || play->m_objects->count() != states.full_copy->objects.size()) {
         return;
     }
-    const auto& base = *states.base;
-    const auto* in = states.diff.data();
-    const auto* end = in + states.diff.size();
-    std::array<unsigned char, STRIDE> cur;
+    const auto& base = *states.full_copy;
+    const auto* in = states.changes.data();
+    const auto* end = in + states.changes.size();
+    std::array<unsigned char, OBJECT_BYTES> changed;
     for (unsigned i = 0; i < base.objects.size(); ++i) {
-        const auto* record = base.bytes.data() + (std::size_t)i * STRIDE;
-        unsigned idx = 0;
-        if (in < end) std::memcpy(&idx, in, sizeof(idx));
-        if (in < end && idx == i) {
-            in += sizeof(idx);
-            unsigned char mask = *in++;
-            std::memcpy(cur.data(), record, STRIDE);
-            auto* slot = cur.data();
-            for (std::size_t s = 0; s < SPANS.size(); ++s) {
-                if (mask & (1u << s)) {
-                    std::memcpy(slot, in, SPANS[s].size);
-                    in += SPANS[s].size;
-                }
-                slot += SPANS[s].size;
-            }
-            record = cur.data();
+        const auto* record = base.bytes.data() + (std::size_t)i * OBJECT_BYTES;
+        if (in < end && record_index(in) == i) {
+            std::memcpy(changed.data(), record, OBJECT_BYTES);
+            apply_record(in, changed.data());
+            record = changed.data();
         }
         auto* obj = static_cast<GameObject*>(play->m_objects->objectAtIndex(i));
         if (obj != base.objects[i]) {
             return;
         }
-        if (obj) put(play, obj, record);
+        if (obj) write_object_bytes(play, obj, record);
     }
 }
 
-struct Timeline {
+struct BackstepObjects {
     PlayLayer* play = nullptr;
     CCArray* array = nullptr;
     std::vector<GameObject*> objects;
-    std::vector<unsigned char> baseline;
-    std::vector<unsigned char> scratch;
-    int pending_frame = -1;
-    std::vector<unsigned> by_uid;
-    std::vector<unsigned> touched_stamp, touched;
-    unsigned epoch = 1;
-    bool full = true, always_full = false;
-    int saves = 0;
+    std::vector<unsigned char> saved_bytes;
+    int restore_at_frame = -1;
+    std::vector<unsigned> index_by_uid;
+    std::vector<unsigned> touched_round, touched_objects;
+    unsigned round = 1;
+    bool check_all = true, always_check_all = false;
+    int save_count = 0;
 };
 
-static Timeline g_timeline;
+static BackstepObjects g_backstep_objects;
 
-static void touch_object(GameObject* object) {
-    auto& line = g_timeline;
-    if (!object || line.by_uid.empty() || Logic::get().predicting) return;
+static void note_touched(GameObject* object) {
+    auto& tracked = g_backstep_objects;
+    if (!object || tracked.index_by_uid.empty() || Logic::get().predicting) return;
     auto uid = (std::size_t)object->m_uniqueID;
-    if (uid >= line.by_uid.size()) return;
-    auto at = line.by_uid[uid];
-    if (!at || line.objects[at - 1] != object) return;
+    if (uid >= tracked.index_by_uid.size()) return;
+    auto at = tracked.index_by_uid[uid];
+    if (!at || tracked.objects[at - 1] != object) return;
     auto i = at - 1;
-    if (line.touched_stamp[i] == line.epoch) return;
-    line.touched_stamp[i] = line.epoch;
-    line.touched.push_back(i);
+    if (tracked.touched_round[i] == tracked.round) return;
+    tracked.touched_round[i] = tracked.round;
+    tracked.touched_objects.push_back(i);
 }
 
-static bool untracked_motion(PlayLayer* play) {
+#define MOVE_TRIGGER 901
+#define ROTATE_TRIGGER 1346
+#define ADVANCED_FOLLOW 3016
+#define EDIT_ADVANCED_FOLLOW 3660
+#define RETARGET_ADVANCED_FOLLOW 3661
+#define KEYFRAME 3032
+#define KEYFRAME_ANIMATION 3033
+
+static bool has_untracked_motion(PlayLayer* play) {
     const auto& game = play->m_gameState;
     if (!game.m_moveEffectInstances.empty() || !game.m_rotateEffectInstances.empty() || !game.m_scaleEffectInstances.empty())
         return true;
     for (const auto& command : play->m_effectManager->m_unkVector560) {
         auto* trigger = command.m_gameObject;
         int id = trigger ? trigger->m_objectID : 0;
-        if (id != 901 && id != 1346) return true;
+        if (id != MOVE_TRIGGER && id != ROTATE_TRIGGER) return true;
     }
     return false;
 }
@@ -224,11 +244,11 @@ static bool lvl_has_untracked_movers(PlayLayer* play) {
         auto* obj = static_cast<GameObject*>(play->m_objects->objectAtIndex(i));
         if (!obj) continue;
         switch (obj->m_objectID) {
-        case 3016:
-        case 3660:
-        case 3661:
-        case 3032:
-        case 3033:
+        case ADVANCED_FOLLOW:
+        case EDIT_ADVANCED_FOLLOW:
+        case RETARGET_ADVANCED_FOLLOW:
+        case KEYFRAME:
+        case KEYFRAME_ANIMATION:
             return true;
         default:
             break;
@@ -237,35 +257,23 @@ static bool lvl_has_untracked_movers(PlayLayer* play) {
     return false;
 }
 
-static void rewind(Timeline& line, const std::vector<unsigned char>& undo) {
+static void rewind(BackstepObjects& tracked, const std::vector<unsigned char>& undo) {
     const auto* in = undo.data();
     const auto* end = in + undo.size();
-    while (in < end) {
-        unsigned idx = 0;
-        std::memcpy(&idx, in, sizeof(idx));
-        in += sizeof(idx);
-        unsigned char mask = *in++;
-        auto* slot = line.baseline.data() + (std::size_t)idx * STRIDE;
-        for (std::size_t s = 0; s < SPANS.size(); ++s) {
-            if (mask & (1u << s)) {
-                std::memcpy(slot, in, SPANS[s].size);
-                in += SPANS[s].size;
-            }
-            slot += SPANS[s].size;
-        }
-    }
+    while (in < end)
+        apply_record(in, tracked.saved_bytes.data() + (std::size_t)record_index(in) * OBJECT_BYTES);
 }
 
 void Logic::step_object_states(PlayLayer* play) {
     if (!play || predicting || backstepping) return;
     int frame = step_frame;
-    auto& line = g_timeline;
-    if (!line.by_uid.empty() && !line.full && untracked_motion(play)) line.full = true;
-    if (line.pending_frame >= 0) {
-        int saved = std::exchange(line.pending_frame, -1);
-        if (saved == frame && line.play == play && line.array == play->m_objects) {
-            for (std::size_t i = 0; i < line.objects.size(); ++i)
-                put(play, line.objects[i], line.baseline.data() + i * STRIDE);
+    auto& tracked = g_backstep_objects;
+    if (!tracked.index_by_uid.empty() && !tracked.check_all && has_untracked_motion(play)) tracked.check_all = true;
+    if (tracked.restore_at_frame >= 0) {
+        int saved = std::exchange(tracked.restore_at_frame, -1);
+        if (saved == frame && tracked.play == play && tracked.array == play->m_objects) {
+            for (std::size_t i = 0; i < tracked.objects.size(); ++i)
+                write_object_bytes(play, tracked.objects[i], tracked.saved_bytes.data() + i * OBJECT_BYTES);
         }
     }
     if (auto* obj = std::exchange(object_restore, nullptr)) {
@@ -275,40 +283,40 @@ void Logic::step_object_states(PlayLayer* play) {
         if (it->objects->frame != frame) {
             return;
         }
-        restore(play, *it->objects);
+        restore_objects(play, *it->objects);
         return;
     }
     if (auto* obj = std::exchange(object_capture, nullptr)) {
         auto it = std::ranges::find(checkpoints, obj, &Checkpoint::object);
         if (it == checkpoints.end()) return;
         if (it->frame != frame) return;
-        it->objects = capture(play, frame);
+        it->objects = capture_objects(play, frame);
     }
 }
 
 void Logic::note_backstep_objects(PlayLayer* play) {
-    auto& line = g_timeline;
-    if (line.play != play || line.array != play->m_objects) {
-        line.play = play;
-        line.array = play->m_objects;
-        line.objects = grouped_objects(play);
-        line.baseline.resize(line.objects.size() * STRIDE);
-        for (std::size_t i = 0; i < line.objects.size(); ++i)
-            gather(line.objects[i], line.baseline.data() + i * STRIDE);
+    auto& tracked = g_backstep_objects;
+    if (tracked.play != play || tracked.array != play->m_objects) {
+        tracked.play = play;
+        tracked.array = play->m_objects;
+        tracked.objects = grouped_objects(play);
+        tracked.saved_bytes.resize(tracked.objects.size() * OBJECT_BYTES);
+        for (std::size_t i = 0; i < tracked.objects.size(); ++i)
+            read_object_bytes(tracked.objects[i], tracked.saved_bytes.data() + i * OBJECT_BYTES);
         int max_uid = 0;
-        for (auto* obj : line.objects)
+        for (auto* obj : tracked.objects)
             max_uid = std::max(max_uid, obj->m_uniqueID);
-        line.by_uid.assign((std::size_t)std::max(max_uid, 0) + 1, 0);
-        for (std::size_t i = 0; i < line.objects.size(); ++i) {
-            auto uid = line.objects[i]->m_uniqueID;
-            if (uid >= 0) line.by_uid[(std::size_t)uid] = (unsigned)(i + 1);
+        tracked.index_by_uid.assign((std::size_t)std::max(max_uid, 0) + 1, 0);
+        for (std::size_t i = 0; i < tracked.objects.size(); ++i) {
+            auto uid = tracked.objects[i]->m_uniqueID;
+            if (uid >= 0) tracked.index_by_uid[(std::size_t)uid] = (unsigned)(i + 1);
         }
-        line.touched_stamp.assign(line.objects.size(), 0);
-        line.touched.clear();
-        ++line.epoch;
-        line.always_full = lvl_has_untracked_movers(play);
-        line.full = line.always_full || untracked_motion(play);
-        line.saves = 0;
+        tracked.touched_round.assign(tracked.objects.size(), 0);
+        tracked.touched_objects.clear();
+        ++tracked.round;
+        tracked.always_check_all = lvl_has_untracked_movers(play);
+        tracked.check_all = tracked.always_check_all || has_untracked_motion(play);
+        tracked.save_count = 0;
         while (backsteps.size() > 1) {
             release_backstep(backsteps.front());
             backsteps.pop_front();
@@ -318,79 +326,65 @@ void Logic::note_backstep_objects(PlayLayer* play) {
     if (backsteps.size() < 2) return;
     auto& undo = backsteps[backsteps.size() - 2].object_undo;
     undo.clear();
-    bool verify = !line.full && !line.always_full && (++line.saves % 32) == 0;
-    bool everything = line.full || line.always_full || verify || !g_touch_tracking;
-    auto diff_object_into_undo = [&](std::size_t i, std::vector<unsigned char>& out, unsigned char* scratch, int& missed) {
-        auto* slot = line.baseline.data() + i * STRIDE;
-        const auto* raw = reinterpret_cast<const unsigned char*>(line.objects[i]);
+    bool spot_check = !tracked.check_all && !tracked.always_check_all && (++tracked.save_count % 32) == 0;
+    bool check_everything = tracked.check_all || tracked.always_check_all || spot_check || !g_touch_tracking;
+    auto save_undo = [&](std::size_t i, std::vector<unsigned char>& out, unsigned char* scratch, int& missed_touches) {
+        auto* saved = tracked.saved_bytes.data() + i * OBJECT_BYTES;
+        const auto* raw = reinterpret_cast<const unsigned char*>(tracked.objects[i]);
         bool same = true;
         std::size_t offset = 0;
         for (const auto& span : SPANS) {
-            if (std::memcmp(raw + span.begin, slot + offset, span.size) != 0) {
+            if (std::memcmp(raw + span.begin, saved + offset, span.size) != 0) {
                 same = false;
                 break;
             }
             offset += span.size;
         }
         if (same) return;
-        gather(line.objects[i], scratch);
-        unsigned idx = (unsigned)i;
-        std::size_t at = out.size();
-        out.resize(at + sizeof(idx) + 1);
-        std::memcpy(out.data() + at, &idx, sizeof(idx));
-        unsigned char mask = 0;
-        offset = 0;
-        for (std::size_t s = 0; s < SPANS.size(); ++s) {
-            auto size = SPANS[s].size;
-            if (std::memcmp(slot + offset, scratch + offset, size) != 0) {
-                mask |= (unsigned char)(1u << s);
-                out.insert(out.end(), slot + offset, slot + offset + size);
-            }
-            offset += size;
-        }
-        out[at + sizeof(idx)] = mask;
-        std::memcpy(slot, scratch, STRIDE);
-        if (verify && (mask & 31) && line.touched_stamp[i] != line.epoch) ++missed;
+        read_object_bytes(tracked.objects[i], scratch);
+        unsigned char mask = append_record(out, (unsigned)i, saved, scratch, saved);
+        std::memcpy(saved, scratch, OBJECT_BYTES);
+        if (spot_check && (mask & SPANS_EXCEPT_DIRTY_FLAGS) && tracked.touched_round[i] != tracked.round) ++missed_touches;
     };
-    int missed = 0;
-    std::array<unsigned char, STRIDE> scratch;
-    std::size_t total = line.objects.size();
+    int missed_touches = 0;
+    std::array<unsigned char, OBJECT_BYTES> scratch;
+    std::size_t total = tracked.objects.size();
     unsigned workers = std::clamp(std::thread::hardware_concurrency(), 1u, 8u);
-    if (everything && total >= 16384 && workers > 1) {
-        std::size_t per = (total + workers - 1) / workers;
+    if (check_everything && total >= 16384 && workers > 1) {
+        std::size_t per_worker = (total + workers - 1) / workers;
         std::vector<std::vector<unsigned char>> worker_undo(workers);
         std::vector<int> worker_misses(workers, 0);
         std::vector<std::thread> threads;
         for (unsigned w = 1; w < workers; ++w) {
             threads.emplace_back([&, w] {
-                std::array<unsigned char, STRIDE> local;
-                for (std::size_t i = w * per; i < std::min(total, (w + 1) * per); ++i)
-                    diff_object_into_undo(i, worker_undo[w], local.data(), worker_misses[w]);
+                std::array<unsigned char, OBJECT_BYTES> local;
+                for (std::size_t i = w * per_worker; i < std::min(total, (w + 1) * per_worker); ++i)
+                    save_undo(i, worker_undo[w], local.data(), worker_misses[w]);
             });
         }
-        for (std::size_t i = 0; i < std::min(total, per); ++i)
-            diff_object_into_undo(i, undo, scratch.data(), worker_misses[0]);
+        for (std::size_t i = 0; i < std::min(total, per_worker); ++i)
+            save_undo(i, undo, scratch.data(), worker_misses[0]);
         for (auto& thread : threads)
             thread.join();
         for (unsigned w = 0; w < workers; ++w) {
-            missed += worker_misses[w];
+            missed_touches += worker_misses[w];
             if (w > 0) undo.insert(undo.end(), worker_undo[w].begin(), worker_undo[w].end());
         }
     }
-    else if (everything) {
+    else if (check_everything) {
         for (std::size_t i = 0; i < total; ++i)
-            diff_object_into_undo(i, undo, scratch.data(), missed);
+            save_undo(i, undo, scratch.data(), missed_touches);
     }
     else {
-        for (auto i : line.touched)
-            diff_object_into_undo(i, undo, scratch.data(), missed);
+        for (auto i : tracked.touched_objects)
+            save_undo(i, undo, scratch.data(), missed_touches);
     }
-    if (missed) {
-        line.always_full = true;
+    if (missed_touches) {
+        tracked.always_check_all = true;
     }
-    line.touched.clear();
-    ++line.epoch;
-    line.full = line.always_full || untracked_motion(play);
+    tracked.touched_objects.clear();
+    ++tracked.round;
+    tracked.check_all = tracked.always_check_all || has_untracked_motion(play);
     undo.shrink_to_fit();
 }
 
@@ -402,10 +396,10 @@ void Logic::pop_backstep() {
         clear_backstep_objects();
         return;
     }
-    auto& line = g_timeline;
-    line.full = true;
+    auto& tracked = g_backstep_objects;
+    tracked.check_all = true;
     auto& undo = backsteps.back().object_undo;
-    if (!line.baseline.empty()) rewind(line, undo);
+    if (!tracked.saved_bytes.empty()) rewind(tracked, undo);
     undo.clear();
     undo.shrink_to_fit();
 }
@@ -418,17 +412,17 @@ void Logic::drop_backstep(std::size_t index) {
         std::vector<unsigned char> masks;
         const auto* in = older.data();
         const auto* end = in + older.size();
-        std::vector<std::pair<unsigned, unsigned char>> have;
+        std::vector<std::pair<unsigned, unsigned char>> older_masks;
         while (in < end) {
             unsigned obj = 0;
             std::memcpy(&obj, in, sizeof(obj));
             in += sizeof(obj);
             unsigned char mask = *in++;
-            have.emplace_back(obj, mask);
+            older_masks.emplace_back(obj, mask);
             for (std::size_t s = 0; s < SPANS.size(); ++s)
                 if (mask & (1u << s)) in += SPANS[s].size;
         }
-        std::ranges::sort(have);
+        std::ranges::sort(older_masks);
         in = newer.data();
         end = in + newer.size();
         while (in < end) {
@@ -436,18 +430,18 @@ void Logic::drop_backstep(std::size_t index) {
             std::memcpy(&obj, in, sizeof(obj));
             in += sizeof(obj);
             unsigned char mask = *in++;
-            auto it = std::ranges::lower_bound(have, std::pair{ obj, (unsigned char)0 });
-            unsigned char taken = it != have.end() && it->first == obj ? it->second : 0;
-            unsigned char add = mask & (unsigned char)(~taken);
-            if (add) {
+            auto it = std::ranges::lower_bound(older_masks, std::pair{ obj, (unsigned char)0 });
+            unsigned char older_has = it != older_masks.end() && it->first == obj ? it->second : 0;
+            unsigned char missing = mask & (unsigned char)(~older_has);
+            if (missing) {
                 std::size_t at = older.size();
                 older.resize(at + sizeof(obj) + 1);
                 std::memcpy(older.data() + at, &obj, sizeof(obj));
-                older[at + sizeof(obj)] = add;
+                older[at + sizeof(obj)] = missing;
             }
             for (std::size_t s = 0; s < SPANS.size(); ++s) {
                 if (!(mask & (1u << s))) continue;
-                if (add & (1u << s)) older.insert(older.end(), in, in + SPANS[s].size);
+                if (missing & (1u << s)) older.insert(older.end(), in, in + SPANS[s].size);
                 in += SPANS[s].size;
             }
         }
@@ -458,21 +452,21 @@ void Logic::drop_backstep(std::size_t index) {
 }
 
 void Logic::clear_backstep_objects() {
-    auto& line = g_timeline;
-    line = Timeline{};
+    auto& tracked = g_backstep_objects;
+    tracked = BackstepObjects{};
 }
 
 void Logic::load_backstep_objects(int frame) {
-    auto& line = g_timeline;
-    if (!line.baseline.empty()) line.pending_frame = frame;
-    line.full = true;
+    auto& tracked = g_backstep_objects;
+    if (!tracked.saved_bytes.empty()) tracked.restore_at_frame = frame;
+    tracked.check_all = true;
 }
 
-void echo_touch_hook(bool on) {
+void enable_touch_hook(bool on) {
     if (!g_touch_hook || on == g_touch_tracking) return;
     if (on ? g_touch_hook->enable().isOk() : g_touch_hook->disable().isOk()) {
         g_touch_tracking = on;
-        if (on) g_timeline.full = true;
+        if (on) g_backstep_objects.check_all = true;
     }
 }
 
@@ -483,11 +477,11 @@ class $modify(BackstepTouched, GJBaseGameLayer) {
     }
 
     static void touch_all(CCArray* objects) {
-        if (!objects || g_timeline.by_uid.empty() || Logic::get().predicting) return;
+        if (!objects || g_backstep_objects.index_by_uid.empty() || Logic::get().predicting) return;
         for (unsigned n = 0; n < objects->count(); ++n) {
             auto* obj = static_cast<GameObject*>(objects->objectAtIndex(n));
             if (!obj) break;
-            touch_object(obj);
+            note_touched(obj);
         }
     }
 
@@ -502,7 +496,7 @@ class $modify(BackstepTouched, GJBaseGameLayer) {
     }
 
     void updateObjectSection(GameObject* object) {
-        touch_object(object);
+        note_touched(object);
         GJBaseGameLayer::updateObjectSection(object);
     }
 };

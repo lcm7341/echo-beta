@@ -34,7 +34,7 @@ static bool waitUntilReady(AVAssetWriterInput* input, AVAssetWriter* writer) {
     return false;
 }
 
-static std::string finish(AVAssetWriter* writer) {
+static std::string finish_writing(AVAssetWriter* writer) {
     dispatch_semaphore_t done = dispatch_semaphore_create(0);
     [writer finishWritingWithCompletionHandler:^{
       dispatch_semaphore_signal(done);
@@ -52,44 +52,44 @@ struct VideoWriter {
     int width = 0;
     int height = 0;
     int fps = 60;
-    long long frame = 0;
+    long long frames_written = 0;
 #if TARGET_OS_IPHONE
-    struct Direct {
+    struct DirectFrame {
         CVPixelBufferRef buffer = nullptr;
         CVOpenGLESTextureRef texture = nullptr;
     };
 
-    CVOpenGLESTextureCacheRef cache = nullptr;
-    Direct drawing;
-    std::deque<Direct> pending;
+    CVOpenGLESTextureCacheRef texture_cache = nullptr;
+    DirectFrame drawing_frame;
+    std::deque<DirectFrame> pending_frames;
 #endif
 };
 
 #if TARGET_OS_IPHONE
-const size_t DIRECT_DELAY = 2;
+const size_t DIRECT_FRAMES_IN_FLIGHT = 2;
 
-static std::string appendDirect(VideoWriter* writer, const VideoWriter::Direct& frame) {
+static std::string append_direct_frame(VideoWriter* writer, const VideoWriter::DirectFrame& frame) {
     std::string failed;
     if (!waitUntilReady(writer->input, writer->writer))
         failed = describe(writer->writer.error, "The video encoder stopped taking frames");
-    else if (![writer->adaptor appendPixelBuffer:frame.buffer withPresentationTime:CMTimeMake(writer->frame, writer->fps)])
+    else if (![writer->adaptor appendPixelBuffer:frame.buffer withPresentationTime:CMTimeMake(writer->frames_written, writer->fps)])
         failed = describe(writer->writer.error, "A frame could not be encoded");
-    else ++writer->frame;
+    else ++writer->frames_written;
     if (frame.texture) CFRelease(frame.texture);
     if (frame.buffer) CVPixelBufferRelease(frame.buffer);
     return failed;
 }
 
-static std::string flushDirect(VideoWriter* writer) {
+static std::string flush_direct_frames(VideoWriter* writer) {
     std::string failed;
-    if (writer->drawing.texture) CFRelease(writer->drawing.texture);
-    if (writer->drawing.buffer) CVPixelBufferRelease(writer->drawing.buffer);
-    writer->drawing = {};
-    if (!writer->pending.empty()) glFinish();
-    while (!writer->pending.empty()) {
-        auto frame = writer->pending.front();
-        writer->pending.pop_front();
-        auto result = appendDirect(writer, frame);
+    if (writer->drawing_frame.texture) CFRelease(writer->drawing_frame.texture);
+    if (writer->drawing_frame.buffer) CVPixelBufferRelease(writer->drawing_frame.buffer);
+    writer->drawing_frame = {};
+    if (!writer->pending_frames.empty()) glFinish();
+    while (!writer->pending_frames.empty()) {
+        auto frame = writer->pending_frames.front();
+        writer->pending_frames.pop_front();
+        auto result = append_direct_frame(writer, frame);
         if (failed.empty()) failed = result;
     }
     return failed;
@@ -148,7 +148,7 @@ std::string open_video(VideoWriter*& out, const std::string& path, int width, in
 std::string write_frame(VideoWriter* writer, const unsigned char* rgba, bool bottomUp) {
     if (!writer || !rgba) return "The video encoder is not open";
 #if TARGET_OS_IPHONE
-    if (auto failed = flushDirect(writer); !failed.empty()) return failed;
+    if (auto failed = flush_direct_frames(writer); !failed.empty()) return failed;
 #endif
     @autoreleasepool {
         if (!waitUntilReady(writer->input, writer->writer))
@@ -172,10 +172,10 @@ std::string write_frame(VideoWriter* writer, const unsigned char* rgba, bool bot
             }
         }
         CVPixelBufferUnlockBaseAddress(buffer, 0);
-        BOOL ok = [writer->adaptor appendPixelBuffer:buffer withPresentationTime:CMTimeMake(writer->frame, writer->fps)];
+        BOOL ok = [writer->adaptor appendPixelBuffer:buffer withPresentationTime:CMTimeMake(writer->frames_written, writer->fps)];
         CVPixelBufferRelease(buffer);
         if (!ok) return describe(writer->writer.error, "A frame could not be encoded");
-        ++writer->frame;
+        ++writer->frames_written;
     }
     return {};
 }
@@ -186,11 +186,11 @@ std::string close_video(VideoWriter* writer) {
     std::string failed;
     @autoreleasepool {
 #if TARGET_OS_IPHONE
-        failed = flushDirect(writer);
-        if (writer->cache) {
-            CVOpenGLESTextureCacheFlush(writer->cache, 0);
-            CFRelease(writer->cache);
-            writer->cache = nullptr;
+        failed = flush_direct_frames(writer);
+        if (writer->texture_cache) {
+            CVOpenGLESTextureCacheFlush(writer->texture_cache, 0);
+            CFRelease(writer->texture_cache);
+            writer->texture_cache = nullptr;
         }
         if (!failed.empty() && writer->writer.status == AVAssetWriterStatusWriting)
             [writer->writer cancelWriting];
@@ -198,8 +198,8 @@ std::string close_video(VideoWriter* writer) {
 #endif
             if (writer->writer.status == AVAssetWriterStatusWriting) {
             [writer->input markAsFinished];
-            [writer->writer endSessionAtSourceTime:CMTimeMake(writer->frame, writer->fps)];
-            failed = finish(writer->writer);
+            [writer->writer endSessionAtSourceTime:CMTimeMake(writer->frames_written, writer->fps)];
+            failed = finish_writing(writer->writer);
         }
         else failed = describe(writer->writer.error, "The video encoder had already stopped");
     }
@@ -211,50 +211,50 @@ std::string close_video(VideoWriter* writer) {
 std::string begin_direct_frame(VideoWriter* writer, unsigned& texture) {
     texture = 0;
     if (!writer) return "The video encoder is not open";
-    if (!writer->cache) {
+    if (!writer->texture_cache) {
         EAGLContext* context = [EAGLContext currentContext];
         if (!context) return "There is no OpenGL context to draw frames with";
-        if (CVOpenGLESTextureCacheCreate(kCFAllocatorDefault, nullptr, context, nullptr, &writer->cache) != kCVReturnSuccess || !writer->cache)
+        if (CVOpenGLESTextureCacheCreate(kCFAllocatorDefault, nullptr, context, nullptr, &writer->texture_cache) != kCVReturnSuccess || !writer->texture_cache)
             return "Could not share memory between the GPU and the encoder";
     }
     CVPixelBufferRef buffer = nullptr;
     if (CVPixelBufferPoolCreatePixelBuffer(nullptr, writer->adaptor.pixelBufferPool, &buffer) != kCVReturnSuccess || !buffer)
         return "Could not get a frame buffer";
     CVOpenGLESTextureRef made = nullptr;
-    CVReturn result = CVOpenGLESTextureCacheCreateTextureFromImage(kCFAllocatorDefault, writer->cache, buffer, nullptr, GL_TEXTURE_2D, GL_RGBA,
+    CVReturn result = CVOpenGLESTextureCacheCreateTextureFromImage(kCFAllocatorDefault, writer->texture_cache, buffer, nullptr, GL_TEXTURE_2D, GL_RGBA,
         writer->width, writer->height, GL_BGRA, GL_UNSIGNED_BYTE, 0, &made);
     if (result != kCVReturnSuccess || !made) {
         CVPixelBufferRelease(buffer);
         return "The encoder's frame buffer could not be drawn into";
     }
-    GLint bound = 0;
-    glGetIntegerv(GL_TEXTURE_BINDING_2D, &bound);
+    GLint previous_texture = 0;
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &previous_texture);
     glBindTexture(GL_TEXTURE_2D, CVOpenGLESTextureGetName(made));
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glBindTexture(GL_TEXTURE_2D, (GLuint)bound);
-    writer->drawing.buffer = buffer;
-    writer->drawing.texture = made;
+    glBindTexture(GL_TEXTURE_2D, (GLuint)previous_texture);
+    writer->drawing_frame.buffer = buffer;
+    writer->drawing_frame.texture = made;
     texture = CVOpenGLESTextureGetName(made);
     return {};
 }
 
 std::string end_direct_frame(VideoWriter* writer) {
-    if (!writer || !writer->drawing.buffer) return "No frame was being drawn";
+    if (!writer || !writer->drawing_frame.buffer) return "No frame was being drawn";
     glFlush();
-    writer->pending.push_back(writer->drawing);
-    writer->drawing = {};
+    writer->pending_frames.push_back(writer->drawing_frame);
+    writer->drawing_frame = {};
     std::string failed;
     @autoreleasepool {
-        while (failed.empty() && writer->pending.size() > DIRECT_DELAY) {
-            auto frame = writer->pending.front();
-            writer->pending.pop_front();
-            failed = appendDirect(writer, frame);
+        while (failed.empty() && writer->pending_frames.size() > DIRECT_FRAMES_IN_FLIGHT) {
+            auto frame = writer->pending_frames.front();
+            writer->pending_frames.pop_front();
+            failed = append_direct_frame(writer, frame);
         }
     }
-    CVOpenGLESTextureCacheFlush(writer->cache, 0);
+    CVOpenGLESTextureCacheFlush(writer->texture_cache, 0);
     return failed;
 }
 
@@ -331,7 +331,7 @@ std::string add_audio(const std::string& video, const float* stereo, std::size_t
         }
         [writer startSessionAtSourceTime:kCMTimeZero];
 
-        const std::size_t CHUNK = 8192;
+        const std::size_t AUDIO_CHUNK_FRAMES = 8192;
         std::size_t sent = 0;
         bool videoDone = false;
         bool audioDone = false;
@@ -355,7 +355,7 @@ std::string add_audio(const std::string& video, const float* stereo, std::size_t
                 moved = true;
             }
             if (failed.empty() && !audioDone && audioIn.readyForMoreMediaData) {
-                std::size_t count = std::min(CHUNK, frames - sent);
+                std::size_t count = std::min(AUDIO_CHUNK_FRAMES, frames - sent);
                 if (count == 0) {
                     [audioIn markAsFinished];
                     audioDone = true;
@@ -394,6 +394,6 @@ std::string add_audio(const std::string& video, const float* stereo, std::size_t
             [writer cancelWriting];
             return failed;
         }
-        return finish(writer);
+        return finish_writing(writer);
     }
 }

@@ -33,9 +33,9 @@ class GJBaseGameLayer;
 class LevelEditorLayer;
 class TeleportPortalObject;
 
-void echo_touch_hook(bool on);
+void enable_touch_hook(bool on);
 #ifdef GEODE_IS_WINDOWS
-void echo_raw_hooks(bool on);
+void enable_raw_hooks(bool on);
 #endif
 
 #ifdef GEODE_IS_WINDOWS
@@ -258,15 +258,15 @@ struct LayerSnapshot {
 	bool gravity_related = false, time_mod_related = false;
 };
 
-struct ObjectBase {
+struct ObjectsFullCopy {
 	std::vector<GameObject*> objects;
 	std::vector<unsigned char> bytes;
 };
 
-struct ObjectStates {
+struct CheckpointObjects {
 	int frame = -1;
-	std::shared_ptr<ObjectBase const> base;
-	std::vector<unsigned char> diff;
+	std::shared_ptr<ObjectsFullCopy const> full_copy;
+	std::vector<unsigned char> changes;
 };
 
 struct Checkpoint {
@@ -281,10 +281,10 @@ struct Checkpoint {
 	unsigned long long random_state = 0, shake_random = 0, teleport_random = 0;
 	std::vector<float> variance;
 	std::vector<std::pair<int, unsigned long long>> rand_states;
-	std::shared_ptr<ObjectStates> objects;
+	std::shared_ptr<CheckpointObjects> objects;
 };
 
-struct CpsNote {
+struct CpsBreak {
 	int first = 0, last = 0;
 	std::string text;
 };
@@ -299,7 +299,7 @@ struct HitboxTrailPoint {
 	int frame = 0;
 };
 
-struct BackstepExtra;
+struct BackstepGdData;
 
 class Logic {
 public:
@@ -308,21 +308,21 @@ public:
 	std::vector<Frame> inputs;
 	std::vector<FramePose> poses;
 	std::vector<unsigned long long> input_ids;
-	std::array<int, 6> live_frame{ -1, -1, -1, -1, -1, -1 };
-	std::array<char, 6> live_held{}, live_seen{};
-	int newest_input = -1;
+	std::array<int, 6> last_input_frame{ -1, -1, -1, -1, -1, -1 };
+	std::array<char, 6> last_input_held{}, has_last_input{};
+	int newest_input_frame = -1;
 	int hold_count = 0, release_count = 0;
 	bool inputs_in_order = true;
-	unsigned long long inputs_revision = 0;
+	unsigned long long inputs_version = 0;
 	unsigned long long next_input_id = 0;
-	std::deque<int> clicks_p1, clicks_p2;
-	unsigned long long clicks_revision = 0;
+	std::deque<int> click_frames_p1, click_frames_p2;
+	unsigned long long clicks_version = 0;
 	std::vector<Checkpoint> checkpoints;
 
 	struct BackstepSave {
 		CheckpointObject* object = nullptr;
-		Checkpoint echo;
-		std::shared_ptr<BackstepExtra> extra;
+		Checkpoint checkpoint;
+		std::shared_ptr<BackstepGdData> extra;
 		std::vector<unsigned char> object_undo;
 		bool broken = false;
 	};
@@ -341,7 +341,7 @@ public:
 	RunState backstep_saved_state = RunState::Idle;
 	bool backstep_swapped = false;
 	chrono::steady_clock::time_point back_hold_start{}, last_back_step{};
-	double back_owed = 0.0;
+	double back_steps_owed = 0.0;
 	CheckpointObject* restored_checkpoint = nullptr;
 	std::vector<Replay> sequence;
 	std::vector<size_t> sequence_order;
@@ -352,32 +352,30 @@ public:
 	bool progress_base_set = false;
 	bool in_step = false;
 	bool pause_known = false, pause_cached = false;
-	unsigned partner_presses = 0;
+	unsigned other_icon_presses = 0;
 	float fps = 240.f, macro_fps = 240.f;
 	// silicate saves the LAST tps it used, so a macro with tps changes can start on the wrong one. ts lets me fix it by hand
 	bool playback_tps_changes = false;
 	bool trace_logging = false;
 	bool no_editor_keybinds = false;
 	std::vector<RateChange> rates;
-	int accuracy = 1;
-	bool present = true;
 	bool resetting = false;
-	double carry = 0.0;
+	double leftover_time = 0.0;
 	int steps_left = 0;
 	bool skip_physics = false;
 	bool defer_player_art = false, player_art_deferred = false;
 	unsigned steps_this_tick = 0;
 	int frame_steps = 0;
-	int respawn_frames = 0, ignore_record_frames = 0;
+	int respawn_single_steps = 0, skip_record_frames = 0;
 	bool restoring_holds = false;
-	bool refresh_only = false, refresh_queued = false;
+	bool refreshing_visuals = false, refresh_queued = false;
 	bool in_scheduler = false;
 	int scheduler_depth = 0;
 	bool save_shown_step = false;
 	bool buttons_prepared = false;
 	int replay_clicks_left = 0;
 	float speedhack = 1.f;
-	float speedhack_memory = 0.f;
+	float saved_speedhack = 0.f;
 	bool real_time_mode = true;
 	bool lock_delta = false;
 	bool true_real_time = false; // real time w/ no step cap at all, every step owed runs
@@ -385,7 +383,7 @@ public:
 	bool lock_display_fps = false;
 	float playback_fps = 0.f;
 	bool playback_fps_held = false;
-	float held_interval = 1.f / 60.f;
+	float interval_before_playback_fps = 1.f / 60.f;
 	bool save_debug = false, show_clock_debug = false;
 	std::vector<std::string> tab_order{ "Play", "Macro", "Editor", "Macro Tools", "Visuals", "Sequence", "Render", "Theme", "Clickbot" };
 	bool ignore_inputs = true;
@@ -505,8 +503,8 @@ public:
 	bool traj_autoclicker = false;
 	int traj_click_lookahead = 1;
 	bool traj_flip_p1 = false, traj_flip_p2 = false;
-	bool traj_flip_raw_p1 = false, traj_flip_raw_p2 = false;
-	bool held_raw_p1 = false, held_raw_p2 = false;
+	bool traj_flip_hold_p1 = false, traj_flip_hold_p2 = false;
+	bool jump_held_p1 = false, jump_held_p2 = false;
 	int assist_clicks[2][2] = {};
 	int restored_clicks[2][2] = {};
 	bool assist_input = false;
@@ -563,14 +561,14 @@ public:
 	unsigned advance_hold_ms = 300, advance_delay_ms = 50;
 	float advance_speed = 100.f;
 	chrono::steady_clock::time_point advance_hold_start{}, last_advance_step{};
-	double advance_owed = 0.0;
+	double advance_steps_owed = 0.0;
 	bool injecting = false;
 	bool applying_playback = false;
 	bool hold_sync = false, keep_checkpoint_hold = true;
 	bool immediate_restart = false, arm_immediate_restart = false;
 	bool suppress_auto_hold = false;
 	bool routing_input = false;
-	std::map<int, int> steered_keys;
+	std::map<int, int> routed_keys;
 	bool key_jump_p1 = false, key_jump_p2 = false, key_left_p1 = false, key_right_p1 = false;
 	bool key_left_p2 = false, key_right_p2 = false, death_jump_p1 = false, death_jump_p2 = false;
 	bool death_left_p1 = false, death_right_p1 = false, death_left_p2 = false, death_right_p2 = false;
@@ -619,7 +617,7 @@ public:
 	unsigned long long shake_random = 0, teleport_random = 0;
 	float end_x = 0.f;
 	bool display_fps_locked = false;
-	float level_interval_held = 0.f;
+	float interval_before_level_fps = 0.f;
 	float background_color[3] = { 0.28235295f, 0.49019608f, 1.f };
 	float blocks_color[3] = { 0.28235295f, 0.49019608f, 1.f };
 	std::vector<RenderPreset> render_presets;
@@ -655,7 +653,7 @@ public:
 	std::vector<std::string> label_order;
 	std::deque<HitboxTrailPoint> trail_p1, trail_p2;
 	std::vector<GameObject*> hidden_decorations;
-	std::vector<CpsNote> cps_notes_p1, cps_notes_p2;
+	std::vector<CpsBreak> cps_notes_p1, cps_notes_p2;
 	std::string highest_cps = "P1: 0";
 
 	unsigned long long input_id(size_t index) const {
@@ -677,20 +675,20 @@ public:
 		if (index < poses.size()) poses[index] = pose;
 	}
 
-	void clear_sides() {
+	void clear_input_extras() {
 		poses.clear();
 		input_ids.clear();
-		live_frame.fill(-1);
-		live_held.fill(0);
-		live_seen.fill(0);
-		newest_input = -1;
+		last_input_frame.fill(-1);
+		last_input_held.fill(0);
+		has_last_input.fill(0);
+		newest_input_frame = -1;
 		hold_count = 0;
 		release_count = 0;
 		inputs_in_order = true;
 	}
 
-	void touch_inputs() {
-		++inputs_revision;
+	void mark_inputs_changed() {
+		++inputs_version;
 	}
 
 	bool is_recording() const {
@@ -800,11 +798,11 @@ public:
 	void conceal_player(PlayerObject* player, bool hide);
 	void play_macro(GJBaseGameLayer* play, GJBaseGameLayer* layer, float dt, bool clear_input_queue);
 	void prepare_buttons(GJBaseGameLayer* play);
-	bool cbf_enabled() const;
+	bool click_between_frames_enabled() const;
 	bool vanilla_click_physics() const;
 	bool defer_physics();
 	double click_stamp() const;
-	void remember_move(const PlayerButtonCommand& cmd);
+	void note_direction_press(const PlayerButtonCommand& cmd);
 	void restore_holds(PlayLayer* play);
 	void on_play_init(PlayLayer* play);
 	void on_reset(PlayLayer* play);
@@ -837,11 +835,11 @@ public:
 	void on_complete(PlayLayer* play);
 	void on_quit(PlayLayer* play);
 	bool should_noclip(PlayLayer* play, PlayerObject* player);
-	bool steer_player(bool& player1);
-	PlayerObject* icon_body(GJBaseGameLayer* play, bool icon2);
+	bool route_to_recorded_player(bool& player1);
+	PlayerObject* icon_player(GJBaseGameLayer* play, bool icon2);
 	bool play_input(GJBaseGameLayer* play, bool icon2, bool down, int button);
 	bool physical_hold(GJBaseGameLayer* play, bool icon2);
-	bool steer_key(GJBaseGameLayer* play, enumKeyCodes key, bool down, double timestamp);
+	bool route_key(GJBaseGameLayer* play, enumKeyCodes key, bool down, double timestamp);
 	void set_routed_hold(bool icon2, int button, bool down);
 	void reinforce_routed_hold(PlayerObject* body);
 	void apply_maintain_gravity(GJBaseGameLayer* play);
@@ -853,7 +851,7 @@ public:
 	void flip_input_players();
 	void sort_inputs();
 	void identify_inputs(bool force = false);
-	unsigned long long mint_input_id();
+	unsigned long long new_input_id();
 	void clear_inputs();
 	bool dispatch_setting_key(std::string_view key, bool down);
 	fs::path save_root();
@@ -862,7 +860,7 @@ public:
 	bool autosave_replay();
 	void poll_autosave();
 	bool read_file(const fs::path& path);
-	bool export_kind(std::string_view kind);
+	bool export_as(std::string_view export_type);
 	bool append_sequence_file(const fs::path& path, int amount);
 	bool merge_replay(const fs::path& path);
 	void pick_replay();
@@ -912,8 +910,8 @@ public:
 	void style_layout_object(GameObject* object);
 	void style_layout_glow(GameObject* object);
 	void draw_hitboxes(GJBaseGameLayer* play);
-	void seat_overlay(CCNode* node, GJBaseGameLayer* play);
-	void sync_overlay_seats(GJBaseGameLayer* play);
+	void attach_overlay(CCNode* node, GJBaseGameLayer* play);
+	void reattach_overlays(GJBaseGameLayer* play);
 	void sample_hitbox_trail(GJBaseGameLayer* play);
 	void note_click_hitbox(GJBaseGameLayer* play, bool player1, bool down);
 	void capture_pending_click(PlayerObject* player);

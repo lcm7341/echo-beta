@@ -34,16 +34,16 @@ static void remove_autosave() {
     logic.autosaved_path.clear();
 }
 
-bool ReplayIO::save_as(const fs::path& path, bool (*write)(const fs::path&, const MacroSnap&)) {
-    return ReplayIO::save_snap(path, ReplayIO::capture_macro(), write);
+bool ReplayIO::save_as(const fs::path& path, bool (*write)(const fs::path&, const MacroData&)) {
+    return ReplayIO::save_macro(path, ReplayIO::capture_macro(), write);
 }
 
-bool ReplayIO::save_snap(const fs::path& path, MacroSnap snap, bool (*write)(const fs::path&, const MacroSnap&)) {
-    for (auto& input : snap.inputs)
+bool ReplayIO::save_macro(const fs::path& path, MacroData macro, bool (*write)(const fs::path&, const MacroData&)) {
+    for (auto& input : macro.inputs)
         input.number = std::max(input.number - FILE_FRAME_SHIFT, 0);
-    for (auto& change : snap.rates)
+    for (auto& change : macro.rates)
         change.frame = std::max(change.frame - FILE_FRAME_SHIFT, 0);
-    return write(path, snap);
+    return write(path, macro);
 }
 
 bool ReplayIO::is_autosave(const fs::path& path) {
@@ -72,9 +72,9 @@ void Logic::poll_autosave() {
     auto now = chrono::steady_clock::now();
     if (now - last < chrono::seconds(30)) return;
     last = now;
-    if (inputs.size() == saved_count && inputs_revision == saved_revision) return;
+    if (inputs.size() == saved_count && inputs_version == saved_revision) return;
     saved_count = inputs.size();
-    saved_revision = inputs_revision;
+    saved_revision = inputs_version;
     autosave_replay();
 }
 
@@ -103,8 +103,8 @@ bool Logic::write_file() {
     return true;
 }
 
-bool Logic::export_kind(std::string_view kind) {
-    if (kind == "JSON") {
+bool Logic::export_as(std::string_view export_type) {
+    if (export_type == "JSON") {
         auto path = ReplayIO::unique_file(save_root() / "converted", ReplayIO::sanitize(macro_name), ".echo.json");
         bool ok = ReplayIO::save_as(path, ReplayIO::write_echo_json);
         notify(ok ? fmt::format("Exported {}", path.filename().string()) : "Export failed", ok);
@@ -114,19 +114,19 @@ bool Logic::export_kind(std::string_view kind) {
     auto converted = save_root() / "converted";
     fs::path path;
     bool ok = false;
-    if (kind == "Plain Text") {
+    if (export_type == "Plain Text") {
         path = ReplayIO::unique_file(converted, base, ".txt");
         ok = ReplayIO::save_as(path, ReplayIO::write_plain);
     }
-    else if (kind == "Silicate") {
+    else if (export_type == "Silicate") {
         path = ReplayIO::unique_file(converted, base, ".slc");
         ok = ReplayIO::save_as(path, ReplayIO::write_silicate);
     }
-    else if (kind == "TCBot") {
+    else if (export_type == "TCBot") {
         path = ReplayIO::unique_file(converted, base, ".tcm");
         ok = ReplayIO::save_as(path, ReplayIO::write_tcbot);
     }
-    else if (kind == "GDR") {
+    else if (export_type == "GDR") {
         path = ReplayIO::unique_file(converted, base, ".gdr");
         ok = ReplayIO::save_as(path, ReplayIO::write_gdr);
     }
@@ -143,21 +143,21 @@ bool Logic::append_sequence_file(const fs::path& path, int amount) {
         notify("File not found", false);
         return false;
     }
-    auto snap = ReplayIO::load_snap(path);
-    if (!snap) {
+    auto macro = ReplayIO::load_macro(path);
+    if (!macro) {
         notify("Unrecognized replay", false);
         return false;
     }
     Replay clip;
     auto title = ReplayIO::import_stem(path);
     clip.name = title.empty() ? path.stem().string() : title;
-    clip.actions = std::move(snap->inputs);
-    clip.fps = snap->fps;
-    clip.rates = snap->rates;
-    clip.lvl_seed = snap->lvl_seed;
-    clip.lvl_seed_known = snap->lvl_seed_known;
-    clip.unrounded = snap->unrounded;
-    clip.silicate_variance = snap->silicate_variance;
+    clip.actions = std::move(macro->inputs);
+    clip.fps = macro->fps;
+    clip.rates = macro->rates;
+    clip.lvl_seed = macro->lvl_seed;
+    clip.lvl_seed_known = macro->lvl_seed_known;
+    clip.unrounded = macro->unrounded;
+    clip.silicate_variance = macro->silicate_variance;
     amount = std::max(amount, 1);
     for (int i = 0; i < amount; ++i)
         sequence.push_back(clip);
@@ -166,13 +166,13 @@ bool Logic::append_sequence_file(const fs::path& path, int amount) {
     return true;
 }
 
-std::optional<MacroSnap> ReplayIO::load_snap(const fs::path& path) {
-    MacroSnap snap;
-    if (!ReplayIO::read_any(path, snap)) return std::nullopt;
-    return snap;
+std::optional<MacroData> ReplayIO::load_macro(const fs::path& path) {
+    MacroData macro;
+    if (!ReplayIO::read_any(path, macro)) return std::nullopt;
+    return macro;
 }
 
-static bool read_by_extension(const fs::path& path, MacroSnap& out) {
+static bool read_by_extension(const fs::path& path, MacroData& out) {
     auto ext = ReplayIO::lower_ext(path);
     if (ext == ".txt") return ReplayIO::read_plain(path, out);
     if (ext == ".slc") return ReplayIO::read_silicate(path, out);
@@ -196,9 +196,9 @@ static bool read_by_extension(const fs::path& path, MacroSnap& out) {
     return ReplayIO::read_legacy_echo(path, out);
 }
 
-bool ReplayIO::read_any(const fs::path& path, MacroSnap& out) {
+bool ReplayIO::read_any(const fs::path& path, MacroData& out) {
     // files are NOT trusted. if reading throws the file fails & the game lives
-    out = MacroSnap{};
+    out = MacroData{};
     bool read = false;
     try {
         read = read_by_extension(path, out);
@@ -226,21 +226,21 @@ bool Logic::read_file(const fs::path& path) {
     unsigned mine = ticket.fetch_add(1) + 1;
     try {
         std::thread([path, title, mine] {
-            auto snap = ReplayIO::load_snap(path);
-            if (snap) {
-                std::stable_sort(snap->inputs.begin(), snap->inputs.end(), [](const Frame& a, const Frame& b) {
+            auto macro = ReplayIO::load_macro(path);
+            if (macro) {
+                std::stable_sort(macro->inputs.begin(), macro->inputs.end(), [](const Frame& a, const Frame& b) {
                     return a.number < b.number;
                 });
             }
-            geode::queueInMainThread([path, title, mine, snap = std::move(snap)]() mutable {
+            geode::queueInMainThread([path, title, mine, macro = std::move(macro)]() mutable {
                 if (mine != ticket.load()) return;
                 auto& logic = Logic::get();
-                if (!snap) {
+                if (!macro) {
                     logic.notify("Unrecognized replay", false);
                     return;
                 }
-                auto amt = snap->inputs.size();
-                ReplayIO::restore_macro(snap.value());
+                auto amt = macro->inputs.size();
+                ReplayIO::restore_macro(macro.value());
                 logic.macro_name = title;
                 logic.macro_name_typed = false;
                 logic.macro_path = path;
@@ -267,20 +267,20 @@ bool Logic::merge_replay(const fs::path& path) {
         return false;
     }
     if (inputs.empty()) return read_file(path);
-    auto snap = ReplayIO::load_snap(path);
-    if (!snap) {
+    auto macro = ReplayIO::load_macro(path);
+    if (!macro) {
         notify("Unrecognized replay", false);
         return false;
     }
     auto title = ReplayIO::import_stem(path);
     if (title.empty()) title = path.stem().string();
-    if (std::abs(snap->fps - macro_fps) > .001f || !snap->rates.empty() || !rates.empty()) {
-        notify(fmt::format("Can't merge {}: it needs the same TPS ({:g} vs {:g}) and no TPS changes", title, snap->fps, macro_fps), false);
+    if (std::abs(macro->fps - macro_fps) > .001f || !macro->rates.empty() || !rates.empty()) {
+        notify(fmt::format("Can't merge {}: it needs the same TPS ({:g} vs {:g}) and no TPS changes", title, macro->fps, macro_fps), false);
         return false;
     }
     const auto& mine = inputs;
-    const auto& theirs = snap->inputs;
-    bool keep_poses = poses.size() == mine.size() && snap->poses.size() == theirs.size();
+    const auto& theirs = macro->inputs;
+    bool keep_poses = poses.size() == mine.size() && macro->poses.size() == theirs.size();
     std::vector<Frame> merged;
     std::vector<FramePose> merged_poses;
     merged.reserve(mine.size() + theirs.size());
@@ -295,7 +295,7 @@ bool Logic::merge_replay(const fs::path& path) {
         }
         else {
             merged.push_back(theirs[b]);
-            if (keep_poses) merged_poses.push_back(snap->poses[b]);
+            if (keep_poses) merged_poses.push_back(macro->poses[b]);
             ++b;
         }
     }
@@ -303,7 +303,7 @@ bool Logic::merge_replay(const fs::path& path) {
     inputs = std::move(merged);
     poses = std::move(merged_poses);
     input_ids.clear();
-    touch_inputs();
+    mark_inputs_changed();
     refresh_live_hold();
     recompute_cps();
     autosave_replay();
@@ -315,56 +315,56 @@ void Logic::pick_replay() {
     GUI::get().open_macro_picker(false, 1);
 }
 
-MacroSnap ReplayIO::capture_macro() {
+MacroData ReplayIO::capture_macro() {
     const auto& logic = Logic::get();
-    MacroSnap snap;
-    snap.name = logic.macro_name;
-    snap.inputs = logic.inputs;
-    snap.poses = logic.poses;
-    snap.format = logic.format;
-    snap.fps = logic.macro_fps;
-    snap.end_x = logic.end_x;
-    snap.recording_seconds = logic.recording_seconds;
-    snap.attempts = logic.attempts;
-    snap.save_debug = logic.save_debug;
-    snap.lvl_seed = logic.lvl_seed;
-    snap.lvl_seed_known = logic.lvl_seed_known;
-    snap.unrounded = logic.macro_unrounded;
-    snap.silicate_variance = logic.macro_silicate_variance;
-    snap.ldm = logic.macro_ldm;
-    snap.ldm_known = logic.macro_ldm_known;
-    snap.rates = logic.rates;
-    snap.highest_cps = logic.highest_cps;
-    snap.cps_notes_p1 = logic.cps_notes_p1;
-    snap.cps_notes_p2 = logic.cps_notes_p2;
-    return snap;
+    MacroData macro;
+    macro.name = logic.macro_name;
+    macro.inputs = logic.inputs;
+    macro.poses = logic.poses;
+    macro.format = logic.format;
+    macro.fps = logic.macro_fps;
+    macro.end_x = logic.end_x;
+    macro.recording_seconds = logic.recording_seconds;
+    macro.attempts = logic.attempts;
+    macro.save_debug = logic.save_debug;
+    macro.lvl_seed = logic.lvl_seed;
+    macro.lvl_seed_known = logic.lvl_seed_known;
+    macro.unrounded = logic.macro_unrounded;
+    macro.silicate_variance = logic.macro_silicate_variance;
+    macro.ldm = logic.macro_ldm;
+    macro.ldm_known = logic.macro_ldm_known;
+    macro.rates = logic.rates;
+    macro.highest_cps = logic.highest_cps;
+    macro.cps_notes_p1 = logic.cps_notes_p1;
+    macro.cps_notes_p2 = logic.cps_notes_p2;
+    return macro;
 }
 
-void ReplayIO::restore_macro(const MacroSnap& snap) {
+void ReplayIO::restore_macro(const MacroData& macro) {
     auto& logic = Logic::get();
-    logic.inputs = snap.inputs;
-    logic.poses = snap.poses;
+    logic.inputs = macro.inputs;
+    logic.poses = macro.poses;
     if (logic.poses.size() != logic.inputs.size()) logic.poses.clear();
     logic.input_ids.clear();
-    logic.touch_inputs();
+    logic.mark_inputs_changed();
     Logic::get().refresh_live_hold();
-    logic.format = snap.format;
-    logic.fps = snap.fps;
-    logic.macro_fps = snap.fps;
-    logic.rates = snap.rates;
-    logic.end_x = snap.end_x;
-    logic.recording_seconds = snap.recording_seconds;
-    logic.attempts = snap.attempts;
-    logic.lvl_seed = snap.lvl_seed;
-    logic.lvl_seed_known = snap.lvl_seed_known;
-    logic.lvl_seed_from_file = snap.lvl_seed_known;
-    logic.macro_unrounded = snap.unrounded;
-    logic.macro_silicate_variance = snap.silicate_variance;
-    logic.macro_ldm = snap.ldm;
-    logic.macro_ldm_known = snap.ldm_known;
-    logic.highest_cps = snap.highest_cps;
-    logic.cps_notes_p1 = snap.cps_notes_p1;
-    logic.cps_notes_p2 = snap.cps_notes_p2;
+    logic.format = macro.format;
+    logic.fps = macro.fps;
+    logic.macro_fps = macro.fps;
+    logic.rates = macro.rates;
+    logic.end_x = macro.end_x;
+    logic.recording_seconds = macro.recording_seconds;
+    logic.attempts = macro.attempts;
+    logic.lvl_seed = macro.lvl_seed;
+    logic.lvl_seed_known = macro.lvl_seed_known;
+    logic.lvl_seed_from_file = macro.lvl_seed_known;
+    logic.macro_unrounded = macro.unrounded;
+    logic.macro_silicate_variance = macro.silicate_variance;
+    logic.macro_ldm = macro.ldm;
+    logic.macro_ldm_known = macro.ldm_known;
+    logic.highest_cps = macro.highest_cps;
+    logic.cps_notes_p1 = macro.cps_notes_p1;
+    logic.cps_notes_p2 = macro.cps_notes_p2;
 }
 
 bool ReplayIO::is_echo_file(const fs::path& path) {
@@ -431,8 +431,8 @@ int Logic::convert_legacy_echoes() {
             ++skipped;
             continue;
         }
-        MacroSnap snap;
-        if (!ReplayIO::read_any(path, snap)) {
+        MacroData macro;
+        if (!ReplayIO::read_any(path, macro)) {
             ++failed;
             continue;
         }
@@ -444,10 +444,10 @@ int Logic::convert_legacy_echoes() {
                 continue;
             }
         }
-        snap.name = stem;
-        snap.save_debug = save_debug;
+        macro.name = stem;
+        macro.save_debug = save_debug;
         auto dest = ReplayIO::unique_file(dir, stem, ".echo");
-        if (!ReplayIO::save_snap(dest, snap, ReplayIO::write_echo)) {
+        if (!ReplayIO::save_macro(dest, macro, ReplayIO::write_echo)) {
             ++failed;
             continue;
         }
@@ -476,15 +476,15 @@ void Logic::import_replays() {
         int copied = 0;
         int failed = 0;
         for (const auto& path : result.unwrap()) {
-            MacroSnap snap;
-            if (!ReplayIO::read_any(path, snap)) {
+            MacroData macro;
+            if (!ReplayIO::read_any(path, macro)) {
                 ++failed;
                 continue;
             }
-            snap.name = ReplayIO::import_stem(path);
-            snap.save_debug = Logic::get().save_debug;
-            auto dest = ReplayIO::unique_file(dir, snap.name, ".echo");
-            if (!ReplayIO::save_snap(dest, snap, ReplayIO::write_echo)) {
+            macro.name = ReplayIO::import_stem(path);
+            macro.save_debug = Logic::get().save_debug;
+            auto dest = ReplayIO::unique_file(dir, macro.name, ".echo");
+            if (!ReplayIO::save_macro(dest, macro, ReplayIO::write_echo)) {
                 ++failed;
                 continue;
             }

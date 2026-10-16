@@ -62,7 +62,7 @@ void Logic::trim_recorded_inputs(int frame) {
         bool later = frame <= 0 ? input.number >= frame : input.number > frame;
         return !(matches && later);
     });
-    touch_inputs();
+    mark_inputs_changed();
     refresh_live_hold();
 }
 
@@ -409,7 +409,7 @@ void Logic::trim_from_checkpoint(PlayLayer* play, const Checkpoint& checkpoint) 
 
 void Logic::clear_physical_holds() {
     key_jump_p1 = key_jump_p2 = false;
-    steered_keys.clear();
+    routed_keys.clear();
     key_left_p1 = key_right_p1 = false;
     key_left_p2 = key_right_p2 = false;
     death_jump_p1 = death_jump_p2 = false;
@@ -438,7 +438,7 @@ struct InputIndex {
     std::array<HeldLane, 9> lanes;
 };
 
-static int lane_of(bool player2, int button) {
+static int channel_index(bool player2, int button) {
     int slot = Logic::button_slot(button);
     if (slot < 0) return -1;
     return (player2 ? 3 : 0) + slot;
@@ -449,7 +449,7 @@ static bool same_input(const Frame& a, const Frame& b) {
 }
 
 static bool append_input(InputIndex& index, const Frame& input) {
-    int lane = lane_of(input.player2, input.button);
+    int lane = channel_index(input.player2, input.button);
     if (lane >= 0) {
         auto& at = index.lanes[(size_t)lane];
         auto& both = index.lanes[(size_t)(6 + lane % 3)];
@@ -490,7 +490,7 @@ static void rebuild_index(InputIndex& index, const std::vector<Frame>& inputs) {
     std::array<std::vector<size_t>, 9> members;
     for (size_t i = 0; i < inputs.size(); ++i) {
         const auto& input = inputs[i];
-        int lane = lane_of(input.player2, input.button);
+        int lane = channel_index(input.player2, input.button);
         if (lane >= 0) {
             members[(size_t)lane].push_back(i);
             members[(size_t)(6 + lane % 3)].push_back(i);
@@ -525,7 +525,7 @@ static InputIndex& held_index() {
 static InputIndex& synced_index(const Logic& logic) {
     auto& idx = held_index();
     const auto& inputs = logic.inputs;
-    bool kept = idx.owner == &inputs && idx.revision == logic.inputs_revision && idx.count <= inputs.size();
+    bool kept = idx.owner == &inputs && idx.revision == logic.inputs_version && idx.count <= inputs.size();
     if (kept && idx.count > 0) kept = same_input(inputs[idx.count - 1], idx.last);
     if (kept && idx.count == inputs.size()) kept = idx.data == inputs.data();
     if (!kept) rebuild_index(idx, inputs);
@@ -536,7 +536,7 @@ static InputIndex& synced_index(const Logic& logic) {
     }
     idx.owner = &inputs;
     idx.data = inputs.data();
-    idx.revision = logic.inputs_revision;
+    idx.revision = logic.inputs_version;
     return idx;
 }
 
@@ -546,7 +546,7 @@ void Logic::release_replay_index() {
 
 bool Logic::held_at(bool player2, int frame, int button) {
     int want = button == 0 ? JUMP : button;
-    int lane = lane_of(player2, want);
+    int lane = channel_index(player2, want);
     if (lane < 0) {
         bool held = false;
         for (const auto& input : inputs) {
@@ -557,7 +557,7 @@ bool Logic::held_at(bool player2, int frame, int button) {
         return held;
     }
     size_t slot = (size_t)lane;
-    if (live_seen[slot] && frame >= live_frame[slot]) return live_held[slot] != 0;
+    if (has_last_input[slot] && frame >= last_input_frame[slot]) return last_input_held[slot] != 0;
     if (is_playing() && !is_recording()) {
         auto* play = PlayLayer::get();
         if (play && !(play->m_levelSettings && play->m_levelSettings->m_twoPlayerMode)) {
@@ -588,19 +588,19 @@ bool Logic::inputs_sorted() {
     return inputs_in_order;
 }
 
-static void note_live(Logic& logic, const Frame& frame) {
-    logic.newest_input = std::max(logic.newest_input, frame.number);
+static void note_last_input(Logic& logic, const Frame& frame) {
+    logic.newest_input_frame = std::max(logic.newest_input_frame, frame.number);
     int slot = Logic::button_slot(frame.button);
     if (slot < 0) return;
     slot += frame.player2 ? 3 : 0;
     size_t lane = (size_t)slot;
-    if (logic.live_seen[lane] && frame.number < logic.live_frame[lane]) return;
-    logic.live_frame[lane] = frame.number;
-    logic.live_held[lane] = frame.holding ? 1 : 0;
-    logic.live_seen[lane] = 1;
+    if (logic.has_last_input[lane] && frame.number < logic.last_input_frame[lane]) return;
+    logic.last_input_frame[lane] = frame.number;
+    logic.last_input_held[lane] = frame.holding ? 1 : 0;
+    logic.has_last_input[lane] = 1;
 }
 
-static void grow_sides(Logic& logic, size_t index, bool appended) {
+static void grow_input_extras(Logic& logic, size_t index, bool appended) {
     auto grow = [&](auto& side, auto empty) {
         if (side.empty()) return;
         if (side.size() + 1 != logic.inputs.size()) {
@@ -621,8 +621,8 @@ size_t Logic::add_input(const Frame& frame) {
     if (!sort_automatically || !is_playing()) {
         if (!inputs.empty() && frame.number < inputs.back().number) inputs_in_order = false;
         inputs.push_back(frame);
-        grow_sides(*this, inputs.size() - 1, true);
-        note_live(*this, frame);
+        grow_input_extras(*this, inputs.size() - 1, true);
+        note_last_input(*this, frame);
         return inputs.size() - 1;
     }
     auto later = std::upper_bound(inputs.begin(), inputs.end(), frame, [](const Frame& key, const Frame& element) {
@@ -632,24 +632,24 @@ size_t Logic::add_input(const Frame& frame) {
     });
     size_t idx = (size_t)std::distance(inputs.begin(), later);
     inputs.insert(later, frame);
-    grow_sides(*this, idx, false);
-    if (idx + 1 != inputs.size()) touch_inputs();
+    grow_input_extras(*this, idx, false);
+    if (idx + 1 != inputs.size()) mark_inputs_changed();
     if (idx <= replay_pos) ++replay_pos;
-    note_live(*this, frame);
+    note_last_input(*this, frame);
     return idx;
 }
 
 void Logic::refresh_live_hold() {
-    live_frame.fill(-1);
-    live_held.fill(0);
-    live_seen.fill(0);
-    newest_input = -1;
+    last_input_frame.fill(-1);
+    last_input_held.fill(0);
+    has_last_input.fill(0);
+    newest_input_frame = -1;
     hold_count = 0;
     release_count = 0;
     inputs_in_order = true;
     int prev = -1;
     for (const auto& input : inputs) {
-        note_live(*this, input);
+        note_last_input(*this, input);
         (input.holding ? hold_count : release_count) += 1;
         if (prev >= 0 && input.number < prev) inputs_in_order = false;
         prev = input.number;
@@ -658,7 +658,7 @@ void Logic::refresh_live_hold() {
 
 void Logic::record_input(GJBaseGameLayer* play, bool down, bool player1, int button, bool force) {
     if (!is_recording() || !play) return;
-    if (resetting || refresh_only || ignore_record_frames > 0) return;
+    if (resetting || refreshing_visuals || skip_record_frames > 0) return;
     if (button != 0 && button != JUMP && button != LEFT && button != RIGHT) return;
     if (button == 0) button = JUMP;
     if (mirror_click) return;
@@ -712,7 +712,7 @@ struct CpsScan {
     float macro_fps = 240.f;
     std::vector<RateChange> rates;
     int max_cps = 16;
-    std::vector<CpsNote> notes_p1, notes_p2;
+    std::vector<CpsBreak> notes_p1, notes_p2;
     std::string highest = "P1: 0";
 
     double seconds_at(int frame) const {
@@ -720,7 +720,7 @@ struct CpsScan {
     }
 };
 
-static void note_rule(std::vector<CpsNote>& notes, int first, int last, std::string text) {
+static void add_cps_break(std::vector<CpsBreak>& notes, int first, int last, std::string text) {
     if (last < first) std::swap(first, last);
     if (!notes.empty() && notes.back().text == text && notes.back().last + 1 >= first) {
         notes.back().first = std::min(notes.back().first, first);
@@ -730,7 +730,7 @@ static void note_rule(std::vector<CpsNote>& notes, int first, int last, std::str
     notes.push_back({ first, last, std::move(text) });
 }
 
-static void eval_player_cps(CpsScan& scan, const std::vector<int>& presses, bool player2) {
+static void check_player_cps(CpsScan& scan, const std::vector<int>& presses, bool player2) {
     auto& notes = player2 ? scan.notes_p2 : scan.notes_p1;
     const char* who = player2 ? "P2" : "P1";
     if (presses.empty()) return;
@@ -745,7 +745,7 @@ static void eval_player_cps(CpsScan& scan, const std::vector<int>& presses, bool
         int end = idx;
         while (end < (int)presses.size() && presses[end] == frame)
             ++end;
-        if (end - idx > Logic::MAX_PER_FRAME) note_rule(notes, frame, frame, "Rule 2");
+        if (end - idx > Logic::MAX_PER_FRAME) add_cps_break(notes, frame, frame, "Rule 2");
         idx = end;
     }
 
@@ -766,7 +766,7 @@ static void eval_player_cps(CpsScan& scan, const std::vector<int>& presses, bool
                 presses[left],
                 presses[right]);
         }
-        if (amt > scan.max_cps) note_rule(notes, presses[left], presses[right], "Rule 1");
+        if (amt > scan.max_cps) add_cps_break(notes, presses[left], presses[right], "Rule 1");
     }
 
     int n = (int)presses.size();
@@ -787,7 +787,7 @@ static void eval_player_cps(CpsScan& scan, const std::vector<int>& presses, bool
             if (margin <= -slack) continue;
             int amt = end - start + 1;
             if (margin > slack || Logic::burst_too_fast(amt, scan.seconds_at(presses[end]) - scan.seconds_at(presses[start]))) {
-                note_rule(notes, presses[start], presses[end], "Rule 3");
+                add_cps_break(notes, presses[start], presses[end], "Rule 3");
                 break;
             }
         }
@@ -800,8 +800,8 @@ static void eval_player_cps(CpsScan& scan, const std::vector<int>& presses, bool
 }
 
 static void scan_cps(CpsScan& scan, const std::vector<int>& p1, const std::vector<int>& p2) {
-    eval_player_cps(scan, p1, false);
-    eval_player_cps(scan, p2, true);
+    check_player_cps(scan, p1, false);
+    check_player_cps(scan, p2, true);
 }
 
 static std::pair<std::vector<int>, std::vector<int>> split_presses(const std::vector<Frame>& inputs) {
@@ -813,7 +813,7 @@ static std::pair<std::vector<int>, std::vector<int>> split_presses(const std::ve
     return presses;
 }
 
-static void take_cps(Logic& logic, CpsScan& scan) {
+static void apply_cps_scan(Logic& logic, CpsScan& scan) {
     logic.cps_notes_p1 = std::move(scan.notes_p1);
     logic.cps_notes_p2 = std::move(scan.notes_p2);
     logic.highest_cps = std::move(scan.highest);
@@ -840,13 +840,13 @@ void Logic::recompute_cps() {
             }
             geode::queueInMainThread([scan = std::move(scan), mine]() mutable {
                 if (mine != ticket.load()) return;
-                take_cps(Logic::get(), scan);
+                apply_cps_scan(Logic::get(), scan);
             });
         }).detach();
     }
     catch (...) {
         auto presses = split_presses(inputs);
         scan_cps(scan, presses.first, presses.second);
-        take_cps(*this, scan);
+        apply_cps_scan(*this, scan);
     }
 }

@@ -48,7 +48,7 @@ namespace ffmpeg {
 				stop();
 				if (settings.m_pixelFormat != PixelFormat::RGBA)
 					return geode::Err(std::string("Only RGBA frames are supported"));
-				m_bytes = (std::size_t)settings.m_width * settings.m_height * 4;
+				m_frameBytes = (std::size_t)settings.m_width * settings.m_height * 4;
 				m_bottomUp = settings.m_doVerticalFlip;
 				auto failed = open_video(m_writer, settings.m_outputFile.string(), (int)settings.m_width, (int)settings.m_height, settings.m_fps, settings.m_bitrate);
 				if (!failed.empty()) return geode::Err(std::move(failed));
@@ -56,7 +56,7 @@ namespace ffmpeg {
 			}
 
 			geode::Result<void, std::string> writeFrame(const std::vector<unsigned char>& frame) {
-				if (frame.size() < m_bytes)
+				if (frame.size() < m_frameBytes)
 					return geode::Err(std::string("A frame was the wrong size"));
 				auto failed = write_frame(m_writer, frame.data(), m_bottomUp);
 				if (!failed.empty()) return geode::Err(std::move(failed));
@@ -81,7 +81,7 @@ namespace ffmpeg {
 
 		private:
 			VideoWriter* m_writer = nullptr;
-			std::size_t m_bytes = 0;
+			std::size_t m_frameBytes = 0;
 			bool m_bottomUp = true;
 		};
 

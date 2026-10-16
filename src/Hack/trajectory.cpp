@@ -35,10 +35,8 @@
 
 using namespace geode::prelude;
 
-namespace {
-}
 
-void Trajectory::park(PlayerObject* player) {
+void Trajectory::park_fake(PlayerObject* player) {
     if (!player) return;
     player->setVisible(false);
     player->m_isHidden = true;
@@ -64,7 +62,7 @@ PlayerObject* Trajectory::spawn_fake(PlayLayer* play, char const* id) {
     if (player->m_iconSpriteSecondary) player->m_iconSpriteSecondary->setVisible(false);
     if (player->m_iconSpriteWhitener) player->m_iconSpriteWhitener->setVisible(false);
     player->removeFromParentAndCleanup(false);
-    park(player);
+    park_fake(player);
     return player;
 }
 
@@ -77,24 +75,24 @@ void Trajectory::attach(PlayLayer* play) {
         made->m_bUseArea = false;
         made->setID(id);
         made->setBlendFunc({ GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA });
-        Logic::get().seat_overlay(made, play);
+        Logic::get().attach_overlay(made, play);
         return made;
     };
-    node = make_node("trajectory"_spr);
-    back_node = make_node("trajectory-next"_spr);
-    back_node->setVisible(false);
+    draw_node = make_node("trajectory"_spr);
+    back_draw_node = make_node("trajectory-next"_spr);
+    back_draw_node->setVisible(false);
     fake1 = spawn_fake(play, "trajectory-player-1"_spr);
     fake2 = spawn_fake(play, "trajectory-player-2"_spr);
 }
 
 void Trajectory::sync_seat(PlayLayer* play) {
-    if (!node || !play) return;
-    Logic::get().seat_overlay(node, play);
-    if (back_node) Logic::get().seat_overlay(back_node, play);
+    if (!draw_node || !play) return;
+    Logic::get().attach_overlay(draw_node, play);
+    if (back_draw_node) Logic::get().attach_overlay(back_draw_node, play);
 }
 
 void Trajectory::invalidate() {
-    cached = false;
+    drawing_valid = false;
     cancel_job();
 }
 
@@ -110,20 +108,16 @@ void Trajectory::detach() {
     };
     drop(fake1);
     drop(fake2);
-    drop(node);
-    drop(back_node);
-    used_p1.clear();
-    used_p2.clear();
-    busy = false;
-    cached = false;
+    drop(draw_node);
+    drop(back_draw_node);
+    activated_by_fake1.clear();
+    activated_by_fake2.clear();
+    simulating = false;
+    drawing_valid = false;
     clicked_frame = -1;
-    delta = 0.f;
+    real_step_delta = 0.f;
     Logic::get().predicting = false;
     Logic::get().sync_predict_hooks();
-}
-
-void Trajectory::note_button(bool player1, bool down) {
-    (player1 ? held_p1 : held_p2) = down;
 }
 
 bool Trajectory::mark_dead(PlayerObject* player) {
@@ -152,8 +146,8 @@ bool Trajectory::mark_predict_death(PlayerObject* player) {
 
 bool Trajectory::fakeActivated(PlayerObject* player, EnhancedGameObject* object) const {
     if (!object || object->m_isMultiActivate) return false;
-    if (player == fake1) return used_p1.contains(object);
-    if (player == fake2) return used_p2.contains(object);
+    if (player == fake1) return activated_by_fake1.contains(object);
+    if (player == fake2) return activated_by_fake2.contains(object);
     return false;
 }
 
@@ -167,38 +161,38 @@ bool Trajectory::realActivated(PlayerObject* player, EnhancedGameObject* object)
 }
 
 void Trajectory::rememberActivation(EnhancedGameObject* object, PlayerObject* player) {
-    if (player == fake1) used_p1.insert(object);
-    else if (player == fake2) used_p2.insert(object);
+    if (player == fake1) activated_by_fake1.insert(object);
+    else if (player == fake2) activated_by_fake2.insert(object);
 }
 
-ccColor4F Trajectory::color_for(PlayerObject* fake, Click click) const {
+ccColor4F Trajectory::path_color(PlayerObject* fake, ClickType click) const {
     auto const& logic = Logic::get();
-    float const* c = logic.traj_color;
+    float const* rgba = logic.traj_color;
     switch (click) {
-    case Click::Swift:
-        c = logic.traj_swift_color;
+    case ClickType::Swift:
+        rgba = logic.traj_swift_color;
         break;
-    case Click::Release:
-        c = logic.traj_release_color;
+    case ClickType::Release:
+        rgba = logic.traj_release_color;
         break;
-    case Click::Hold:
-    case Click::Replay:
+    case ClickType::Hold:
+    case ClickType::Replay:
         break;
     }
     if (fake == fake2)
-        return { 1.f - c[0], 1.f - c[1], 1.f - c[2], c[3] };
-    return { c[0], c[1], c[2], c[3] };
+        return { 1.f - rgba[0], 1.f - rgba[1], 1.f - rgba[2], rgba[3] };
+    return { rgba[0], rgba[1], rgba[2], rgba[3] };
 }
 
-float Trajectory::lineWidth(PlayLayer* play) const {
+float Trajectory::line_width(PlayLayer* play) const {
     return Logic::get().traj_width / std::max(play->m_gameState.m_cameraZoom, 0.05f);
 }
 
-Trajectory::Key Trajectory::make_key(PlayLayer* play) const {
+Trajectory::CacheKey Trajectory::make_cache_key(PlayLayer* play) const {
     auto const& logic = Logic::get();
-    Key key;
+    CacheKey key;
     key.frame = Logic::get().get_frame(play);
-    auto fill = [](PlayerObject* player, float* out) {
+    auto fill_player_state = [](PlayerObject* player, float* out) {
         if (!player) return;
         out[0] = player->m_position.x;
         out[1] = player->m_position.y;
@@ -207,8 +201,8 @@ Trajectory::Key Trajectory::make_key(PlayLayer* play) const {
         out[4] = (float)player->m_platformerXVelocity;
         out[5] = (float)((player->m_holdingLeft ? 1 : 0) | (player->m_holdingRight ? 2 : 0) | (player->m_leftPressedFirst ? 4 : 0));
     };
-    fill(play->m_player1, key.p1);
-    fill(play->m_player2, key.p2);
+    fill_player_state(play->m_player1, key.player1_state);
+    fill_player_state(play->m_player2, key.player2_state);
     key.dual = play->m_gameState.m_isDualMode;
     auto jump_held = [](PlayerObject* body) {
         if (!body) return false;
@@ -254,13 +248,13 @@ Trajectory::Key Trajectory::make_key(PlayLayer* play) const {
 }
 
 // w silly cat skid
-void Trajectory::seed(PlayerObject* fake, PlayerObject* real) {
+void Trajectory::copy_real_into_fake(PlayerObject* fake, PlayerObject* real) {
     // mod 0 crashes on windows
-    auto own_fire = fake->m_shipStreakType;
+    auto own_streak_type = fake->m_shipStreakType;
     fake->copyAttributes(real);
     SavedPlayerCheckpoint checkpoint = SavedPlayerCheckpoint::create(real);
     checkpoint.apply(fake);
-    fake->m_shipStreakType = own_fire;
+    fake->m_shipStreakType = own_streak_type;
     fake->m_pendingCheckpoint = nullptr;
     fake->m_maybeReducedEffects = real->m_maybeReducedEffects;
     fake->m_isHidden = true;
@@ -276,19 +270,19 @@ void Trajectory::dualPortal(GJBaseGameLayer* layer, PlayerObject* player, Effect
     if (state.m_isDualMode == on || !fake1 || !fake2) return;
     bool twoPlayer = layer->m_levelSettings && layer->m_levelSettings->m_twoPlayerMode;
     auto with_fakes = [&](auto&& action) {
-        PlayerObject* one = layer->m_player1;
-        PlayerObject* two = layer->m_player2;
+        PlayerObject* real1 = layer->m_player1;
+        PlayerObject* real2 = layer->m_player2;
         layer->m_player1 = fake1;
         layer->m_player2 = fake2;
         action();
-        layer->m_player1 = one;
-        layer->m_player2 = two;
+        layer->m_player1 = real1;
+        layer->m_player2 = real2;
     };
     if (on) {
-        if (player != fake1 || pairing) return;
+        if (player != fake1 || running_pair) return;
         state.m_isDualMode = true;
         fake1->m_unkA99 = true;
-        if (join_real) seed(fake2, join_real);
+        if (dual_partner_real) copy_real_into_fake(fake2, dual_partner_real);
         fake2->m_unkA99 = true;
         fake2->resetObject();
         fake2->copyAttributes(fake1);
@@ -314,7 +308,7 @@ void Trajectory::dualPortal(GJBaseGameLayer* layer, PlayerObject* player, Effect
         with_fakes([&] {
             layer->playerWillSwitchMode(player, portal);
         });
-        joined = joinable;
+        dual_started = can_start_dual;
         return;
     }
     state.m_isDualMode = false;
@@ -330,26 +324,26 @@ void Trajectory::dualPortal(GJBaseGameLayer* layer, PlayerObject* player, Effect
     with_fakes([&] {
         layer->updateDualGround(player, mode, false, 0.f);
     });
-    parted = true;
+    dual_ended = true;
 }
 
-void Trajectory::press(PlayLayer* play, PlayerObject* fake, Click click) {
+void Trajectory::press_fake(PlayLayer* play, PlayerObject* fake, ClickType click) {
     auto& logic = Logic::get();
     bool stash_orbs = Orbs::click_orb_assist(fake == fake2);
     if (stash_orbs) logic.suppress_rings = true;
     switch (click) {
-    case Click::Replay:
+    case ClickType::Replay:
         break;
-    case Click::Hold:
+    case ClickType::Hold:
         fake->pushButton(PlayerButton::Jump);
         break;
-    case Click::Swift:
+    case ClickType::Swift:
         fake->releaseButton(PlayerButton::Jump);
         fake->m_jumpBuffered = false;
         fake->pushButton(PlayerButton::Jump);
         fake->releaseButton(PlayerButton::Jump);
         break;
-    case Click::Release:
+    case ClickType::Release:
         fake->releaseButton(PlayerButton::Jump);
         fake->m_jumpBuffered = false;
         break;
@@ -357,18 +351,18 @@ void Trajectory::press(PlayLayer* play, PlayerObject* fake, Click click) {
     if (stash_orbs) logic.suppress_rings = false;
 }
 
-bool Trajectory::advance(PlayLayer* play, PlayerObject* fake, float step_delta, bool draw, Click click) {
+bool Trajectory::step_fake(PlayLayer* play, PlayerObject* fake, float step_delta, bool draw, ClickType click) {
     CCPoint from = fake->getPosition();
 
     // w nat
     fake->m_totalTime += Logic::get().physics_step();
     auto clear_log = [&](CCDictionary* log) {
         if (!log) return;
-        auto shared = [&](PlayerObject* body) {
+        auto is_real_log = [&](PlayerObject* body) {
             if (!body) return false;
             return log == body->m_collisionLogTop || log == body->m_collisionLogBottom || log == body->m_collisionLogLeft || log == body->m_collisionLogRight;
         };
-        if (shared(play->m_player1) || shared(play->m_player2)) return;
+        if (is_real_log(play->m_player1) || is_real_log(play->m_player2)) return;
         log->removeAllObjects();
     };
     clear_log(fake->m_collisionLogTop);
@@ -378,19 +372,19 @@ bool Trajectory::advance(PlayLayer* play, PlayerObject* fake, float step_delta, 
     fake->m_playEffects = false;
     bool live_was_dead = play->m_playerDied || (play->m_player1 && play->m_player1->m_isDead) || (play->m_player2 && play->m_player2->m_isDead);
     // a fire sprite w a type that has no frames must never reach update()
-    if (int fire = (int)(fake->m_shipStreakType); fake->m_shipStreak && (fire < 2 || fire > 6))
+    if (int streak_type = (int)(fake->m_shipStreakType); fake->m_shipStreak && (streak_type < 2 || streak_type > 6))
         fake->m_shipStreakType = (ShipStreak)2;
     fake->update(step_delta);
     fake->m_unkUnused3 = fake->getRotation();
     fake->updateRotation(step_delta);
     fake->m_shipRotation = fake->getPosition();
-    PlayerObject*& slot = (fake == fake2) ? play->m_player2 : play->m_player1;
-    PlayerObject* saved_slot = slot;
-    if (slot) slot = fake;
+    PlayerObject*& player_slot = (fake == fake2) ? play->m_player2 : play->m_player1;
+    PlayerObject* saved_slot = player_slot;
+    if (player_slot) player_slot = fake;
     colliding_fake = fake;
     int hit = play->checkCollisions(fake, step_delta, false);
     colliding_fake = nullptr;
-    if (slot) slot = saved_slot;
+    if (player_slot) player_slot = saved_slot;
     (void)hit;
     if (fake->m_isDead) mark_dead(fake);
     bool live_now_dead = play->m_playerDied || (play->m_player1 && play->m_player1->m_isDead) || (play->m_player2 && play->m_player2->m_isDead);
@@ -411,19 +405,19 @@ bool Trajectory::advance(PlayLayer* play, PlayerObject* fake, float step_delta, 
         return true;
     }
     if (draw) {
-        auto& path = paths[fake == fake2];
+        auto& path = unflushed_paths[fake == fake2];
         if (path.empty()) path.push_back(from);
         path.push_back(fake->getPosition());
     }
     return false;
 }
 
-void Trajectory::flush_path(PlayLayer* play, PlayerObject* fake, Click click) {
-    auto& path = paths[fake == fake2];
-    float width = lineWidth(play);
-    auto color = color_for(fake, click);
+void Trajectory::flush_path(PlayLayer* play, PlayerObject* fake, ClickType click) {
+    auto& path = unflushed_paths[fake == fake2];
+    float width = line_width(play);
+    auto color = path_color(fake, click);
     echo::trajectory::draw_path(path, [&](CCPoint a, CCPoint b) {
-        node->drawSegment(a, b, width, color);
+        draw_node->drawSegment(a, b, width, color);
     });
     path.clear();
 }
@@ -432,18 +426,18 @@ void Trajectory::draw_death(PlayerObject* fake) {
     auto* play = PlayLayer::get();
     if (!play) return;
     auto const& logic = Logic::get();
-    float width = lineWidth(play);
-    auto color = [](float const* c) {
+    float width = line_width(play);
+    auto to_color = [](float const* c) {
         return ccColor4F{ c[0], c[1], c[2], c[3] };
     };
-    node->drawRect(fake->getObjectRect(), { 0.f, 0.f, 0.f, 0.f }, width, color(logic.hitbox_outer_color), BorderAlignment::Inside);
-    node->drawRect(fake->getObjectRect(0.3f, 0.3f), { 0.f, 0.f, 0.f, 0.f }, width, color(logic.hitbox_inner_color), BorderAlignment::Inside);
+    draw_node->drawRect(fake->getObjectRect(), { 0.f, 0.f, 0.f, 0.f }, width, to_color(logic.hitbox_outer_color), BorderAlignment::Inside);
+    draw_node->drawRect(fake->getObjectRect(0.3f, 0.3f), { 0.f, 0.f, 0.f, 0.f }, width, to_color(logic.hitbox_inner_color), BorderAlignment::Inside);
 }
 
-void Trajectory::simulate(PlayLayer* play, bool player1, Click click, bool both, bool draw, int limit, int measure) {
+void Trajectory::simulate(PlayLayer* play, bool player1, ClickType click, bool both, bool draw, int limit, int measure) {
     auto& logic = Logic::get();
     const int MEASURE_LIVE = 1, MEASURE_HOLD = 2, MEASURE_RELEASE = 4;
-    bool watch = measure != 0;
+    bool measuring = measure != 0;
     PlayerObject* fake = player1 ? fake1 : fake2;
     PlayerObject* real = player1 ? play->m_player1 : play->m_player2;
     PlayerObject* partner = otherFake(fake);
@@ -453,14 +447,14 @@ void Trajectory::simulate(PlayLayer* play, bool player1, Click click, bool both,
     auto random_state = GameToolbox::getfast_srand();
     auto teleport_roll = logic.teleport_random;
     auto shake_roll = logic.shake_random;
-    bool pair = both && play->m_gameState.m_isDualMode && partner && partner_real;
+    bool with_partner = both && play->m_gameState.m_isDualMode && partner && partner_real;
     auto* manager = GameManager::get();
-    bool performance = manager && manager->m_performanceMode;
+    bool saved_performance_mode = manager && manager->m_performanceMode;
     if (manager) manager->m_performanceMode = true;
 
-    auto first = SavedPlayerCheckpoint::create(play->m_player1);
-    auto second = play->m_player2 ? SavedPlayerCheckpoint::create(play->m_player2) : SavedPlayerCheckpoint();
-    bool has_second = play->m_player2 != nullptr;
+    auto player1_checkpoint = SavedPlayerCheckpoint::create(play->m_player1);
+    auto player2_checkpoint = play->m_player2 ? SavedPlayerCheckpoint::create(play->m_player2) : SavedPlayerCheckpoint();
+    bool has_player2 = play->m_player2 != nullptr;
     bool died = play->m_playerDied;
     auto queued = play->m_queuedButtons;
     auto recorded = play->m_queuedRecordedButtons;
@@ -470,7 +464,7 @@ void Trajectory::simulate(PlayLayer* play, bool player1, Click click, bool both,
         return body ? std::array{ body->m_collisionLogTop, body->m_collisionLogBottom, body->m_collisionLogLeft, body->m_collisionLogRight } : std::array<CCDictionary*, 4>{};
     };
 
-    struct Trails {
+    struct PlayerTrails {
         HardStreak* wave = nullptr;
         CCMotionStreak* regular = nullptr;
         GhostTrailEffect* ghost = nullptr;
@@ -478,8 +472,8 @@ void Trajectory::simulate(PlayLayer* play, bool player1, Click click, bool both,
 
     auto trails_of = [](PlayerObject* body) {
         if (!body)
-            return Trails{};
-        return Trails{ body->m_waveTrail, body->m_regularTrail, body->m_ghostTrail };
+            return PlayerTrails{};
+        return PlayerTrails{ body->m_waveTrail, body->m_regularTrail, body->m_ghostTrail };
     };
     auto logs1 = logs_of(play->m_player1);
     auto logs2 = logs_of(play->m_player2);
@@ -490,9 +484,9 @@ void Trajectory::simulate(PlayLayer* play, bool player1, Click click, bool both,
     float layer_scale_x = layer ? layer->getScaleX() : 1.f, layer_scale_y = layer ? layer->getScaleY() : 1.f;
     float layer_rotation = layer ? layer->getRotation() : 0.f;
     auto restore_players = [&] {
-        auto put_body = [](PlayerObject* body, SavedPlayerCheckpoint& shot, std::array<CCDictionary*, 4> const& logs, Trails const& trails) {
+        auto restore_body = [](PlayerObject* body, SavedPlayerCheckpoint& checkpoint, std::array<CCDictionary*, 4> const& logs, PlayerTrails const& trails) {
             if (!body) return;
-            shot.apply(body);
+            checkpoint.apply(body);
             body->m_collisionLogTop = logs[0];
             body->m_collisionLogBottom = logs[1];
             body->m_collisionLogLeft = logs[2];
@@ -501,8 +495,8 @@ void Trajectory::simulate(PlayLayer* play, bool player1, Click click, bool both,
             body->m_regularTrail = trails.regular;
             body->m_ghostTrail = trails.ghost;
         };
-        put_body(play->m_player1, first, logs1, trails1);
-        if (has_second) put_body(play->m_player2, second, logs2, trails2);
+        restore_body(play->m_player1, player1_checkpoint, logs1, trails1);
+        if (has_player2) restore_body(play->m_player2, player2_checkpoint, logs2, trails2);
         play->m_playerDied = died;
         play->m_queuedButtons = queued;
         play->m_queuedRecordedButtons = recorded;
@@ -517,36 +511,36 @@ void Trajectory::simulate(PlayLayer* play, bool player1, Click click, bool both,
 
     SavedGameState saved_state(play->m_gameState);
     Orbs::reset_prediction_pads();
-    seed(fake, real);
-    if (pair) seed(partner, partner_real);
+    copy_real_into_fake(fake, real);
+    if (with_partner) copy_real_into_fake(partner, partner_real);
     fake->m_controlsDisabled = false;
-    if (pair && partner) partner->m_controlsDisabled = false;
+    if (with_partner && partner) partner->m_controlsDisabled = false;
     dead_p1 = false;
     dead_p2 = false;
 
-    std::array<PlayerObject*, 2> bodies = { fake, pair ? partner : nullptr };
+    std::array<PlayerObject*, 2> bodies = { fake, with_partner ? partner : nullptr };
     auto each_body = [&](auto&& action) {
         for (auto* body : bodies) {
             if (body) action(body);
         }
     };
 
-    bool played = logic.plays_player(!player1);
-    bool clicker = !played && logic.autoclicker && logic.records_player(!player1) && (player1 ? logic.autoclick_p1 : logic.autoclick_p2);
+    bool macro_plays = logic.plays_player(!player1);
+    bool uses_autoclicker = !macro_plays && logic.autoclicker && logic.records_player(!player1) && (player1 ? logic.autoclick_p1 : logic.autoclick_p2);
     auto jump_held = [](PlayerObject* body) {
         if (!body) return false;
         int jump = (int)PlayerButton::Jump;
         auto it = body->m_holdingButtons.find(jump);
         return it != body->m_holdingButtons.end() && it->second;
     };
-    bool key_held = Logic::get().physical_hold(play, !player1);
-    bool started_held = jump_held(real) || (logic.maintain_gravity && key_held && real->m_isDart);
-    AutoClick clock = logic.auto_click;
-    if (clicker) {
-        bool stash_orbs = Orbs::click_orb_assist(!player1) || (pair && Orbs::click_orb_assist(player1));
+    bool physical_key_held = Logic::get().physical_hold(play, !player1);
+    bool started_held = jump_held(real) || (logic.maintain_gravity && physical_key_held && real->m_isDart);
+    AutoClick autoclick_state = logic.auto_click;
+    if (uses_autoclicker) {
+        bool stash_orbs = Orbs::click_orb_assist(!player1) || (with_partner && Orbs::click_orb_assist(player1));
         if (stash_orbs) logic.suppress_rings = true;
         each_body([&](PlayerObject* body) {
-            if (clock.pressed) body->pushButton(PlayerButton::Jump);
+            if (autoclick_state.pressed) body->pushButton(PlayerButton::Jump);
             else body->releaseButton(PlayerButton::Jump);
         });
         if (stash_orbs) logic.suppress_rings = false;
@@ -556,104 +550,104 @@ void Trajectory::simulate(PlayLayer* play, bool player1, Click click, bool both,
             body->m_controlsDisabled = false;
             body->m_isLocked = false;
             bool already_held = jump_held(body);
-            if (!already_held && logic.maintain_gravity && key_held && body->m_isDart && click == Click::Hold) {
+            if (!already_held && logic.maintain_gravity && physical_key_held && body->m_isDart && click == ClickType::Hold) {
                 already_held = true;
             }
-            if (click == Click::Hold && already_held) return;
-            if (click != Click::Release && click != Click::Replay) body->m_jumpBuffered = false;
-            press(play, body, click);
+            if (click == ClickType::Hold && already_held) return;
+            if (click != ClickType::Release && click != ClickType::Replay) body->m_jumpBuffered = false;
+            press_fake(play, body, click);
         });
     }
 
     float warp = play->m_gameState.m_timeWarp;
-    float step_delta = delta > 0.f ? delta : logic.physics_step() * 60.f * std::min(warp, 1.f);
+    float step_delta = real_step_delta > 0.f ? real_step_delta : logic.physics_step() * 60.f * std::min(warp, 1.f);
     // a macro can change tps part way so each step gets its own length (NOT the last real frames)
-    bool varying = logic.is_playing() && !logic.rates.empty();
-    float step_len = logic.physics_step();
-    if (varying) {
-        step_len = 1.f / std::max(logic.rate_at(logic.get_frame(play)), 1.f);
-        step_delta = step_len * 60.f * std::min(warp, 1.f);
+    bool varying_tps = logic.is_playing() && !logic.rates.empty();
+    float step_seconds = logic.physics_step();
+    if (varying_tps) {
+        step_seconds = 1.f / std::max(logic.rate_at(logic.get_frame(play)), 1.f);
+        step_delta = step_seconds * 60.f * std::min(warp, 1.f);
     }
     int steps = echo::trajectory::prediction_steps(logic.traj_seconds, logic.sample_rate(), warp);
     if (limit > 0) steps = std::min(steps, limit);
     perf_count_traj_steps(steps);
-    bool moving_objects = logic.traj_moving_objects && !label_only;
+    bool moving_objects = logic.traj_moving_objects && !death_label_only;
     if (moving_objects) forecast::prepare(play, steps, step_delta / 60.f);
     else forecast::invalidate();
     if (draw) {
-        paths[fake == fake2].reserve(steps + 1);
-        if (partner) paths[partner == fake2].reserve(steps + 1);
+        unflushed_paths[fake == fake2].reserve(steps + 1);
+        if (partner) unflushed_paths[partner == fake2].reserve(steps + 1);
     }
     int frame = logic.get_frame(play);
-    size_t cursor = logic.replay_pos;
+    size_t input_cursor = logic.replay_pos;
     const int HOLD_BUTTONS[] = { (int)PlayerButton::Jump, (int)PlayerButton::Left, (int)PlayerButton::Right };
     std::array<std::array<bool, 3>, 2> macro_held{};
-    std::array<int, 2> last_input = { -1, -1 };
+    std::array<int, 2> last_input_frame = { -1, -1 };
     if (logic.is_playing()) {
         for (int side = 0; side < 2; ++side) {
             if (!logic.plays_player(side == 1)) continue;
             for (int b = 0; b < (play->m_isPlatformer ? 3 : 1); ++b)
                 macro_held[side][b] = Logic::get().held_at(side == 1, frame, HOLD_BUTTONS[b]);
         }
-        for (size_t i = logic.inputs.size(); i-- > 0 && (last_input[0] < 0 || last_input[1] < 0);) {
-            int& last = last_input[logic.inputs[i].player2 ? 1 : 0];
+        for (size_t i = logic.inputs.size(); i-- > 0 && (last_input_frame[0] < 0 || last_input_frame[1] < 0);) {
+            int& last = last_input_frame[logic.inputs[i].player2 ? 1 : 0];
             if (last < 0) last = logic.inputs[i].number;
         }
     }
-    bool done1 = false, done2 = !pair;
-    int live_steps1 = 0, live_steps2 = 0;
-    auto poses = Orbs::capture(play, real);
-    if (pair) {
-        auto extra = Orbs::capture(play, partner_real);
-        poses.insert(poses.end(), extra.begin(), extra.end());
+    bool fake_done = false, partner_done = !with_partner;
+    int fake_alive_steps = 0, partner_alive_steps = 0;
+    auto orb_poses = Orbs::capture(play, real);
+    if (with_partner) {
+        auto partner_orb_poses = Orbs::capture(play, partner_real);
+        orb_poses.insert(orb_poses.end(), partner_orb_poses.begin(), partner_orb_poses.end());
     }
     auto restore_orbs = [&] {
-        Orbs::restore(poses);
+        Orbs::restore(orb_poses);
     };
     bool twoPlayer = play->m_levelSettings && play->m_levelSettings->m_twoPlayerMode;
-    bool ended1 = false, ended2 = false;
-    pairing = pair;
-    join_real = partner_real;
-    joinable = player1 && !pair && partner == fake2 && partner_real && !Logic::get().traj_player_hidden(true);
-    joined = false;
-    parted = false;
-    auto portals = [&] {
-        if (std::exchange(joined, false)) {
-            pair = true;
-            pairing = true;
-            done2 = false;
+    bool fake_left_dual = false, partner_left_dual = false;
+    running_pair = with_partner;
+    dual_partner_real = partner_real;
+    can_start_dual = player1 && !with_partner && partner == fake2 && partner_real && !Logic::get().traj_player_hidden(true);
+    dual_started = false;
+    dual_ended = false;
+    auto apply_dual_portal_changes = [&] {
+        if (std::exchange(dual_started, false)) {
+            with_partner = true;
+            running_pair = true;
+            partner_done = false;
             partner->m_controlsDisabled = false;
             partner->m_isLocked = false;
             if (!twoPlayer) bodies[1] = partner;
-            if (draw) paths[partner == fake2].reserve(steps + 1);
+            if (draw) unflushed_paths[partner == fake2].reserve(steps + 1);
         }
-        if (std::exchange(parted, false)) {
-            pairing = false;
+        if (std::exchange(dual_ended, false)) {
+            running_pair = false;
             if (fake == fake2) {
-                ended1 = !done1;
-                done1 = true;
+                fake_left_dual = !fake_done;
+                fake_done = true;
             }
-            else if (pair) {
-                ended2 = !done2;
-                done2 = true;
+            else if (with_partner) {
+                partner_left_dual = !partner_done;
+                partner_done = true;
                 bodies[1] = nullptr;
             }
         }
     };
     std::array<std::unordered_set<int>, 2> orb_clicks;
 
-    struct SavedFlag {
+    struct ObjectUseFlags {
         EnhancedGameObject* object;
         bool p1, p2;
     };
 
-    std::vector<SavedFlag> flags;
-    for (auto const& pose : poses) {
+    std::vector<ObjectUseFlags> orb_use_flags;
+    for (auto const& pose : orb_poses) {
         auto* ring = static_cast<EnhancedGameObject*>(pose.object);
         if (ring)
-            flags.push_back({ ring, ring->m_activatedByPlayer1, ring->m_activatedByPlayer2 });
+            orb_use_flags.push_back({ ring, ring->m_activatedByPlayer1, ring->m_activatedByPlayer2 });
     }
-    auto snap_rings = [](PlayerObject* player) {
+    auto copy_touching_rings = [](PlayerObject* player) {
         std::vector<CCObject*> rings;
         if (!player || !player->m_touchingRings) return rings;
         unsigned int count = player->m_touchingRings->count();
@@ -662,31 +656,31 @@ void Trajectory::simulate(PlayLayer* play, bool player1, Click click, bool both,
             rings.push_back(player->m_touchingRings->objectAtIndex(i));
         return rings;
     };
-    auto put_rings = [](PlayerObject* player, std::vector<CCObject*> const& rings) {
+    auto restore_touching_rings = [](PlayerObject* player, std::vector<CCObject*> const& rings) {
         if (!player || !player->m_touchingRings) return;
         player->m_touchingRings->removeAllObjects();
         for (auto* ring : rings) {
             if (ring) player->m_touchingRings->addObject(ring);
         }
     };
-    auto rings1 = snap_rings(play->m_player1);
-    auto rings2 = snap_rings(play->m_player2);
-    auto restore_live = [&] {
+    auto rings1 = copy_touching_rings(play->m_player1);
+    auto rings2 = copy_touching_rings(play->m_player2);
+    auto restore_live_orbs = [&] {
         restore_orbs();
-        for (auto const& flag : flags) {
+        for (auto const& flag : orb_use_flags) {
             if (!flag.object) continue;
             flag.object->m_activatedByPlayer1 = flag.p1;
             flag.object->m_activatedByPlayer2 = flag.p2;
         }
-        put_rings(play->m_player1, rings1);
-        put_rings(play->m_player2, rings2);
+        restore_touching_rings(play->m_player1, rings1);
+        restore_touching_rings(play->m_player2, rings2);
     };
 
     std::unique_ptr<SavedGameState> sim_state;
     decltype(random_state) sim_random{};
     decltype(teleport_roll) sim_teleport{};
     decltype(shake_roll) sim_shake{};
-    std::vector<SavedFlag> sim_flags;
+    std::vector<ObjectUseFlags> sim_orb_use_flags;
     std::vector<CCObject*> sim_rings1, sim_rings2;
     SavedPlayerCheckpoint sim_first, sim_second;
     auto sim_queued = queued;
@@ -694,21 +688,21 @@ void Trajectory::simulate(PlayLayer* play, bool player1, Click click, bool both,
     int sim_recorded_size = recorded_size;
     CCPoint sim_layer_pos = layer_pos;
     float sim_scale_x = layer_scale_x, sim_scale_y = layer_scale_y, sim_rotation = layer_rotation;
-    SliceHook world{
+    SliceStateHooks world_hooks{
         [&] {
             sim_state = std::make_unique<SavedGameState>(play->m_gameState);
             sim_random = GameToolbox::getfast_srand();
             sim_teleport = logic.teleport_random;
             sim_shake = logic.shake_random;
-            sim_flags.clear();
-            for (auto const& flag : flags) {
+            sim_orb_use_flags.clear();
+            for (auto const& flag : orb_use_flags) {
                 if (flag.object)
-                    sim_flags.push_back({ flag.object, flag.object->m_activatedByPlayer1, flag.object->m_activatedByPlayer2 });
+                    sim_orb_use_flags.push_back({ flag.object, flag.object->m_activatedByPlayer1, flag.object->m_activatedByPlayer2 });
             }
-            sim_rings1 = snap_rings(play->m_player1);
-            sim_rings2 = snap_rings(play->m_player2);
+            sim_rings1 = copy_touching_rings(play->m_player1);
+            sim_rings2 = copy_touching_rings(play->m_player2);
             sim_first = SavedPlayerCheckpoint::create(play->m_player1);
-            if (has_second) sim_second = SavedPlayerCheckpoint::create(play->m_player2);
+            if (has_player2) sim_second = SavedPlayerCheckpoint::create(play->m_player2);
             sim_queued = play->m_queuedButtons;
             sim_recorded = play->m_queuedRecordedButtons;
             sim_recorded_size = play->m_queuedRecordedButtonsSize;
@@ -721,13 +715,13 @@ void Trajectory::simulate(PlayLayer* play, bool player1, Click click, bool both,
         },
         [&] {
             forecast::suspend(play);
-            restore_live();
+            restore_live_orbs();
             saved_state.restore(play->m_gameState);
             restore_players();
             GameToolbox::fast_srand(random_state);
             logic.teleport_random = teleport_roll;
             logic.shake_random = shake_roll;
-            if (manager) manager->m_performanceMode = performance;
+            if (manager) manager->m_performanceMode = saved_performance_mode;
         },
         [&] {
             queued = play->m_queuedButtons;
@@ -736,7 +730,7 @@ void Trajectory::simulate(PlayLayer* play, bool player1, Click click, bool both,
             random_state = GameToolbox::getfast_srand();
             teleport_roll = logic.teleport_random;
             shake_roll = logic.shake_random;
-            if (manager) performance = manager->m_performanceMode;
+            if (manager) saved_performance_mode = manager->m_performanceMode;
             if (manager) manager->m_performanceMode = true;
             if (sim_state) {
                 sim_state->restore(play->m_gameState);
@@ -745,15 +739,15 @@ void Trajectory::simulate(PlayLayer* play, bool player1, Click click, bool both,
             GameToolbox::fast_srand(sim_random);
             logic.teleport_random = sim_teleport;
             logic.shake_random = sim_shake;
-            for (auto const& flag : sim_flags) {
+            for (auto const& flag : sim_orb_use_flags) {
                 flag.object->m_activatedByPlayer1 = flag.p1;
                 flag.object->m_activatedByPlayer2 = flag.p2;
             }
-            put_rings(play->m_player1, sim_rings1);
-            put_rings(play->m_player2, sim_rings2);
-            auto put_sim = [](PlayerObject* body, SavedPlayerCheckpoint& shot, std::array<CCDictionary*, 4> const& logs, Trails const& trails) {
+            restore_touching_rings(play->m_player1, sim_rings1);
+            restore_touching_rings(play->m_player2, sim_rings2);
+            auto restore_sim_body = [](PlayerObject* body, SavedPlayerCheckpoint& checkpoint, std::array<CCDictionary*, 4> const& logs, PlayerTrails const& trails) {
                 if (!body) return;
-                shot.apply(body);
+                checkpoint.apply(body);
                 body->m_collisionLogTop = logs[0];
                 body->m_collisionLogBottom = logs[1];
                 body->m_collisionLogLeft = logs[2];
@@ -762,8 +756,8 @@ void Trajectory::simulate(PlayLayer* play, bool player1, Click click, bool both,
                 body->m_regularTrail = trails.regular;
                 body->m_ghostTrail = trails.ghost;
             };
-            put_sim(play->m_player1, sim_first, logs1, trails1);
-            if (has_second) put_sim(play->m_player2, sim_second, logs2, trails2);
+            restore_sim_body(play->m_player1, sim_first, logs1, trails1);
+            if (has_player2) restore_sim_body(play->m_player2, sim_second, logs2, trails2);
             play->m_playerDied = false;
             play->m_queuedButtons = sim_queued;
             play->m_queuedRecordedButtons = sim_recorded;
@@ -776,33 +770,33 @@ void Trajectory::simulate(PlayLayer* play, bool player1, Click click, bool both,
             }
         }
     };
-    slice_hooks.push_back(&world);
+    slice_state_hooks.push_back(&world_hooks);
     struct PopHook {
-        std::vector<SliceHook*>& hooks;
+        std::vector<SliceStateHooks*>& hooks;
         ~PopHook() {
             hooks.pop_back();
         }
-    } pop_world{ slice_hooks };
+    } pop_world{ slice_state_hooks };
 
     std::vector<CCPoint> player_path;
-    bool note_path = (measure & MEASURE_LIVE) && fake == fake1 && steps >= 30 && !died;
-    if (note_path) {
+    bool record_player_path = (measure & MEASURE_LIVE) && fake == fake1 && steps >= 30 && !died;
+    if (record_player_path) {
         player_path.reserve((size_t)steps + 1);
         player_path.push_back(fake->getPosition());
     }
-    for (int i = 0; i < steps && !(done1 && done2); ++i) {
-        slice_point();
-        if (job_cancel) break;
+    for (int i = 0; i < steps && !(fake_done && partner_done); ++i) {
+        yield_if_slice_over();
+        if (job_cancel_requested) break;
 
-        if (varying) {
-            step_len = 1.f / std::max(logic.rate_at(frame + i), 1.f);
-            step_delta = step_len * 60.f * std::min(warp, 1.f);
+        if (varying_tps) {
+            step_seconds = 1.f / std::max(logic.rate_at(frame + i), 1.f);
+            step_delta = step_seconds * 60.f * std::min(warp, 1.f);
         }
         {
-            const float REACH = 360.f;
+            const float FORECAST_REACH = 360.f;
             auto at = fake->getPosition();
             float left = at.x, right = at.x, bottom = at.y, top = at.y;
-            if (pair && partner) {
+            if (with_partner && partner) {
                 auto other = partner->getPosition();
                 left = std::min(left, other.x);
                 right = std::max(right, other.x);
@@ -810,72 +804,72 @@ void Trajectory::simulate(PlayLayer* play, bool player1, Click click, bool both,
                 top = std::max(top, other.y);
             }
             if (moving_objects)
-                forecast::apply(play, i + 1, { left - REACH, bottom - REACH, right - left + 2.f * REACH, top - bottom + 2.f * REACH }, fake == fake1 ? at.y : NAN);
+                forecast::apply(play, i + 1, { left - FORECAST_REACH, bottom - FORECAST_REACH, right - left + 2.f * FORECAST_REACH, top - bottom + 2.f * FORECAST_REACH }, fake == fake1 ? at.y : NAN);
         }
-        std::array<bool, 2> orb_press{};
-        if (played || (pair && logic.is_playing())) {
+        std::array<bool, 2> orb_pressed{};
+        if (macro_plays || (with_partner && logic.is_playing())) {
             int at = frame + i + 1;
-            bool shared = pair && logic.records_player(false) == logic.records_player(true) && (!logic.is_playing() || logic.play_p1 == logic.play_p2);
-            auto send = [&](PlayerObject* target, bool player2, PlayerButton button, bool holding) {
-                auto apply = [&](PlayerObject* body, bool icon2) {
+            bool inputs_shared = with_partner && logic.records_player(false) == logic.records_player(true) && (!logic.is_playing() || logic.play_p1 == logic.play_p2);
+            auto send_input = [&](PlayerObject* target, bool player2, PlayerButton button, bool holding) {
+                auto press_or_release = [&](PlayerObject* body, bool icon2) {
                     if (!body) return;
                     if (holding) {
                         body->pushButton(button);
-                        if (button == PlayerButton::Jump) orb_press[icon2 ? 1 : 0] = true;
+                        if (button == PlayerButton::Jump) orb_pressed[icon2 ? 1 : 0] = true;
                     }
                     else body->releaseButton(button);
                 };
-                apply(target, player2);
-                if (shared) apply(otherFake(target), !player2);
+                press_or_release(target, player2);
+                if (inputs_shared) press_or_release(otherFake(target), !player2);
             };
-            std::array<std::array<bool, 3>, 2> sent{};
+            std::array<std::array<bool, 3>, 2> sent_this_step{};
             bool two_player_lvl = play->m_levelSettings && play->m_levelSettings->m_twoPlayerMode;
-            while (cursor < logic.inputs.size() && logic.inputs[cursor].number <= at) {
-                auto const& input = logic.inputs[cursor++];
-                int raw = input.button == 0 ? 1 : input.button;
+            while (input_cursor < logic.inputs.size() && logic.inputs[input_cursor].number <= at) {
+                auto const& input = logic.inputs[input_cursor++];
+                int raw_button = input.button == 0 ? 1 : input.button;
                 // outside 2 player levels gd gives p2 inputs to p1 (silicate macros can be all p2)
                 bool to_p2 = input.player2 && two_player_lvl;
-                send(to_p2 ? fake2 : fake1, to_p2, (PlayerButton)raw, input.holding);
+                send_input(to_p2 ? fake2 : fake1, to_p2, (PlayerButton)raw_button, input.holding);
                 int side = to_p2 ? 1 : 0;
                 for (int b = 0; b < 3; ++b) {
-                    if (HOLD_BUTTONS[b] != raw) continue;
+                    if (HOLD_BUTTONS[b] != raw_button) continue;
                     macro_held[side][b] = input.holding;
-                    sent[side][b] = true;
+                    sent_this_step[side][b] = true;
                 }
             }
             for (int side = 0; side < (two_player_lvl ? 2 : 1); ++side) {
                 if (!logic.plays_player(side == 1)) continue;
-                if (!logic.ignore_inputs && at > last_input[side]) continue;
+                if (!logic.ignore_inputs && at > last_input_frame[side]) continue;
                 PlayerObject* body = side == 1 ? fake2 : fake1;
-                if (body != fake && !(pair && body == partner)) continue;
+                if (body != fake && !(with_partner && body == partner)) continue;
                 for (int b = 0; b < (play->m_isPlatformer ? 3 : 1); ++b) {
-                    if (sent[side][b]) continue;
+                    if (sent_this_step[side][b]) continue;
                     if (b > 0 && body->m_controlsDisabled) continue;
                     if (Logic::button_held(body, HOLD_BUTTONS[b]) == macro_held[side][b]) continue;
-                    send(body, side == 1, (PlayerButton)HOLD_BUTTONS[b], macro_held[side][b]);
+                    send_input(body, side == 1, (PlayerButton)HOLD_BUTTONS[b], macro_held[side][b]);
                 }
             }
         }
 
-        bool pressed_now = (i == 0 && (click == Click::Swift || (click == Click::Hold && !started_held)));
-        if (clicker) {
-            if (clock.pressed) ++clock.since_press;
-            else ++clock.since_release;
-            bool flip = clock.pressed ? clock.since_press >= clock.press_interval : clock.since_release >= clock.release_interval;
+        bool pressed_now = (i == 0 && (click == ClickType::Swift || (click == ClickType::Hold && !started_held)));
+        if (uses_autoclicker) {
+            if (autoclick_state.pressed) ++autoclick_state.since_press;
+            else ++autoclick_state.since_release;
+            bool flip = autoclick_state.pressed ? autoclick_state.since_press >= autoclick_state.press_interval : autoclick_state.since_release >= autoclick_state.release_interval;
             if (flip) {
-                clock.pressed = !clock.pressed;
-                clock.since_press = 0;
-                clock.since_release = 0;
-                pressed_now = clock.pressed;
-                bool stash_orbs = Orbs::click_orb_assist(!player1) || (pair && Orbs::click_orb_assist(player1));
+                autoclick_state.pressed = !autoclick_state.pressed;
+                autoclick_state.since_press = 0;
+                autoclick_state.since_release = 0;
+                pressed_now = autoclick_state.pressed;
+                bool stash_orbs = Orbs::click_orb_assist(!player1) || (with_partner && Orbs::click_orb_assist(player1));
                 if (stash_orbs) logic.suppress_rings = true;
                 each_body([&](PlayerObject* body) {
-                    if (clock.pressed) body->pushButton(PlayerButton::Jump);
+                    if (autoclick_state.pressed) body->pushButton(PlayerButton::Jump);
                     else body->releaseButton(PlayerButton::Jump);
                 });
                 if (stash_orbs) logic.suppress_rings = false;
-                if (clock.pressed && clock.press_interval <= 0) {
-                    clock.pressed = false;
+                if (autoclick_state.pressed && autoclick_state.press_interval <= 0) {
+                    autoclick_state.pressed = false;
                     pressed_now = false;
                     each_body([&](PlayerObject* body) {
                         body->releaseButton(PlayerButton::Jump);
@@ -884,17 +878,17 @@ void Trajectory::simulate(PlayLayer* play, bool player1, Click click, bool both,
             }
         }
 
-        auto maintain = [&](PlayerObject* body) {
+        auto keep_gravity_hold = [&](PlayerObject* body) {
             bool icon2 = body == fake2;
             if (!body->m_isDart || logic.plays_player(icon2) || !logic.maintain_gravity || !logic.records_player(icon2))
                 return;
-            bool physical = clicker ? clock.pressed : click == Click::Hold;
+            bool physically_held = uses_autoclicker ? autoclick_state.pressed : click == ClickType::Hold;
             bool stash_orbs = Orbs::click_orb_assist(icon2);
             if (stash_orbs) logic.suppress_rings = true;
             for (int step = 0; step < 8 && !body->m_controlsDisabled; ++step) {
-                if (body->m_isUpsideDown != (physical == body->m_jumpBuffered)) break;
+                if (body->m_isUpsideDown != (physically_held == body->m_jumpBuffered)) break;
                 bool before_flip = body->m_isUpsideDown, before_buffer = body->m_jumpBuffered;
-                if (physical != body->m_isUpsideDown) {
+                if (physically_held != body->m_isUpsideDown) {
                     body->pushButton(PlayerButton::Jump);
                 }
                 else body->releaseButton(PlayerButton::Jump);
@@ -903,113 +897,113 @@ void Trajectory::simulate(PlayLayer* play, bool player1, Click click, bool both,
             }
             if (stash_orbs) logic.suppress_rings = false;
         };
-        each_body(maintain);
+        each_body(keep_gravity_hold);
         each_body([&](PlayerObject* body) {
             bool icon2 = body == fake2;
-            bool fresh = orb_press[icon2 ? 1 : 0] || (!logic.plays_player(icon2) && pressed_now);
-            Orbs::click_fake(play, body, icon2, orb_clicks[icon2 ? 1 : 0], fresh);
+            bool fresh_press = orb_pressed[icon2 ? 1 : 0] || (!logic.plays_player(icon2) && pressed_now);
+            Orbs::click_fake(play, body, icon2, orb_clicks[icon2 ? 1 : 0], fresh_press);
             Orbs::click_fake_dash(body, icon2);
             Orbs::apply_prediction_pads(play, body, icon2);
         });
-        each_body(maintain);
+        each_body(keep_gravity_hold);
 
         // w skidicate
         auto& state = play->m_gameState;
-        float dt = varying ? step_len : logic.physics_step();
+        float dt = varying_tps ? step_seconds : logic.physics_step();
         state.m_totalTime += dt;
         state.m_unkDouble3 += dt / state.m_timeWarp;
         state.m_currentProgress++;
         state.m_unkUint5 += (int)roundf(state.m_timeWarp * 1000.0f);
-        float timeMod = *reinterpret_cast<float*>(&state.m_timeModRelated);
-        if (timeMod != 0.0f) {
+        float time_mod = *reinterpret_cast<float*>(&state.m_timeModRelated);
+        if (time_mod != 0.0f) {
             state.m_timeModRelated = 0;
             state.m_timeModRelated2 = 0;
             each_body([&](PlayerObject* body) {
-                body->updateTimeMod(timeMod, true);
+                body->updateTimeMod(time_mod, true);
             });
         }
 
-        if (!done1) fake->resetTouchedRings(false);
-        if (!done2 && partner) partner->resetTouchedRings(false);
-        bool was1 = done1, was2 = done2;
-        if (!done1) done1 = advance(play, fake, step_delta, draw, click);
-        if (note_path && !done1) player_path.push_back(fake->getPosition());
-        if (path_sink && !done1) path_sink->push_back(fake->getPosition());
-        portals();
-        if (!done2) done2 = advance(play, partner, step_delta, draw, click);
-        portals();
+        if (!fake_done) fake->resetTouchedRings(false);
+        if (!partner_done && partner) partner->resetTouchedRings(false);
+        bool fake_was_done = fake_done, partner_was_done = partner_done;
+        if (!fake_done) fake_done = step_fake(play, fake, step_delta, draw, click);
+        if (record_player_path && !fake_done) player_path.push_back(fake->getPosition());
+        if (survival_path_out && !fake_done) survival_path_out->push_back(fake->getPosition());
+        apply_dual_portal_changes();
+        if (!partner_done) partner_done = step_fake(play, partner, step_delta, draw, click);
+        apply_dual_portal_changes();
         restore_orbs();
         if ((measure & MEASURE_LIVE) && i == 0 && !died) {
             if (player1) {
-                if (!was1 && done1 && !ended1) logic.death_next_p1 = true;
-                if (pair && !was2 && done2 && !ended2) logic.death_next_p2 = true;
+                if (!fake_was_done && fake_done && !fake_left_dual) logic.death_next_p1 = true;
+                if (with_partner && !partner_was_done && partner_done && !partner_left_dual) logic.death_next_p2 = true;
             }
-            else if (!was1 && done1 && !ended1) {
+            else if (!fake_was_done && fake_done && !fake_left_dual) {
                 logic.death_next_p2 = true;
             }
         }
-        if (watch) {
-            if (!was1 && !done1) ++live_steps1;
-            if (pair && !was2 && !done2) ++live_steps2;
+        if (measuring) {
+            if (!fake_was_done && !fake_done) ++fake_alive_steps;
+            if (with_partner && !partner_was_done && !partner_done) ++partner_alive_steps;
         }
     }
 
-    if (watch) {
-        measured[0] = done1 && !ended1 ? live_steps1 : steps;
-        measured[1] = pair && done2 && !ended2 ? live_steps2 : steps;
-        measured_full = steps;
-        float scale = std::clamp(warp, 0.01f, 1.f) / (float)logic.sample_rate();
-        auto store = [&](float& alive1, bool& dies1, float& alive2, bool& dies2) {
+    if (measuring) {
+        measured_alive_steps[0] = fake_done && !fake_left_dual ? fake_alive_steps : steps;
+        measured_alive_steps[1] = with_partner && partner_done && !partner_left_dual ? partner_alive_steps : steps;
+        measured_total_steps = steps;
+        float steps_to_seconds = std::clamp(warp, 0.01f, 1.f) / (float)logic.sample_rate();
+        auto store_alive_times = [&](float& alive1, bool& dies1, float& alive2, bool& dies2) {
             if (player1) {
-                alive1 = (float)live_steps1 * scale;
-                dies1 = done1 && !ended1;
-                if (pair) {
-                    alive2 = (float)live_steps2 * scale;
-                    dies2 = done2 && !ended2;
+                alive1 = (float)fake_alive_steps * steps_to_seconds;
+                dies1 = fake_done && !fake_left_dual;
+                if (with_partner) {
+                    alive2 = (float)partner_alive_steps * steps_to_seconds;
+                    dies2 = partner_done && !partner_left_dual;
                 }
             }
             else {
-                alive2 = (float)live_steps1 * scale;
-                dies2 = done1 && !ended1;
+                alive2 = (float)fake_alive_steps * steps_to_seconds;
+                dies2 = fake_done && !fake_left_dual;
             }
         };
         if (measure & MEASURE_LIVE)
-            store(logic.traj_alive_p1, logic.traj_dies_p1, logic.traj_alive_p2, logic.traj_dies_p2);
+            store_alive_times(logic.traj_alive_p1, logic.traj_dies_p1, logic.traj_alive_p2, logic.traj_dies_p2);
         if (measure & MEASURE_HOLD) {
             if (player1) {
-                logic.traj_hold_alive_p1 = (float)live_steps1 * scale;
-                if (pair) logic.traj_hold_alive_p2 = (float)live_steps2 * scale;
+                logic.traj_hold_alive_p1 = (float)fake_alive_steps * steps_to_seconds;
+                if (with_partner) logic.traj_hold_alive_p2 = (float)partner_alive_steps * steps_to_seconds;
             }
             else {
-                logic.traj_hold_alive_p2 = (float)live_steps1 * scale;
+                logic.traj_hold_alive_p2 = (float)fake_alive_steps * steps_to_seconds;
             }
         }
         if (measure & MEASURE_RELEASE) {
             if (player1) {
-                logic.traj_release_alive_p1 = (float)live_steps1 * scale;
-                if (pair) logic.traj_release_alive_p2 = (float)live_steps2 * scale;
+                logic.traj_release_alive_p1 = (float)fake_alive_steps * steps_to_seconds;
+                if (with_partner) logic.traj_release_alive_p2 = (float)partner_alive_steps * steps_to_seconds;
             }
             else {
-                logic.traj_release_alive_p2 = (float)live_steps1 * scale;
+                logic.traj_release_alive_p2 = (float)fake_alive_steps * steps_to_seconds;
             }
         }
     }
 
-    if (note_path) forecast::note_player_path(std::move(player_path), real->m_lastPosition);
+    if (record_player_path) forecast::note_player_path(std::move(player_path), real->m_lastPosition);
     forecast::rewind(play);
-    pairing = false;
-    joinable = false;
-    join_real = nullptr;
-    if (manager) manager->m_performanceMode = performance;
+    running_pair = false;
+    can_start_dual = false;
+    dual_partner_real = nullptr;
+    if (manager) manager->m_performanceMode = saved_performance_mode;
     if (draw) {
         flush_path(play, fake, click);
         if (partner) flush_path(play, partner, click);
     }
-    restore_live();
-    park(fake);
-    if (partner) park(partner);
-    used_p1.clear();
-    used_p2.clear();
+    restore_live_orbs();
+    park_fake(fake);
+    if (partner) park_fake(partner);
+    activated_by_fake1.clear();
+    activated_by_fake2.clear();
     saved_state.restore(play->m_gameState);
     restore_players();
     GameToolbox::fast_srand(random_state);
@@ -1018,14 +1012,14 @@ void Trajectory::simulate(PlayLayer* play, bool player1, Click click, bool both,
 }
 
 void Trajectory::refresh_now(PlayLayer* play) {
-    if (!play || !play->m_started || !play->m_player1 || !node || !fake1 || !fake2) return;
+    if (!play || !play->m_started || !play->m_player1 || !draw_node || !fake1 || !fake2) return;
     auto& logic = Logic::get();
     if (play->m_hasCompletedLevel || play->m_levelEndAnimationStarted) {
-        if (node->isVisible()) node->setVisible(false);
-        park(fake1);
-        park(fake2);
-        if (cached || logic.death_next_p1 || logic.death_next_p2) {
-            cached = false;
+        if (draw_node->isVisible()) draw_node->setVisible(false);
+        park_fake(fake1);
+        park_fake(fake2);
+        if (drawing_valid || logic.death_next_p1 || logic.death_next_p2) {
+            drawing_valid = false;
             logic.death_next_p1 = false;
             logic.death_next_p2 = false;
             Logic::get().sync_death_label(play);
@@ -1036,18 +1030,18 @@ void Trajectory::refresh_now(PlayLayer* play) {
     bool draw = logic.show_traj;
     bool need_predict = draw;
     if (!need_predict) {
-        if (node->isVisible()) node->setVisible(false);
+        if (draw_node->isVisible()) draw_node->setVisible(false);
         bool pause_kill = logic.pause_before_kill && logic.is_recording();
         if (!rendering && ((logic.show_death_next && !(logic.is_playing() && !logic.is_recording())) || pause_kill)) {
-            label_only = !pause_kill;
+            death_label_only = !pause_kill;
             lookahead(play);
-            label_only = false;
+            death_label_only = false;
             Logic::get().check_advance_pause(play);
             Logic::get().sync_death_label(play);
             return;
         }
-        if (cached || logic.death_next_p1 || logic.death_next_p2 || logic.traj_dies_p1 || logic.traj_dies_p2) {
-            cached = false;
+        if (drawing_valid || logic.death_next_p1 || logic.death_next_p2 || logic.traj_dies_p1 || logic.traj_dies_p2) {
+            drawing_valid = false;
             logic.death_next_p1 = false;
             logic.death_next_p2 = false;
             logic.traj_alive_p1 = 0.f;
@@ -1062,15 +1056,15 @@ void Trajectory::refresh_now(PlayLayer* play) {
         }
         return;
     }
-    Logic::get().seat_overlay(node, play);
+    Logic::get().attach_overlay(draw_node, play);
     if (play->m_objectLayer) {
         if (!fake1->getParent()) play->m_objectLayer->addChild(fake1);
         if (!fake2->getParent()) play->m_objectLayer->addChild(fake2);
     }
     if (rendering && !logic.show_traj) {
-        node->setVisible(false);
-        park(fake1);
-        park(fake2);
+        draw_node->setVisible(false);
+        park_fake(fake1);
+        park_fake(fake2);
         Logic::get().death_next_p1 = false;
         Logic::get().death_next_p2 = false;
         logic.traj_alive_p1 = 0.f;
@@ -1084,126 +1078,126 @@ void Trajectory::refresh_now(PlayLayer* play) {
         Logic::get().sync_death_label(play);
         return;
     }
-    park(fake1);
-    park(fake2);
+    park_fake(fake1);
+    park_fake(fake2);
 
-    node->setVisible(draw);
+    draw_node->setVisible(draw);
 
     float saved_seconds = logic.traj_seconds;
     int step_limit = 0;
 
-    Key key = make_key(play);
+    CacheKey key = make_cache_key(play);
     key.hold = draw && logic.traj_hold;
     key.swift = draw && logic.traj_swift;
     key.release = draw && logic.traj_release;
-    if (cached && key == last_key) {
+    if (drawing_valid && key == last_cache_key) {
         logic.traj_seconds = saved_seconds;
         Logic::get().check_advance_pause(play);
         return;
     }
 
-    busy = true;
+    simulating = true;
     phys::prepare_prediction_art();
     logic.predicting = true;
     Logic::get().sync_predict_hooks();
-    if (in_job && !job_swapped && back_node) {
-        std::swap(node, back_node);
-        job_swapped = true;
-        node->setVisible(false);
+    if (inside_job && !job_swapped_nodes && back_draw_node) {
+        std::swap(draw_node, back_draw_node);
+        job_swapped_nodes = true;
+        draw_node->setVisible(false);
     }
-    node->clear();
-    auto snap = [](PlayerObject* body) {
+    draw_node->clear();
+    auto save_hold = [](PlayerObject* body) {
         return body ? std::pair{ body->m_jumpBuffered, body->m_holdingButtons } : std::pair{ false, gd::map<int, bool>{} };
     };
-    auto take = [](std::pair<bool, gd::map<int, bool>>& into, PlayerObject* body) {
+    auto copy_hold_into = [](std::pair<bool, gd::map<int, bool>>& into, PlayerObject* body) {
         into.first = body ? body->m_jumpBuffered : false;
         if (body) into.second = body->m_holdingButtons;
         else into.second.clear();
     };
-    auto p1_hold = snap(play->m_player1);
-    auto p2_hold = snap(play->m_player2);
-    bool ui1 = false, ui2 = false;
-    int touch1 = -1, touch2 = -1;
+    auto p1_hold = save_hold(play->m_player1);
+    auto p2_hold = save_hold(play->m_player2);
+    bool p1_ui_jumping = false, p2_ui_jumping = false;
+    int p1_touch_id = -1, p2_touch_id = -1;
     if (auto* ui = play->m_uiLayer) {
-        ui1 = ui->m_p1Jumping;
-        ui2 = ui->m_p2Jumping;
-        touch1 = ui->m_p1TouchId;
-        touch2 = ui->m_p2TouchId;
+        p1_ui_jumping = ui->m_p1Jumping;
+        p2_ui_jumping = ui->m_p2Jumping;
+        p1_touch_id = ui->m_p1TouchId;
+        p2_touch_id = ui->m_p2TouchId;
     }
-    auto restore = [&] {
-        auto put = [](PlayerObject* body, std::pair<bool, gd::map<int, bool>> const& hold) {
+    auto restore_holds = [&] {
+        auto restore_hold = [](PlayerObject* body, std::pair<bool, gd::map<int, bool>> const& hold) {
             if (!body) return;
             body->m_jumpBuffered = hold.first;
             body->m_holdingButtons = hold.second;
         };
-        put(play->m_player1, p1_hold);
-        put(play->m_player2, p2_hold);
+        restore_hold(play->m_player1, p1_hold);
+        restore_hold(play->m_player2, p2_hold);
         if (auto* ui = play->m_uiLayer) {
-            ui->m_p1Jumping = ui1;
-            ui->m_p2Jumping = ui2;
-            ui->m_p1TouchId = touch1;
-            ui->m_p2TouchId = touch2;
+            ui->m_p1Jumping = p1_ui_jumping;
+            ui->m_p2Jumping = p2_ui_jumping;
+            ui->m_p1TouchId = p1_touch_id;
+            ui->m_p2TouchId = p2_touch_id;
         }
     };
 
     std::pair<bool, gd::map<int, bool>> sim_hold1, sim_hold2;
-    bool sim_ui1 = false, sim_ui2 = false;
-    int sim_touch1 = -1, sim_touch2 = -1;
-    SliceHook holds{
+    bool sim_p1_ui_jumping = false, sim_p2_ui_jumping = false;
+    int sim_p1_touch_id = -1, sim_p2_touch_id = -1;
+    SliceStateHooks hold_hooks{
         [&] {
-            take(sim_hold1, play->m_player1);
-            take(sim_hold2, play->m_player2);
+            copy_hold_into(sim_hold1, play->m_player1);
+            copy_hold_into(sim_hold2, play->m_player2);
             if (auto* ui = play->m_uiLayer) {
-                sim_ui1 = ui->m_p1Jumping;
-                sim_ui2 = ui->m_p2Jumping;
-                sim_touch1 = ui->m_p1TouchId;
-                sim_touch2 = ui->m_p2TouchId;
+                sim_p1_ui_jumping = ui->m_p1Jumping;
+                sim_p2_ui_jumping = ui->m_p2Jumping;
+                sim_p1_touch_id = ui->m_p1TouchId;
+                sim_p2_touch_id = ui->m_p2TouchId;
             }
         },
         [&] {
-            restore();
-            busy = false;
+            restore_holds();
+            simulating = false;
             logic.predicting = false;
             Logic::get().sync_predict_hooks();
         },
         [&] {
-            take(p1_hold, play->m_player1);
-            take(p2_hold, play->m_player2);
+            copy_hold_into(p1_hold, play->m_player1);
+            copy_hold_into(p2_hold, play->m_player2);
             if (auto* ui = play->m_uiLayer) {
-                ui1 = ui->m_p1Jumping;
-                ui2 = ui->m_p2Jumping;
-                touch1 = ui->m_p1TouchId;
-                touch2 = ui->m_p2TouchId;
+                p1_ui_jumping = ui->m_p1Jumping;
+                p2_ui_jumping = ui->m_p2Jumping;
+                p1_touch_id = ui->m_p1TouchId;
+                p2_touch_id = ui->m_p2TouchId;
             }
-            busy = true;
+            simulating = true;
             logic.predicting = true;
             Logic::get().sync_predict_hooks();
-            auto put = [](PlayerObject* body, std::pair<bool, gd::map<int, bool>> const& hold) {
+            auto restore_hold = [](PlayerObject* body, std::pair<bool, gd::map<int, bool>> const& hold) {
                 if (!body) return;
                 body->m_jumpBuffered = hold.first;
                 body->m_holdingButtons = hold.second;
             };
-            put(play->m_player1, sim_hold1);
-            put(play->m_player2, sim_hold2);
+            restore_hold(play->m_player1, sim_hold1);
+            restore_hold(play->m_player2, sim_hold2);
             if (auto* ui = play->m_uiLayer) {
-                ui->m_p1Jumping = sim_ui1;
-                ui->m_p2Jumping = sim_ui2;
-                ui->m_p1TouchId = sim_touch1;
-                ui->m_p2TouchId = sim_touch2;
+                ui->m_p1Jumping = sim_p1_ui_jumping;
+                ui->m_p2Jumping = sim_p2_ui_jumping;
+                ui->m_p1TouchId = sim_p1_touch_id;
+                ui->m_p2TouchId = sim_p2_touch_id;
             }
         }
     };
-    slice_hooks.push_back(&holds);
+    slice_state_hooks.push_back(&hold_hooks);
     struct PopHook {
-        std::vector<SliceHook*>& hooks;
+        std::vector<SliceStateHooks*>& hooks;
         ~PopHook() {
             hooks.pop_back();
         }
-    } pop_holds{ slice_hooks };
+    } pop_holds{ slice_state_hooks };
 
     bool twoPlayer = play->m_levelSettings && play->m_levelSettings->m_twoPlayerMode;
     bool dual = play->m_gameState.m_isDualMode && play->m_player2;
-    auto live = [&](bool player2) {
+    auto is_live = [&](bool player2) {
         if (logic.plays_player(player2)) return false;
         return true;
     };
@@ -1223,73 +1217,73 @@ void Trajectory::refresh_now(PlayLayer* play) {
         auto it = body->m_holdingButtons.find(jump);
         return it != body->m_holdingButtons.end() && it->second;
     };
-    auto actual = [&](bool player1) {
-        if (logic.plays_player(!player1)) return Click::Replay;
+    auto actual_click = [&](bool player1) {
+        if (logic.plays_player(!player1)) return ClickType::Replay;
         PlayerObject* body = player1 ? play->m_player1 : play->m_player2;
         if (logic.maintain_gravity && logic.records_player(!player1) && body && body->m_isDart) {
-            return Logic::get().physical_hold(play, !player1) ? Click::Hold : Click::Release;
+            return Logic::get().physical_hold(play, !player1) ? ClickType::Hold : ClickType::Release;
         }
-        return jump_held(body) ? Click::Hold : Click::Release;
+        return jump_held(body) ? ClickType::Hold : ClickType::Release;
     };
     const int MEASURE_LIVE = 1, MEASURE_HOLD = 2, MEASURE_RELEASE = 4;
-    auto run = [&](bool player1, Click click, bool both, bool show, int measure) {
-        if (job_cancel) return;
+    auto run = [&](bool player1, ClickType click, bool both, bool show, int measure) {
+        if (job_cancel_requested) return;
         simulate(play, player1, click, both, show, step_limit, measure);
     };
-    auto modes = [&](bool player1, bool both) {
-        auto act = actual(player1);
-        auto fire = [&](Click click, bool show) {
+    auto run_click_types = [&](bool player1, bool both) {
+        auto actual = actual_click(player1);
+        auto run_click = [&](ClickType click, bool show) {
             int measure = 0;
-            if (click == act) measure |= MEASURE_LIVE;
-            if (logic.pause_at_traj_length && click == Click::Hold) measure |= MEASURE_HOLD;
-            if (logic.pause_at_traj_length && click == Click::Release) measure |= MEASURE_RELEASE;
+            if (click == actual) measure |= MEASURE_LIVE;
+            if (logic.pause_at_traj_length && click == ClickType::Hold) measure |= MEASURE_HOLD;
+            if (logic.pause_at_traj_length && click == ClickType::Release) measure |= MEASURE_RELEASE;
             if (!show && measure == 0) return;
             run(player1, click, both, show, measure);
         };
         if (play->m_playerDied || rendering) {
-            fire(act, draw);
+            run_click(actual, draw);
             return;
         }
         bool show_hold = draw && logic.traj_hold, show_swift = draw && logic.traj_swift;
         bool show_release = draw && logic.traj_release;
         bool need_hold = show_hold || logic.pause_at_traj_length;
         bool need_release = show_release || logic.pause_at_traj_length;
-        if (need_hold) fire(Click::Hold, show_hold);
-        if (show_swift) fire(Click::Swift, true);
-        if (need_release) fire(Click::Release, show_release);
-        bool covered = (act == Click::Hold && need_hold) || (act == Click::Swift && show_swift) || (act == Click::Release && need_release);
-        if (!covered) fire(act, draw);
+        if (need_hold) run_click(ClickType::Hold, show_hold);
+        if (show_swift) run_click(ClickType::Swift, true);
+        if (need_release) run_click(ClickType::Release, show_release);
+        bool covered = (actual == ClickType::Hold && need_hold) || (actual == ClickType::Swift && show_swift) || (actual == ClickType::Release && need_release);
+        if (!covered) run_click(actual, draw);
     };
     bool hide1 = Logic::get().traj_player_hidden(false), hide2 = Logic::get().traj_player_hidden(true);
     bool linked = dual && !twoPlayer && !hide1 && !hide2;
     if (!hide1) {
         if (!rendering && !play->m_playerDied && logic.plays_player(false))
-            run(true, Click::Replay, linked, draw, MEASURE_LIVE);
-        if (live(false) || rendering || play->m_playerDied) modes(true, linked);
+            run(true, ClickType::Replay, linked, draw, MEASURE_LIVE);
+        if (is_live(false) || rendering || play->m_playerDied) run_click_types(true, linked);
     }
-    bool second = dual && !hide2 && !linked && (twoPlayer || live(true) || logic.plays_player(true) || play->m_playerDied);
-    if (second) {
+    bool draw_player2 = dual && !hide2 && !linked && (twoPlayer || is_live(true) || logic.plays_player(true) || play->m_playerDied);
+    if (draw_player2) {
         if (!rendering && !play->m_playerDied && logic.plays_player(true))
-            run(false, Click::Replay, false, draw, MEASURE_LIVE);
-        if (live(true) || rendering || play->m_playerDied) modes(false, false);
+            run(false, ClickType::Replay, false, draw, MEASURE_LIVE);
+        if (is_live(true) || rendering || play->m_playerDied) run_click_types(false, false);
     }
-    restore();
+    restore_holds();
     Logic::get().sync_death_label(play);
     Logic::get().check_advance_pause(play);
 
-    busy = false;
+    simulating = false;
     logic.predicting = false;
     Logic::get().sync_predict_hooks();
-    cached = !job_cancel;
-    last_key = key;
+    drawing_valid = !job_cancel_requested;
+    last_cache_key = key;
     logic.traj_seconds = saved_seconds;
 }
 
 void Trajectory::refresh(PlayLayer* play) {
     PerfScope traj_time(PERF_TRAJECTORY);
 #ifdef GEODE_IS_WINDOWS
-    if (in_job) return;
-    if (back_node && play) Logic::get().seat_overlay(back_node, play);
+    if (inside_job) return;
+    if (back_draw_node && play) Logic::get().attach_overlay(back_draw_node, play);
     if (job_running) {
         if (play == job_play && want_slicing(play)) {
             run_slice();
@@ -1301,13 +1295,13 @@ void Trajectory::refresh(PlayLayer* play) {
         if (!main_fiber)
             main_fiber = IsThreadAFiber() ? GetCurrentFiber() : ConvertThreadToFiber(nullptr);
         if (main_fiber && !job_fiber)
-            job_fiber = CreateFiber(4u << 20, reinterpret_cast<LPFIBER_START_ROUTINE>(&Trajectory::job_entry), this);
+            job_fiber = CreateFiber(4u << 20, reinterpret_cast<LPFIBER_START_ROUTINE>(&Trajectory::job_fiber_main), this);
         if (job_fiber) {
             job_running = true;
-            job_done = job_cancel = job_swapped = false;
+            job_done = job_cancel_requested = job_swapped_nodes = false;
             job_play = play;
             job_frame = Logic::get().step_frame;
-            job_drawn = 0;
+            job_last_drawn_frame = 0;
             run_slice();
             return;
         }
@@ -1319,8 +1313,8 @@ void Trajectory::refresh(PlayLayer* play) {
 bool Trajectory::want_slicing(PlayLayer* play) const {
 #ifdef GEODE_IS_WINDOWS
     auto const& logic = Logic::get();
-    if (!(play && node && back_node && logic.lock_delta && logic.show_traj && !Logic::get().render_capturing() && !logic.frame_advance &&
-            !logic.traj_autoclicker && !(logic.pause_before_kill && logic.is_recording()) && !play->m_playerDied && !path_sink))
+    if (!(play && draw_node && back_draw_node && logic.lock_delta && logic.show_traj && !Logic::get().render_capturing() && !logic.frame_advance &&
+            !logic.traj_autoclicker && !(logic.pause_before_kill && logic.is_recording()) && !play->m_playerDied && !survival_path_out))
         return false;
     return true;
 #else
@@ -1329,13 +1323,13 @@ bool Trajectory::want_slicing(PlayLayer* play) const {
 #endif
 }
 
-void Trajectory::job_entry(void* self) {
+void Trajectory::job_fiber_main(void* self) {
 #ifdef GEODE_IS_WINDOWS
     auto* trajectory = static_cast<Trajectory*>(self);
     for (;;) {
-        trajectory->in_job = true;
+        trajectory->inside_job = true;
         trajectory->refresh_now(trajectory->job_play);
-        trajectory->in_job = false;
+        trajectory->inside_job = false;
         trajectory->job_done = true;
         SwitchToFiber(trajectory->main_fiber);
     }
@@ -1344,20 +1338,20 @@ void Trajectory::job_entry(void* self) {
 #endif
 }
 
-void Trajectory::slice_point() {
+void Trajectory::yield_if_slice_over() {
 #ifdef GEODE_IS_WINDOWS
-    if (!in_job || job_cancel) return;
-    if ((++slice_counter & 15) != 0) return;
-    if (std::chrono::duration<double>(std::chrono::steady_clock::now() - slice_began).count() < slice_budget)
+    if (!inside_job || job_cancel_requested) return;
+    if ((++slice_point_count & 15) != 0) return;
+    if (std::chrono::duration<double>(std::chrono::steady_clock::now() - slice_start).count() < slice_budget_seconds)
         return;
-    for (auto* hook : slice_hooks)
+    for (auto* hook : slice_state_hooks)
         hook->save();
-    for (auto it = slice_hooks.rbegin(); it != slice_hooks.rend(); ++it)
+    for (auto it = slice_state_hooks.rbegin(); it != slice_state_hooks.rend(); ++it)
         (*it)->pause();
-    in_job = false;
+    inside_job = false;
     SwitchToFiber(main_fiber);
-    in_job = true;
-    for (auto* hook : slice_hooks)
+    inside_job = true;
+    for (auto* hook : slice_state_hooks)
         hook->resume();
 #endif
 }
@@ -1367,26 +1361,26 @@ void Trajectory::run_slice() {
     if (!job_running) return;
     auto* director = CCDirector::sharedDirector();
     unsigned drawn = director->getTotalFrames();
-    if (drawn != 0 && drawn == job_drawn) return;
+    if (drawn != 0 && drawn == job_last_drawn_frame) return;
     if (job_play != PlayLayer::get() || job_frame != Logic::get().step_frame) {
         abandon_job();
         return;
     }
-    job_drawn = drawn;
+    job_last_drawn_frame = drawn;
     auto& logic = Logic::get();
     double interval = director->getAnimationInterval();
-    slice_began = std::chrono::steady_clock::now();
-    double used = std::chrono::duration<double>(slice_began - logic.frame_start).count();
-    slice_budget = interval - used - logic.draw_time;
-    slice_counter = 0;
+    slice_start = std::chrono::steady_clock::now();
+    double used = std::chrono::duration<double>(slice_start - logic.frame_start).count();
+    slice_budget_seconds = interval - used - logic.draw_time;
+    slice_point_count = 0;
     SwitchToFiber(job_fiber);
     if (job_done) {
         finish_job();
         return;
     }
-    if (job_swapped) {
-        node->setVisible(false);
-        back_node->setVisible(Logic::get().show_traj);
+    if (job_swapped_nodes) {
+        draw_node->setVisible(false);
+        back_draw_node->setVisible(Logic::get().show_traj);
     }
 #endif
 }
@@ -1394,28 +1388,28 @@ void Trajectory::run_slice() {
 void Trajectory::finish_job() {
 #ifdef GEODE_IS_WINDOWS
     job_running = false;
-    if (job_swapped) {
-        if (job_cancel) std::swap(node, back_node);
-        back_node->clear();
-        back_node->setVisible(false);
-        node->setVisible(Logic::get().show_traj);
+    if (job_swapped_nodes) {
+        if (job_cancel_requested) std::swap(draw_node, back_draw_node);
+        back_draw_node->clear();
+        back_draw_node->setVisible(false);
+        draw_node->setVisible(Logic::get().show_traj);
     }
-    job_swapped = job_cancel = job_done = false;
+    job_swapped_nodes = job_cancel_requested = job_done = false;
     job_play = nullptr;
 #endif
 }
 
 void Trajectory::cancel_job() {
 #ifdef GEODE_IS_WINDOWS
-    if (!job_running || in_job) return;
+    if (!job_running || inside_job) return;
     if (job_play != PlayLayer::get() || job_frame != Logic::get().step_frame) {
         abandon_job();
         return;
     }
-    job_cancel = true;
+    job_cancel_requested = true;
     while (!job_done) {
-        slice_began = std::chrono::steady_clock::now();
-        slice_budget = 1e9;
+        slice_start = std::chrono::steady_clock::now();
+        slice_budget_seconds = 1e9;
         SwitchToFiber(job_fiber);
     }
     finish_job();
@@ -1426,116 +1420,115 @@ void Trajectory::abandon_job() {
 #ifdef GEODE_IS_WINDOWS
     if (job_fiber) DeleteFiber(job_fiber);
     job_fiber = nullptr;
-    job_running = job_done = job_cancel = in_job = false;
-    slice_hooks.clear();
-    busy = false;
+    job_running = job_done = job_cancel_requested = inside_job = false;
+    slice_state_hooks.clear();
+    simulating = false;
     Logic::get().predicting = false;
     Logic::get().sync_predict_hooks();
-    used_p1.clear();
-    used_p2.clear();
-    paths[0].clear();
-    paths[1].clear();
-    cached = false;
-    if (job_swapped) {
-        std::swap(node, back_node);
-        back_node->clear();
-        back_node->setVisible(false);
-        job_swapped = false;
+    activated_by_fake1.clear();
+    activated_by_fake2.clear();
+    unflushed_paths[0].clear();
+    unflushed_paths[1].clear();
+    drawing_valid = false;
+    if (job_swapped_nodes) {
+        std::swap(draw_node, back_draw_node);
+        back_draw_node->clear();
+        back_draw_node->setVisible(false);
+        job_swapped_nodes = false;
     }
     job_play = nullptr;
 #endif
 }
 
-Trajectory::Click Trajectory::next_click(PlayLayer* play, bool player1) const {
+Trajectory::ClickType Trajectory::next_click(PlayLayer* play, bool player1) const {
     auto const& logic = Logic::get();
     PlayerObject* body = player1 ? play->m_player1 : play->m_player2;
     if (logic.maintain_gravity && logic.records_player(!player1) && body && body->m_isDart)
-        return Logic::get().physical_hold(play, !player1) ? Click::Hold : Click::Release;
+        return Logic::get().physical_hold(play, !player1) ? ClickType::Hold : ClickType::Release;
     int jump = (int)PlayerButton::Jump;
     for (auto it = play->m_queuedButtons.rbegin(); it != play->m_queuedButtons.rend(); ++it) {
         int button = (int)it->m_button;
         if ((button == 0 || button == jump) && it->m_isPlayer2 != player1)
-            return it->m_isPush ? Click::Hold : Click::Release;
+            return it->m_isPush ? ClickType::Hold : ClickType::Release;
     }
-    if (!body) return Click::Release;
+    if (!body) return ClickType::Release;
     auto found = body->m_holdingButtons.find(jump);
-    return found != body->m_holdingButtons.end() && found->second ? Click::Hold : Click::Release;
+    return found != body->m_holdingButtons.end() && found->second ? ClickType::Hold : ClickType::Release;
 }
 
 template <class F>
-void Trajectory::predicting(PlayLayer* play, F&& predict) {
+void Trajectory::run_prediction(PlayLayer* play, F&& predict) {
     cancel_job();
     auto& logic = Logic::get();
     if (play->m_objectLayer) {
         if (!fake1->getParent()) play->m_objectLayer->addChild(fake1);
         if (!fake2->getParent()) play->m_objectLayer->addChild(fake2);
     }
-    park(fake1);
-    park(fake2);
-    busy = true;
+    park_fake(fake1);
+    park_fake(fake2);
+    simulating = true;
     phys::prepare_prediction_art();
     logic.predicting = true;
     Logic::get().sync_predict_hooks();
-    auto snap = [](PlayerObject* body) {
+    auto save_hold = [](PlayerObject* body) {
         return body ? std::pair{ body->m_jumpBuffered, body->m_holdingButtons } : std::pair{ false, gd::map<int, bool>{} };
     };
-    auto p1_hold = snap(play->m_player1);
-    auto p2_hold = snap(play->m_player2);
+    auto p1_hold = save_hold(play->m_player1);
+    auto p2_hold = save_hold(play->m_player2);
     predict();
-    auto put = [](PlayerObject* body, std::pair<bool, gd::map<int, bool>> const& hold) {
+    auto restore_hold = [](PlayerObject* body, std::pair<bool, gd::map<int, bool>> const& hold) {
         if (!body) return;
         body->m_jumpBuffered = hold.first;
         body->m_holdingButtons = hold.second;
     };
-    put(play->m_player1, p1_hold);
-    put(play->m_player2, p2_hold);
-    busy = false;
+    restore_hold(play->m_player1, p1_hold);
+    restore_hold(play->m_player2, p2_hold);
+    simulating = false;
     logic.predicting = false;
     Logic::get().sync_predict_hooks();
 }
 
 int Trajectory::flip_survival(PlayLayer* play, bool player1, int& full, std::vector<CCPoint>* path, int limit) {
     full = 0;
-    if (!play || !play->m_started || play->m_playerDied || !node || !fake1 || !fake2) return 0;
+    if (!play || !play->m_started || play->m_playerDied || !draw_node || !fake1 || !fake2) return 0;
     auto& logic = Logic::get();
     const int MEASURE_HOLD = 2, MEASURE_RELEASE = 4;
     bool twoPlayer = play->m_levelSettings && play->m_levelSettings->m_twoPlayerMode;
     bool linked = player1 && play->m_gameState.m_isDualMode && play->m_player2 && !twoPlayer;
-    Click flip = next_click(play, player1) == Click::Hold ? Click::Release : Click::Hold;
-    float kept[4] = { logic.traj_hold_alive_p1, logic.traj_hold_alive_p2, logic.traj_release_alive_p1, logic.traj_release_alive_p2 };
-    measured[0] = measured[1] = measured_full = 0;
-    path_sink = path;
-    predicting(play, [&] {
-        simulate(play, player1, flip, linked, false, limit, flip == Click::Hold ? MEASURE_HOLD : MEASURE_RELEASE);
+    ClickType flip = next_click(play, player1) == ClickType::Hold ? ClickType::Release : ClickType::Hold;
+    float saved_alive[4] = { logic.traj_hold_alive_p1, logic.traj_hold_alive_p2, logic.traj_release_alive_p1, logic.traj_release_alive_p2 };
+    measured_alive_steps[0] = measured_alive_steps[1] = measured_total_steps = 0;
+    survival_path_out = path;
+    run_prediction(play, [&] {
+        simulate(play, player1, flip, linked, false, limit, flip == ClickType::Hold ? MEASURE_HOLD : MEASURE_RELEASE);
     });
-    path_sink = nullptr;
-    logic.traj_hold_alive_p1 = kept[0];
-    logic.traj_hold_alive_p2 = kept[1];
-    logic.traj_release_alive_p1 = kept[2];
-    logic.traj_release_alive_p2 = kept[3];
-    cached = false;
-    full = measured_full;
-    return std::min(measured[0], measured[1]);
+    survival_path_out = nullptr;
+    logic.traj_hold_alive_p1 = saved_alive[0];
+    logic.traj_hold_alive_p2 = saved_alive[1];
+    logic.traj_release_alive_p1 = saved_alive[2];
+    logic.traj_release_alive_p2 = saved_alive[3];
+    drawing_valid = false;
+    full = measured_total_steps;
+    return std::min(measured_alive_steps[0], measured_alive_steps[1]);
 }
 
-int Trajectory::click_survival(PlayLayer* play, bool player1, Click click, int& full, int limit) {
+int Trajectory::click_survival(PlayLayer* play, bool player1, ClickType click, int& full, int limit) {
     full = 0;
-    if (!play || !play->m_started || play->m_playerDied || !node || !fake1 || !fake2) return 0;
+    if (!play || !play->m_started || play->m_playerDied || !draw_node || !fake1 || !fake2) return 0;
     bool twoPlayer = play->m_levelSettings && play->m_levelSettings->m_twoPlayerMode;
     bool linked = player1 && play->m_gameState.m_isDualMode && play->m_player2 && !twoPlayer;
-    measured[0] = measured[1] = measured_full = 0;
-    predicting(play, [&] {
+    measured_alive_steps[0] = measured_alive_steps[1] = measured_total_steps = 0;
+    run_prediction(play, [&] {
         simulate(play, player1, click, linked, false, limit, 8);
     });
-    cached = false;
-    full = measured_full;
-    return std::min(measured[0], measured[1]);
+    drawing_valid = false;
+    full = measured_total_steps;
+    return std::min(measured_alive_steps[0], measured_alive_steps[1]);
 }
 
 void Trajectory::autoclick(PlayLayer* play) {
     PerfScope click_time(PERF_AUTOCLICK);
     auto& logic = Logic::get();
-    safe_steps = 1;
     if (!logic.traj_autoclicker || !play || play->m_isPaused || play->m_playerDied) return;
     if (play->m_hasCompletedLevel || play->m_levelEndAnimationStarted) return;
     if (logic.step_frame < clicked_frame) clicked_frame = -1;
@@ -1546,80 +1539,62 @@ void Trajectory::autoclick(PlayLayer* play) {
     bool dual = play->m_gameState.m_isDualMode && play->m_player2;
     bool flip1 = logic.death_next_p1 || (dual && !twoPlayer && logic.death_next_p2);
     bool flip2 = dual && twoPlayer && logic.death_next_p2;
-    int ahead = std::max(logic.traj_click_lookahead, 1);
-    int keep_lives[2] = { 0, 0 };
-    int soonest = std::numeric_limits<int>::max();
-    auto watched = [&](bool player2) {
+    int lookahead_steps = std::max(logic.traj_click_lookahead, 1);
+    int current_lives[2] = { 0, 0 };
+    auto is_watched = [&](bool player2) {
         return logic.is_recording() ? logic.records_player(player2) : !logic.plays_player(player2);
     };
-    auto measure = [&](bool player1) {
+    auto dies_within_lookahead = [&](bool player1) {
         int full = 0;
-        int lives = click_survival(play, player1, next_click(play, player1), full, ahead * 2);
-        if (full <= 0) {
-            soonest = 0;
-            return false;
-        }
-        soonest = std::min(soonest, std::min(lives, full));
-        if (lives >= full || lives >= ahead) return false;
-        keep_lives[player1 ? 0 : 1] = lives;
+        int lives = click_survival(play, player1, next_click(play, player1), full, lookahead_steps * 2);
+        if (full <= 0) return false;
+        if (lives >= full || lives >= lookahead_steps) return false;
+        current_lives[player1 ? 0 : 1] = lives;
         return true;
     };
-    if (!flip1 && watched(false) && !logic.plays_player(false)) {
-        bool soon = measure(true);
-        if (ahead > 1) flip1 = soon;
+    if (!flip1 && is_watched(false) && !logic.plays_player(false)) {
+        bool dies_soon = dies_within_lookahead(true);
+        if (lookahead_steps > 1) flip1 = dies_soon;
     }
-    if (!flip2 && dual && twoPlayer && watched(true) && !logic.plays_player(true)) {
-        bool soon = measure(false);
-        if (ahead > 1) flip2 = soon;
+    if (!flip2 && dual && twoPlayer && is_watched(true) && !logic.plays_player(true)) {
+        bool dies_soon = dies_within_lookahead(false);
+        if (lookahead_steps > 1) flip2 = dies_soon;
     }
-    if (!flip1 && !flip2) {
-        if (soonest != std::numeric_limits<int>::max())
-            safe_steps = std::max(1, soonest - ahead + 1);
-        else safe_steps = std::numeric_limits<int>::max();
-        return;
-    }
+    if (!flip1 && !flip2) return;
     int jump = (int)PlayerButton::Jump;
     bool linked = dual && !twoPlayer;
-    auto dies = [&](bool player1, Click click) {
-        logic.death_next_p1 = logic.death_next_p2 = false;
-        predicting(play, [&] {
-            simulate(play, player1, click, player1 && linked, false, 1, 1);
-        });
-        cached = false;
-        return player1 ? logic.death_next_p1 || (linked && logic.death_next_p2) : logic.death_next_p2;
-    };
-    auto flip = [&](bool player1) {
-        bool held = next_click(play, player1) == Click::Hold;
+    auto flip_click = [&](bool player1) {
+        bool held = next_click(play, player1) == ClickType::Hold;
         auto* body = player1 ? play->m_player1 : play->m_player2;
-        int keep = keep_lives[player1 ? 0 : 1];
-        int horizon = keep > 0 ? ahead * 2 : 0;
+        int current = current_lives[player1 ? 0 : 1];
+        int horizon = current > 0 ? lookahead_steps * 2 : 0;
         int flip_full = 0, swift_full = 0;
-        int flip_lives = click_survival(play, player1, held ? Click::Release : Click::Hold, flip_full, horizon);
-        int swift_lives = click_survival(play, player1, Click::Swift, swift_full, horizon);
-        if (keep > 0 && std::max(flip_lives, swift_lives) <= keep) return;
+        int flip_lives = click_survival(play, player1, held ? ClickType::Release : ClickType::Hold, flip_full, horizon);
+        int swift_lives = click_survival(play, player1, ClickType::Swift, swift_full, horizon);
+        if (current > 0 && std::max(flip_lives, swift_lives) <= current) return;
         if (logic.maintain_gravity && body && body->m_isDart && logic.records_player(!player1)) {
             bool& flipped = player1 ? logic.traj_flip_p1 : logic.traj_flip_p2;
             if (!flipped) {
                 Logic::get().physical_hold(play, !player1);
-                (player1 ? logic.traj_flip_raw_p1 : logic.traj_flip_raw_p2) = player1 ? logic.held_raw_p1 : logic.held_raw_p2;
+                (player1 ? logic.traj_flip_hold_p1 : logic.traj_flip_hold_p2) = player1 ? logic.jump_held_p1 : logic.jump_held_p2;
             }
             flipped ^= true;
             return;
         }
-        auto queue = [&](bool down) {
+        auto queue_click = [&](bool down) {
             ++logic.assist_clicks[player1 ? 0 : 1][down ? 1 : 0];
             play->queueButton(jump, down, !player1, Logic::get().click_stamp());
         };
         if (swift_lives > flip_lives) {
-            if (held) queue(false);
-            queue(true);
-            queue(false);
+            if (held) queue_click(false);
+            queue_click(true);
+            queue_click(false);
             return;
         }
-        queue(!held);
+        queue_click(!held);
     };
-    if (flip1) flip(true);
-    if (flip2) flip(false);
+    if (flip1) flip_click(true);
+    if (flip2) flip_click(false);
     clicked_frame = logic.step_frame;
     lookahead(play);
 }
@@ -1629,28 +1604,28 @@ void Trajectory::lookahead(PlayLayer* play) {
     auto& logic = Logic::get();
     logic.death_next_p1 = false;
     logic.death_next_p2 = false;
-    if (!play || !play->m_started || play->m_playerDied || !play->m_player1 || !node || !fake1 || !fake2)
+    if (!play || !play->m_started || play->m_playerDied || !play->m_player1 || !draw_node || !fake1 || !fake2)
         return;
     if (play->m_hasCompletedLevel || play->m_levelEndAnimationStarted) return;
-    auto actual = [&](bool player1) {
+    auto actual_click = [&](bool player1) {
         return next_click(play, player1);
     };
-    auto watched = [&](bool player2) {
+    auto is_watched = [&](bool player2) {
         return logic.is_recording() ? logic.records_player(player2) : !logic.plays_player(player2);
     };
     const int MEASURE_LIVE = 1;
     bool twoPlayer = play->m_levelSettings && play->m_levelSettings->m_twoPlayerMode;
     bool dual = play->m_gameState.m_isDualMode && play->m_player2;
     bool linked = dual && !twoPlayer;
-    predicting(play, [&] {
-        if (watched(false) && !logic.plays_player(false))
-            simulate(play, true, actual(true), linked, false, 1, MEASURE_LIVE);
-        if (dual && !linked && watched(true) && !logic.plays_player(true))
-            simulate(play, false, actual(false), false, false, 1, MEASURE_LIVE);
+    run_prediction(play, [&] {
+        if (is_watched(false) && !logic.plays_player(false))
+            simulate(play, true, actual_click(true), linked, false, 1, MEASURE_LIVE);
+        if (dual && !linked && is_watched(true) && !logic.plays_player(true))
+            simulate(play, false, actual_click(false), false, false, 1, MEASURE_LIVE);
     });
     logic.traj_alive_p1 = logic.traj_alive_p2 = 0.f;
     logic.traj_dies_p1 = logic.traj_dies_p2 = false;
-    cached = false;
+    drawing_valid = false;
 }
 
 bool Logic::is_traj_player(CCObject* object) {

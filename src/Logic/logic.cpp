@@ -24,7 +24,7 @@ namespace fs = std::filesystem;
 
 using namespace geode::prelude;
 
-static bool bulk_settings = false;
+static bool saving_all_settings = false;
 
 Logic& Logic::get() {
     static Logic logic;
@@ -119,7 +119,7 @@ void Logic::boot() {
         Logic::write_float("macro-fps", 240.f);
     pull_settings();
     SettingChangedEventV3().listen([](std::string_view modID, std::string_view, std::shared_ptr<SettingV3>) {
-                               if (bulk_settings || modID != Mod::get()->getID())
+                               if (saving_all_settings || modID != Mod::get()->getID())
                                    return ListenerResult::Propagate;
                                Logic::get().save_settings_file();
                                return ListenerResult::Propagate;
@@ -138,8 +138,8 @@ void Logic::pull_settings() {
             if (auto number = json["macro_fps"].asDouble()) fps = (float)number.unwrap();
             if (auto number = json["speedhack"].asDouble()) speedhack = (float)number.unwrap();
             if (auto number = json["speedhack_memory"].asDouble())
-                speedhack_memory = (float)number.unwrap();
-            else if (std::abs(speedhack - 1.f) > 0.05f) speedhack_memory = speedhack;
+                saved_speedhack = (float)number.unwrap();
+            else if (std::abs(speedhack - 1.f) > 0.05f) saved_speedhack = speedhack;
             if (auto flag = json["real_time_mode"].asBool()) real_time_mode = flag.unwrap();
             if (auto flag = json["true_real_time"].asBool()) true_real_time = flag.unwrap();
             if (auto flag = json["lock_delta"].asBool()) lock_delta = flag.unwrap();
@@ -156,7 +156,7 @@ void Logic::pull_settings() {
                 playback_tps_changes = flag.unwrap();
             if (auto flag = json["trace_logging"].asBool()) trace_logging = flag.unwrap();
             if (auto flag = json["no_editor_keybinds"].asBool()) no_editor_keybinds = flag.unwrap();
-            if (auto flag = json["opt_effects"].asBool()) opt_effects = flag.unwrap();
+            if (auto flag = json["opt_effects"].asBool()) optimize_effects = flag.unwrap();
             if (auto flag = json["record_p1"].asBool()) record_p1 = flag.unwrap();
             if (auto flag = json["record_p2"].asBool()) record_p2 = flag.unwrap();
             if (auto flag = json["play_p1"].asBool()) play_p1 = flag.unwrap();
@@ -618,7 +618,7 @@ void Logic::pull_settings() {
 }
 
 void Logic::push_runtime_settings() {
-    bulk_settings = true;
+    saving_all_settings = true;
     Logic::write_float("macro-fps", fps);
     Logic::write_float("speedhack", speedhack);
     Logic::write_bool("real-time", real_time_mode);
@@ -661,7 +661,7 @@ void Logic::push_runtime_settings() {
     Logic::write_int("autoclick-swifts", auto_click.swifts);
     Logic::write_bool("autoclick-auto-disable", autoclick_auto_disable);
     Mod::get()->setSettingValue<fs::path>("clickpack", fs::path(clickpack));
-    bulk_settings = false;
+    saving_all_settings = false;
     save_settings_file();
 }
 
@@ -669,7 +669,7 @@ void Logic::save_settings_file() {
     matjson::Value json;
     json["macro_fps"] = fps;
     json["speedhack"] = speedhack;
-    json["speedhack_memory"] = speedhack_memory;
+    json["speedhack_memory"] = saved_speedhack;
     json["real_time_mode"] = real_time_mode;
     json["true_real_time"] = true_real_time;
     json["lock_delta"] = lock_delta;
@@ -682,7 +682,7 @@ void Logic::save_settings_file() {
     json["playback_tps_changes"] = playback_tps_changes;
     json["trace_logging"] = trace_logging;
     json["no_editor_keybinds"] = no_editor_keybinds;
-    json["opt_effects"] = opt_effects;
+    json["opt_effects"] = optimize_effects;
     json["record_p1"] = record_p1;
     json["record_p2"] = record_p2;
     json["play_p1"] = play_p1;
@@ -976,5 +976,5 @@ void Logic::save_settings_file() {
         std::ofstream file(save_root() / "settings.json");
         if (file) file << json.dump(4);
     }
-    if (!bulk_settings) (void)Mod::get()->saveData();
+    if (!saving_all_settings) (void)Mod::get()->saveData();
 }

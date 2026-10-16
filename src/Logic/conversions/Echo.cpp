@@ -55,8 +55,8 @@ const size_t READ_PAST_END = 64;
 // a channel is 1 button (jump, left, right) of 1 player
 #define BUTTONS 3
 #define CHANNELS (BUTTONS * 2)
-// a click kind is its channel & whether its a press or a release
-#define CLICK_KINDS (CHANNELS * 2)
+// a click type is its channel & whether its a press or a release
+#define CLICK_TYPES (CHANNELS * 2)
 #define CLICK_SHIFT 4
 // each channel is pressed, released or not used yet. 4 of them get looked at together (3^4 = 81)
 #define HELD_STATES 81
@@ -66,7 +66,7 @@ const size_t READ_PAST_END = 64;
 #define GAP_BASES 4
 #define GAP_STAGES 3
 #define LENGTH_BUCKETS 40
-#define MATCH_KINDS 6
+#define MATCH_TYPES 6
 
 // when guesses get mixed theyre out of 4096 instead
 #define CHANCE_MAX 4095
@@ -504,16 +504,16 @@ static int length_bucket(unsigned long long length) {
 using GapGuesses = std::array<Guess, SLOT_NODES + HIGH_NODES + (GAP_MAX_LEN + 1) * GAP_MAX_LEN>;
 
 struct ClickGuesses {
-    std::array<std::array<Guess, MATCH_KINDS>, LENGTH_BUCKETS> match{};
-    std::array<std::array<Guess, CHANNEL_NODES>, CLICK_KINDS * CLICK_KINDS> channel_pair{};
-    std::array<std::array<Guess, CHANNEL_NODES>, CLICK_KINDS> channel_last{};
-    std::array<std::array<Guess, CHANNEL_NODES>, HELD_STATES * CLICK_KINDS> channel_held{};
+    std::array<std::array<Guess, MATCH_TYPES>, LENGTH_BUCKETS> match{};
+    std::array<std::array<Guess, CHANNEL_NODES>, CLICK_TYPES * CLICK_TYPES> channel_pair{};
+    std::array<std::array<Guess, CHANNEL_NODES>, CLICK_TYPES> channel_last{};
+    std::array<std::array<Guess, CHANNEL_NODES>, HELD_STATES * CLICK_TYPES> channel_held{};
     std::array<Mix, CHANNEL_NODES> channel_mix{};
     std::array<Guess, HOLD_BASES * SHORT_GAPS> hold_short{};
     std::array<Guess, HOLD_BASES> hold_state{};
     std::array<Guess, 2 * LENGTH_BUCKETS> hold_gap{};
     std::array<Mix, 2> hold_mix{};
-    std::array<GapGuesses, GAP_BASES> gap_kind{};
+    std::array<GapGuesses, GAP_BASES> gap_base{};
     std::array<GapGuesses, GAP_BASES * LENGTH_BUCKETS> gap_same{}, gap_last{};
     std::array<Mix, GAP_BASES * GAP_STAGES> gap_mix{};
     std::array<NumberGuesses, POSE_FIELDS * 2> pose{};
@@ -521,7 +521,7 @@ struct ClickGuesses {
 };
 
 static MixGuesses gap_guesses(ClickGuesses& guesses, int base, int same_bucket, int last_bucket, int node) {
-    return { &guesses.gap_kind[base][node], &guesses.gap_same[base * LENGTH_BUCKETS + same_bucket][node], &guesses.gap_last[base * LENGTH_BUCKETS + last_bucket][node] };
+    return { &guesses.gap_base[base][node], &guesses.gap_same[base * LENGTH_BUCKETS + same_bucket][node], &guesses.gap_last[base * LENGTH_BUCKETS + last_bucket][node] };
 }
 
 template <typename Coder>
@@ -658,7 +658,7 @@ struct PastClicks {
     unsigned long long matched = 0;
     int misses = 0;
     std::array<int, CHANNELS> state{};
-    std::array<unsigned long long, CLICK_KINDS> last_gap_of{};
+    std::array<unsigned long long, CLICK_TYPES> last_gap_of{};
     int last_frame = 0;
 
     int click_at(size_t back) const {
@@ -717,7 +717,7 @@ struct ClickHints {
     }
 
     MixGuesses channel_guesses(ClickGuesses& guesses, int node) const {
-        return { &guesses.channel_pair[last * CLICK_KINDS + prev][node], &guesses.channel_last[last][node], &guesses.channel_held[held * CLICK_KINDS + last][node] };
+        return { &guesses.channel_pair[last * CLICK_TYPES + prev][node], &guesses.channel_last[last][node], &guesses.channel_held[held * CLICK_TYPES + last][node] };
     }
 
     int hold_base(const PastClicks& past, int channel) const {
@@ -960,7 +960,7 @@ static bool load_version3(std::istream& file, unsigned char flags, int version, 
     return !reader.failed && out.inputs.size() == amt;
 }
 
-static void store_echo_body(EchoFile& body, MacroSnap& out) {
+static void store_echo_body(EchoFile& body, MacroData& out) {
     out.inputs = std::move(body.inputs);
     out.poses = std::move(body.poses);
     if (out.poses.size() != out.inputs.size()) out.poses.clear();
@@ -978,20 +978,20 @@ static void store_echo_body(EchoFile& body, MacroSnap& out) {
     out.format = ReplayFormat::Meta;
 }
 
-bool ReplayIO::write_echo(const fs::path& path, const MacroSnap& snap) {
-    auto rates = snap.rates;
-    tidy_rates(rates, snap.fps);
-    auto poses = snap.poses.size() == snap.inputs.size() ? snap.poses : std::vector<FramePose>{};
-    auto inputs = inputs_in_file_order(snap.inputs, poses.empty() ? nullptr : &poses);
-    bool samples = snap.save_debug && poses.size() == inputs.size();
+bool ReplayIO::write_echo(const fs::path& path, const MacroData& macro) {
+    auto rates = macro.rates;
+    tidy_rates(rates, macro.fps);
+    auto poses = macro.poses.size() == macro.inputs.size() ? macro.poses : std::vector<FramePose>{};
+    auto inputs = inputs_in_file_order(macro.inputs, poses.empty() ? nullptr : &poses);
+    bool samples = macro.save_debug && poses.size() == inputs.size();
 
     auto guesses = std::make_unique<ClickGuesses>();
     Compressor writer;
-    float header_fps = !rates.empty() ? snap.fps : (float)ReplayIO::snap_sample_rate(snap);
+    float header_fps = !rates.empty() ? macro.fps : (float)ReplayIO::macro_sample_rate(macro);
     code_bits(writer, std::bit_cast<unsigned>(header_fps), 32);
-    code_bits(writer, std::bit_cast<unsigned>(snap.end_x), 32);
-    code_bits(writer, std::bit_cast<unsigned long long>(snap.recording_seconds), 64);
-    code_count(writer, (unsigned long long)std::max(snap.attempts, 0));
+    code_bits(writer, std::bit_cast<unsigned>(macro.end_x), 32);
+    code_bits(writer, std::bit_cast<unsigned long long>(macro.recording_seconds), 64);
+    code_count(writer, (unsigned long long)std::max(macro.attempts, 0));
     code_count(writer, inputs.size());
     code_clicks(writer, *guesses, inputs, inputs.size());
     if (samples) code_poses(writer, inputs, poses, guesses->pose);
@@ -999,7 +999,7 @@ bool ReplayIO::write_echo(const fs::path& path, const MacroSnap& snap) {
         code_count(writer, rates.size());
         code_rates(writer, rates, rates.size());
     }
-    if (snap.lvl_seed_known) code_bits(writer, snap.lvl_seed, 64);
+    if (macro.lvl_seed_known) code_bits(writer, macro.lvl_seed, 64);
     writer.finish();
 
     std::ofstream file(path, std::ios::binary);
@@ -1008,10 +1008,10 @@ bool ReplayIO::write_echo(const fs::path& path, const MacroSnap& snap) {
     file.write(magic, 4);
     unsigned char version = !rates.empty() ? 4 : 3;
     unsigned char flags = samples ? FLAG_SAMPLES : 0;
-    if (snap.lvl_seed_known) flags |= FLAG_SEED;
-    if (snap.unrounded) flags |= FLAG_UNROUNDED;
-    if (snap.silicate_variance) flags |= FLAG_SILICATE_VARIANCE;
-    if (snap.ldm_known) flags |= FLAG_LDM_KNOWN | (snap.ldm ? FLAG_LDM : 0);
+    if (macro.lvl_seed_known) flags |= FLAG_SEED;
+    if (macro.unrounded) flags |= FLAG_UNROUNDED;
+    if (macro.silicate_variance) flags |= FLAG_SILICATE_VARIANCE;
+    if (macro.ldm_known) flags |= FLAG_LDM_KNOWN | (macro.ldm ? FLAG_LDM : 0);
     ReplayIO::write_pod(file, version);
     ReplayIO::write_pod(file, flags);
     if (!writer.bytes.empty())
@@ -1019,7 +1019,7 @@ bool ReplayIO::write_echo(const fs::path& path, const MacroSnap& snap) {
     return (bool)file;
 }
 
-bool ReplayIO::read_echo(const fs::path& path, MacroSnap& out) {
+bool ReplayIO::read_echo(const fs::path& path, MacroData& out) {
     std::ifstream file(path, std::ios::binary);
     if (!file) return false;
     char magic[4] = {};

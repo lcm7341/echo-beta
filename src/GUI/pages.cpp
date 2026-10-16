@@ -2,7 +2,7 @@
 #include "Hooks/opt.hpp"
 #include "GUI/gui.hpp"
 #include "GUI/logo_texture.hpp"
-#include "Hack/label_kinds.hpp"
+#include "Hack/label_types.hpp"
 
 #include <imgui-cocos.hpp>
 #include <imgui.h>
@@ -25,7 +25,7 @@ static float card_width() {
 }
 
 static const char* const PLAYERS[] = { "Both", "Player 1", "Player 2" };
-static const char* const QUAD[] = { "Off", "Player 1", "Player 2", "Both" };
+static const char* const PLAYER_CHOICES[] = { "Off", "Player 1", "Player 2", "Both" };
 static const ImVec4 RECORD_RED(1.f, .36f, .44f, 1.f);
 
 static void tip(const char* text) {
@@ -51,7 +51,7 @@ static void persist_on_release() {
 static bool quad_row(const char* label, const char* id, bool& p1, bool& p2, const char* hint = nullptr) {
     EchoUI::Row(label, hint);
     int idx = GUI::get().quad_index(p1, p2);
-    if (!EchoUI::Combo(id, &idx, QUAD, 4)) return false;
+    if (!EchoUI::Combo(id, &idx, PLAYER_CHOICES, 4)) return false;
     GUI::get().apply_quad(idx, p1, p2);
     return true;
 }
@@ -325,12 +325,12 @@ static void draw_sequence_card() {
 static void draw_video_shape(bool& open_save_preset) {
     auto& logic = Logic::get();
 
-    struct Shape {
+    struct VideoPreset {
         const char* name;
         int width, height, fps, mbps;
     };
 
-    static const Shape DEFAULTS[] = {
+    static const VideoPreset DEFAULTS[] = {
         { "720p 30", 1280, 720, 30, 8 },
         { "720p 60", 1280, 720, 60, 12 },
         { "1080p 60", 1920, 1080, 60, 20 },
@@ -957,7 +957,7 @@ void GUI::draw_visuals() {
         tip("The end screen never shows, so leave the level from the pause menu.");
         if (toggle("No Mirror Portals", logic.no_mirror_portals)) GUI::get().apply_no_mirror();
         tip("Stops mirror portals from flipping the level.");
-        toggle("Stacked Orb Optimization", opt_effects);
+        toggle("Stacked Orb Optimization", optimize_effects);
         tip("Clicking many orbs on the same frame only shows one effect.");
     }
     EchoUI::EndCard();
@@ -1000,7 +1000,7 @@ void GUI::draw_macro() {
         EchoUI::Row("Format");
         EchoUI::Combo("##convert-format", &format, formats, 5);
         float half = EchoUI::RowButton(2);
-        if (EchoUI::Button("Export", ImVec2(half, 0.f))) Logic::get().export_kind(formats[format]);
+        if (EchoUI::Button("Export", ImVec2(half, 0.f))) Logic::get().export_as(formats[format]);
         tip("Converts the current replay to the converted folder");
         ImGui::SameLine();
         if (EchoUI::Button("Import", ImVec2(half, 0.f))) Logic::get().import_replays();

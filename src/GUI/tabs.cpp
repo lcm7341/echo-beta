@@ -1,6 +1,6 @@
 // the input editor: every input in a list that can be selected, moved, offset & deleted
 #include "GUI/gui.hpp"
-#include "Hack/label_kinds.hpp"
+#include "Hack/label_types.hpp"
 #include <imgui-cocos.hpp>
 #include <imgui.h>
 #include <misc/cpp/imgui_stdlib.h>
@@ -91,7 +91,7 @@ void GUI::apply_plain(const std::string& text) {
     Logic::get().inputs = std::move(next);
     Logic::get().poses.clear();
     Logic::get().input_ids.clear();
-    Logic::get().touch_inputs();
+    Logic::get().mark_inputs_changed();
     Logic::get().refresh_live_hold();
     Logic::get().recompute_cps();
     Logic::get().autosave_replay();
@@ -331,7 +331,7 @@ void GUI::editor() {
 
                 static ShownRows filtered;
                 if (!every_row) {
-                    bool kept = filtered.owner == &inputs && filtered.revision == logic.inputs_revision && filtered.count <= inputs.size() &&
+                    bool kept = filtered.owner == &inputs && filtered.revision == logic.inputs_version && filtered.count <= inputs.size() &&
                                 filtered.p1 == GUI::get().show_editor_p1 && filtered.p2 == GUI::get().show_editor_p2 &&
                                 (filtered.count < inputs.size() || filtered.data == inputs.data());
                     if (!kept) {
@@ -341,7 +341,7 @@ void GUI::editor() {
                     for (size_t i = filtered.count; i < inputs.size(); ++i) {
                         if (GUI::get().editor_shows(inputs[i])) filtered.rows.push_back((int)(i));
                     }
-                    filtered = { &inputs, inputs.data(), inputs.size(), logic.inputs_revision, GUI::get().show_editor_p1, GUI::get().show_editor_p2, std::move(filtered.rows) };
+                    filtered = { &inputs, inputs.data(), inputs.size(), logic.inputs_version, GUI::get().show_editor_p1, GUI::get().show_editor_p2, std::move(filtered.rows) };
                 }
                 int rows = every_row ? (int)(inputs.size()) : (int)(filtered.rows.size());
                 auto input_at = [&](int row) {

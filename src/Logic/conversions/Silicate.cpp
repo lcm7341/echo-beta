@@ -63,7 +63,7 @@ public:
         }
     }
 
-    bool section(ByteCursor& in, size_t end, unsigned long long target) {
+    bool section(ByteReader& in, size_t end, unsigned long long target) {
         if (end - in.at < 2) return false;
         auto header = (unsigned short)in.uint(2);
         switch (header >> 14) {
@@ -126,7 +126,7 @@ public:
         }
     }
 
-    bool actions(ByteCursor& in, size_t end) {
+    bool actions(ByteReader& in, size_t end) {
         if (end - in.at < 8) return false;
         unsigned long long amt = in.uint(8);
         if (amt > ReplayIO::max_inputs - produced) return false;
@@ -151,7 +151,7 @@ public:
         return a.button == 1 && b.button == 1 && a.holding && !b.holding && a.player2 == b.player2 && a.number == b.number;
     }
 
-    struct Item {
+    struct ActionToWrite {
         unsigned long long state = 0;
         size_t width = 0;
         bool rate = false;
@@ -166,8 +166,8 @@ public:
         return 3;
     }
 
-    static void write_actions(ByteSink& out, const std::vector<Frame>& inputs, const std::vector<RateChange>& rates) {
-        std::vector<Item> items;
+    static void write_actions(ByteWriter& out, const std::vector<Frame>& inputs, const std::vector<RateChange>& rates) {
+        std::vector<ActionToWrite> items;
         int prev = 0;
         size_t next_rate = 0;
         auto place_rates = [&](int up_to) {
@@ -213,8 +213,8 @@ public:
     }
 };
 
-bool ReplayIO::read_silicate(const fs::path& path, MacroSnap& out) {
-    ByteCursor in{ ReplayIO::read_all(path) };
+bool ReplayIO::read_silicate(const fs::path& path, MacroData& out) {
+    ByteReader in{ ReplayIO::read_all(path) };
     auto& data = in.data;
     if (data.size() < SilicateReplay::magic_size + 2 + 16 + 1) return false;
     if (std::memcmp(data.data(), SilicateReplay::magic, SilicateReplay::magic_size) != 0)
@@ -248,14 +248,14 @@ bool ReplayIO::read_silicate(const fs::path& path, MacroSnap& out) {
     return true;
 }
 
-bool ReplayIO::write_silicate(const fs::path& path, const MacroSnap& snap) {
-    auto inputs = ReplayIO::sorted_inputs(snap);
-    ByteSink out;
+bool ReplayIO::write_silicate(const fs::path& path, const MacroData& macro) {
+    auto inputs = ReplayIO::sorted_inputs(macro);
+    ByteWriter out;
     out.text({ SilicateReplay::magic, SilicateReplay::magic_size });
     out.uint(SilicateReplay::meta_size, 2);
     size_t meta_start = out.data.size();
-    out.pod((double)rate_at_frame(snap.rates, snap.fps, 0));
-    out.uint(snap.lvl_seed_known ? snap.lvl_seed : 0, 8);
+    out.pod((double)rate_at_frame(macro.rates, macro.fps, 0));
+    out.uint(macro.lvl_seed_known ? macro.lvl_seed : 0, 8);
     out.uint(SilicateReplay::meta_version, 4);
     out.uint(SilicateReplay::build, 4);
     out.uint(0, 4);
@@ -263,7 +263,7 @@ bool ReplayIO::write_silicate(const fs::path& path, const MacroSnap& snap) {
     out.uint(SilicateReplay::action_atom, 4);
     size_t size_at = out.data.size();
     out.uint(0, 8);
-    auto rates = snap.rates;
+    auto rates = macro.rates;
     std::stable_sort(rates.begin(), rates.end(), [](const RateChange& a, const RateChange& b) {
         return a.frame < b.frame;
     });

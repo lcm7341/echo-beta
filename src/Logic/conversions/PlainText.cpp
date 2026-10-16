@@ -11,7 +11,7 @@ namespace fs = std::filesystem;
 
 using namespace geode::prelude;
 
-bool ReplayIO::read_plain(const fs::path& path, MacroSnap& out) {
+bool ReplayIO::read_plain(const fs::path& path, MacroData& out) {
     std::ifstream file(path);
     if (!file) return false;
     float fps = 0.f;
@@ -32,11 +32,11 @@ bool ReplayIO::read_plain(const fs::path& path, MacroSnap& out) {
     return true;
 }
 
-bool ReplayIO::write_plain(const fs::path& path, const MacroSnap& snap) {
+bool ReplayIO::write_plain(const fs::path& path, const MacroData& macro) {
     std::ofstream file(path);
     if (!file) return false;
-    file << snap.fps << "\n";
-    for (const auto& input : snap.inputs) {
+    file << macro.fps << "\n";
+    for (const auto& input : macro.inputs) {
         file << input.number << " " << (input.holding ? 1 : 0) << " " << (input.player2 ? 1 : 0) << "\n";
     }
     return true;

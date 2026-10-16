@@ -3,7 +3,7 @@
 #import <UIKit/UIKit.h>
 
 // the round corners radius over the screens short side. 0 = square corners (or no idea)
-float echo_ios_corner_ratio() {
+float ios_corner_ratio() {
     static float ratio = -1.f;
     if (ratio >= 0.f) return ratio;
     ratio = 0.f;
