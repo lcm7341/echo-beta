@@ -5,9 +5,9 @@
 
 using namespace cocos2d;
 
-namespace eui {
-	ImTextureID logo_image(char const* sprite);
+namespace EchoUI {
+	ImTextureID logo_image(const char* sprite);
 	ImTextureID logo_tinted(float hue);
-	CCTexture2D* logo_texture(char const* sprite);
+	CCTexture2D* logo_texture(const char* sprite);
 	CCTexture2D* logo_tinted_texture(float hue);
 }

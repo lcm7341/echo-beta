@@ -9,20 +9,39 @@ using namespace cocos2d;
 namespace Orbs {
 	struct Pose {
 		GameObject* object = nullptr;
-		CCPoint pos;
-		float rotation = 0.f, rotationX = 0.f, rotationY = 0.f;
+		CCPoint position;
+		float rotation = 0.f, rotation_x = 0.f, rotation_y = 0.f;
+	};
+
+	// where each orb near a player is, so the trajectory can tell when one moved
+	struct Spot {
+		int id = 0;
+		float x = 0.f, y = 0.f, rotation = 0.f;
+		bool operator==(Spot const&) const = default;
+	};
+
+	struct PredictedPads {
+		bool pending = false;
+		bool black_clicked_by_assist = false;
+		bool unknown_pad = false;
+		std::vector<GameObject*> black_orbs;
+		std::vector<GameObject*> blue_orbs;
+		std::vector<int> pad_ids;
+	};
+
+	struct PadPrediction {
+		PredictedPads p1, p2;
+		std::unordered_set<int> spent_pads_p1, spent_pads_p2, spent_blue_p1, spent_blue_p2, spent_black_p1, spent_black_p2;
 	};
 
 	bool click_orb_assist(bool player2);
 	int claim_click(GJBaseGameLayer* layer, PlayerObject* player, bool player2);
 	void begin_push(PlayerObject* player);
 	void end_push(PlayerObject* player);
-	void note_jump_presses(PlayLayer* play);
 	void begin_step();
 	void arm_tool(bool on);
-	void commit_tool_hits();
 	bool blockHoldRing(PlayerObject* player, GameObject* object);
-	void click_pads(PlayLayer* play, PlayerObject* player, int objectType, GameObject* pad);
+	void click_pads(PlayLayer* play, PlayerObject* player, int object_type, GameObject* pad);
 	void flush_pads(PlayLayer* play);
 	void note_dash(PlayLayer* play, PlayerObject* player, GameObject* ring);
 	void click_fake_dash(PlayerObject* player, bool player2);
@@ -30,10 +49,11 @@ namespace Orbs {
 	bool take_queued_assist();
 	void click_fake(GJBaseGameLayer* play, PlayerObject* player, bool player2, std::unordered_set<int>& used, bool fresh_click);
 	void reset_prediction_pads();
+	void swap_prediction_pads(PadPrediction& state);
 	void notePredictionPad(GJBaseGameLayer* play, PlayerObject* player, GameObject* pad);
 	void apply_prediction_pads(GJBaseGameLayer* play, PlayerObject* player, bool player2);
 	void clear();
 	std::vector<Pose> capture(GJBaseGameLayer* play, PlayerObject* player);
 	void restore(std::vector<Pose> const& poses);
-	uint32_t pose_hash(GJBaseGameLayer* play, PlayerObject* player);
+	std::vector<Spot> orb_spots(GJBaseGameLayer* play, PlayerObject* player);
 }

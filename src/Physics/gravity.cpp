@@ -12,7 +12,7 @@ namespace phys {
 void flipGravityInner(PlayerObject* player, bool gravity) {
     bool icon2 = false;
     if (auto* layer = GJBaseGameLayer::get()) {
-        icon2 = player == layer->m_player2 || player == Trajectory::get().fake2;
+        icon2 = player == layer->m_player2 || Trajectory::get().is_second_fake(player);
     }
     bool ignoreUpsideDown = player->m_isDart && Logic::get().maintain_gravity && Logic::get().records_player(icon2);
 
@@ -109,10 +109,10 @@ void bumpPlayer(PlayerObject* player, float force, int p2, bool playBumpEffect,
         player->m_touchedPad = true;
     }
 
-    if (p2 != 0x2c) {
+    if (p2 != 44) {
         propellPlayer(player, force, playBumpEffect, p2);
         player->m_isAccelerating = false;
-        if (p2 == 0x22) {
+        if (p2 == 34) {
             player->m_isAccelerating = true;
             player->m_lastGroundedPos = CCPoint{0.0, 0.0};
         }

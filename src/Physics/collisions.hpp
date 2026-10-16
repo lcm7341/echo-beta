@@ -95,5 +95,4 @@ void collisionCheckObjects(GJBaseGameLayer* pl, PlayerObject* player,
 
 void triggerObject(EffectGameObject* obj, GJBaseGameLayer* pl,
                    PlayerObject* player);
-void checkSpawnObjects(GJBaseGameLayer* pl, PlayerObject* player);
 }

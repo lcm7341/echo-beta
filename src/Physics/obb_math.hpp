@@ -1,28 +1,25 @@
-// the box math for obb_fast.cpp (the rotated hitbox of an object: its 4 corners & its 2 sides)
-// add / sub / mul / div each do exactly 1 float op ON PURPOSE. the compiler must NOT merge or reorder them,
-//   the result has to match gds own function bit for bit or macros stop syncing
-// so dont "clean up" the order of anything in here, a + b & b + a are not the same thing to ts file
 #pragma once
 #include <cstdint>
 #include <cstring>
 
-namespace echo::obb {
-	using Trig = float (*)(float);
+namespace OBB {
+	using TrigFunction = float (*)(float);
+
+	const std::size_t BOX_CORNERS = 0x140, BOX_EDGES = 0x180, BOX_PROJECTIONS = 0x1a0, BOX_CENTER = 0x1b0;
 
 	struct Point {
 		float x, y;
 	};
 
 	// write straight into gds OBB2D, at the offset it keeps that value
-	inline void put(std::uint8_t* box, std::size_t offset, Point p) {
+	inline void write_point(unsigned char* box, std::size_t offset, Point p) {
 		std::memcpy(box + offset, &p, sizeof(p));
 	}
 
-	inline void put_double(std::uint8_t* box, std::size_t offset, double value) {
+	inline void write_double(unsigned char* box, std::size_t offset, double value) {
 		std::memcpy(box + offset, &value, sizeof(value));
 	}
 
-	// a = a (op) b, 1 instruction each
 	inline float add(float a, float b) {
 		asm("addss %1, %0" : "+x"(a) : "x"(b));
 		return a;
@@ -60,33 +57,28 @@ namespace echo::obb {
 		return add(mul(a.x, a.x), mul(a.y, a.y));
 	}
 
-	// how far along a side a corner is (y first, gd does y first)
-	inline float along(Point corner, Point side) {
-		return add(mul(corner.y, side.y), mul(corner.x, side.x));
+	inline float dot(Point corner, Point edge) {
+		return add(mul(corner.y, edge.y), mul(corner.x, edge.x));
 	}
 
-	// gds OBB2D::calculateWithCenter. half & one are gds own 0.5 & 1.0, cosine & sine are gds own too
-	inline void calculate(std::uint8_t* box, Point center, float width, float height, float angle,
-		Trig cosine, Trig sine, float half, float one) {
-		put(box, 0x1b0, center);
-		// half the box along its own x & y
-		Point x{ cosine(angle), sine(angle) }, y{ -sine(angle), cosine(angle) };
-		x = scale(x, mul(width, half));
-		y = scale(y, mul(height, half));
-		// the 4 corners
-		Point c0 = sub(sub(center, x), y), c1 = sub(add(center, x), y), c2 = add(add(center, x), y);
-		Point c3 = add(sub(center, x), y);
-		put(box, 0x140, c0);
-		put(box, 0x148, c1);
-		put(box, 0x150, c2);
-		put(box, 0x158, c3);
-		// the 2 sides coming out of corner 0, & where corner 0 sits along each
-		Point side0 = sub(c1, c0), side1 = sub(c3, c0);
-		side0 = scale(side0, div(one, length_squared(side0)));
-		put(box, 0x180, side0);
-		put_double(box, 0x1a0, static_cast<double>(along(c0, side0)));
-		side1 = scale(side1, div(one, length_squared(side1)));
-		put(box, 0x188, side1);
-		put_double(box, 0x1a8, static_cast<double>(along(c0, side1)));
+	inline void calculate(unsigned char* box, Point center, float width, float height, float angle,
+		TrigFunction cosine, TrigFunction sine, float half, float one) {
+		write_point(box, BOX_CENTER, center);
+		Point axis_x{ cosine(angle), sine(angle) }, axis_y{ -sine(angle), cosine(angle) };
+		axis_x = scale(axis_x, mul(width, half));
+		axis_y = scale(axis_y, mul(height, half));
+		Point corner0 = sub(sub(center, axis_x), axis_y), corner1 = sub(add(center, axis_x), axis_y), corner2 = add(add(center, axis_x), axis_y);
+		Point corner3 = add(sub(center, axis_x), axis_y);
+		write_point(box, BOX_CORNERS, corner0);
+		write_point(box, BOX_CORNERS + 8, corner1);
+		write_point(box, BOX_CORNERS + 16, corner2);
+		write_point(box, BOX_CORNERS + 24, corner3);
+		Point edge0 = sub(corner1, corner0), edge1 = sub(corner3, corner0);
+		edge0 = scale(edge0, div(one, length_squared(edge0)));
+		write_point(box, BOX_EDGES, edge0);
+		write_double(box, BOX_PROJECTIONS, (double)dot(corner0, edge0));
+		edge1 = scale(edge1, div(one, length_squared(edge1)));
+		write_point(box, BOX_EDGES + 8, edge1);
+		write_double(box, BOX_PROJECTIONS + 8, (double)dot(corner0, edge1));
 	}
 }

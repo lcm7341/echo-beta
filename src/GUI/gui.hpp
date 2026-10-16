@@ -19,6 +19,10 @@ namespace fs = std::filesystem;
 
 using namespace cocos2d;
 
+#ifdef GEODE_IS_MACOS
+bool scroll_is_precise();
+#endif
+
 enum class Slide {
 	Left,
 	Right,
@@ -39,7 +43,7 @@ struct ShelfMotion {
 	bool placed = false;
 };
 
-struct PickerState {
+struct ReplayPicker {
 	bool want_open = false;
 	bool sequence = false;
 	bool merge = false;
@@ -70,7 +74,7 @@ struct RenderPicker {
 };
 
 struct TabPage {
-	char const* name;
+	const char* name;
 	void (*draw)();
 };
 
@@ -78,8 +82,7 @@ struct StyleVarGuard {
 	int count = 0;
 
 	~StyleVarGuard() {
-		if (count > 0)
-			ImGui::PopStyleVar(count);
+		if (count > 0) ImGui::PopStyleVar(count);
 	}
 };
 
@@ -89,8 +92,8 @@ struct ShownReplay {
 };
 
 struct BindAction {
-	char const* setting;
-	char const* label;
+	const char* setting;
+	const char* label;
 };
 
 class GUI {
@@ -98,16 +101,16 @@ public:
 	static GUI& get();
 	static std::span<BindAction const> bind_actions();
 
-	void rewrite_selected(std::function<void(Frame&)> const& edit);
+	void rewrite_selected(const std::function<void(Frame&)>& edit);
 	void move_selected(int dir);
-	void addInput(int frame);
-	void deleteSelected();
+	void add_input(int frame);
+	void delete_selected();
 	void reset_macro();
 	void offset_chosen(int delta);
 	void random_offset_chosen();
 	void set_frame_advance(bool on);
 	void apply_seed_override();
-	void setSpeed(float speed, bool settle);
+	void set_speed(float speed, bool settle);
 	void set_playback_fps(float fps);
 	void drop_carry();
 	void apply_no_mirror();
@@ -117,7 +120,6 @@ public:
 	void release_stuck_mouse();
 	void draw_frame_bar();
 	bool bar_only = false;
-	// the id of a thing thats being dragged up & down by a finger, so touch_scroll leaves the page alone
 	unsigned int scroll_hold = 0;
 	int bar_pressed = 0;
 	ImVec4 bar_area{}, bar_back{}, bar_step{}, bar_resume{}, bar_best{};
@@ -150,7 +152,7 @@ public:
 	void renderer();
 	void apply_saved_theme();
 	bool typing();
-	void apply_theme_json(matjson::Value const& json);
+	void apply_theme_json(const matjson::Value& json);
 	void sync_menu_scale();
 	void draw_status(bool rule = true);
 	float touch_scale();
@@ -158,9 +160,9 @@ public:
 	void touch_scroll();
 	void on_style_replaced();
 	void restore_base_sizes();
-	void offer_rebind(char const* setting_id, char const* tip = nullptr);
+	void offer_rebind(const char* setting_id, const char* tip = nullptr);
 	void show_keybind_prompt(bool nested = false);
-	static char const* const BIND_POPUP;
+	static const char* const BIND_POPUP;
 
 	MenuMotion motion;
 	bool closing = false;
@@ -180,7 +182,7 @@ public:
 	std::unordered_map<std::string, Slide> slide;
 	Slide dock_slide = Slide::Up;
 	std::string page = "Replay";
-	eui::Palette palette;
+	EchoUI::Palette palette;
 	bool has_palette = false;
 	float applied_scale = 1.f;
 	ImGuiStyle base_style{};
@@ -194,20 +196,18 @@ public:
 	int prompt_drawn_frame = -100;
 #endif
 	int selected = -1;
-	uint64_t selected_id = 0;
+	unsigned long long selected_id = 0;
 	int anchor = -1;
-	uint64_t anchor_id = 0;
+	unsigned long long anchor_id = 0;
 	void select_input(int index, bool range = false);
 	void follow_selection();
 	bool shift_selecting() const;
 
 	bool selection_span(int& first, int& last) const {
-		if (selected < 0)
-			return false;
+		if (selected < 0) return false;
 		first = selected;
 		last = anchor >= 0 ? anchor : selected;
-		if (first > last)
-			std::swap(first, last);
+		if (first > last) std::swap(first, last);
 		return true;
 	}
 
@@ -218,8 +218,7 @@ public:
 
 	int selected_count() const {
 		int first = 0, last = 0;
-		if (!selection_span(first, last))
-			return 0;
+		if (!selection_span(first, last)) return 0;
 		return last - first + 1;
 	}
 
@@ -233,17 +232,14 @@ public:
 	bool show_editor_p1 = true, show_editor_p2 = true;
 	Frame draft;
 
-	bool editor_shows(Frame const& input) const {
+	bool editor_shows(const Frame& input) const {
 		return input.player2 ? show_editor_p2 : show_editor_p1;
 	}
 
-	bool in_cps_mark(Frame const& input) const {
-		if (mark_first < 0)
-			return false;
-		if (input.number < mark_first || input.number > mark_last)
-			return false;
-		if (mark_player >= 0 && input.player2 != (mark_player == 1))
-			return false;
+	bool in_cps_mark(const Frame& input) const {
+		if (mark_first < 0) return false;
+		if (input.number < mark_first || input.number > mark_last) return false;
+		if (mark_player >= 0 && input.player2 != (mark_player == 1)) return false;
 		return true;
 	}
 
@@ -259,8 +255,7 @@ public:
 	void sync_draft() {
 		follow_selection();
 		auto& inputs = Logic::get().inputs;
-		if (selected < 0 || selected >= static_cast<int>(inputs.size()))
-			return;
+		if (selected < 0 || selected >= (int)inputs.size()) return;
 		draft = inputs[selected];
 	}
 
@@ -268,7 +263,7 @@ public:
 	bool plain = false;
 	int input_offset = 0;
 	std::string plain_text;
-	PickerState replay_picker;
+	ReplayPicker replay_picker;
 	ThemePicker theme_picker;
 	ClickpackPicker clickpack_picker;
 	RenderPicker render_picker;
@@ -277,20 +272,16 @@ public:
 		Logic::get().push_runtime_settings();
 	}
 
-	bool checkbox_setting(char const* label, bool& field) {
-		if (!eui::Checkbox(label, &field))
-			return false;
+	bool checkbox_setting(const char* label, bool& field) {
+		if (!EchoUI::Checkbox(label, &field)) return false;
 		persist();
 		return true;
 	}
 
 	int pair_index(bool first, bool second) {
-		if (first && second)
-			return 0;
-		if (first)
-			return 1;
-		if (second)
-			return 2;
+		if (first && second) return 0;
+		if (first) return 1;
+		if (second) return 2;
 		return 0;
 	}
 
@@ -300,12 +291,9 @@ public:
 	}
 
 	int quad_index(bool first, bool second) {
-		if (first && second)
-			return 3;
-		if (first)
-			return 1;
-		if (second)
-			return 2;
+		if (first && second) return 3;
+		if (first) return 1;
+		if (second) return 2;
 		return 0;
 	}
 
@@ -314,50 +302,47 @@ public:
 		second = index == 2 || index == 3;
 	}
 
-	float combo_box_width(char const* const* labels, int count) {
+	float combo_box_width(const char* const* labels, int count) {
 		float width = 0.f;
 		for (int i = 0; i < count; ++i)
 			width = std::max(width, ImGui::CalcTextSize(labels[i]).x);
 		return width + ImGui::GetFrameHeight() + ImGui::GetStyle().FramePadding.x * 2.f + ImGui::GetStyle().ItemInnerSpacing.x;
 	}
 
-	bool combo_items(char const* id, char const* const* labels, int count, int& selected, float width = 0.f) {
+	bool combo_items(const char* id, const char* const* labels, int count, int& selected, float width = 0.f) {
 		bool changed = false;
 		ImGui::SetNextItemWidth(width > 0.f ? width : combo_box_width(labels, count));
-		if (eui::BeginCombo(id, labels[selected])) {
+		if (EchoUI::BeginCombo(id, labels[selected])) {
 			for (int i = 0; i < count; ++i) {
-				if (eui::Selectable(labels[i], selected == i)) {
+				if (EchoUI::Selectable(labels[i], selected == i)) {
 					selected = i;
 					changed = true;
 				}
-				if (selected == i)
-					ImGui::SetItemDefaultFocus();
+				if (selected == i) ImGui::SetItemDefaultFocus();
 			}
 			ImGui::EndCombo();
 		}
 		return changed;
 	}
 
-	void drag_float_setting(char const* label, float& field, float speed, float min, float max, char const* format) {
+	void drag_float_setting(const char* label, float& field, float speed, float min, float max, const char* format) {
 		float value = field;
-		if (eui::DragFloat(label, &value, speed, min, max, format))
-			field = value;
-		if (ImGui::IsItemDeactivatedAfterEdit())
-			persist();
+		if (EchoUI::DragFloat(label, &value, speed, min, max, format)) field = value;
+		if (ImGui::IsItemDeactivatedAfterEdit()) persist();
 	}
 
 	float px(float at18) {
 		return at18 * (ImGui::GetFontSize() / 18.f);
 	}
 
-	float labelWidth(char const* text) {
+	float label_width(const char* text) {
 		return ImGui::CalcTextSize(text).x + ImGui::GetStyle().FramePadding.x * 2.f;
 	}
 
-	float shared_button_width(std::initializer_list<char const*> labels);
+	float shared_button_width(std::initializer_list<const char*> labels);
 
-	void section_label(char const* label) {
-		eui::SectionLabel(label);
+	void section_label(const char* label) {
+		EchoUI::SectionLabel(label);
 	}
 
 	void load_menu_font();
@@ -373,53 +358,50 @@ public:
 	void tick_motion();
 	void push_open_fade(StyleVarGuard& guard);
 	float shelf_shown(int index, int count);
-	void layout_shelf(std::vector<TabPage> const& pages, std::vector<ImVec2>& targets);
+	void layout_shelf(const std::vector<TabPage>& pages, std::vector<ImVec2>& targets);
 	float max_fitting_scale();
-	template <typename A1>
-	void fade_page(char const* name, A1&& draw);
-	const TabPage* active_page(std::vector<TabPage> const& pages);
+	void fade_page(const char* name, void (*draw)());
+	const TabPage* active_page(const std::vector<TabPage>& pages);
 	ImGuiWindowFlags menu_flags();
-	void draw_nav(std::vector<TabPage> const& pages, float height);
-	void draw_floating(std::vector<TabPage> const& pages);
-	template <typename A1>
-	void draw_loose(char const* id, char const* title, bool can_close, ImVec2 target, float shown, A1&& draw);
+	void draw_nav(const std::vector<TabPage>& pages, float height);
+	void draw_floating(const std::vector<TabPage>& pages);
 	void draw_window();
 	ImGuiChildFlags fit_card();
-	float columnWidth(std::initializer_list<char const*> labels);
+	float column_width(std::initializer_list<const char*> labels);
 	std::string ordinal(int number);
-	std::string format_plain(Session const& value);
-	void apply_plain(std::string const& text);
+	std::string format_plain(const Logic& value);
+	void apply_plain(const std::string& text);
 	void draw_edit_fields(bool enabled, float column);
-	void draw_click_times(bool& softs, float& soft_ms, bool& hards, float& hard_seconds, bool& micros, int& micro_ms, char const* suffix);
-	void help_marker(char const* text);
-	matjson::Value color_json(ImVec4 const& color);
-	matjson::Value pair_json(ImVec2 const& value);
-	void read_pair(matjson::Value const& json, char const* key, ImVec2& value);
-	void read_color(matjson::Value const& json, char const* key, float* color);
+	void draw_click_times(bool& softs, float& soft_ms, bool& hards, float& hard_seconds, bool& micros, int& micro_ms, const char* suffix);
+	void help_marker(const char* text);
+	matjson::Value color_json(const ImVec4& color);
+	matjson::Value pair_json(const ImVec2& value);
+	void read_pair(const matjson::Value& json, const char* key, ImVec2& value);
+	void read_color(const matjson::Value& json, const char* key, float* color);
 	float unscaled(float value);
 	ImVec2 unscaled(ImVec2 value);
 	matjson::Value style_json();
-	void apply_style_json(matjson::Value const& json);
-	fs::path theme_path(std::string const& name);
-	void export_theme(fs::path const& path);
-	void import_theme(fs::path const& path);
-	matjson::Value convert_old_theme(matjson::Value const& old, std::string const& name);
+	void apply_style_json(const matjson::Value& json);
+	fs::path theme_path(const std::string& name);
+	void export_theme(const fs::path& path);
+	void import_theme(const fs::path& path);
+	matjson::Value convert_old_theme(const matjson::Value& old, const std::string& name);
 	void note_style_edit();
 	void paint_editor(float* dest, ImVec4 color);
 	void paint_editor_from_theme();
 	void randomize_theme();
-	void use_palette(eui::Palette const& palette, std::string const& name);
-	void color_row(char const* label, float* color, int id);
+	void use_palette(const EchoUI::Palette& palette, const std::string& name);
+	void color_row(const char* label, float* color, int id);
 	std::optional<enumKeyCodes> cocos_key(ImGuiKey key);
 	bool is_modifier(ImGuiKey key);
 	std::string key_name(enumKeyCodes key);
 	geode::KeyboardModifier modifier_for_key(enumKeyCodes key);
-	std::string stored_bind(char const* setting);
-	void store_bind(char const* setting, enumKeyCodes key, bool ctrl, bool shift, bool alt);
-	void flip_setting(bool& field, char const* setting);
-	PickerState& picker();
+	std::string stored_bind(const char* setting);
+	void store_bind(const char* setting, enumKeyCodes key, bool ctrl, bool shift, bool alt);
+	void flip_setting(bool& field, const char* setting);
+	ReplayPicker& picker();
 	std::string lower_copy(std::string text);
-	ShownReplay shown_replay(fs::path const& path);
+	ShownReplay shown_replay(const fs::path& path);
 	void refresh_files();
 	ThemePicker& themes();
 	void refresh_themes();

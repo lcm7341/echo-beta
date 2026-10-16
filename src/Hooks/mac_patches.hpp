@@ -4,14 +4,13 @@
 
 // mac 2.2081. offsets from the start of the mach-o, arm & intel checked separately
 // original bytes get compared first
-namespace echo::patches::mac {
+namespace MacPatches {
 #if defined(__aarch64__)
 	// update() works out the step count from dt, ts swaps that for a load of my count
 	// the pointer goes in at step_pointer_offset
-	inline constexpr uintptr_t step_address = 0x122d50, step_pointer_offset = 0x18;
-	inline constexpr uintptr_t event_address = 0xfa490, event_size = 0x1d8, event_lookup_address = 0xfa5c0;
-	inline constexpr uint64_t event_hash = 0x6ce94c5f2fb678ff; // gd code hash
-	inline constexpr std::array<uint8_t, 32> step_original = {
+	inline const uintptr_t step_address = 0x122d50, step_pointer_offset = 0x18;
+	inline const uintptr_t event_lookup_address = 0xfa5c0;
+	inline const std::array<unsigned char, 32> step_original = {
 		0x00,
 		0xc0,
 		0x22,
@@ -46,7 +45,7 @@ namespace echo::patches::mac {
 		0x1e,
 	};
 	// ldr x8, <ptr>; ldr w20, [x8]; cmp w20, #1; csinc w20, w20, wzr, ge; b +16; nop; <ptr>
-	inline constexpr std::array<uint8_t, 32> step_replacement = {
+	inline const std::array<unsigned char, 32> step_replacement = {
 		0xc8,
 		0x00,
 		0x00,
@@ -80,8 +79,7 @@ namespace echo::patches::mac {
 		0x00,
 		0x00,
 	};
-	// b past the second event map lookup, same idea as windows (game_patches.hpp)
-	inline constexpr std::array<uint8_t, 4> event_lookup_replacement = {
+	inline const std::array<unsigned char, 4> event_lookup_replacement = {
 		0x29,
 		0x00,
 		0x00,
@@ -89,8 +87,8 @@ namespace echo::patches::mac {
 	};
 	// arm only: getModifiedDelta is inlined into update() so a hook never runs
 	// so the inlined copy calls thru the pointer at delta_pointer_offset. s0 = dt, x0 = this, delta in d1 & delta / timewarp in d8
-	inline constexpr uintptr_t delta_address = 0x122c48, delta_pointer_offset = 0x28;
-	inline constexpr std::array<uint8_t, 88> delta_original = {
+	inline const uintptr_t delta_address = 0x122c48, delta_pointer_offset = 0x28;
+	inline const std::array<unsigned char, 88> delta_original = {
 		0x60,
 		0x5e,
 		0x58,
@@ -182,7 +180,7 @@ namespace echo::patches::mac {
 	};
 	// fmov s0, s9; mov x0, x19; ldr x16, <ptr>; blr x16; fmov d1, d0; ldr s2, [x19, #0x330]; fcvt d2, s2; fdiv d8, d1, d2;
 	// ldrb w8, [x24, #0x1a0]; b +0x34; <ptr>
-	inline constexpr std::array<uint8_t, 48> delta_replacement = {
+	inline const std::array<unsigned char, 48> delta_replacement = {
 		0x20,
 		0x41,
 		0x20,
@@ -233,11 +231,9 @@ namespace echo::patches::mac {
 		0x00,
 	};
 #else
-	// intel slice, same patches
-	inline constexpr uintptr_t step_address = 0x1516cf, step_pointer_offset = 0x2;
-	inline constexpr uintptr_t event_address = 0x121590, event_size = 0x1ac, event_lookup_address = 0x12168b;
-	inline constexpr uint64_t event_hash = 0x92f729cfa2100615; // gd code hash
-	inline constexpr std::array<uint8_t, 71> step_original = {
+	inline const uintptr_t step_address = 0x1516cf, step_pointer_offset = 0x2;
+	inline const uintptr_t event_lookup_address = 0x12168b;
+	inline const std::array<unsigned char, 71> step_original = {
 		0xf3,
 		0x0f,
 		0x5a,
@@ -311,7 +307,7 @@ namespace echo::patches::mac {
 		0xf8,
 	};
 	// movabs r11, <ptr>; mov r15d, [r11]; cmp r15d, 1; mov r11d, 1; cmovl r15d, r11d; cvtsi2ss xmm0, r15d; movaps [rbp-0x50], xmm0; nops
-	inline constexpr std::array<uint8_t, 71> step_replacement = {
+	inline const std::array<unsigned char, 71> step_replacement = {
 		0x49,
 		0xbb,
 		0x00,
@@ -385,7 +381,7 @@ namespace echo::patches::mac {
 		0x90,
 	};
 	// jmp over the second lookup
-	inline constexpr std::array<uint8_t, 5> event_lookup_replacement = {
+	inline const std::array<unsigned char, 5> event_lookup_replacement = {
 		0xe9,
 		0xa8,
 		0x00,

@@ -11,38 +11,32 @@ namespace fs = std::filesystem;
 
 using namespace geode::prelude;
 
-bool ReplayIO::read_plain(fs::path const& path) {
+bool ReplayIO::read_plain(const fs::path& path, MacroData& out) {
     std::ifstream file(path);
-    if (!file)
-        return false;
+    if (!file) return false;
     float fps = 0.f;
     file >> fps;
-    if (!file)
-        return false;
+    if (!file) return false;
     std::vector<Frame> inputs;
     while (file) {
         Frame input;
         int holding = 0;
         int player2 = 0;
         file >> input.number >> holding >> player2;
-        if (!file)
-            break;
+        if (!file) break;
         input.holding = holding != 0;
         input.player2 = player2 != 0;
         inputs.push_back(input);
     }
-    ReplayIO::adopt_inputs(std::move(inputs), fps);
-    Logic::get().clear_sides();
+    ReplayIO::adopt_inputs(out, std::move(inputs), fps);
     return true;
 }
 
-bool ReplayIO::write_plain(fs::path const& path) {
+bool ReplayIO::write_plain(const fs::path& path, const MacroData& macro) {
     std::ofstream file(path);
-    if (!file)
-        return false;
-    auto const& logic = Logic::get();
-    file << logic.macro_fps << "\n";
-    for (auto const& input : logic.inputs) {
+    if (!file) return false;
+    file << macro.fps << "\n";
+    for (const auto& input : macro.inputs) {
         file << input.number << " " << (input.holding ? 1 : 0) << " " << (input.player2 ? 1 : 0) << "\n";
     }
     return true;

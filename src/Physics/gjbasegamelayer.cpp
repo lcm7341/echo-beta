@@ -86,8 +86,8 @@ void teleportPlayer(GJBaseGameLayer* pl, TeleportPortalObject* object,
                     someFloat = 0.0;
                 } else {
                     auto& roll = Logic::get().teleport_random;
-                    roll = static_cast<uint64_t>(static_cast<int>((214013ull * roll + 2531011ull) >> 16) & 0x7FFF);
-                    someFloat = static_cast<float>(roll) / 32767.f;
+                    roll = (unsigned long long)((int)((214013ull * roll + 2531011ull) >> 16) & 32767);
+                    someFloat = (float)roll / 32767.f;
                     if (someFloat == 1.f) someFloat = 0.f;
                 }
 
@@ -103,7 +103,7 @@ void teleportPlayer(GJBaseGameLayer* pl, TeleportPortalObject* object,
         player->m_lastPortalPos = object->getPosition();
         player->m_lastActivatedPortal = object;
         player->m_fallStartY = 0.0;
-        if (object->m_objectID == 0x2eb) {
+        if (object->m_objectID == 747) {
             float dy = object->m_teleportYOffset;
             portalPos = object->getRealPosition();
 
@@ -143,16 +143,16 @@ void teleportPlayer(GJBaseGameLayer* pl, TeleportPortalObject* object,
     if (destination) {
         float gravityForceMod = 90.0;
         int objectID = object->m_objectID;
-        if (objectID == 0x26 || objectID == 0x2eb || objectID == 0x2ed ||
-            objectID == 0x810 || objectID == 0xb56) {
+        if (objectID == 38 || objectID == 747 || objectID == 749 ||
+            objectID == 2064 || objectID == 2902) {
             gravityForceMod = 180.0;
         }
 
-        float flipMod = (float)(object->isFlipX() ? 0xb4 : 1);
+        float flipMod = (float)(object->isFlipX() ? 180 : 1);
         forceRelated =
             flipMod + (gravityForceMod - destination->getRotationX());
     } else {
-        float flipMod = (float)(object->isFlipX() ? 0xb4 : 1);
+        float flipMod = (float)(object->isFlipX() ? 180 : 1);
         forceRelated = flipMod - object->getRotationX();
     }
 

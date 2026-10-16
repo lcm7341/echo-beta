@@ -16,42 +16,39 @@ using namespace geode::prelude;
 // static = same bytes every launch so it cant hold an address of mine
 // the count sits in the empty space after the last __DATA section instead (__common ends at 0x8b1778, the segment at 0x8b4000)
 // nothing else uses that slot. it got blamed for a crash once & it wasnt it
-namespace {
-    constexpr std::uintptr_t STEP_SITE = 0x1fe730, STEP_SLOT = 0x8b3ff0;
-    constexpr std::array<std::uint32_t, 8> STEP_ORIGINAL = {
-        0x1e22c000, // fcvt d0, s0
-        0x1e601920, // fdiv d0, d9, d0
-        0x1e621002, // fmov d2, #4.0
-        0x1e620800, // fmul d0, d0, d2
-        0x1e624000, // fcvt s0, d0
-        0x1e264000, // frinta s0, s0
-        0x1e216800, // fmaxnm s0, s0, s1
-        0x1e380015, // fcvtzs w21, s0
-    };
-    constexpr std::array<std::uint32_t, 8> STEP_REPLACEMENT = {
-        0xb00035a8, // adrp x8, 0x8b3000
-        0xb94ff115, // ldr w21, [x8, #0xff0]
-        0x710006bf, // cmp w21, #1
-        0x1a9fa6b5, // csinc w21, w21, wzr, ge
-        0xd503201f,
-        0xd503201f,
-        0xd503201f,
-        0xd503201f, // nop
-    };
-    bool g_stepPatched = false;
+const std::uintptr_t STEP_SITE = 0x1fe730, STEP_SLOT = 0x8b3ff0;
+const std::array<unsigned, 8> STEP_ORIGINAL = {
+    0x1e22c000, // fcvt d0, s0
+    0x1e601920, // fdiv d0, d9, d0
+    0x1e621002, // fmov d2, #4.0
+    0x1e620800, // fmul d0, d0, d2
+    0x1e624000, // fcvt s0, d0
+    0x1e264000, // frinta s0, s0
+    0x1e216800, // fmaxnm s0, s0, s1
+    0x1e380015, // fcvtzs w21, s0
+};
+const std::array<unsigned, 8> STEP_REPLACEMENT = {
+    0xb00035a8, // adrp x8, 0x8b3000
+    0xb94ff115, // ldr w21, [x8, #0xff0]
+    0x710006bf, // cmp w21, #1
+    0x1a9fa6b5, // csinc w21, w21, wzr, ge
+    0xd503201f,
+    0xd503201f,
+    0xd503201f,
+    0xd503201f, // nop
+};
+static bool g_step_patched = false;
 
-    int* step_slot() {
-        return reinterpret_cast<int*>(geode::base::get() + STEP_SLOT);
-    }
+static int* step_slot() {
+    return reinterpret_cast<int*>(geode::base::get() + STEP_SLOT);
 }
 
 $execute {
     auto* site = reinterpret_cast<void*>(geode::base::get() + STEP_SITE);
-    auto is = [site](std::array<std::uint32_t, 8> const& words) {
+    auto is = [site](const std::array<unsigned, 8>& words) {
         return std::memcmp(site, words.data(), sizeof(words)) == 0;
     };
     if (Loader::get()->isPatchless()) {
-        // STEP_REPLACEMENT byte for byte, at STEP_SITE
         GEODE_MOD_STATIC_PATCH(0x1fe730, {
                                              0xa8,
                                              0x35,
@@ -88,31 +85,27 @@ $execute {
                                          });
     }
     else if (is(STEP_ORIGINAL)) {
-        std::vector<std::uint8_t> bytes(sizeof(STEP_REPLACEMENT));
+        std::vector<unsigned char> bytes(sizeof(STEP_REPLACEMENT));
         std::memcpy(bytes.data(), STEP_REPLACEMENT.data(), bytes.size());
         (void)Mod::get()->patch(site, bytes);
     }
-    // only installed if the bytes are REALLY there
     if (is(STEP_REPLACEMENT)) {
-        g_stepPatched = true;
+        g_step_patched = true;
         step_patched = true;
     }
     else if (is(STEP_ORIGINAL)) {
     }
     else {
-        // another mods patch is there (a tps bypass does the same spot)
     }
 }
 
 class $modify(EchoIosStepCount, GJBaseGameLayer) {
     static void onModify(auto& self) {
-        // innermost, so the count in the slot is the one in force when the game reads it
         (void)self.setHookPriority("GJBaseGameLayer::update", Priority::Last);
     }
 
     void update(float dt) {
-        if (g_stepPatched)
-            *step_slot() = Logic::get().steps_this_tick;
+        if (g_step_patched) *step_slot() = Logic::get().steps_this_tick;
         GJBaseGameLayer::update(dt);
     }
 };

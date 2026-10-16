@@ -12,52 +12,45 @@
 
 using namespace geode::prelude;
 
-class $modify(EchoQuietLayer, GJBaseGameLayer) {
+class $modify(EchoNoEffectsBaseLayer, GJBaseGameLayer) {
     void playExitDualEffect(PlayerObject* player) {
         auto& logic = Logic::get();
-        // dying in dual plays ts burst too, so disable death effect takes it as well
-        if (logic.no_effects || (m_playerDied && logic.disable_death_effect))
-            return;
+        if (logic.no_effects || (m_playerDied && logic.disable_death_effect)) return;
         GJBaseGameLayer::playExitDualEffect(player);
     }
 };
 
-class $modify(EchoQuietPlay, PlayLayer) {
+class $modify(EchoNoEffectsPlayLayer, PlayLayer) {
     void playGravityEffect(bool flip) {
-        if (Logic::get().no_effects)
-            return;
+        if (Logic::get().no_effects) return;
         PlayLayer::playGravityEffect(flip);
     }
 };
 
-class $modify(EchoQuietTrigger, EffectGameObject) {
+class $modify(EchoNoEffectsTrigger, EffectGameObject) {
     void playTriggerEffect() {
-        if (Logic::get().no_effects)
-            return;
+        if (Logic::get().no_effects) return;
         EffectGameObject::playTriggerEffect();
     }
 };
 
-class $modify(EchoQuietWave, CCCircleWave) {
+class $modify(EchoNoEffectsCircleWave, CCCircleWave) {
     void draw() {
-        if (Logic::get().no_effects && PlayLayer::get())
-            return;
+        if (Logic::get().no_effects && PlayLayer::get()) return;
         CCCircleWave::draw();
     }
 };
 
-class $modify(EchoQuietParticle, ParticleGameObject) {
+class $modify(EchoNoEffectsParticle, ParticleGameObject) {
     void updateParticle() {
         ParticleGameObject::updateParticle();
-        if (Logic::get().no_effects && PlayLayer::get())
-            this->setVisible(false);
+        if (Logic::get().no_effects && PlayLayer::get()) this->setVisible(false);
     }
 };
 
-class $modify(EchoEndLayer, EndLevelLayer) {
+class $modify(EchoHideEndscreen, EndLevelLayer) {
     void showLayer(bool instant) {
-        if (Logic::get().hide_endscreen)
-            return;
+        if (Logic::get().hide_endscreen) return;
         EndLevelLayer::showLayer(instant);
     }
 };

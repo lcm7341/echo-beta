@@ -14,15 +14,29 @@ set(CMAKE_CXX_VISIBILITY_PRESET hidden)
 project(Echo VERSION 2.2.0)
 
 file(GLOB_RECURSE SOURCES CONFIGURE_DEPENDS src/*.cpp)
+# these only build on their own os (added further down)
+list(FILTER SOURCES EXCLUDE REGEX "src/Logic/(mac|win)_refresh_clock\\.cpp$")
+list(FILTER SOURCES EXCLUDE REGEX "src/Physics/android_sort\\.cpp$")
 
 add_library(${PROJECT_NAME} SHARED ${SOURCES})
 if (ANDROID)
     target_compile_definitions(${PROJECT_NAME} PRIVATE ECHO_FFMPEG_API_ENABLED=1)
+    if (ANDROID_ABI STREQUAL "arm64-v8a")
+        target_sources(${PROJECT_NAME} PRIVATE src/Physics/android_sort.cpp)
+    endif()
 else()
     target_compile_definitions(${PROJECT_NAME} PRIVATE ECHO_FFMPEG_API_ENABLED=0)
 endif()
 
 target_include_directories(${PROJECT_NAME} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+
+set(ECHO_BUILD_INFO "${CMAKE_CURRENT_BINARY_DIR}/generated/build_info.cpp")
+add_custom_target(echo_build_info ALL
+    COMMAND ${CMAKE_COMMAND} -E env TZ=America/Chicago ${CMAKE_COMMAND} -DOUT=${ECHO_BUILD_INFO} -DSRC=${CMAKE_CURRENT_SOURCE_DIR} -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/build_info.cmake
+    BYPRODUCTS ${ECHO_BUILD_INFO}
+    VERBATIM)
+add_dependencies(${PROJECT_NAME} echo_build_info)
+target_sources(${PROJECT_NAME} PRIVATE ${ECHO_BUILD_INFO})
 
 if (NOT DEFINED ENV{GEODE_SDK} OR NOT EXISTS "$ENV{GEODE_SDK}/CMakeLists.txt")
     foreach(_geode_candidate "$ENV{HOME}/Documents/Geode" "$ENV{HOME}/.local/share/Geode/sdk")
@@ -56,6 +70,8 @@ target_link_libraries(${PROJECT_NAME} imgui-cocos)
 if (WIN32)
     CPMAddPackage("gh:cursey/safetyhook#2f28386")
     target_link_libraries(${PROJECT_NAME} safetyhook)
+    target_sources(${PROJECT_NAME} PRIVATE src/Logic/win_refresh_clock.cpp)
+    target_link_libraries(${PROJECT_NAME} dwmapi)
 endif()
 
 setup_geode_mod(${PROJECT_NAME})
@@ -70,7 +86,9 @@ if (IOS)
 endif()
 
 if (APPLE AND NOT IOS)
-    set_source_files_properties(src/Logic/mac_refresh_clock.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    # apple calls the display link "old" now, this hides those warnings
+    target_sources(${PROJECT_NAME} PRIVATE src/Logic/mac_refresh_clock.cpp)
+    set_source_files_properties(src/Logic/mac_refresh_clock.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON COMPILE_FLAGS "-Wno-deprecated-declarations")
     enable_language(OBJCXX)
     target_sources(${PROJECT_NAME} PRIVATE src/Logic/mac_promotion.mm)
     set_source_files_properties(src/Logic/mac_promotion.mm PROPERTIES SKIP_PRECOMPILE_HEADERS ON)

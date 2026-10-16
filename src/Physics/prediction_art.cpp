@@ -2,48 +2,41 @@
 #include "prediction_art.hpp"
 #include <Geode/loader/Loader.hpp>
 #include <Geode/loader/Hook.hpp>
+#include <algorithm>
 #include <cstdint>
+#include <string_view>
 
 using namespace geode::prelude;
 
+#define PLAYER_SET_POSITION 0x39c640
+
 namespace phys {
-    namespace {
-        bool fast_pos = false;
+    static bool skip_prediction_art = false, skip_live_art = false;
+
+    bool can_skip_prediction_art() {
+        return skip_prediction_art;
     }
 
-    bool fast_prediction_pos() {
-        return fast_pos;
+    bool can_defer_player_art() {
+        return skip_live_art;
     }
 
     void prepare_prediction_art() {
 #ifdef GEODE_IS_WINDOWS
-        static bool const supported = [] {
-            auto* code = reinterpret_cast<uint8_t const*>(geode::base::get() + 0x39c660); // PlayerObject::setPosition
-            uint64_t hash = 14695981039346656037ull;                                      // fnv-1a start value
-            for (size_t i = 0; i < 0xcab; ++i)
-                hash = (hash ^ code[i]) * 1099511628211ull; // fnv-1a prime
-            return hash == 0x4382ee25ecaa5ff1ull;           // gd code hash
-        }();
-        fast_pos = supported;
-        static bool reported = false;
-        if (!fast_pos) {
-            reported = true;
-            return;
-        }
+        skip_prediction_art = skip_live_art = true;
+        const std::string_view VISUAL_ONLY_MODS[] = { "cvolton.misc_bugfixes" };
         for (auto* mod : Loader::get()->getAllMods()) {
-            if (mod == Mod::get())
-                continue;
+            if (mod == Mod::get()) continue;
+            bool visual_only = std::ranges::find(VISUAL_ONLY_MODS, mod->getID()) != std::end(VISUAL_ONLY_MODS);
             for (auto* hook : mod->getHooks()) {
-                if (hook->isEnabled() && hook->getAddress() == geode::base::get() + 0x39c640) {
-                    fast_pos = false;
-                    reported = true;
-                    return;
+                if (hook->isEnabled() && hook->getAddress() == geode::base::get() + PLAYER_SET_POSITION) {
+                    skip_live_art = false;
+                    if (!visual_only) skip_prediction_art = false;
                 }
             }
         }
-        reported = true;
 #else
-        fast_pos = false;
+        skip_prediction_art = skip_live_art = false;
 #endif
     }
 }
