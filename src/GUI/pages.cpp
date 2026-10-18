@@ -581,8 +581,6 @@ void GUI::main() {
         ImGui::BeginDisabled(logic.lock_delta);
         if (toggle("Real Time", logic.real_time_mode)) GUI::get().drop_carry();
         tip("Keeps the game at full speed when it lags instead of slowing it down.");
-        toggle("Skip Far Moving Objects", logic.near_movers);
-        tip("Only tests the moving objects that can reach the player. Same physics, less work.");
         if (EchoUI::Gear("##real-time-settings")) open_real_time = true;
         ImGui::EndDisabled();
         toggle("Audio Speedhack", logic.audio_speedhack);
@@ -978,6 +976,8 @@ void GUI::draw_visuals() {
         tip("Stops mirror portals from flipping the level.");
         toggle("Stacked Orb Optimization", optimize_effects);
         tip("Draws stacked orb effects as one to reduce lag.");
+        toggle("Skip Far Moving Objects", logic.near_movers);
+        tip("Only tests the moving objects that can reach the player. Same physics, less work.");
 #ifdef GEODE_IS_WINDOWS
         toggle("Batched Effects", logic.batched_effects);
         tip("Draws many effects all at once using more CPU cores");
