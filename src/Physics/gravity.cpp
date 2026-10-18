@@ -5,6 +5,7 @@
 
 #include "Hack/trajectory.hpp"
 #include "Logic/logic.hpp"
+#include "Physics/player.hpp"
 
 using namespace geode::prelude;
 
@@ -16,9 +17,11 @@ void flipGravityInner(PlayerObject* player, bool gravity) {
     }
     bool ignoreUpsideDown = player->m_isDart && Logic::get().maintain_gravity && Logic::get().records_player(icon2);
 
+    placeStreakPointState(player);
     if (!ignoreUpsideDown) {
         player->m_isUpsideDown = gravity;
     }
+    gameEvent(player, gravity ? (int)GJGameEvent::GravityInverted : (int)GJGameEvent::GravityRestored);
 
     player->m_lastFlipTime = player->m_totalTime;
     player->m_collidedBottomMaxY = 0.;
@@ -57,6 +60,11 @@ void flipGravity(PlayerObject* player, bool gravity, bool linkPartner) {
     auto& gameState = GJBaseGameLayer::get()->m_gameState;
 
     flipGravityInner(player, gravity);
+    if (auto* layer = player->m_gameLayer;
+        !player->m_isBall && layer && !layer->m_freezeStartCamera && !player->m_isDart && !player->m_maybeReducedEffects) {
+        player->m_shouldTryPlacingCheckpoint = true;
+        activateStreakState(player);
+    }
     if (!linkPartner || !Trajectory::get().isFake(player) ||
         gameState.m_unkBool31 || !gameState.m_isDualMode ||
         GJBaseGameLayer::get()->m_levelSettings->m_twoPlayerMode) return;
@@ -72,19 +80,25 @@ void flipGravity(PlayerObject* player, bool gravity, bool linkPartner) {
 }
 
 void propellPlayer(PlayerObject* player, float force, bool, int) {
+    const float smallVehicleGravity = 0.8f;
+    const float forceScale = 16.f;
+    const double ballDamping = 0.6000000238418579;
     player->m_maybeIsBoosted = true;
     player->m_isOnGround2 = false;
     player->m_isOnGround = false;
+    player->m_shouldTryPlacingCheckpoint = true;
     player->m_isOnSlope = false;
     player->m_wasOnSlope = false;
 
-    float gravity = player->m_vehicleSize != 1.0 ? 0.8 : 1.0;
-    float gravityCoefficient = player->m_isUpsideDown ? -1 : 1;
-    double velocity = force * gravity * gravityCoefficient * 16.0;
+    float gravity = player->m_vehicleSize != 1.f ? smallVehicleGravity : 1.f;
+    float gravityCoefficient = player->m_isUpsideDown ? -1.f : 1.f;
+    float scaled = gravityCoefficient * (force * forceScale);
+    scaled *= gravity;
+    double velocity = scaled;
     player->setYVelocity(velocity, 0);
 
     if (player->m_isBall || player->m_isSpider || player->m_isSwing) {
-        player->m_yVelocity *= 0.6;
+        player->m_yVelocity *= ballDamping;
     }
 
     if (!player->m_isLocked && !player->m_isDashing) {
@@ -94,12 +108,13 @@ void propellPlayer(PlayerObject* player, float force, bool, int) {
         player->m_rotationSpeed = 0.;
 
         if (!player->m_isBall) {
-            player->runBallRotation(velocity);
+            player->runNormalRotation(false, 1.f);
         } else {
-            player->runNormalRotation(0, 1.0);
+            player->runBallRotation(1.f);
         }
     }
 
+    activateStreakState(player);
     player->m_lastGroundedPos = player->getPosition();
 }
 
@@ -122,6 +137,7 @@ void bumpPlayer(PlayerObject* player, float force, int p2, bool playBumpEffect,
 
     if (!object) {
         player->spiderTestJumpInternal(false);
+        gameEvent(player, (int)GJGameEvent::SpiderTeleport);
         return;
     }
 
@@ -136,5 +152,6 @@ void bumpPlayer(PlayerObject* player, float force, int p2, bool playBumpEffect,
     }
 
     player->spiderTestJumpInternal(false);
+    gameEvent(player, (int)GJGameEvent::SpiderTeleport);
 }
 }

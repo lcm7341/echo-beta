@@ -2,16 +2,74 @@
 #include "Physics/player.hpp"
 #include "Hack/orbs.hpp"
 #include "Hack/trajectory.hpp"
+#include "Hack/predicted_world.hpp"
 #include "Physics/collisions.hpp"
+#include "Logic/logic.hpp"
 
 #include <Geode/Geode.hpp>
 
 using namespace geode::prelude;
 
 namespace phys {
+void placeStreakPointState(PlayerObject* player) {
+    if (!Logic::get().predicting) player->placeStreakPoint();
+    else player->m_justPlacedStreak = false;
+}
+
+static bool flyingMode(PlayerObject* player) {
+    return player->m_isShip || player->m_isBird || player->m_isDart || player->m_isSwing;
+}
+
+void activateStreakState(PlayerObject* player) {
+    if (!Logic::get().predicting) {
+        player->activateStreak();
+        return;
+    }
+    if (player->levelFlipping() || GameManager::get()->m_editorEnabled || player->m_isHidden)
+        return;
+    player->m_fadeOutStreak = true;
+}
+
+static void countJumpState(PlayerObject* player) {
+    if (player->m_playEffects) player->m_hasEverJumped = true;
+}
+
+static void finishRingJump(PlayerObject* player) {
+    countJumpState(player);
+}
+
+static void dashArtForTrajectory(PlayerObject* player) {
+    const int sidewaysDashArtAngle = 90;
+    const float leftFlipAngle = 180.f;
+    const float dashSpinSpeed = 288.f;
+    const float maxDashSpinLength = 17.31f;
+    const float maxDashSpinScale = 2.f;
+    const float dashSpinSlope = 1.7f;
+    const float dashSpinBase = 0.3f;
+    for (auto* sprite : { player->m_iconSprite, player->m_iconGlow })
+        if (sprite) sprite->setRotation(0.f);
+    float dashArtAngle = (float)((double)(player->m_isSideways ? sidewaysDashArtAngle : 0) - player->m_dashAngle);
+    if (player->m_isGoingLeft) dashArtAngle += leftFlipAngle;
+    player->setRotation(dashArtAngle);
+    if (flyingMode(player) || player->m_isRobot || player->m_isSpider) return;
+    float spin = player->m_isSideways == player->m_isUpsideDown ? 1.f : -1.f;
+    spin *= dashSpinSpeed;
+    spin *= player->m_gravityMod;
+    if (player->m_isPlatformer) {
+        float dashLength = sqrtf((float)player->m_dashX * (float)player->m_dashX + (float)player->m_dashY * (float)player->m_dashY);
+        spin *= dashLength > maxDashSpinLength ? maxDashSpinScale : dashLength / maxDashSpinLength * dashSpinSlope + dashSpinBase;
+    }
+    Trajectory::get().dash_spin_start(player, spin);
+}
+
 void startDashing(PlayerObject* player, DashRingObject* ring) {
+    const float platformerDashAngleScale = 5.7700018882751465f;
+    const float radiansPerDegree = 0.01745329238474369f;
+    const float dashFlashDuration = 0.2f;
+    const float dashFlashDelay = 0.1f;
     if (player->m_isDashing) return;
 
+    if (!player->m_isDart && player->m_fadeOutStreak) player->m_fadeOutStreak = false;
     player->m_isDashing = true;
     player->m_lastLandTime = 0.;
     player->m_isRotating = false;
@@ -39,7 +97,7 @@ void startDashing(PlayerObject* player, DashRingObject* ring) {
 
     float sidewaysAngle = 0.0;
     if (player->m_isPlatformer) {
-        sidewaysAngle = ring->m_dashSpeed * 5.77;
+        sidewaysAngle = ring->m_dashSpeed * platformerDashAngleScale;
     } else {
         if (player->m_isSideways) {
             sidewaysAngle = -90.0;
@@ -101,14 +159,14 @@ void startDashing(PlayerObject* player, DashRingObject* ring) {
     }
 
 #if defined(GEODE_IS_WINDOWS) || defined(GEODE_IS_ANDROID)
-    cocos2d::CCPoint p = cocos2d::ccpForAngle(dashAngle * 0.01745329);
+    cocos2d::CCPoint dashDirection = cocos2d::ccpForAngle(dashAngle * radiansPerDegree);
 #else
-    cocos2d::CCPoint p = CCPoint{
+    cocos2d::CCPoint dashDirection = CCPoint{
         (float)std::cos(((float)dashAngle * 0.01745329)),
         (float)std::sin(((float)dashAngle * 0.01745329)),
     };
 #endif
-    cocos2d::CCPoint mult = p * sidewaysAngle;
+    cocos2d::CCPoint mult = dashDirection * sidewaysAngle;
 
     float x = mult.x;
     if (player->m_isSideways) {
@@ -120,9 +178,9 @@ void startDashing(PlayerObject* player, DashRingObject* ring) {
     player->m_dashX = doubleX;
     player->m_dashY = mult.y;
     if (!player->m_isPlatformer) {
-        doubleX = mult.y / fabs(mult.x);
-        player->m_dashY = doubleX;
-        player->m_dashX = fabs(doubleX);
+        float ratio = mult.y / std::fabs(mult.x);
+        player->m_dashY = ratio;
+        player->m_dashX = std::fabs(player->m_dashY);
     } else if (doubleX >= 0.0) {
         if (doubleX > 0.0) {
             player->doReversePlayer(false);
@@ -132,7 +190,15 @@ void startDashing(PlayerObject* player, DashRingObject* ring) {
     }
 
     player->m_dashAngle = dashAngle;
+    if (!Logic::get().predicting) player->updateDashArt();
+    else dashArtForTrajectory(player);
+    if (player->m_playEffects && !ring->m_hasNoEffects) {
+        player->m_flashTime = player->m_totalTime;
+        player->m_flashDuration = dashFlashDuration;
+        player->m_flashDelay = dashFlashDelay;
+    }
     player->m_lastGroundedPos = cocos2d::CCPoint{0.0, 0.0};
+    gameEvent(player, (int)GJGameEvent::DashStart);
 }
 
 void stopDashing(PlayerObject* player) {
@@ -191,9 +257,22 @@ void stopDashing(PlayerObject* player) {
 
         player->runBallRotation(1.0);
     }
+    if (!flyingMode(player) && !player->m_isRobot && !player->m_isSpider && player->m_iconSprite && player->m_iconGlow) {
+        if (Trajectory::get().isFake(player)) Trajectory::get().dash_spin_stop(player);
+        float spin = player->m_iconSprite->getRotation();
+        for (auto* sprite : { player->m_iconSprite, player->m_iconGlow }) {
+            sprite->setScale(1.f);
+            sprite->stopAllActions();
+            sprite->setRotation(0.f);
+        }
+        player->setRotation(spin);
+    }
+    gameEvent(player, (int)GJGameEvent::DashStop);
 }
 
 void ringJump(PlayerObject* player, RingObject* ring) {
+    const double swingRingYVelocityScale = 0.6000000238418579;
+    const double ballRingYVelocityScale = 0.699999988079071;
     if (player->m_isDead) return;
     if (!ring) return;
 
@@ -223,6 +302,8 @@ void ringJump(PlayerObject* player, RingObject* ring) {
 
     player->m_ringRelatedSet.insert(ring->m_uniqueID);
     if (Trajectory::get().isFake(player)) activateForTrajectory(ring, player);
+    gameEvent(player, (int)GJGameEvent::OrbActivated);
+    gameEvent(player, (int)player->m_gameLayer->objectTypeToGameEvent((int)ring->m_objectType));
 
     if (ring->m_objectType == GameObjectType::CustomRing) {
         player->m_touchedCustomRing = true;
@@ -238,13 +319,24 @@ void ringJump(PlayerObject* player, RingObject* ring) {
     }
 
     if (ring->m_objectType == GameObjectType::CustomRing) {
+        if (PredictedWorld::get().firing()) {
+            gd::vector<int> keys;
+            if (ring->m_isSpawnOnly)
+                player->m_gameLayer->spawnGroup(ring->m_targetGroupID, false, 0.0, keys, ring->m_uniqueID, ring->m_controlID);
+            else
+                player->m_gameLayer->toggleGroupTriggered(ring->m_targetGroupID, ring->m_activateGroup, keys, ring->m_uniqueID, ring->m_controlID);
+        }
+        if (player->m_enable22Changes) player->m_stateRingJump = false;
+        finishRingJump(player);
         return;
     }
 
     if (ring->m_objectType == GameObjectType::TeleportOrb) {
         teleportPlayer(player->m_gameLayer, (TeleportPortalObject*)ring,
                        player);
+        player->m_stateRingJump = false;
 
+        finishRingJump(player);
         return;
     }
 
@@ -259,19 +351,24 @@ void ringJump(PlayerObject* player, RingObject* ring) {
             }
         }
 
-        player->spiderTestJumpInternal(false);
+        player->spiderTestJump(false);
+        finishRingJump(player);
+        return;
     }
 
     if (ring->m_objectType == GameObjectType::DashRing) {
         startDashing(player, (DashRingObject*)ring);
 
+        finishRingJump(player);
         return;
     }
 
     if (ring->m_objectType == GameObjectType::GravityDashRing) {
         flipGravity(player, !player->m_isUpsideDown, true);
+        gameEvent(player, (int)GJGameEvent::GravityDashOrb);
         startDashing(player, (DashRingObject*)ring);
 
+        finishRingJump(player);
         return;
     }
 
@@ -301,12 +398,14 @@ void ringJump(PlayerObject* player, RingObject* ring) {
         } else {
             player->runBallRotation2();
         }
+        activateStreakState(player);
         player->m_hasEverHitRing = true;
         player->m_isAccelerating = true;
         if (player->m_isBall || player->m_isSwing) {
             player->m_jumpBuffered = false;
         }
 
+        finishRingJump(player);
         return;
     }
 
@@ -392,11 +491,14 @@ void ringJump(PlayerObject* player, RingObject* ring) {
     cocos2d::CCPoint playerPos = player->getPosition();
     player->m_lastGroundedPos = playerPos;
 
+    activateStreakState(player);
     player->m_hasEverHitRing = true;
     if (player->m_isSwing) {
-        player->m_yVelocity *= 0.6;
+        player->m_yVelocity *= swingRingYVelocityScale;
+        player->m_jumpBuffered = false;
     } else if (player->m_isBall || player->m_isSpider) {
-        player->m_yVelocity *= 0.7;
+        player->m_yVelocity *= ballRingYVelocityScale;
+        player->m_jumpBuffered = false;
     }
 
     if (gravityOrb) {
@@ -406,345 +508,13 @@ void ringJump(PlayerObject* player, RingObject* ring) {
     if (ring->m_objectType == GameObjectType::RedJumpRing) {
         player->m_isAccelerating = true;
     }
+    finishRingJump(player);
 }
 
-template <typename T>
-T clamp(T value, T min, T max) {
-    if (value <= max) {
-        if (value < min) {
-            return min;
-        }
-    } else {
-        return max;
-    }
-
-    return value;
-}
-
-bool playerIsFalling(PlayerObject* player) {
-    double gravity = 0.0;
-    double velocity = 0.0;
-
-    if (player->m_isSideways || player->m_isPlatformer || player->m_isSwing ||
-        player->m_fixGravityBug) {
-        gravity = player->m_gravity;
-        velocity = player->m_yVelocity;
-        double doubledGravity = gravity * 2;
-        if (player->m_isUpsideDown) {
-            return fabs(doubledGravity) < velocity;
-        } else {
-            return doubledGravity > velocity;
-        }
-    }
-
-    if (player->m_unkA99) {
-        velocity = fabs(gravity);
-    }
-
-    double playerVelocity = player->m_yVelocity;
-    if (player->m_isUpsideDown) {
-        return (double)gravity * 2 < playerVelocity;
-    } else {
-        return playerVelocity < (double)velocity * 2;
-    }
-}
-
-void updateJump(PlayerObject* player, float dt) {
-    bool holdingLeft = player->m_holdingLeft;
-    bool holdingRight = player->m_holdingRight;
-
-    if (holdingLeft && holdingRight) {
-        if (player->m_leftPressedFirst) {
-            holdingRight = false;
-        } else {
-            holdingLeft = false;
-        }
-    }
-
-    float slopeAngleAbs = fabs(player->m_slopeAngleRadians * 57.29578);
-    if (player->m_isPlatformer && player->m_isOnSlope &&
-        slopeAngleAbs >= 80.0 && player->m_currentSlope->m_unk4F8) {
-        player->m_isOnGround = false;
-    }
-
-    int jumpACRelated = -(player->m_isOnGround ? 1 : 0) & 213;
-    int randNumber = rand();
-    int jumpACSeed = (int)(((float)randNumber / 32767) * 1000.0);
-
-    player->m_jumpRelatedAC2 = geode::SeedValueRSV(jumpACRelated, jumpACSeed);
-
-    float gravity = player->m_gravity;
-    bool isJumpBuffered = player->m_jumpBuffered;
-    if (player->m_isRobot) {
-        if (!player->m_stateRingJump || !isJumpBuffered) {
-            isJumpBuffered = false;
-        } else {
-            isJumpBuffered = true;
-        }
-    }
-
-    if (player->m_isBall || player->m_isShip || player->m_isBird ||
-        player->m_isDart || player->m_isSwing || player->m_isSpider) {
-        gravity = 0.958199;
-    }
-
-    float origGravity = gravity;
-
-    float gravityMod = player->m_gravityMod;
-    gravity *= gravityMod;
-    double what = 0.8;
-
-    float vehicleSizeRelated = player->m_vehicleSize != 1.0 ? 0.8 : 1.0;
-    if (player->m_isShip || player->m_isBird || player->m_isDart ||
-        player->m_isSwing) {
-        if (player->m_vehicleSize != 1.0) {
-            vehicleSizeRelated = 0.85;
-        }
-
-        double velocity = player->m_yVelocity;
-        double v64 = 8.0 / vehicleSizeRelated;
-        double v65 = -6.4 / vehicleSizeRelated;
-
-        if (player->m_isUpsideDown) {
-            if (!((velocity > 0.0 || velocity <= -v64) &&
-                  (velocity < 0.0 || -v65 <= velocity))) {
-                player->m_isAccelerating = false;
-            }
-        } else {
-            if (!((velocity < 0.0 || v64 <= velocity) &&
-                  (velocity > 0.0 || velocity <= v65))) {
-                player->m_isAccelerating = false;
-            }
-        }
-
-        if (player->m_isDart) {
-            int gravityMult = player->m_isUpsideDown ? -1 : 1;
-            int jumpBufferedMult = player->m_jumpBuffered ? 1 : -1;
-            player->setYVelocity(player->m_playerSpeed *
-                                     player->m_speedMultiplier * gravityMult *
-                                     8.0 * jumpBufferedMult,
-                                 0);
-        } else if (player->m_isSwing) {
-            if (player->m_stateRingJump && player->m_jumpBuffered) {
-                player->m_stateRingJump = false;
-                velocity = player->m_yVelocity;
-                phys::flipGravity(player, !player->m_isUpsideDown, false);
-                player->setYVelocity(velocity * 0.8, 0);
-            }
-
-            what = 1.0;
-            gravity = 0.4;
-            if (player->m_vehicleSize != 1.0) {
-                gravity = 0.6;
-            }
-
-            int gravityMult = player->m_isUpsideDown ? -1 : 1;
-            velocity = player->m_yVelocity -
-                       (gravityMult * dt * gravity * origGravity);
-            player->setYVelocity(velocity, 0);
-        } else if (player->m_isBird) {
-            if (player->m_stateRingJump && player->m_jumpBuffered) {
-                player->m_stateRingJump = false;
-                float sizeMod = player->m_vehicleSize != 1.0 ? 8.0 : 7.0;
-
-                float newVel = 0.0;
-                bool gt = false;
-
-                if (player->m_isUpsideDown) {
-                    newVel = -1 * sizeMod * vehicleSizeRelated;
-                    gt = player->m_yVelocity <= newVel;
-                } else {
-                    newVel = sizeMod * vehicleSizeRelated;
-                    gt = player->m_yVelocity >= newVel;
-                }
-
-                if (!gt) {
-                    player->setYVelocity(newVel, 0);
-                    if (player->m_isOnSlope || player->m_wasOnSlope) {
-                        if (player->m_slopeVelocity > 0) {
-                            float prevVelocity = player->m_yVelocity;
-                            player->setYVelocity(player->m_slopeVelocity * 0.5 +
-                                                     player->m_yVelocity,
-                                                 0);
-                            player->setYVelocity(
-                                fmin(player->m_yVelocity, prevVelocity * 1.4),
-                                0);
-                        }
-                    }
-                }
-            }
-
-            float fallingMod = 0.8;
-            if (!phys::playerIsFalling(player)) {
-                fallingMod = 1.2;
-            }
-
-            int gravityMult = player->m_isUpsideDown ? -1 : 1;
-            velocity = -(fallingMod * dt * origGravity * gravityMult * 0.5) /
-                           vehicleSizeRelated +
-                       player->m_yVelocity;
-            player->setYVelocity(velocity, 0);
-            if (player->m_jumpBuffered) {
-                player->m_isOnGround2 = false;
-            }
-        } else if (player->m_isShip) {
-            float something = 0.8;
-            if (player->m_jumpBuffered) {
-                if (!player->m_isAccelerating) {
-                    something = -1.0;
-                    if (player->m_isPlatformer) {
-                        gravity *= 0.8;
-                    }
-
-                    if (something >= 0.0) {
-                        origGravity = gravity;
-                    }
-
-                    float fallingMod =
-                        phys::playerIsFalling(player) ? 0.5 : 0.4;
-                    float upsideDownMod = player->m_isUpsideDown ? -1 : 1;
-                    player->setYVelocity(
-                        -(upsideDownMod * dt * fallingMod * origGravity) /
-                                vehicleSizeRelated +
-                            player->m_yVelocity,
-                        0);
-
-                    if (phys::playerIsFalling(player)) {
-                        player->m_maybeIsBoosted = false;
-                    }
-
-                    goto end;
-                }
-            } else if (!player->m_isAccelerating) {
-                if (player->m_isPlatformer) {
-                    gravity *= 0.8;
-                }
-
-                if (something >= 0.0) {
-                    origGravity = gravity;
-                }
-
-                float fallingMod =
-                    phys::playerIsFalling(player) && player->m_jumpBuffered
-                        ? 0.5
-                        : 0.4;
-                float upsideDownMod = player->m_isUpsideDown ? -1 : 1;
-                player->setYVelocity(
-                    -(upsideDownMod * dt * fallingMod * origGravity) /
-                            vehicleSizeRelated +
-                        player->m_yVelocity,
-                    0);
-
-                if (phys::playerIsFalling(player)) {
-                    player->m_maybeIsBoosted = false;
-                }
-
-                goto end;
-            }
-
-            if (!player->m_isUpsideDown) {
-                if (player->m_yVelocity >= 0.0) {
-                    if (player->m_isPlatformer) {
-                        gravity *= 0.8;
-                    }
-
-                    if (something >= 0.0) {
-                        origGravity = gravity;
-                    }
-
-                    float fallingMod =
-                        phys::playerIsFalling(player) && player->m_jumpBuffered
-                            ? 0.5
-                            : 0.4;
-                    float upsideDownMod = player->m_isUpsideDown ? -1 : 1;
-                    player->setYVelocity(
-                        -(upsideDownMod * dt * fallingMod * origGravity) /
-                                vehicleSizeRelated +
-                            player->m_yVelocity,
-                        0);
-
-                    if (phys::playerIsFalling(player)) {
-                        player->m_maybeIsBoosted = false;
-                    }
-
-                    goto end;
-                }
-
-                something = -1.0;
-            }
-
-            if (player->m_yVelocity > 0.0) {
-                something = -1.0;
-            }
-
-            if (player->m_jumpBuffered && !phys::playerIsFalling(player)) {
-                something = 1.2;
-            }
-
-            if (player->m_isPlatformer) {
-                gravity *= 0.8;
-            }
-
-            if (something >= 0.0) {
-                origGravity = gravity;
-            }
-
-            float fallingMod =
-                phys::playerIsFalling(player) && player->m_jumpBuffered ? 0.5
-                                                                        : 0.4;
-            float upsideDownMod = player->m_isUpsideDown ? -1 : 1;
-            player->setYVelocity(
-                -(upsideDownMod * dt * fallingMod * origGravity) /
-                        vehicleSizeRelated +
-                    player->m_yVelocity,
-                0);
-
-            if (phys::playerIsFalling(player)) {
-                player->m_maybeIsBoosted = false;
-            }
-
-            goto end;
-        }
-
-    end:
-        if (!player->m_isAccelerating && !player->m_isDart) {
-            velocity = player->m_yVelocity;
-            if (!player->m_isUpsideDown) {
-                player->setYVelocity(
-                    fmax(player->m_yVelocity, what * -8.0 / vehicleSizeRelated),
-                    0);
-                velocity = (what * 8.0) / vehicleSizeRelated;
-            } else {
-                player->setYVelocity(
-                    fmax(player->m_yVelocity, -8.0 / vehicleSizeRelated), 0);
-                velocity = (8.0) / vehicleSizeRelated;
-            }
-
-            player->setYVelocity(fmin(player->m_yVelocity, velocity), 0);
-        }
-
-        if (phys::playerIsFalling(player)) {
-            player->m_maybeIsBoosted = false;
-        }
-
-        player->m_wasJumpBuffered = player->m_jumpBuffered;
-        player->m_wasRobotJump = player->m_touchedPad;
-
-        return;
-    }
-}
-
-void playerUpdate(PlayerObject* player, float) {
-    player->m_yVelocity = clamp(player->m_yVelocity, -1000.0, 1000.0);
-
-    if (player->m_isPlatformer) {
-        player->m_platformerXVelocity =
-            clamp(player->m_platformerXVelocity, -1000.0, 1000.0);
-    }
-    if (player->m_isDead) return;
-
-    player->m_lastPosition = player->getPosition();
-    player->m_yVelocityRelated3 = 0.0;
+void gameEvent(PlayerObject* player, int event) {
+    if (!player->m_gameLayer) return;
+    if (Trajectory::get().isFake(player) && !PredictedWorld::get().firing()) return;
+    player->m_gameLayer->gameEventTriggered((GJGameEvent)event, 0, player->m_uniqueID);
 }
 
 void togglePlayerScale(PlayerObject* player, bool smallSize) {

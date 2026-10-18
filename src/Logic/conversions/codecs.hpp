@@ -116,7 +116,7 @@ public:
 
 class ReplayIO {
 public:
-	static const unsigned long long max_inputs = 1ull << 26;
+	static const unsigned long long max_inputs = 1ull << 30;
 
 	static std::string lower_ext(const fs::path& path);
 	static std::string sanitize(std::string name);

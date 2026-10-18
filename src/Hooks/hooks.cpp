@@ -21,7 +21,7 @@
 #include "Physics/gravity.hpp"
 #include "Physics/player.hpp"
 #include "Physics/prediction_art.hpp"
-#include "Rendering/effect_frame.hpp"
+#include "Hooks/effect_copies.hpp"
 #include <Geode/binding/PauseLayer.hpp>
 #include <Geode/modify/PauseLayer.hpp>
 #include <Geode/modify/PlayLayer.hpp>
@@ -122,117 +122,14 @@ static unsigned long long g_updates_run = 0;
 void forget_camera(GJBaseGameLayer* layer);
 
 #define DASH_SPIN_TAG 12
-#define EXPLOSION_SPACING 0.5f
-#define MAX_EXPLOSION_OFFSETS 2048
-#define MAX_OPACITY 255
 #define ALMOST_DONE_PROGRESS 0.9999f
-#define MERGED_HIT_SPACING 0.5f
-#define MAX_MERGED_HITS 512
-static EffectFrame g_effect_frame;
-static int g_stacked_wave_count = 0;
+static bool g_effects_frame_active = false;
 static bool g_dud_orb_active = false;
 // waves gd made for a dud ahh orb!
 static std::vector<CCCircleWave*> g_dud_orb_waves;
-struct ExplosionStack {
-    std::vector<CCPoint> offsets;
-    std::vector<int> weights;
-    int base_weight = 1;
-};
-static std::unordered_map<CCSprite*, ExplosionStack> g_explosion_stacks;
-static Hook* g_explosion_visit_hook = nullptr;
-struct FirstExplosion {
-    CCSprite* sprite = nullptr;
-    CCPoint position;
-};
-static std::map<std::pair<GameObject*, PlayerObject*>, FirstExplosion> g_first_orb_explosion;
-static std::unordered_map<PlayerObject*, FirstExplosion> g_first_dash_explosion;
-static bool g_capturing_explosion = false;
-static CCSprite* g_captured_explosion = nullptr;
 
-class $modify(EchoExplosionSprite, CCSprite) {
-    static CCSprite* createWithSpriteFrameName(const char* name) {
-        auto* made = CCSprite::createWithSpriteFrameName(name);
-        if (g_capturing_explosion && !g_captured_explosion) g_captured_explosion = made;
-        return made;
-    }
-};
-
-using ChildOpacities = std::vector<std::pair<CCRGBAProtocol*, GLubyte>>;
-
-static ChildOpacities child_opacities(CCNode* node) {
-    ChildOpacities kids;
-    for (auto* child : CCArrayExt<CCNode*>(node->getChildren())) {
-        if (auto* rgba = typeinfo_cast<CCRGBAProtocol*>(child))
-            kids.push_back({ rgba, rgba->getOpacity() });
-    }
-    return kids;
-}
-
-static GLubyte weighted_opacity(GLubyte opacity, int weight) {
-    return (GLubyte)std::min(MAX_OPACITY, (int)opacity * std::max(weight, 1));
-}
-
-static void weigh_explosion(CCSprite* sprite, GLubyte sprite_opacity, const ChildOpacities& kids, int weight) {
-    sprite->setOpacity(weighted_opacity(sprite_opacity, weight));
-    for (const auto& [kid, opacity] : kids)
-        kid->setOpacity(weighted_opacity(opacity, weight));
-}
-
-static void restore_explosion_opacity(CCSprite* sprite, GLubyte sprite_opacity, const ChildOpacities& kids) {
-    sprite->setOpacity(sprite_opacity);
-    for (const auto& [kid, opacity] : kids)
-        kid->setOpacity(opacity);
-}
-
-static int explosion_copy_weight(const ExplosionStack& stack) {
-    int total = stack.base_weight;
-    for (int weight : stack.weights)
-        total += weight;
-    return (total + (int)stack.offsets.size()) / ((int)stack.offsets.size() + 1);
-}
-
-class $modify(EchoStackNode, CCNode) {
-    static void onModify(auto& self) {
-        if (auto hook = self.getHook("cocos2d::CCNode::visit"); hook) {
-            hook.unwrap()->setAutoEnable(false);
-            g_explosion_visit_hook = hook.unwrap();
-        }
-    }
-
-    void visit_moved_by(const CCPoint& offset) {
-        kmGLPushMatrix();
-        kmGLTranslatef(offset.x, offset.y, 0.f);
-        CCNode::visit();
-        kmGLPopMatrix();
-    }
-
-    void visit() {
-        if (g_explosion_stacks.empty()) {
-            CCNode::visit();
-            return;
-        }
-        auto it = g_explosion_stacks.find(reinterpret_cast<CCSprite*>(this));
-        if (it == g_explosion_stacks.end() || !isVisible()) {
-            CCNode::visit();
-            return;
-        }
-        // offsets are in the parents space so a plain translate works. whole visit so the outline comes too
-        const auto& stack = it->second;
-        auto* sprite = it->first;
-        GLubyte sprite_opacity = sprite->getOpacity();
-        ChildOpacities kids = child_opacities(this);
-        int copy_weight = explosion_copy_weight(stack);
-        for (size_t at = 0; at < stack.offsets.size(); ++at) {
-            weigh_explosion(sprite, sprite_opacity, kids, copy_weight);
-            visit_moved_by(stack.offsets[at]);
-        }
-        weigh_explosion(sprite, sprite_opacity, kids, copy_weight);
-        CCNode::visit();
-        restore_explosion_opacity(sprite, sprite_opacity, kids);
-    }
-};
-
-static CCNode* g_wave_being_created = nullptr;
+static bool g_making_wave = false;
+static CCNode* g_new_wave_target = nullptr;
 static CCAction* g_new_wave_tween = nullptr;
 struct WaveBornThisFrame {
     CCCircleWave* wave;
@@ -256,39 +153,24 @@ static float action_progress_at(CCActionInterval* timed, float elapsed) {
     return std::clamp(elapsed / std::max(timed->getDuration(), FLT_EPSILON), 0.f, ALMOST_DONE_PROGRESS);
 }
 
-static void pose_tween_at_step(CCActionInterval* timed, float elapsed, int step, int born_step, float step_time) {
-    if (!timed) return;
-    timed->update(action_progress_at(timed, elapsed - (float)(step - born_step) * step_time));
-}
-
-static float stacked_opacity(float alpha, int weight, bool additive) {
-    return additive ? std::min(alpha * (float)weight, 1.f) : 1.f - std::pow(1.f - std::clamp(alpha, 0.f, 1.f), (float)weight);
-}
-
 class $modify(EchoCaptureWaveTween, CCActionManager) {
     void addAction(CCAction* action, CCNode* target, bool paused) {
-        if (g_wave_being_created && target == g_wave_being_created && !g_new_wave_tween)
+        if (g_making_wave && !g_new_wave_tween && typeinfo_cast<CCCircleWave*>(target)) {
+            g_new_wave_target = target;
             g_new_wave_tween = action;
+        }
         CCActionManager::addAction(action, target, paused);
     }
 };
 
 class $modify(EchoCircleWave, CCCircleWave) {
-    struct MergedHit {
-        int step = 0;
-        CCPoint offset;
-        int weight = 1;
-    };
-
     struct Fields {
-        int hit_count = 1;
         int born_step = 0;
-        bool stacked = false, ages_by_step = false;
+        float start_radius = 0.f, end_radius = 0.f, duration = 0.f;
+        bool fade_in = false, ease_out = false, ages_by_step = false;
         CCAction* tween_action = nullptr;
-        std::vector<MergedHit> merged_hits;
 
         ~Fields() {
-            if (stacked) --g_stacked_wave_count;
             if (tween_action) tween_action->release();
         }
     };
@@ -303,37 +185,36 @@ class $modify(EchoCircleWave, CCCircleWave) {
         tween->retain();
         fields->tween_action = tween;
         fields->ages_by_step = Logic::get().render_capturing();
-        if (fields->ages_by_step && g_effect_frame.active) {
+        if (fields->ages_by_step && g_effects_frame_active) {
             this->retain();
             g_waves_born_this_frame.push_back({ this, step });
         }
     }
 
-    void add_to_current_effect() {
-        if (auto* record = g_effect_frame.current; record && record->wave_count < (int)record->waves.size()) {
-            this->retain();
-            record->waves[record->wave_count++] = this;
-        }
-    }
-
-    bool init(float startRadius, float endRadius, float duration, bool fadeIn, bool easeOut) {
-        if (g_dud_orb_active && !g_effect_frame.current) {
-            hold_as_dud_orb_wave();
-            return true;
-        }
-        g_wave_being_created = this;
+    static CCCircleWave* create(float startRadius, float endRadius, float duration, bool fadeIn, bool easeOut) {
+        g_making_wave = true;
+        g_new_wave_target = nullptr;
         g_new_wave_tween = nullptr;
-        bool ok = CCCircleWave::init(startRadius, endRadius, duration, fadeIn, easeOut);
-        g_wave_being_created = nullptr;
-        auto* captured = g_new_wave_tween;
+        auto* wave = static_cast<EchoCircleWave*>(CCCircleWave::create(startRadius, endRadius, duration, fadeIn, easeOut));
+        g_making_wave = false;
+        auto* captured = g_new_wave_target == wave ? g_new_wave_tween : nullptr;
+        g_new_wave_target = nullptr;
         g_new_wave_tween = nullptr;
-        if (!ok) return false;
-        auto* fields = m_fields.self();
+        if (!wave) return nullptr;
+        if (g_dud_orb_active) {
+            wave->hold_as_dud_orb_wave();
+            return wave;
+        }
+        auto* fields = wave->m_fields.self();
         int step = Logic::get().step_frame;
         fields->born_step = step;
-        if (typeinfo_cast<CCActionInterval*>(captured)) adopt_wave_tween(captured, step);
-        add_to_current_effect();
-        return true;
+        fields->start_radius = startRadius;
+        fields->end_radius = endRadius;
+        fields->duration = duration;
+        fields->fade_in = fadeIn;
+        fields->ease_out = easeOut;
+        if (typeinfo_cast<CCActionInterval*>(captured)) wave->adopt_wave_tween(captured, step);
+        return wave;
     }
 
     void advance_tween_by(float extra) {
@@ -344,158 +225,32 @@ class $modify(EchoCircleWave, CCCircleWave) {
         timed->update(action_progress_at(timed, elapsed));
     }
 
-    static bool repeats_last_hit(const Fields* fields, int step, const CCPoint& at) {
-        if (fields->merged_hits.empty()) return false;
-        const auto& last = fields->merged_hits.back();
-        return (!fields->ages_by_step || last.step == step) && ccpDistance(at, last.offset) < MERGED_HIT_SPACING;
+    bool same_as(EchoCircleWave* other) {
+        auto* mine = m_fields.self();
+        auto* theirs = other->m_fields.self();
+        if (mine->ages_by_step && mine->born_step != theirs->born_step) return false;
+        if (mine->start_radius != theirs->start_radius || mine->end_radius != theirs->end_radius || mine->duration != theirs->duration)
+            return false;
+        if (mine->fade_in != theirs->fade_in || mine->ease_out != theirs->ease_out || mine->ages_by_step != theirs->ages_by_step)
+            return false;
+        if (!mine->tween_action != !theirs->tween_action || !m_target != !other->m_target)
+            return false;
+        if (m_width != other->m_width || m_radius != other->m_radius || m_opacity != other->m_opacity || m_opacityMod != other->m_opacityMod)
+            return false;
+        if (m_color.r != other->m_color.r || m_color.g != other->m_color.g || m_color.b != other->m_color.b)
+            return false;
+        return m_circleMode == other->m_circleMode && m_lineWidth == other->m_lineWidth && m_blendAdditive == other->m_blendAdditive &&
+            m_delegate == other->m_delegate;
     }
 
-    void record_merged_hit(const CCPoint* offset) {
-        auto* fields = m_fields.self();
-        int step = Logic::get().step_frame;
-        CCPoint at = offset ? *offset : CCPointZero;
-        bool same = repeats_last_hit(fields, step, at);
-        if (same || fields->merged_hits.size() >= MAX_MERGED_HITS) ++fields->merged_hits.back().weight;
-        else
-            fields->merged_hits.push_back({ step, at, 1 });
-        if (++fields->hit_count == 2) {
-            fields->stacked = true;
-            ++g_stacked_wave_count;
-        }
-    }
-
-    void draw_as_stacked_copies(int weight, const CCPoint& offset) {
-        float alpha = m_opacity * m_opacityMod;
-        float stacked = stacked_opacity(alpha, weight, m_blendAdditive);
-        if (m_opacityMod > 0.f) m_opacity = stacked / m_opacityMod;
-        bool moved = offset.x != 0.f || offset.y != 0.f;
-        if (moved) {
-            kmGLPushMatrix();
-            kmGLTranslatef(offset.x, offset.y, 0.f);
-        }
-        CCCircleWave::draw();
-        if (moved) kmGLPopMatrix();
-    }
-
-    static int hit_weight(const Fields* fields, std::size_t hit) {
-        return hit == 0 ? 1 : fields->merged_hits[hit - 1].weight;
-    }
-
-    static int hit_step(const Fields* fields, std::size_t hit) {
-        return hit == 0 ? fields->born_step : fields->merged_hits[hit - 1].step;
-    }
-
-    static CCPoint hit_offset(const Fields* fields, std::size_t hit) {
-        return hit == 0 ? CCPointZero : fields->merged_hits[hit - 1].offset;
-    }
-
-    static int group_weight(const Fields* fields, std::size_t from, std::size_t to) {
-        int weight = 0;
-        for (std::size_t hit = from; hit < to; ++hit)
-            weight += hit_weight(fields, hit);
-        return weight;
-    }
-
-    void draw() {
-        auto* fields = m_fields.self();
-        if (g_stacked_wave_count <= 0 || fields->hit_count <= 1) {
-            CCCircleWave::draw();
-            return;
-        }
-        float old_radius = m_radius, old_opacity = m_opacity;
-        auto* timed = fields->ages_by_step ? typeinfo_cast<CCActionInterval*>(fields->tween_action) : nullptr;
-        if (timed && timed->isDone()) timed = nullptr;
-        float elapsed = timed ? timed->getElapsed() : 0.f;
-        float step_time = physics_step_seconds();
-        const std::size_t MAX_DRAW_GROUPS = 64;
-        std::size_t total = fields->merged_hits.size() + 1;
-        std::size_t groups = std::min(total, MAX_DRAW_GROUPS);
-        for (std::size_t group = 0; group < groups; ++group) {
-            std::size_t from = group * total / groups, to = (group + 1) * total / groups;
-            int weight = group_weight(fields, from, to);
-            std::size_t mid = (from + to - 1) / 2;
-            int step = hit_step(fields, mid);
-            CCPoint offset = hit_offset(fields, mid);
-            pose_tween_at_step(timed, elapsed, step, fields->born_step, step_time);
-            if (!timed) {
-                m_radius = old_radius;
-                m_opacity = old_opacity;
-            }
-            draw_as_stacked_copies(weight, offset);
-        }
-        if (timed) timed->update(action_progress_at(timed, elapsed));
-        m_radius = old_radius;
-        m_opacity = old_opacity;
+    void updatePosition(float dt) {
+        CCCircleWave::updatePosition(dt);
+        follow_wave_copies(this);
     }
 };
 
-static bool effect_merging_off(const Logic& logic) {
-    return !optimize_effects || logic.predicting || logic.refreshing_visuals || logic.backstepping;
-}
-
-static EffectRecord* effect_slot(const EffectKey& key, const CCPoint* at, bool& fresh) {
-    const auto& logic = Logic::get();
-    fresh = false;
-    if (effect_merging_off(logic)) return nullptr;
-    auto* record = g_effect_frame.find(key, fresh);
-    if (!record || !fresh) return record;
-    g_effect_frame.current = record;
-    if (at) {
-        record->first_x = at->x;
-        record->first_y = at->y;
-        record->has_first = true;
-    }
-    return record;
-}
-
-static EchoCircleWave* effect_wave(EffectRecord* record, int index) {
-    return static_cast<EchoCircleWave*>(static_cast<CCCircleWave*>(record->waves[index]));
-}
-
-static void count_repeat(EffectRecord* record, const CCPoint* at) {
-    CCPoint offset;
-    const CCPoint* moved = nullptr;
-    if (at && record->has_first) {
-        offset = *at - CCPoint{ record->first_x, record->first_y };
-        moved = &offset;
-    }
-    for (int wave = 0; wave < record->wave_count; ++wave)
-        effect_wave(record, wave)->record_merged_hit(moved);
-}
-
-// true = already played ts shown frame. the 1st time needs an EffectScope around the call
-static bool repeated_effect(const EffectKey& key, const CCPoint* at = nullptr) {
-    bool fresh = false;
-    auto* record = effect_slot(key, at, fresh);
-    if (!record || fresh) return false;
-    count_repeat(record, at);
-    return true;
-}
-
-static double shown_frame_seconds(Logic& logic) {
-    double interval = 1.0 / std::max(logic.render_fps, 1);
-    if (!logic.render_capturing()) {
-        interval = CCDirector::sharedDirector()->getAnimationInterval() * logic.speedhack;
-    }
-    return interval;
-}
-
-static bool skip_spread_effect(const EffectKey& key) {
-    const int PLAYS_PER_SHOWN_FRAME = 16;
-    auto& logic = Logic::get();
-    if (effect_merging_off(logic)) return false;
-    bool fresh = false;
-    auto* record = g_effect_frame.find(key, fresh);
-    if (!record) return false;
-    double interval = shown_frame_seconds(logic);
-    int steps_between_plays = std::max((int)(logic.sample_rate() * interval / PLAYS_PER_SHOWN_FRAME), 1);
-    int step = logic.step_frame;
-    if (fresh || (record->play_count < PLAYS_PER_SHOWN_FRAME && step - record->last_step >= steps_between_plays)) {
-        record->last_step = step;
-        ++record->play_count;
-        return false;
-    }
-    return true;
+bool same_wave(CCNode* first, CCNode* second) {
+    return static_cast<EchoCircleWave*>(first)->same_as(static_cast<EchoCircleWave*>(second));
 }
 
 static void drop_dud_waves() {
@@ -504,98 +259,6 @@ static void drop_dud_waves() {
         wave->release();
     }
     g_dud_orb_waves.clear();
-}
-
-struct EffectScope {
-    EffectRecord* outer_record = g_effect_frame.current;
-    ~EffectScope() {
-        g_effect_frame.current = outer_record;
-    }
-};
-
-#define GAME_MANAGER_GAME_LAYER_OFFSET 0x1f8
-#define GAME_LAYER_EFFECT_LAYER_OFFSET 0xeb8
-
-// the layer gd adds the dash afterimage to: GameManager+0x1f8 (the game layer) then +0xeb8, from stopDashing on m1
-static CCNode* effect_layer() {
-#ifdef GEODE_IS_ARM_MAC
-    auto* game = GJBaseGameLayer::get();
-    auto* gm = GameManager::get();
-    if (!game || !gm) return nullptr;
-    if (*reinterpret_cast<GJBaseGameLayer**>(reinterpret_cast<char*>(gm) + GAME_MANAGER_GAME_LAYER_OFFSET) != game)
-        return nullptr;
-    auto* layer = *reinterpret_cast<CCNode**>(reinterpret_cast<char*>(game) + GAME_LAYER_EFFECT_LAYER_OFFSET);
-    for (auto* up = layer ? layer->getParent() : nullptr; up; up = up->getParent()) {
-        if (up == game) return layer;
-    }
-    return nullptr;
-#else
-    return nullptr;
-#endif
-}
-
-static CCSprite* last_child_sprite(CCNode* layer) {
-    return typeinfo_cast<CCSprite*>(static_cast<CCObject*>(layer->getChildren()->objectAtIndex(layer->getChildrenCount() - 1)));
-}
-
-template <class F>
-static CCSprite* added_effect(F&& run) {
-    auto* layer = effect_layer();
-    unsigned children_before = layer ? layer->getChildrenCount() : 0;
-    run();
-    if (!layer || layer->getChildrenCount() <= children_before) return nullptr;
-    return last_child_sprite(layer);
-}
-
-static void stack_explosion(const FirstExplosion& first, CCPoint now) {
-    auto offset = now - first.position;
-    auto& stack = g_explosion_stacks[first.sprite];
-    CCPoint last_offset = stack.offsets.empty() ? CCPointZero : stack.offsets.back();
-    if (ccpDistance(offset, last_offset) >= EXPLOSION_SPACING && stack.offsets.size() < MAX_EXPLOSION_OFFSETS) {
-        stack.offsets.push_back(offset);
-        stack.weights.push_back(1);
-    }
-    else if (stack.weights.empty()) ++stack.base_weight;
-    else ++stack.weights.back();
-}
-
-static void enable_explosion_visit_hook() {
-    if (g_explosion_visit_hook && !g_explosion_visit_hook->isEnabled()) (void)g_explosion_visit_hook->enable();
-}
-
-static void disable_explosion_visit_hook() {
-    if (g_explosion_visit_hook && g_explosion_visit_hook->isEnabled()) (void)g_explosion_visit_hook->disable();
-}
-
-static void keep_first_explosion(CCSprite* sprite) {
-    if (g_explosion_stacks.emplace(sprite, ExplosionStack{}).second) sprite->retain();
-    enable_explosion_visit_hook();
-}
-
-static void release_detached_explosions() {
-    for (auto it = g_explosion_stacks.begin(); it != g_explosion_stacks.end();) {
-        if (!it->first->getParent()) {
-            it->first->release();
-            it = g_explosion_stacks.erase(it);
-        }
-        else ++it;
-    }
-}
-
-static void forget_explosions() {
-    g_first_orb_explosion.clear();
-    g_first_dash_explosion.clear();
-    release_detached_explosions();
-    if (g_explosion_stacks.empty()) disable_explosion_visit_hook();
-}
-
-static void release_every_explosion() {
-    for (auto const& [sprite, stack] : g_explosion_stacks)
-        sprite->release();
-    g_explosion_stacks.clear();
-    g_first_orb_explosion.clear();
-    g_first_dash_explosion.clear();
-    disable_explosion_visit_hook();
 }
 
 static void age_waves_born_this_frame() {
@@ -609,30 +272,13 @@ static void age_waves_born_this_frame() {
     g_waves_born_this_frame.clear();
 }
 
-static void release_effect_waves(EffectRecord& record) {
-    for (int wave = 0; wave < record.wave_count; ++wave)
-        static_cast<CCCircleWave*>(record.waves[wave])->release();
-    record.wave_count = 0;
-}
-
-static void forget_effects() {
-    forget_explosions();
-    for (std::size_t at = 0; at < g_effect_frame.count; ++at)
-        release_effect_waves(g_effect_frame.seen[at]);
-    g_effect_frame.count = 0;
-    g_effect_frame.current = nullptr;
-}
-
 static void begin_effects() {
-    forget_effects();
-    g_effect_frame.started_step = Logic::get().step_frame;
-    g_effect_frame.active = true;
+    g_effects_frame_active = true;
 }
 
 static void end_effects() {
     age_waves_born_this_frame();
-    forget_effects();
-    g_effect_frame.active = false;
+    g_effects_frame_active = false;
 }
 
 static bool in_orb_button = false;
@@ -931,6 +577,7 @@ class $modify(EchoPlayLayer, PlayLayer) {
 
     void postUpdate(float dt) {
         PlayLayer::postUpdate(dt);
+        follow_listed_wave_copies(m_circleWaveArray);
         Logic::get().after_frame(this, dt);
         Logic::get().update_safe_mode(this);
     }
@@ -938,8 +585,13 @@ class $modify(EchoPlayLayer, PlayLayer) {
     // updateCamera calls ts every frame & it rebuilds the whole label :/
     void flipArt(bool flip) {
         flip = flip && !Logic::get().no_mirror_portals;
+#ifdef GEODE_IS_WINDOWS
+        if (!m_attemptLabel || m_attemptLabel->getScaleX() == (flip ? -1.f : 1.f)) return;
+        m_attemptLabel->setScaleX(flip ? -1.f : 1.f);
+#else
         if (m_attemptLabel && m_attemptLabel->getScaleX() == (flip ? -1.f : 1.f)) return;
         PlayLayer::flipArt(flip);
+#endif
     }
 
     void updateVisibility(float dt) {
@@ -975,8 +627,7 @@ class $modify(EchoPlayLayer, PlayLayer) {
 
     void resetLevel() {
         Trajectory::get().invalidate();
-        forget_effects();
-        g_effect_frame.started_step = Logic::get().step_frame;
+        forget_effect_copies();
         restore_tilt(m_player1);
         restore_tilt(m_player2);
         clear_tilt();
@@ -1162,9 +813,8 @@ class $modify(EchoPlayLayer, PlayLayer) {
         trace_flush();
         Logic::get().on_quit(this);
         Trajectory::get().detach();
-        forget_effects();
+        forget_effect_copies();
         drop_dud_waves();
-        release_every_explosion();
         PlayLayer::onQuit();
     }
 };
@@ -1663,6 +1313,11 @@ class $modify(EchoGameLayer, GJBaseGameLayer) {
         GJBaseGameLayer::destroyObject(object);
     }
 
+    void updateCounters(int item, int count) {
+        if (Logic::get().predicting) return;
+        GJBaseGameLayer::updateCounters(item, count);
+    }
+
     void pickupItem(EffectGameObject* object) {
         if (Logic::get().predicting) return;
         GJBaseGameLayer::pickupItem(object);
@@ -1897,7 +1552,11 @@ class $modify(EchoGameLayer, GJBaseGameLayer) {
     }
 
     void gameEventTriggered(GJGameEvent event, int material, int playerID) {
-        if (Logic::get().predicting) return;
+        if (Logic::get().predicting && !PredictedWorld::get().fires_events()) return;
+        if (PredictedWorld::get().fires_events()) {
+            playerID = Trajectory::get().live_player_id(playerID);
+            PredictedWorld::get().note_event(Logic::as_play(this), (int)event, material, playerID);
+        }
         GJBaseGameLayer::gameEventTriggered(event, material, playerID);
     }
 
@@ -2121,7 +1780,7 @@ class $modify(EchoPlayerObject, PlayerObject) {
             return;
         }
         struct JumpLog {
-            std::function<void()> run;
+            decltype(log_jump)& run;
             ~JumpLog() { run(); }
         } jump_log{ log_jump };
         struct RingNote {
@@ -2137,26 +1796,14 @@ class $modify(EchoPlayerObject, PlayerObject) {
                     Logic::button_held(player, JUMP), player->getPositionX(), player->getPositionY()));
             }
         } ring_note{ this, ring };
-        bool hidden = Logic::get().player_hidden(this);
-        EffectScope scope;
-        auto ring_at = ring ? ring->getPosition() : CCPointZero;
-        bool fresh = false;
-        auto* seen = ring && m_playEffects && !hidden ? effect_slot({ this, 3, ring->m_uniqueID }, &ring_at, fresh) : nullptr;
-        if (!hidden && (!seen || fresh)) {
+        if (!Logic::get().player_hidden(this)) {
+            EffectCopyScope copies(EffectSource::RingJump);
             PlayerObject::ringJump(ring, skipCheck);
-            // touching it calls ts every step w/o jumping, those cant take the slot
-            if (seen && seen->wave_count == 0)
-                seen->key = {};
             return;
         }
         bool was_quiet = std::exchange(g_dud_orb_active, true);
-        auto duds = g_dud_orb_waves.size();
-        bool dashing = m_isDashing, flipped = m_isUpsideDown;
-        double vel = m_yVelocity;
         PlayerObject::ringJump(ring, skipCheck);
         g_dud_orb_active = was_quiet;
-        bool jumped = g_dud_orb_waves.size() > duds || dashing != m_isDashing || flipped != m_isUpsideDown || vel != m_yVelocity;
-        if (seen && jumped) count_repeat(seen, &ring_at);
         drop_dud_waves();
     }
 
@@ -2197,24 +1844,11 @@ class $modify(EchoPlayerObject, PlayerObject) {
                 layer && this == layer->m_player2, ring ? ring->m_objectID : 0, ring ? ring->m_uniqueID : 0, m_isDashing, getPositionX(), getPositionY()));
         }
         bool loud = m_playEffects;
-        EffectScope scope;
-        bool repeat = loud && ring && skip_spread_effect({ this, 0, ring->m_uniqueID });
-        if (repeat && ring && !m_isDashing) {
-            if (auto first = g_first_orb_explosion.find({ ring, this }); first != g_first_orb_explosion.end() && first->second.sprite)
-                stack_explosion(first->second, ring->getPosition());
+        if (Logic::get().no_effects || Logic::get().player_hidden(this)) m_playEffects = false;
+        {
+            EffectCopyScope copies(EffectSource::DashStart);
+            PlayerObject::startDashing(ring);
         }
-        if (Logic::get().no_effects || repeat || Logic::get().player_hidden(this))
-            m_playEffects = false;
-        bool capture = !repeat && m_playEffects && ring && !m_isDashing && g_effect_frame.active && optimize_effects;
-        g_capturing_explosion = capture;
-        g_captured_explosion = nullptr;
-        PlayerObject::startDashing(ring);
-        g_capturing_explosion = false;
-        if (capture && g_captured_explosion && !g_captured_explosion->getBatchNode()) {
-            g_first_orb_explosion[{ ring, this }] = { g_captured_explosion, ring->getPosition() };
-            keep_first_explosion(g_captured_explosion);
-        }
-        g_captured_explosion = nullptr;
         m_playEffects = loud;
         if (auto* play = PlayLayer::get()) Orbs::note_dash(play, this, ring);
     }
@@ -2234,31 +1868,18 @@ class $modify(EchoPlayerObject, PlayerObject) {
         struct DashNote {
             PlayerObject* player; bool was; float visual, tick; bool used;
             ~DashNote() {
-                if (!was || Logic::get().predicting) return;
+                if (!was || Logic::get().predicting || !tracing()) return;
                 auto* layer = GJBaseGameLayer::get();
                 trace_event(fmt::format("DASH_END frame={} p2={} visual_spin={:.4f} tick_spin={:.4f} used_tick={} rot_after={:.4f} yvel={:.4f} x={:.3f} y={:.4f}\n",
                     Logic::get().step_frame + 1, layer && player == layer->m_player2, visual, tick, used, player->getRotation(), player->m_yVelocity, player->getPositionX(), player->getPositionY()));
             }
         } dash_note{ this, was_dashing, visual_spin, tick_spin, use_tick };
         bool reduced = m_maybeReducedEffects;
-        EffectScope scope;
-        bool repeat = was_dashing && !reduced && skip_spread_effect({ this, 1, 0 });
-        if (repeat) {
-            if (auto first = g_first_dash_explosion.find(this); first != g_first_dash_explosion.end() && first->second.sprite)
-                stack_explosion(first->second, getPosition());
+        if (Logic::get().no_effects) m_maybeReducedEffects = true;
+        {
+            EffectCopyScope copies(EffectSource::DashStop);
+            PlayerObject::stopDashing();
         }
-        if (Logic::get().no_effects || repeat) m_maybeReducedEffects = true;
-        bool capture = was_dashing && !repeat && !m_maybeReducedEffects && g_effect_frame.active && optimize_effects && !Logic::get().no_effects;
-        auto at = getPosition();
-        g_captured_explosion = nullptr;
-        if (capture)
-            g_captured_explosion = added_effect([&] { PlayerObject::stopDashing(); });
-        else PlayerObject::stopDashing();
-        if (capture && g_captured_explosion && !g_captured_explosion->getBatchNode()) {
-            g_first_dash_explosion[this] = { g_captured_explosion, at };
-            keep_first_explosion(g_captured_explosion);
-        }
-        g_captured_explosion = nullptr;
         m_maybeReducedEffects = reduced;
     }
 
@@ -2339,17 +1960,24 @@ class $modify(EchoPlayerObject, PlayerObject) {
         }
         else {
             std::vector<CCObject*> rings;
+            std::vector<bool> keep;
             rings.reserve(m_touchingRings->count());
             for (unsigned int i = 0; i < m_touchingRings->count(); ++i) {
                 auto* ring = m_touchingRings->objectAtIndex(i);
                 ring->retain();
                 rings.push_back(ring);
+                keep.push_back(Orbs::assist_clicks_orb(this, static_cast<GameObject*>(ring)));
             }
             m_touchingRings->removeAllObjects();
+            for (size_t i = 0; i < rings.size(); ++i)
+                if (!keep[i]) m_touchingRings->addObject(rings[i]);
             pressed = PlayerObject::pushButton(button);
-            for (auto* ring : rings) {
-                m_touchingRings->addObject(ring);
-                ring->release();
+            for (size_t i = 0; i < rings.size(); ++i)
+                if (!keep[i]) keep[i] = m_touchingRings->containsObject(rings[i]);
+            m_touchingRings->removeAllObjects();
+            for (size_t i = 0; i < rings.size(); ++i) {
+                if (keep[i]) m_touchingRings->addObject(rings[i]);
+                rings[i]->release();
             }
             pressed = finish(pressed);
         }
@@ -2772,7 +2400,11 @@ class $modify(EchoEffectObject, EffectGameObject) {
     }
 
     void triggerActivated(float xPosition) {
-        if (Logic::get().predicting) return;
+        if (Logic::get().predicting) {
+            auto& world = PredictedWorld::get();
+            if (!world.firing()) return;
+            world.note_trigger(this);
+        }
         EffectGameObject::triggerActivated(xPosition);
     }
 };
@@ -2855,9 +2487,7 @@ class $modify(EchoRingObject, RingObject) {
             };
             if (caused(play->m_player1) || caused(play->m_player2)) return;
         }
-        CCPoint spot = getPosition();
-        EffectScope scope;
-        if (repeated_effect({ getParent(), 2, m_objectID, spot.x, spot.y })) return;
+        EffectCopyScope copies(EffectSource::RingCircle);
         RingObject::spawnCircle();
     }
 };
@@ -3035,8 +2665,10 @@ class $modify(EchoPortalTarget, GJBaseGameLayer) {
 void enable_raw_hooks(bool on) {
     static safetyhook::MidHook shake_a, shake_b, shake_c, shake_d;
     static safetyhook::MidHook teleport;
+    static safetyhook::MidHook last_step;
     if (!on) {
         g_level_seed = {};
+        last_step = {};
         shake_a = {};
         shake_b = {};
         shake_c = {};
@@ -3065,6 +2697,18 @@ void enable_raw_hooks(bool on) {
     shake_c = safetyhook::create_mid(geode::base::get() + 0x23E1CB, shake_step);
     shake_d = safetyhook::create_mid(geode::base::get() + 0x23E1E9, shake_step);
     teleport = safetyhook::create_mid(geode::base::get() + 0x20FEDC, teleport_step); // in teleportPlayer
+
+    auto last_step_flag = [](safetyhook::Context& ctx) {
+        auto& logic = Logic::get();
+        if (!logic.fixed_cadence || logic.predicting) return;
+        auto* play = Logic::as_play(reinterpret_cast<GJBaseGameLayer*>(ctx.rsi));
+        if (!play || play->m_playerDied || play->m_resumeTimer > 0) return;
+        const unsigned long long low_byte_mask = 255;
+        bool full_step = (ctx.rdx & low_byte_mask) == 1;
+        bool frame_end = (logic.step_frame + 1) % logic.frame_cadence() == 0;
+        ctx.r15 = (ctx.r15 & ~low_byte_mask) | (full_step && frame_end ? 1 : 0);
+    };
+    last_step = safetyhook::create_mid(geode::base::get() + 0x237E5D, last_step_flag); // in GJBaseGameLayer::update
 }
 
 // silicate saved MY step patch as its "original" (it loaded after me). when it turns itself off it puts mine back
@@ -3659,6 +3303,8 @@ class $modify(EchoCameraPace, GJBaseGameLayer) {
         auto& pace = g_camera_pace;
         auto& logic = Logic::get();
         int every = camera_step_interval();
+        if (pace.layer == this && (logic.resetting || logic.refreshing_visuals))
+            pace.have_shown = false;
         if (pace.in_picture_call || dt == 0.f || !m_player1 || every <= 1 || !Logic::as_play(this)) {
             GJBaseGameLayer::updateCamera(dt);
             return;

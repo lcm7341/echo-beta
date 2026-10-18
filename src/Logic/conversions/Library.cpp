@@ -227,11 +227,11 @@ bool Logic::read_file(const fs::path& path) {
     try {
         std::thread([path, title, mine] {
             auto macro = ReplayIO::load_macro(path);
-            if (macro) {
-                std::stable_sort(macro->inputs.begin(), macro->inputs.end(), [](const Frame& a, const Frame& b) {
-                    return a.number < b.number;
-                });
-            }
+            auto by_frame = [](const Frame& a, const Frame& b) {
+                return a.number < b.number;
+            };
+            if (macro && !std::is_sorted(macro->inputs.begin(), macro->inputs.end(), by_frame))
+                std::stable_sort(macro->inputs.begin(), macro->inputs.end(), by_frame);
             geode::queueInMainThread([path, title, mine, macro = std::move(macro)]() mutable {
                 if (mine != ticket.load()) return;
                 auto& logic = Logic::get();

@@ -142,6 +142,9 @@ void Logic::pull_settings() {
             else if (std::abs(speedhack - 1.f) > 0.05f) saved_speedhack = speedhack;
             if (auto flag = json["real_time_mode"].asBool()) real_time_mode = flag.unwrap();
             if (auto flag = json["true_real_time"].asBool()) true_real_time = flag.unwrap();
+            if (auto number = json["lowest_playback_fps"].asInt()) lowest_playback_fps = (int)number.unwrap();
+            if (auto flag = json["prefetch_helper"].asBool()) prefetch_helper = flag.unwrap();
+            if (auto flag = json["batched_effects"].asBool()) batched_effects = flag.unwrap();
             if (auto flag = json["lock_delta"].asBool()) lock_delta = flag.unwrap();
             if (auto flag = json["fix_tps_rotation"].asBool()) fix_tps_rotation = flag.unwrap();
             if (auto flag = json["save_debug"].asBool()) save_debug = flag.unwrap();
@@ -481,6 +484,7 @@ void Logic::pull_settings() {
             if (auto flag = json["trajectory_moving_objects"].asBool())
                 traj_moving_objects = flag.unwrap();
             if (auto flag = json["near_movers"].asBool()) near_movers = flag.unwrap();
+            if (auto flag = json["fixed_cadence"].asBool()) fixed_cadence = flag.unwrap();
             if (auto flag = json["backstep"].asBool()) backstep = flag.unwrap();
             if (auto flag = json["velocity_unrounding"].asBool())
                 velocity_unrounding = flag.unwrap();
@@ -673,6 +677,9 @@ void Logic::save_settings_file() {
     json["speedhack_memory"] = saved_speedhack;
     json["real_time_mode"] = real_time_mode;
     json["true_real_time"] = true_real_time;
+    json["lowest_playback_fps"] = lowest_playback_fps;
+    json["prefetch_helper"] = prefetch_helper;
+    json["batched_effects"] = batched_effects;
     json["lock_delta"] = lock_delta;
     json["fix_tps_rotation"] = fix_tps_rotation;
     json["save_debug"] = save_debug;
@@ -907,6 +914,7 @@ void Logic::save_settings_file() {
     json["trajectory_click_lookahead"] = traj_click_lookahead;
     json["trajectory_moving_objects"] = traj_moving_objects;
     json["near_movers"] = near_movers;
+    json["fixed_cadence"] = fixed_cadence;
     json["backstep"] = backstep;
     json["velocity_unrounding"] = velocity_unrounding;
     json["backstep_percent"] = backstep_percent;

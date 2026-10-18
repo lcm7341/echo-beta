@@ -32,6 +32,7 @@ public:
 
     std::vector<Frame> inputs;
     std::vector<RateChange> rates;
+    std::vector<unsigned long long> cluster;
     unsigned long long frame = 0;
     unsigned long long attempt_start = 0;
     unsigned long long produced = 0;
@@ -73,7 +74,7 @@ public:
             size_t len = size_t(1) << ((header >> 8) & 15);
             size_t repeats = (header >> 14) == 1 ? size_t(1) << ((header >> 3) & 31) : 1;
             if (end - in.at < width * len) return false;
-            std::vector<unsigned long long> cluster(len);
+            cluster.resize(len);
             for (auto& value : cluster)
                 value = in.uint(width);
             unsigned long long count = 0;
@@ -131,6 +132,8 @@ public:
         unsigned long long amt = in.uint(8);
         if (amt > ReplayIO::max_inputs - produced) return false;
         unsigned long long target = produced + amt;
+        const size_t max_inputs_per_byte = 2;
+        if (target <= (end - in.at) * max_inputs_per_byte) inputs.reserve((size_t)target);
         while (produced < target) {
             if (in.at >= end || !section(in, end, target)) return false;
         }

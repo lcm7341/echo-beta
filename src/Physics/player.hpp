@@ -16,15 +16,9 @@ void startDashing(PlayerObject* player, DashRingObject* ring);
 void stopDashing(PlayerObject* player);
 
 void ringJump(PlayerObject* player, RingObject* ring);
-
-template <typename T>
-T clamp(T value, T min, T max);
-
-bool playerIsFalling(PlayerObject* player);
-
-void updateJump(PlayerObject* player, float dt);
-
-void playerUpdate(PlayerObject* player, float dt);
+void activateStreakState(PlayerObject* player);
+void placeStreakPointState(PlayerObject* player);
+void gameEvent(PlayerObject* player, int event);
 
 void togglePlayerScale(PlayerObject* player, bool smallSize);
 

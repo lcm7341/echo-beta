@@ -65,6 +65,11 @@ void Logic::sync_unrounding() {
     applied = want;
 }
 
+bool Logic::unrounding_applied() {
+    static bool other_mod = Loader::get()->isModLoaded("chizz.velocity-unrounding");
+    return applied || other_mod;
+}
+
 class $modify(UnroundedPlayer, PlayerObject) {
     void setYVelocity(double velocity, int type) {
         if (applied) {

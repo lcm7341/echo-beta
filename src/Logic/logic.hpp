@@ -379,6 +379,9 @@ public:
 	bool real_time_mode = true;
 	bool lock_delta = false;
 	bool true_real_time = false; // real time w/ no step cap at all, every step owed runs
+	int lowest_playback_fps = 0;
+	bool prefetch_helper = true;
+	bool batched_effects = true;
 	bool fix_tps_rotation = false;
 	bool lock_display_fps = false;
 	float playback_fps = 0.f;
@@ -522,6 +525,7 @@ public:
 	bool best_frame_step_first = false;
 	bool traj_moving_objects = true;
 	bool near_movers = true;
+	bool fixed_cadence = true;
 	bool backstep = false;
 	int backstep_percent = 100;
 	double backstep_save_sec = 0.0;
@@ -607,6 +611,7 @@ public:
 	}
 
 	void sync_unrounding();
+	static bool unrounding_applied();
 
 	bool shown_unrounded() const {
 		return is_playing() || is_recording() || !inputs.empty() ? macro_unrounded : velocity_unrounding;
@@ -734,6 +739,12 @@ public:
 
 	float physics_step() const {
 		return (float)(1.0 / sample_rate());
+	}
+
+	int frame_cadence() const {
+		double interval = CCDirector::sharedDirector()->getAnimationInterval();
+		if (!(interval > 0.0)) return 1;
+		return std::max(1, (int)std::lround(sample_rate() * interval));
 	}
 
 	float rate_at(int frame) const {
@@ -921,6 +932,7 @@ public:
 	void style_layout_glow(GameObject* object);
 	void draw_hitboxes(GJBaseGameLayer* play);
 	void attach_overlay(CCNode* node, GJBaseGameLayer* play);
+	void sync_overlay(CCNode* node, GJBaseGameLayer* play);
 	void reattach_overlays(GJBaseGameLayer* play);
 	void sample_hitbox_trail(GJBaseGameLayer* play);
 	void note_click_hitbox(GJBaseGameLayer* play, bool player1, bool down);
@@ -932,6 +944,13 @@ public:
 	void end_editor_playtest(GJBaseGameLayer* editor);
 	bool render_active();
 	bool render_capturing();
+	bool renders_in_real_time() const {
+#ifdef GEODE_IS_MOBILE
+		return false;
+#else
+		return render_real_time;
+#endif
+	}
 	bool render_paused();
 	bool pause_menu_open();
 	bool render_should_skip();

@@ -11,7 +11,7 @@ else()
 endif()
 set(CMAKE_CXX_VISIBILITY_PRESET hidden)
 
-project(Echo VERSION 2.2.0)
+project(Echo VERSION 2.2.1)
 
 file(GLOB_RECURSE SOURCES CONFIGURE_DEPENDS src/*.cpp)
 # these only build on their own os (added further down)

@@ -105,6 +105,7 @@ namespace MovingObjects {
 	class MoveThreads {
 	public:
 		static const unsigned HELPERS = 5;
+		static const unsigned PARTS = HELPERS + 1;
 
 		static MoveThreads& get() {
 			static MoveThreads* threads = new MoveThreads();
@@ -118,23 +119,27 @@ namespace MovingObjects {
 			};
 			task_data = &job;
 			float_mode = _mm_getcsr();
-			helpers_working.store(HELPERS, std::memory_order_relaxed);
+			parts_done.store(0, std::memory_order_relaxed);
+			next_part.store(0, std::memory_order_release);
 			round.fetch_add(1, std::memory_order_seq_cst);
 			if (helpers_sleeping.load(std::memory_order_seq_cst) > 0) round.notify_all();
-			job(0u);
-			while (helpers_working.load(std::memory_order_acquire) != 0)
+			for (unsigned part; (part = next_part.fetch_add(1, std::memory_order_acq_rel)) < PARTS;) {
+				job(part);
+				parts_done.fetch_add(1, std::memory_order_release);
+			}
+			while (parts_done.load(std::memory_order_acquire) != PARTS)
 				_mm_pause();
 		}
 
 	private:
 		MoveThreads() {
 			for (unsigned i = 0; i < HELPERS; ++i)
-				std::thread([this, i] {
-					helper_loop(i + 1);
+				std::thread([this] {
+					helper_loop();
 				}).detach();
 		}
 
-		void helper_loop(unsigned part) {
+		void helper_loop() {
 			unsigned last_round = 0;
 			for (;;) {
 				auto waiting_since = chrono::steady_clock::now();
@@ -150,9 +155,11 @@ namespace MovingObjects {
 					waiting_since = chrono::steady_clock::now();
 				}
 				last_round = round.load(std::memory_order_acquire);
-				if (_mm_getcsr() != float_mode) _mm_setcsr(float_mode);
-				task(task_data, part);
-				helpers_working.fetch_sub(1, std::memory_order_release);
+				for (unsigned part; (part = next_part.fetch_add(1, std::memory_order_acq_rel)) < PARTS;) {
+					if (_mm_getcsr() != float_mode) _mm_setcsr(float_mode);
+					task(task_data, part);
+					parts_done.fetch_add(1, std::memory_order_release);
+				}
 			}
 		}
 
@@ -160,7 +167,8 @@ namespace MovingObjects {
 		void* task_data = nullptr;
 		unsigned float_mode = 0;
 		std::atomic<unsigned> round{ 0 };
-		std::atomic<unsigned> helpers_working{ 0 };
+		std::atomic<unsigned> next_part{ 0 };
+		std::atomic<unsigned> parts_done{ 0 };
 		std::atomic<unsigned> helpers_sleeping{ 0 };
 	};
 

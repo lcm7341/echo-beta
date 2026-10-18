@@ -22,6 +22,13 @@ using namespace cocos2d;
 #define MEASURE_RELEASE 4
 #define MEASURE_STEPS 8
 
+class DashSpinManager : public cocos2d::CCActionManager {
+public:
+	void tick(float dt) {
+		update(dt);
+	}
+};
+
 enum class ClickType {
 	Hold,
 	Swift,
@@ -64,6 +71,9 @@ public:
 	void refresh(PlayLayer* play);
 	void note_live_step(PlayLayer* play);
 	void check_live_step(PlayLayer* play);
+	void dash_spin_tick(PlayerObject* fake);
+	void dash_spin_start(PlayerObject* fake, float angle);
+	void dash_spin_stop(PlayerObject* fake);
 	void log_ring_jump(PlayerObject* player, RingObject* ring, bool fake, bool before_set, bool after_set, bool was_dashing, bool was_buffered, bool was_ring_jump, bool was_touched, bool was_custom);
 	void lookahead(PlayLayer* play);
 	void autoclick(PlayLayer* play);
@@ -85,6 +95,7 @@ public:
 		return fake_index(player) >= 0;
 	}
 
+	int live_player_id(int unique_id) const;
 	bool is_second_fake(PlayerObject* player) const {
 		int index = fake_index(player);
 		return index >= 0 && (index & 1) == 1;
@@ -135,9 +146,9 @@ private:
 		PlayerObject* partner = nullptr;
 		PlayerObject* real = nullptr;
 		PlayerObject* partner_real = nullptr;
-		int start_step = 0, first_step = 0, start_frame = 0;
+		int start_step = 0, partner_start_step = 0, first_step = 0, start_frame = 0;
 		bool done = false, partner_done = true, left_dual = false, partner_left_dual = false;
-		int death_step = -1, partner_death_step = -1;
+		int death_step = -1, partner_death_step = -1, steps_after_death = 0;
 		std::vector<CCPoint> path, partner_path;
 		std::vector<Sample> samples, partner_samples;
 		bool has_death = false, partner_has_death = false;
@@ -167,9 +178,9 @@ private:
 		int frame = -1;
 		unsigned last_drawn_frame = 0;
 		std::vector<Line> lines;
-		int now = 0, step = 0, steps = 0, steps_per_frame = 1;
+		int now = 0, step = 0, steps = 0, steps_per_frame = 1, cadence = 1, current_step = -1, live_advance = 0;
 		float step_delta = 0.f, step_seconds = 0.f, warp = 1.f;
-		bool varying_tps = false;
+		bool varying_tps = false, world_last_step = false;
 		CacheKey key;
 		std::vector<CCPoint>* survival_path = nullptr;
 		std::unique_ptr<SavedGameState> live_state, prediction_state;
@@ -194,7 +205,19 @@ private:
 		int phase_steps[3] = {};
 	};
 
+	struct DrawnPath {
+		std::vector<CCPoint> points;
+		ccColor4F color;
+		int first_step = 0;
+		bool show_death = false;
+		CCRect death_outer, death_inner;
+	};
+
+	std::vector<DrawnPath> drawn_paths;
+	int drawn_step = -1;
 	PlayerObject* fakes[FAKE_PAIRS * 2] = {};
+	CCNode* dash_spins[FAKE_PAIRS * 2] = {};
+	DashSpinManager* dash_spin_managers[FAKE_PAIRS * 2] = {};
 	GameObject* killers[FAKE_PAIRS * 2] = {};
 	std::vector<EnhancedGameObject*> activated[FAKE_PAIRS * 2];
 	bool fake_dead[FAKE_PAIRS * 2] = {};
@@ -206,6 +229,7 @@ private:
 	PlayerObject* colliding_fake = nullptr;
 	int measured_alive_steps[2] = {}, measured_total_steps = 0;
 	int clicked_frame = -1;
+	int previous_job_now = -1;
 	Job job;
 	struct Watch {
 		bool valid = false, reported = false, player1 = true, kept = false;
@@ -244,7 +268,7 @@ private:
 	bool kept_matches(PlayLayer* play, bool linked, std::string& reason, bool& diverged);
 	void begin_extend();
 	void start_line(Line& line);
-	void press_fake(PlayerObject* fake, ClickType click, bool icon2);
+	void press_fake(const Line& line, PlayerObject* fake, ClickType click, bool icon2);
 	void enter_prediction();
 	void leave_prediction(bool finished);
 	void switch_to_lines();
@@ -255,13 +279,21 @@ private:
 	bool step_phase();
 	void advance_time();
 	void step_line(Line& line, int step);
+	void press_line(Line& line, int step);
+	void move_line(Line& line, int step);
 	bool step_fake(Line& line, PlayerObject* body, bool is_partner, int step);
+	CCPoint move_fake(PlayerObject* body);
+	bool land_fake(Line& line, PlayerObject* body, bool is_partner, int step, CCPoint from);
+	bool drives_world(const Line& line) const;
+	void touch_input(const Line& line, bool down, bool player1, bool handled, PlayerButton button = PlayerButton::Jump);
 	void walk_spawn_triggers(Line& line, PlayerObject* body, bool is_partner);
-	void apply_dual_portal_changes(Line& line);
+	void apply_dual_portal_changes(Line& line, int step);
 	CCRect lines_window() const;
+	CCRect covered_region(PlayLayer* play) const;
 	CCRect window_around(PlayerObject* body) const;
 	void finish_job();
 	void draw_lines();
+	void paint_paths(int skip);
 	void store_results();
 	int click_survival(PlayLayer* play, bool player1, ClickType click, int& full, int limit);
 	ccColor4F path_color(bool icon2, ClickType click) const;

@@ -33,8 +33,27 @@ namespace chrono = std::chrono;
 #define EXTEND_BUDGET_SECONDS 0.003
 #define TELEPORT_DISTANCE 60.f
 #define TELEPORT_DASH 6.f
+#define BASE_STEPS_PER_SECOND (60.f)
 #define PLAYER_TOLERANCE 0.3f
 #define VELOCITY_TOLERANCE 0.01f
+
+class TrajectoryNode : public CCDrawNode {
+public:
+	static TrajectoryNode* create() {
+		auto* node = new TrajectoryNode();
+		if (node->init()) {
+			node->autorelease();
+			return node;
+		}
+		delete node;
+		return nullptr;
+	}
+
+	void visit() override {
+		Logic::get().sync_overlay(this, GJBaseGameLayer::get());
+		CCDrawNode::visit();
+	}
+};
 
 static int prediction_steps(float seconds, float rate, float warp) {
 	double count = std::ceil(seconds * rate / std::clamp(warp, 0.01f, 1.f));
@@ -85,7 +104,10 @@ std::string Trajectory::ring_report(PlayLayer* play, PlayerObject* player) {
 		if (!object) return;
 		int type = (int)object->m_objectType;
 		bool ring = type >= (int)GameObjectType::YellowJumpRing && type <= (int)GameObjectType::TeleportOrb;
-		if (!ring && type != (int)GameObjectType::CustomRing && type != (int)GameObjectType::DashRing && type != (int)GameObjectType::GravityDashRing && type != (int)GameObjectType::GreenRing && type != (int)GameObjectType::PinkJumpRing && type != (int)GameObjectType::RedJumpRing && type != (int)GameObjectType::DropRing && type != (int)GameObjectType::GravityRing && type != (int)GameObjectType::SpiderOrb) return;
+		bool portal = type == (int)GameObjectType::InverseGravityPortal || type == (int)GameObjectType::NormalGravityPortal || type == (int)GameObjectType::GravityTogglePortal || type == (int)GameObjectType::GravityPad ||
+			type == (int)GameObjectType::YellowJumpPad || type == (int)GameObjectType::PinkJumpPad || type == (int)GameObjectType::RedJumpPad || type == (int)GameObjectType::SpiderPad;
+		if (!ring && !portal && type != (int)GameObjectType::CustomRing && type != (int)GameObjectType::DashRing && type != (int)GameObjectType::GravityDashRing && type != (int)GameObjectType::GreenRing && type != (int)GameObjectType::PinkJumpRing && type != (int)GameObjectType::RedJumpRing && type != (int)GameObjectType::DropRing && type != (int)GameObjectType::GravityRing && type != (int)GameObjectType::SpiderOrb)
+			return;
 		if (std::fabs((float)object->m_positionX - at.x) > 60.f || std::fabs((float)object->m_positionY - at.y) > 60.f) return;
 		std::string groups;
 		for (int g = 0; object->m_groups && g < object->m_groupCount && g < 10; ++g) groups += fmt::format("{}{}", g ? "," : "", (*object->m_groups)[(size_t)g]);
@@ -113,12 +135,46 @@ std::string Trajectory::ring_report(PlayLayer* play, PlayerObject* player) {
 	return out;
 }
 
+void Trajectory::dash_spin_tick(PlayerObject* fake) {
+	int index = fake_index(fake);
+	if (index < 0 || !dash_spins[index] || Logic::get().defer_physics()) return;
+	float warp = job.play ? job.play->m_gameState.m_timeWarp : 1.f;
+	if (!std::isfinite(warp)) warp = 1.f;
+	dash_spin_managers[index]->tick(1.f / (float)Logic::get().sample_rate() / std::max(warp, 1.f));
+}
+
+void Trajectory::dash_spin_start(PlayerObject* fake, float angle) {
+	const float spin_seconds = 0.3f;
+	int index = fake_index(fake);
+	if (index < 0) return;
+	if (!dash_spin_managers[index]) dash_spin_managers[index] = new DashSpinManager();
+	if (!dash_spins[index]) {
+		dash_spins[index] = CCNode::create();
+		dash_spins[index]->retain();
+	}
+	auto* node = dash_spins[index];
+	auto* manager = dash_spin_managers[index];
+	manager->removeAllActionsFromTarget(node);
+	node->setRotation(0.f);
+	manager->addAction(CCRepeatForever::create(CCRotateBy::create(spin_seconds, angle)), node, false);
+}
+
+void Trajectory::dash_spin_stop(PlayerObject* fake) {
+	int index = fake_index(fake);
+	if (index < 0 || !dash_spins[index]) return;
+	auto* node = dash_spins[index];
+	auto* manager = dash_spin_managers[index];
+	if (fake->m_iconSprite && !Logic::get().defer_physics() && manager->numberOfRunningActionsInTarget(node) > 0)
+		fake->m_iconSprite->setRotation(node->getRotation());
+	manager->removeAllActionsFromTarget(node);
+}
+
 void Trajectory::log_ring_jump(PlayerObject* player, RingObject* ring, bool fake, bool before_set, bool after_set, bool was_dashing, bool was_buffered, bool was_ring_jump, bool was_touched, bool was_custom) {
 	if (!Logic::get().trace_logging || !ring || !player) return;
 	auto* play = PlayLayer::get();
 	bool second = fake ? is_second_fake(player) : (play && player == play->m_player2);
 	traj_log(fmt::format("RJ {} frame={} fake_step={} fake={} phase={} p2={} uid={} id={} type={} used_before={} fired={} dashing={}->{} buffered={} ring_jump={} touched={} touched_custom={} upside_down={} pos=({:.3f},{:.3f}) vel={:.4f}",
-		fake ? "FAKE" : "LIVE", Logic::get().step_frame, fake ? job.now + job.step : -1, fake_index(player), (int)job.phase, second, ring->m_uniqueID, ring->m_objectID, (int)ring->m_objectType, before_set, !before_set && after_set,
+		fake ? "FAKE" : "LIVE", Logic::get().step_frame, fake ? job.current_step : -1, fake_index(player), (int)job.phase, second, ring->m_uniqueID, ring->m_objectID, (int)ring->m_objectType, before_set, !before_set && after_set,
 		was_dashing, player->m_isDashing, was_buffered, was_ring_jump, was_touched, was_custom, player->m_isUpsideDown, player->getPositionX(), player->getPositionY(), player->m_yVelocity));
 }
 
@@ -239,7 +295,7 @@ PlayerObject* Trajectory::spawn_fake(PlayLayer* play, const char* id) {
 void Trajectory::attach(PlayLayer* play) {
 	detach();
 	if (!play || !play->m_objectLayer) return;
-	draw_node = CCDrawNode::create();
+	draw_node = TrajectoryNode::create();
 	draw_node->retain();
 	draw_node->m_bUseArea = false;
 	draw_node->setID("trajectory"_spr);
@@ -275,6 +331,11 @@ void Trajectory::detach() {
 	for (int i = 0; i < FAKE_PAIRS * 2; ++i) {
 		drop(fakes[i]);
 		activated[i].clear();
+		if (dash_spins[i]) {
+			dash_spin_managers[i]->removeAllActionsFromTarget(dash_spins[i]);
+			dash_spins[i]->release();
+			dash_spins[i] = nullptr;
+		}
 	}
 	drop(draw_node);
 	simulating = false;
@@ -357,7 +418,10 @@ Trajectory::CacheKey Trajectory::make_cache_key(PlayLayer* play) const {
 	fill_player_state(play->m_player1, key.player1_state);
 	fill_player_state(play->m_player2, key.player2_state);
 	key.dual = play->m_gameState.m_isDualMode;
-	if (logic.maintain_gravity) {
+	if (Logic::get().advance_paused(play)) {
+		key.held_p1 = next_click(play, true) == ClickType::Hold;
+		key.held_p2 = next_click(play, false) == ClickType::Hold;
+	} else if (logic.maintain_gravity) {
 		key.held_p1 = Logic::get().physical_hold(play, false);
 		key.held_p2 = Logic::get().physical_hold(play, true);
 	}
@@ -406,6 +470,7 @@ void Trajectory::copy_real_into_fake(PlayerObject* fake, PlayerObject* real) {
 	fake->copyAttributes(real);
 	if (rings && fake->m_touchingRings != rings) fake->m_touchingRings = rings;
 	fake->m_lastPosition = real->m_lastPosition;
+	fake->m_unk52C = real->m_unk52C;
 	SavedPlayerCheckpoint checkpoint = SavedPlayerCheckpoint::create(real);
 	checkpoint.apply(fake);
 	fake->m_collisionLogTop = logs[0];
@@ -491,7 +556,7 @@ void Trajectory::dualPortal(GJBaseGameLayer* layer, PlayerObject* player, Effect
 	line->dual_ended = true;
 }
 
-void Trajectory::press_fake(PlayerObject* fake, ClickType click, bool icon2) {
+void Trajectory::press_fake(const Line& line, PlayerObject* fake, ClickType click, bool icon2) {
 	auto& logic = Logic::get();
 	bool stash_orbs = Orbs::click_orb_assist(icon2);
 	if (stash_orbs) logic.suppress_rings = true;
@@ -499,18 +564,20 @@ void Trajectory::press_fake(PlayerObject* fake, ClickType click, bool icon2) {
 	case ClickType::Replay:
 		break;
 	case ClickType::Hold:
-		fake->pushButton(PlayerButton::Jump);
+		touch_input(line, true, !icon2, fake->pushButton(PlayerButton::Jump));
 		break;
 	case ClickType::Swift:
 		fake->releaseButton(PlayerButton::Jump);
 		fake->m_jumpBuffered = false;
-		fake->pushButton(PlayerButton::Jump);
-		fake->releaseButton(PlayerButton::Jump);
+		touch_input(line, true, !icon2, fake->pushButton(PlayerButton::Jump));
+		touch_input(line, false, !icon2, fake->releaseButton(PlayerButton::Jump));
 		break;
-	case ClickType::Release:
-		fake->releaseButton(PlayerButton::Jump);
+	case ClickType::Release: {
+		bool handled = fake->releaseButton(PlayerButton::Jump);
 		fake->m_jumpBuffered = false;
+		touch_input(line, false, !icon2, handled);
 		break;
+	}
 	}
 	if (stash_orbs) logic.suppress_rings = false;
 }
@@ -555,6 +622,8 @@ Trajectory::Line Trajectory::make_line(PlayLayer* play, bool player1, ClickType 
 void Trajectory::add_click_lines(PlayLayer* play, std::vector<Line>& lines, bool player1, bool with_partner, bool draw, bool rendering) {
 	const auto& logic = Logic::get();
 	ClickType actual = actual_click(play, player1);
+	if (actual != ClickType::Replay && Logic::get().advance_paused(play))
+		actual = next_click(play, player1);
 	int pair = 0;
 	for (const auto& line : lines)
 		if (line.player1 == player1) ++pair;
@@ -603,10 +672,11 @@ bool Trajectory::kept_matches(PlayLayer* play, bool linked, std::string& reason,
 		reason = "stepped back";
 		return false;
 	}
-	int index = now - kept.start_step - 1;
+	int index = now - kept.start_step - 1, partner_index = now - kept.partner_start_step - 1;
 	if (index < 0) return true;
 	if ((size_t)index >= kept.samples.size()) {
-		reason = fmt::format("kept line too short ({} of {})", kept.samples.size(), index + 1);
+		reason = fmt::format("kept line too short ({} of {}, start={} after_death={} done={})", kept.samples.size(), index + 1, kept.start_step, kept.steps_after_death, kept.done);
+		diverged = true;
 		return false;
 	}
 	auto describe = [&](const Sample& sample, PlayerObject* body, const char* who) {
@@ -620,13 +690,16 @@ bool Trajectory::kept_matches(PlayLayer* play, bool linked, std::string& reason,
 		diverged = true;
 		return false;
 	}
-	if (kept.with_partner) {
-		if ((size_t)index >= kept.partner_samples.size() || !sample_matches(kept.partner_samples[(size_t)index], play->m_player2)) {
-			if ((size_t)index < kept.partner_samples.size()) {
-				describe(kept.partner_samples[(size_t)index], play->m_player2, "p2");
+	if (kept.with_partner && partner_index >= 0) {
+		if ((size_t)partner_index >= kept.partner_samples.size() || !sample_matches(kept.partner_samples[(size_t)partner_index], play->m_player2)) {
+			if ((size_t)partner_index < kept.partner_samples.size()) {
+				index = partner_index;
+				describe(kept.partner_samples[(size_t)partner_index], play->m_player2, "p2");
+				diverged = true;
+			} else {
+				reason = fmt::format("kept partner line too short ({} of {}, partner_start={} done={} death={} left={})", kept.partner_samples.size(), partner_index + 1, kept.partner_start_step, kept.partner_done, kept.partner_death_step, kept.partner_left_dual);
 				diverged = true;
 			}
-			else reason = "kept partner line too short";
 			return false;
 		}
 	}
@@ -654,16 +727,20 @@ bool Trajectory::begin_job(PlayLayer* play, std::vector<Line> lines, int limit, 
 		if (!fake->getParent()) play->m_objectLayer->addChild(fake);
 	phys::prepare_prediction_art();
 	job.warp = play->m_gameState.m_timeWarp;
-	job.step_seconds = logic.physics_step();
+	job.step_seconds = (float)((1.0 / logic.sample_rate()) * (double)std::clamp(job.warp, 0.f, 1.f));
 	// a macro can change tps part way so each step gets its own length (NOT the last real frames)
 	job.varying_tps = logic.is_playing() && !logic.rates.empty();
-	if (job.varying_tps) job.step_seconds = 1.f / std::max(logic.rate_at(logic.get_frame(play)), 1.f);
-	job.step_delta = job.step_seconds * 60.f * std::min(job.warp, 1.f);
+	if (job.varying_tps)
+		job.step_seconds = (float)((1.0 / std::max((double)logic.rate_at(logic.get_frame(play)), 1.0)) * (double)std::clamp(job.warp, 0.f, 1.f));
+	job.step_delta = job.step_seconds * BASE_STEPS_PER_SECOND;
 	if (!job.varying_tps && real_step_delta > 0.f && std::fabs(real_step_delta - job.step_delta) < job.step_delta * 0.01f) job.step_delta = real_step_delta;
 	job.steps = prediction_steps(logic.traj_seconds, (float)logic.sample_rate(), job.warp);
 	if (limit > 0) job.steps = std::min(job.steps, limit);
 	perf_count_traj_steps(job.steps);
 	job.steps_per_frame = std::max(1, (int)std::lround(logic.sample_rate() / 60.0));
+	job.live_advance = previous_job_now >= 0 && job.now >= previous_job_now ? job.now - previous_job_now : job.steps_per_frame;
+	previous_job_now = job.now;
+	job.cadence = logic.frame_cadence();
 	job.use_world = logic.traj_moving_objects && job.steps > 1 && !job.varying_tps;
 	bool twoPlayer = play->m_levelSettings && play->m_levelSettings->m_twoPlayerMode;
 	bool dual_now = play->m_gameState.m_isDualMode && play->m_player2;
@@ -675,10 +752,10 @@ bool Trajectory::begin_job(PlayLayer* play, std::vector<Line> lines, int limit, 
 		std::string reason;
 		bool diverged = false;
 		bool kept_ok = kept_matches(play, linked, reason, diverged);
-		bool reuse = !diverged;
+		bool reuse = !diverged || !world.changes_after(job.now);
 		if (reuse) {
 			world.trim(job.now);
-			reuse = world.matches_live(play, job.now);
+			reuse = world.matches_live(play, job.now, covered_region(play));
 			if (!reuse) reason = world.mismatch;
 		}
 		if (reuse && !kept_ok) {
@@ -706,21 +783,23 @@ bool Trajectory::begin_job(PlayLayer* play, std::vector<Line> lines, int limit, 
 				traj_log(fmt::format("REUSE frame={} horizon={} want={} tracked={}", job.now, world.horizon(), job.now + job.steps, world.tracked_count()));
 			size_t consumed = (size_t)(job.now - kept.start_step);
 			if (consumed > 0) {
-				auto cut = [consumed](auto& list) {
-					list.erase(list.begin(), list.begin() + (std::ptrdiff_t)std::min(consumed, list.size()));
+				auto cut = [](auto& list, size_t amount) {
+					list.erase(list.begin(), list.begin() + (std::ptrdiff_t)std::min(amount, list.size()));
 				};
-				cut(kept.path);
-				cut(kept.partner_path);
-				cut(kept.samples);
-				cut(kept.partner_samples);
+				cut(kept.path, consumed);
+				cut(kept.samples, consumed);
+				if (job.now > kept.partner_start_step) {
+					cut(kept.partner_path, (size_t)(job.now - kept.partner_start_step));
+					cut(kept.partner_samples, (size_t)(job.now - kept.partner_start_step));
+					kept.partner_start_step = job.now;
+				}
 				kept.start_step = job.now;
 			}
 		}
 		kept.draw = false;
 		kept.measure = 0;
 		job.use_kept = true;
-		bool covered = world.horizon() >= job.now + job.steps;
-		for (size_t i = 0; covered && i < job.lines.size();) {
+		for (size_t i = 0; i < job.lines.size();) {
 			auto& line = job.lines[i];
 			bool same_player1 = line.player1 && line.click == kept.click && (line.with_partner == kept.with_partner || kept.with_partner);
 			bool same_player2 = !line.player1 && kept.with_partner && line.click == ClickType::Replay && kept.click == ClickType::Replay;
@@ -738,7 +817,7 @@ bool Trajectory::begin_job(PlayLayer* play, std::vector<Line> lines, int limit, 
 		start_line(line);
 	if (job.use_world) {
 		world.begin_session(play);
-		int kept_next = kept.start_step + (int)kept.samples.size();
+		int kept_next = kept.start_step + (int)kept.samples.size() + kept.steps_after_death;
 		if (kept_next < world.horizon() && !kept.done) job.phase = Phase::Catchup;
 		else begin_extend();
 	}
@@ -760,6 +839,7 @@ void Trajectory::start_line(Line& line) {
 	line.with_partner = line.with_partner && dual && line.partner_real;
 	line.partner_done = !line.with_partner;
 	line.start_step = job.now;
+	line.partner_start_step = job.now;
 	line.first_step = job.now;
 	line.start_frame = logic.get_frame(play);
 	copy_real_into_fake(line.fake, line.real);
@@ -794,8 +874,8 @@ void Trajectory::start_line(Line& line) {
 		bool stash_orbs = Orbs::click_orb_assist(!player1) || (line.with_partner && Orbs::click_orb_assist(player1));
 		if (stash_orbs) logic.suppress_rings = true;
 		each_body([&](PlayerObject* body) {
-			if (line.autoclick.pressed) body->pushButton(PlayerButton::Jump);
-			else body->releaseButton(PlayerButton::Jump);
+			bool handled = line.autoclick.pressed ? body->pushButton(PlayerButton::Jump) : body->releaseButton(PlayerButton::Jump);
+			touch_input(line, line.autoclick.pressed, !is_second_fake(body), handled);
 		});
 		if (stash_orbs) logic.suppress_rings = false;
 	}
@@ -805,7 +885,7 @@ void Trajectory::start_line(Line& line) {
 			if (!already_held && logic.maintain_gravity && physical_key_held && body->m_isDart && line.click == ClickType::Hold) already_held = true;
 			if (line.click == ClickType::Hold && already_held) return;
 			if (line.click != ClickType::Release && line.click != ClickType::Replay) body->m_jumpBuffered = false;
-			press_fake(body, line.click, is_second_fake(body));
+			press_fake(line, body, line.click, is_second_fake(body));
 		});
 	}
 	line.input_cursor = logic.replay_pos;
@@ -882,6 +962,7 @@ void Trajectory::enter_prediction() {
 	if (!job.paused) return;
 	job.paused = false;
 	auto& world = PredictedWorld::get();
+	if (job.use_world) world.resume_session(play);
 	if (job.phase == Phase::Extend) {
 		world.resume_horizon(play);
 		return;
@@ -902,7 +983,7 @@ void Trajectory::leave_prediction(bool finished) {
 	auto& world = PredictedWorld::get();
 	if (!finished) {
 		job.paused = true;
-		if (job.phase == Phase::Lines) {
+		if (job.phase != Phase::Extend) {
 			job.prediction_state = std::make_unique<SavedGameState>(play->m_gameState);
 			job.prediction_random = GameToolbox::getfast_srand();
 			job.prediction_teleport = logic.teleport_random;
@@ -911,9 +992,11 @@ void Trajectory::leave_prediction(bool finished) {
 			job.prediction_recorded = play->m_queuedRecordedButtons;
 			job.prediction_recorded_size = play->m_queuedRecordedButtonsSize;
 		}
-		if (job.use_world) world.pause_session(play);
+		if (job.use_world) world.suspend_session(play);
 	}
 	else if (job.use_world) world.end_session(play);
+	for (auto* fake : fakes)
+		fake->setVisible(false);
 	job.live_state->restore(play->m_gameState);
 	GameToolbox::fast_srand(job.live_random);
 	logic.teleport_random = job.live_teleport;
@@ -1028,11 +1111,14 @@ void Trajectory::run_steps(double budget_seconds) {
 
 void Trajectory::advance_time() {
 	auto& state = job.play->m_gameState;
+	const int progress_per_step = 2;
+	const float milliseconds_per_second = 1000.0f;
 	float dt = job.step_seconds;
 	state.m_totalTime += dt;
 	state.m_unkDouble3 += dt / state.m_timeWarp;
-	state.m_currentProgress++;
-	state.m_unkUint5 += (int)roundf(state.m_timeWarp * 1000.0f);
+	state.m_levelTime += dt / state.m_timeWarp;
+	state.m_currentProgress += progress_per_step;
+	state.m_unkUint6 += (int)roundf(state.m_timeWarp * milliseconds_per_second);
 }
 
 bool Trajectory::step_once() {
@@ -1045,19 +1131,21 @@ bool Trajectory::step_once() {
 }
 
 bool Trajectory::step_phase() {
+	const double frame_advance_extend_seconds = 0.1;
+	const int behind_min_frames = 4, normal_min_frames = 2;
+	const int behind_live_frames = 2, normal_live_frames = 1;
 	auto& logic = Logic::get();
 	auto* play = job.play;
 	auto& world = PredictedWorld::get();
 	auto& state = play->m_gameState;
 	if (job.phase == Phase::Catchup) {
-		int step = kept.start_step + (int)kept.samples.size();
+		int step = kept.start_step + (int)kept.samples.size() + kept.steps_after_death;
 		if (step >= world.horizon() || kept.done) {
 			begin_extend();
 			if (job.phase == Phase::Lines) switch_to_lines();
 			return false;
 		}
 		advance_time();
-		world.apply_records(play, step + 1, window_around(kept.fake));
 		float time_mod = *reinterpret_cast<float*>(&state.m_timeModRelated);
 		if (time_mod != 0.0f) {
 			state.m_timeModRelated = 0;
@@ -1065,7 +1153,9 @@ bool Trajectory::step_phase() {
 			if (!kept.done) kept.fake->updateTimeMod(time_mod, true);
 			if (!kept.partner_done) kept.partner->updateTimeMod(time_mod, true);
 		}
-		step_line(kept, step);
+		press_line(kept, step);
+		world.apply_records(play, step + 1, window_around(kept.fake));
+		move_line(kept, step);
 		return false;
 	}
 	if (job.phase == Phase::Extend) {
@@ -1073,15 +1163,18 @@ bool Trajectory::step_phase() {
 		int extended = world.horizon() - job.horizon_at_start;
 		bool behind = world.horizon() < job.now + job.steps / 2;
 		double budget = behind ? EXTEND_BUDGET_SECONDS * 3.0 : EXTEND_BUDGET_SECONDS;
-		bool budget_over = extended >= job.steps_per_frame * (behind ? 4 : 2) && !job.sliced && !logic.frame_advance &&
+		if (logic.frame_advance) budget = frame_advance_extend_seconds;
+		int minimum = std::max(job.steps_per_frame * (behind ? behind_min_frames : normal_min_frames), job.live_advance + job.steps_per_frame * (behind ? behind_live_frames : normal_live_frames));
+		bool budget_over = extended >= minimum && !job.sliced && !logic.render_capturing() &&
 			chrono::duration<double>(chrono::steady_clock::now() - job.extend_started).count() >= budget;
 		if (step >= job.now + job.steps || world.full() || budget_over) {
 			switch_to_lines();
 			return false;
 		}
 		advance_time();
-		bool last_step = (step + 1) % job.steps_per_frame == 0;
-		world.step(play, kept.fake, kept.with_partner && !kept.partner_done ? kept.partner : nullptr, last_step);
+		job.world_last_step = (step + 1) % job.cadence == 0;
+		auto* partner = kept.with_partner && !kept.partner_done ? kept.partner : nullptr;
+		world.begin_step(play, kept.fake, partner);
 		float time_mod = *reinterpret_cast<float*>(&state.m_timeModRelated);
 		if (time_mod != 0.0f) {
 			state.m_timeModRelated = 0;
@@ -1089,13 +1182,15 @@ bool Trajectory::step_phase() {
 			if (!kept.done) kept.fake->updateTimeMod(time_mod, true);
 			if (!kept.partner_done) kept.partner->updateTimeMod(time_mod, true);
 		}
-		step_line(kept, step);
-		world.after_players(play);
+		if (kept.done && kept.partner_done)
+			world.move_step(play, kept.fake, nullptr, job.world_last_step);
+		else step_line(kept, step);
+		world.end_step(play, kept.fake, kept.with_partner && !kept.partner_done ? kept.partner : nullptr);
 		return false;
 	}
 	if (job.varying_tps) {
-		job.step_seconds = 1.f / std::max(logic.rate_at(logic.get_frame(play) + job.step), 1.f);
-		job.step_delta = job.step_seconds * 60.f * std::min(job.warp, 1.f);
+		job.step_seconds = (float)((1.0 / std::max((double)logic.rate_at(logic.get_frame(play) + job.step), 1.0)) * (double)std::clamp(job.warp, 0.f, 1.f));
+		job.step_delta = job.step_seconds * BASE_STEPS_PER_SECOND;
 	}
 	int step = job.now + job.step;
 	if (job.use_world && step + 1 > world.horizon()) {
@@ -1103,7 +1198,6 @@ bool Trajectory::step_phase() {
 		return true;
 	}
 	advance_time();
-	if (job.use_world) world.apply_records(play, step + 1, lines_window());
 	// w skidicate
 	float time_mod = *reinterpret_cast<float*>(&state.m_timeModRelated);
 	if (time_mod != 0.0f) {
@@ -1114,9 +1208,12 @@ bool Trajectory::step_phase() {
 			if (!line.partner_done) line.partner->updateTimeMod(time_mod, true);
 		}
 	}
+	for (auto& line : job.lines)
+		press_line(line, step);
+	if (job.use_world) world.apply_records(play, step + 1, lines_window());
 	bool all_done = true;
 	for (auto& line : job.lines) {
-		step_line(line, step);
+		move_line(line, step);
 		if (!line.done || !line.partner_done) all_done = false;
 	}
 	++job.step;
@@ -1126,6 +1223,32 @@ bool Trajectory::step_phase() {
 CCRect Trajectory::window_around(PlayerObject* body) const {
 	CCPoint at = body->getPosition();
 	return { at.x - WORLD_REACH, at.y - WORLD_REACH, 2.f * WORLD_REACH, 2.f * WORLD_REACH };
+}
+
+CCRect Trajectory::covered_region(PlayLayer* play) const {
+	float left = 0.f, right = 0.f, bottom = 0.f, top = 0.f;
+	bool first = true;
+	auto include = [&](CCPoint at) {
+		if (first) {
+			left = right = at.x;
+			bottom = top = at.y;
+			first = false;
+			return;
+		}
+		left = std::min(left, at.x);
+		right = std::max(right, at.x);
+		bottom = std::min(bottom, at.y);
+		top = std::max(top, at.y);
+	};
+	include(play->m_player1->getPosition());
+	if (play->m_player2 && play->m_gameState.m_isDualMode) include(play->m_player2->getPosition());
+	for (const auto& drawn : drawn_paths)
+		for (const auto& point : drawn.points) include(point);
+	if (kept_valid && kept_play == play) {
+		for (const auto& point : kept.path) include(point);
+		for (const auto& point : kept.partner_path) include(point);
+	}
+	return { left - WORLD_REACH, bottom - WORLD_REACH, right - left + 2.f * WORLD_REACH, top - bottom + 2.f * WORLD_REACH };
 }
 
 CCRect Trajectory::lines_window() const {
@@ -1153,6 +1276,17 @@ CCRect Trajectory::lines_window() const {
 }
 
 void Trajectory::step_line(Line& line, int step) {
+	bool in_world = drives_world(line);
+	auto& world = PredictedWorld::get();
+	if (in_world)
+		world.enter(job.play, line.fake, line.with_partner && !line.partner_done ? line.partner : nullptr);
+	press_line(line, step);
+	move_line(line, step);
+	if (in_world) world.leave(job.play);
+}
+
+void Trajectory::press_line(Line& line, int step) {
+	job.current_step = step;
 	auto& logic = Logic::get();
 	auto* play = job.play;
 	if (line.done && line.partner_done) return;
@@ -1162,17 +1296,21 @@ void Trajectory::step_line(Line& line, int step) {
 		if (!line.done) action(line.fake);
 		if (!line.partner_done) action(line.partner);
 	};
+	each_body([&](PlayerObject* body) { dash_spin_tick(body); });
 	Orbs::swap_prediction_pads(line.pads);
 	std::array<bool, 2> orb_pressed{};
 	if (line.macro_plays || (line.with_partner && logic.is_playing())) {
 		int at = line.start_frame + i + 1;
-		bool inputs_shared = line.with_partner && logic.records_player(false) == logic.records_player(true) && (!logic.is_playing() || logic.play_p1 == logic.play_p2);
+		bool two_player_lvl = play->m_levelSettings && play->m_levelSettings->m_twoPlayerMode;
+		bool inputs_shared = line.with_partner && !two_player_lvl && logic.records_player(false) == logic.records_player(true) && (!logic.is_playing() || logic.play_p1 == logic.play_p2);
 		const int HOLD_BUTTONS[] = { JUMP, LEFT, RIGHT };
 		PlayerObject* first = player1 ? line.fake : line.partner;
 		PlayerObject* second = player1 ? line.partner : line.fake;
 		auto send_input = [&](PlayerObject* target, bool player2, PlayerButton button, bool holding) {
+			std::optional<bool> handled1, handled2;
 			auto press_or_release = [&](PlayerObject* body, bool icon2) {
 				if (!body || (body != line.fake && !(line.with_partner && body == line.partner))) return;
+				std::optional<bool>& handled = icon2 ? handled2 : handled1;
 				if (holding) {
 					if (logic.trace_logging && button == PlayerButton::Jump) {
 						std::string rings;
@@ -1183,16 +1321,15 @@ void Trajectory::step_line(Line& line, int step) {
 						traj_log(fmt::format("LPRESS step={} at={} job_step={} phase={} fake={} line_click={} line_player1={} line_first={} kept={} p2={} rings=[{}] buffered={} dashing={} upside_down={} ground={} pos=({:.3f},{:.3f}) vel={:.4f}", step, at, job.step, (int)job.phase, fake_index(body), (int)line.click, line.player1, line.first_step, &line == &kept, icon2, rings,
 							body->m_jumpBuffered, body->m_isDashing, body->m_isUpsideDown, body->m_isOnGround, body->getPositionX(), body->getPositionY(), body->m_yVelocity));
 					}
-					body->pushButton(button);
+					handled = body->pushButton(button);
 					if (button == PlayerButton::Jump) orb_pressed[icon2 ? 1 : 0] = true;
-				}
-				else body->releaseButton(button);
+				} else handled = body->releaseButton(button);
 			};
 			press_or_release(target, player2);
 			if (inputs_shared) press_or_release(target == first ? second : first, !player2);
+			touch_input(line, holding, !player2, handled2 ? *handled2 : handled1.value_or(false), button);
 		};
 		std::array<std::array<bool, 3>, 2> sent_this_step{};
-		bool two_player_lvl = play->m_levelSettings && play->m_levelSettings->m_twoPlayerMode;
 		while (line.input_cursor < logic.inputs.size() && logic.inputs[line.input_cursor].number <= at) {
 			const auto& input = logic.inputs[line.input_cursor++];
 			int raw_button = input.button == 0 ? 1 : input.button;
@@ -1234,15 +1371,15 @@ void Trajectory::step_line(Line& line, int step) {
 			bool stash_orbs = Orbs::click_orb_assist(!player1) || (line.with_partner && Orbs::click_orb_assist(player1));
 			if (stash_orbs) logic.suppress_rings = true;
 			each_body([&](PlayerObject* body) {
-				if (autoclick.pressed) body->pushButton(PlayerButton::Jump);
-				else body->releaseButton(PlayerButton::Jump);
+				bool handled = autoclick.pressed ? body->pushButton(PlayerButton::Jump) : body->releaseButton(PlayerButton::Jump);
+				touch_input(line, autoclick.pressed, !is_second_fake(body), handled);
 			});
 			if (stash_orbs) logic.suppress_rings = false;
 			if (autoclick.pressed && autoclick.press_interval <= 0) {
 				autoclick.pressed = false;
 				pressed_now = false;
 				each_body([&](PlayerObject* body) {
-					body->releaseButton(PlayerButton::Jump);
+					touch_input(line, false, !is_second_fake(body), body->releaseButton(PlayerButton::Jump));
 				});
 			}
 		}
@@ -1257,8 +1394,9 @@ void Trajectory::step_line(Line& line, int step) {
 		for (int round = 0; round < 8 && !body->m_controlsDisabled; ++round) {
 			if (body->m_isUpsideDown != (physically_held == body->m_jumpBuffered)) break;
 			bool before_flip = body->m_isUpsideDown, before_buffer = body->m_jumpBuffered;
-			if (physically_held != body->m_isUpsideDown) body->pushButton(PlayerButton::Jump);
-			else body->releaseButton(PlayerButton::Jump);
+			bool down = physically_held != body->m_isUpsideDown;
+			bool handled = down ? body->pushButton(PlayerButton::Jump) : body->releaseButton(PlayerButton::Jump);
+			touch_input(line, down, !icon2, handled);
 			if (body->m_isUpsideDown == before_flip && body->m_jumpBuffered == before_buffer) break;
 		}
 		if (stash_orbs) logic.suppress_rings = false;
@@ -1272,29 +1410,86 @@ void Trajectory::step_line(Line& line, int step) {
 		Orbs::apply_prediction_pads(play, body, icon2);
 	});
 	each_body(keep_gravity_hold);
-
-	each_body([&](PlayerObject* body) {
-		body->resetTouchedRings(false);
-	});
-	if (!line.done) line.done = step_fake(line, line.fake, false, step);
-	if (job.survival_path && &line != &kept && !line.done) job.survival_path->push_back(line.fake->getPosition());
-	apply_dual_portal_changes(line);
-	if (!line.partner_done) line.partner_done = step_fake(line, line.partner, true, step);
-	apply_dual_portal_changes(line);
 	Orbs::swap_prediction_pads(line.pads);
 }
 
-bool Trajectory::step_fake(Line& line, PlayerObject* body, bool is_partner, int step) {
+void Trajectory::move_line(Line& line, int step) {
+	job.current_step = step;
 	auto* play = job.play;
+	if (line.done && line.partner_done) return;
+	auto each_body = [&](auto&& action) {
+		if (!line.done) action(line.fake);
+		if (!line.partner_done) action(line.partner);
+	};
+	Orbs::swap_prediction_pads(line.pads);
+	each_body([&](PlayerObject* body) {
+		body->resetTouchedRings(false);
+	});
+	bool partner_active = !line.partner_done;
+	if (drives_world(line))
+		PredictedWorld::get().move_step(play, line.fake, partner_active ? line.partner : nullptr, job.world_last_step);
+	if (line.partner) {
+		PlayerObject* first = line.player1 ? line.fake : line.partner;
+		PlayerObject* second = line.player1 ? line.partner : line.fake;
+		second->m_maybeReverseSpeed = first->m_maybeReverseSpeed;
+		second->m_maybeReverseAcceleration = first->m_maybeReverseAcceleration;
+	}
+	if (!line.done) line.done = step_fake(line, line.fake, false, step);
+	if (job.survival_path && &line != &kept && !line.done) job.survival_path->push_back(line.fake->getPosition());
+	apply_dual_portal_changes(line, step);
+	if (partner_active && !line.partner_done)
+		line.partner_done = step_fake(line, line.partner, true, step);
+	apply_dual_portal_changes(line, step);
+	Orbs::swap_prediction_pads(line.pads);
+}
+
+bool Trajectory::drives_world(const Line& line) const {
+	return job.use_world && job.phase == Phase::Extend && &line == &kept;
+}
+
+int Trajectory::live_player_id(int unique_id) const {
+	for (int i = 0; i < FAKE_PAIRS * 2; ++i) {
+		if (!fakes[i] || fakes[i]->m_uniqueID != unique_id) continue;
+		auto* live = PredictedWorld::get().live_player(is_second_fake(fakes[i]));
+		return live ? live->m_uniqueID : unique_id;
+	}
+	return unique_id;
+}
+
+void Trajectory::touch_input(const Line& line, bool down, bool player1, bool handled, PlayerButton button) {
+	if (!drives_world(line)) return;
+	PredictedWorld::get().player_button(job.play, line.fake, line.with_partner && !line.partner_done ? line.partner : nullptr, down, player1, handled, (int)button);
+}
+
+bool Trajectory::step_fake(Line& line, PlayerObject* body, bool is_partner, int step) {
+	return land_fake(line, body, is_partner, step, move_fake(body));
+}
+
+CCPoint Trajectory::move_fake(PlayerObject* body) {
 	CCPoint from = body->getPosition();
 	body->m_totalTime += job.step_seconds;
 	for (auto* log : { body->m_collisionLogTop, body->m_collisionLogBottom, body->m_collisionLogLeft, body->m_collisionLogRight })
 		if (log) log->removeAllObjects();
+	body->m_unk50C = body->m_lastCollisionBottom;
+	body->m_unk510 = body->m_lastCollisionTop;
+	body->m_lastCollisionBottom = -1;
+	body->m_lastCollisionTop = -1;
+	body->m_lastCollisionLeft = -1;
+	body->m_lastCollisionRight = -1;
 	body->m_playEffects = false;
 	// a fire sprite w a type that has no frames must never reach update()
 	if (int streak_type = (int)(body->m_shipStreakType); body->m_shipStreak && (streak_type < 2 || streak_type > 6))
 		body->m_shipStreakType = (ShipStreak)2;
 	body->update(job.step_delta);
+	return from;
+}
+
+bool Trajectory::land_fake(Line& line, PlayerObject* body, bool is_partner, int step, CCPoint from) {
+	auto* play = job.play;
+	auto& world = PredictedWorld::get();
+	bool in_world = drives_world(line);
+	if (in_world)
+		world.enter(play, line.fake, line.with_partner && !line.partner_done ? line.partner : nullptr);
 	PlayerObject*& player_slot = is_second_fake(body) ? play->m_player2 : play->m_player1;
 	PlayerObject* saved_slot = player_slot;
 	if (player_slot) player_slot = body;
@@ -1302,11 +1497,12 @@ bool Trajectory::step_fake(Line& line, PlayerObject* body, bool is_partner, int 
 	play->checkCollisions(body, job.step_delta, false);
 	colliding_fake = nullptr;
 	if (player_slot) player_slot = saved_slot;
+	if (in_world) world.leave(play);
 	if (play->m_playerDied) {
 		play->m_playerDied = false;
 		mark_dead(body);
 	}
-	body->m_unk838 += job.step_delta;
+	body->m_unk838 += job.step_seconds;
 	if (body->m_unk838 >= 0.01f) {
 		body->m_unk838 -= 0.01f;
 		++body->m_followRelated;
@@ -1318,7 +1514,8 @@ bool Trajectory::step_fake(Line& line, PlayerObject* body, bool is_partner, int 
 	}
 	int index = fake_index(body);
 	bool dead = fake_dead[index] || body->m_isDead;
-	if (!dead) {
+	bool drives_world_after_death = job.use_world && &line == &kept && !is_partner;
+	if (!dead || drives_world_after_death) {
 		bool drives_world = job.use_world && job.phase == Phase::Extend && &line == &kept && !is_partner;
 		if (drives_world) PredictedWorld::get().fire_spawn_triggers(play, body, line.with_partner && !line.partner_done ? line.partner : nullptr);
 		else walk_spawn_triggers(line, body, is_partner);
@@ -1327,6 +1524,10 @@ bool Trajectory::step_fake(Line& line, PlayerObject* body, bool is_partner, int 
 	body->updateRotation(job.step_delta);
 	body->m_shipRotation = body->getPosition();
 	dead = dead || fake_dead[index] || body->m_isDead;
+	if (dead && drives_world_after_death && line.has_death) {
+		++line.steps_after_death;
+		return false;
+	}
 	auto& path = is_partner ? line.partner_path : line.path;
 	auto& samples = is_partner ? line.partner_samples : line.samples;
 	if (dead && Logic::get().trace_logging && (line.draw || &line == &kept)) {
@@ -1363,6 +1564,10 @@ bool Trajectory::step_fake(Line& line, PlayerObject* body, bool is_partner, int 
 			line.death_outer = outer;
 			line.death_inner = inner;
 			line.death_step = step + 1;
+		}
+		if (drives_world_after_death) {
+			++line.steps_after_death;
+			return false;
 		}
 		return true;
 	}
@@ -1405,11 +1610,12 @@ void Trajectory::walk_spawn_triggers(Line& line, PlayerObject* body, bool is_par
 	}
 }
 
-void Trajectory::apply_dual_portal_changes(Line& line) {
+void Trajectory::apply_dual_portal_changes(Line& line, int step) {
 	if (std::exchange(line.dual_started, false)) {
 		line.with_partner = true;
 		line.running_pair = true;
 		line.partner_done = false;
+		line.partner_start_step = step + 1;
 		line.partner->m_controlsDisabled = false;
 		line.partner->m_isLocked = false;
 		fake_dead[fake_index(line.partner)] = false;
@@ -1486,48 +1692,63 @@ void Trajectory::store_results() {
 }
 
 void Trajectory::draw_lines() {
-	auto* play = job.play;
-	const auto& logic = Logic::get();
-	float width = line_width(play);
-	auto to_color = [](const float* c) {
-		return ccColor4F{ c[0], c[1], c[2], c[3] };
-	};
-	draw_node->clear();
-	bool teleport_drawn = false;
 	int last_step = job.now + job.steps;
+	drawn_paths.clear();
+	drawn_step = job.now;
 	auto draw_line = [&](const Line& line) {
 		if (!line.draw) return;
-		auto draw_body = [&](const std::vector<CCPoint>& path, bool icon2, int death_step, bool has_death, const CCRect& outer, const CCRect& inner) {
-			auto color = path_color(icon2, line.click);
-			std::size_t begin = 0;
-			for (std::size_t i = 1; i <= path.size(); ++i) {
-				bool jump = i < path.size() && path[i].getDistance(path[i - 1]) > TELEPORT_DISTANCE;
-				if (i < path.size() && !jump) continue;
-				std::vector<CCPoint> piece(path.begin() + (std::ptrdiff_t)begin, path.begin() + (std::ptrdiff_t)i);
-				draw_path(piece, [&](CCPoint a, CCPoint b) {
-					draw_node->drawSegment(a, b, width, color);
-				});
-				if (jump && !teleport_drawn) {
-					teleport_drawn = true;
-					ccColor4F faded = { color.r, color.g, color.b, color.a * 0.35f };
-					CCPoint from = path[i - 1], to = path[i];
-					float length = from.getDistance(to);
-					CCPoint direction = (to - from) / length;
-					for (float at = 0.f; at < length; at += TELEPORT_DASH * 2.f)
-						draw_node->drawSegment(from + direction * at, from + direction * std::min(at + TELEPORT_DASH, length), width, faded);
-				}
-				begin = i;
-			}
-			if (!has_death || death_step > last_step) return;
-			draw_node->drawRect(outer, { 0.f, 0.f, 0.f, 0.f }, width, to_color(logic.hitbox_outer_color), BorderAlignment::Inside);
-			draw_node->drawRect(inner, { 0.f, 0.f, 0.f, 0.f }, width, to_color(logic.hitbox_inner_color), BorderAlignment::Inside);
+		auto draw_body = [&](const std::vector<CCPoint>& path, int first_step, bool icon2, int death_step, bool has_death, const CCRect& outer, const CCRect& inner) {
+			drawn_paths.push_back({ path, path_color(icon2, line.click), first_step, has_death && death_step <= last_step, outer, inner });
 		};
-		draw_body(line.path, !line.player1, line.death_step, line.has_death, line.death_outer, line.death_inner);
-		if (line.with_partner) draw_body(line.partner_path, line.player1, line.partner_death_step, line.partner_has_death, line.partner_death_outer, line.partner_death_inner);
+		draw_body(line.path, line.start_step, !line.player1, line.death_step, line.has_death, line.death_outer, line.death_inner);
+		if (line.with_partner)
+			draw_body(line.partner_path, line.partner_start_step, line.player1, line.partner_death_step, line.partner_has_death, line.partner_death_outer, line.partner_death_inner);
 	};
 	if (job.use_kept) draw_line(kept);
 	for (const auto& line : job.lines)
 		draw_line(line);
+	paint_paths(0);
+}
+
+void Trajectory::paint_paths(int skip) {
+	const float teleport_fade = 0.35f;
+	const float teleport_dash_cycle = 2.f;
+	auto* play = PlayLayer::get();
+	if (!play) return;
+	const auto& logic = Logic::get();
+	float width = line_width(play);
+	auto to_color = [](const float* rgba) {
+		return ccColor4F{ rgba[0], rgba[1], rgba[2], rgba[3] };
+	};
+	draw_node->clear();
+	bool teleport_drawn = false;
+	for (const auto& drawn : drawn_paths) {
+		const auto& path = drawn.points;
+		auto color = drawn.color;
+		int started_late = std::max(drawn.first_step - drawn_step, 0);
+		std::size_t begin = std::min((std::size_t)std::max(skip - started_late, 0), path.size());
+		for (std::size_t i = begin + 1; i <= path.size(); ++i) {
+			bool jump = i < path.size() && path[i].getDistance(path[i - 1]) > TELEPORT_DISTANCE;
+			if (i < path.size() && !jump) continue;
+			std::vector<CCPoint> piece(path.begin() + (std::ptrdiff_t)begin, path.begin() + (std::ptrdiff_t)i);
+			draw_path(piece, [&](CCPoint a, CCPoint b) {
+				draw_node->drawSegment(a, b, width, color);
+			});
+			if (jump && !teleport_drawn) {
+				teleport_drawn = true;
+				ccColor4F faded = { color.r, color.g, color.b, color.a * teleport_fade };
+				CCPoint from = path[i - 1], to = path[i];
+				float length = from.getDistance(to);
+				CCPoint direction = (to - from) / length;
+				for (float at = 0.f; at < length; at += TELEPORT_DASH * teleport_dash_cycle)
+					draw_node->drawSegment(from + direction * at, from + direction * std::min(at + TELEPORT_DASH, length), width, faded);
+			}
+			begin = i;
+		}
+		if (!drawn.show_death) continue;
+		draw_node->drawRect(drawn.death_outer, { 0.f, 0.f, 0.f, 0.f }, width, to_color(logic.hitbox_outer_color), BorderAlignment::Inside);
+		draw_node->drawRect(drawn.death_inner, { 0.f, 0.f, 0.f, 0.f }, width, to_color(logic.hitbox_inner_color), BorderAlignment::Inside);
+	}
 }
 
 void Trajectory::finish_job() {
@@ -1553,11 +1774,12 @@ void Trajectory::finish_job() {
 			watch.death_step = actual->death_step;
 			watch.death_text = actual->death_text;
 			watch.partner_samples.clear();
-			watch.partner_start_step = actual->start_step;
+			watch.partner_start_step = actual->partner_start_step;
 			watch.partner_death_step = actual->partner_death_step;
 			watch.partner_death_text = actual->partner_death_text;
-			if (actual->with_partner) watch.partner_samples = actual->partner_samples;
-			else {
+			if (actual->with_partner) {
+				watch.partner_samples = actual->partner_samples;
+			} else {
 				for (const auto& line : job.lines) {
 					if (line.player1 || !(line.measure & MEASURE_LIVE)) continue;
 					watch.partner_samples = line.samples;
@@ -1661,9 +1883,9 @@ void Trajectory::refresh(PlayLayer* play) {
 	park_fakes(true);
 	draw_node->setVisible(true);
 	CacheKey key = make_cache_key(play);
-	if (drawing_valid && key == last_cache_key) {
-		auto& world = PredictedWorld::get();
-		bool behind = logic.traj_moving_objects && kept_valid && kept_play == play && world.horizon() < logic.step_frame + prediction_steps(logic.traj_seconds, (float)logic.sample_rate(), play->m_gameState.m_timeWarp);
+	auto& world = PredictedWorld::get();
+	bool behind = logic.traj_moving_objects && kept_valid && kept_play == play && !world.full() && world.horizon() < logic.step_frame + prediction_steps(logic.traj_seconds, (float)logic.sample_rate(), play->m_gameState.m_timeWarp);
+	if (drawing_valid && key == last_cache_key && !(behind && logic.advance_paused(play))) {
 		if (behind && begin_job(play, {}, 0, false, false)) {
 			run_steps(std::numeric_limits<double>::infinity());
 			finish_job();
@@ -1698,6 +1920,7 @@ void Trajectory::refresh(PlayLayer* play) {
 	if (!begin_job(play, std::move(lines), 0, true, want_slicing(play))) return;
 	job.key = key;
 	if (job.sliced) {
+		if (drawn_step >= 0 && job.now > drawn_step) paint_paths(job.now - drawn_step);
 		run_slice();
 		return;
 	}

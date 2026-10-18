@@ -53,7 +53,7 @@ bool Logic::advance_paused(GJBaseGameLayer* play) {
 }
 
 bool Logic::real_time_now() {
-    return real_time_mode && (!render_capturing() || render_real_time);
+    return real_time_mode && (!render_capturing() || renders_in_real_time());
 }
 
 bool Logic::lock_delta_active() {
@@ -212,12 +212,16 @@ std::string step_pace() {
 int Logic::affordable_steps() const {
     const auto& cost = g_step_cost;
     if (!(cost.per_step > 0.0)) return std::numeric_limits<int>::max();
+    const double fixed_work_multiplier = 3.0;
+    const double max_extra_floor = 0.25;
     double interval = CCDirector::sharedDirector()->getAnimationInterval();
     double budget = std::clamp(interval * 1.5, 0.004, 0.05);
     double fixed = cost.per_update + cost.other_work;
     double floor = std::max(cost.per_update, std::min(fixed * 4.0, 0.05 - fixed));
-    floor = std::max(floor, std::min(fixed, 0.25));
+    floor = std::max(floor, std::min(fixed * fixed_work_multiplier, max_extra_floor));
     double room = std::max(budget - cost.per_update, floor);
+    int lowest_fps = Logic::get().lowest_playback_fps;
+    if (lowest_fps > 0) room = std::max(room, 1.0 / lowest_fps - fixed);
     double steps = std::floor(room / cost.per_step);
     if (steps >= (double)(std::numeric_limits<int>::max())) return std::numeric_limits<int>::max();
     return std::max((int)steps, 8);
@@ -237,11 +241,11 @@ int Logic::count_unlocked_steps(GJBaseGameLayer* play, double dt) {
     bool real_time = real_time_now();
     bool uncapped = real_time && true_real_time;
     bool render_cap = false;
-    if (render_capturing() && render_real_time) {
+    if (render_capturing() && renders_in_real_time()) {
         auto* live = Logic::as_play(play);
         render_cap = live && (live->m_hasCompletedLevel || live->m_levelEndAnimationStarted);
     }
-    if ((!render_capturing() || render_cap) && !lock_delta && !uncapped) {
+    if (!lock_delta && (render_cap || (!render_capturing() && !uncapped))) {
         int affordable = g_single_path ? single_affordable() : affordable_steps();
         int cap = std::max(std::min(unlocked_step_cap(), affordable) - frame_steps, 0);
         capped = steps > cap;

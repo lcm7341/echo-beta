@@ -10,6 +10,7 @@
 #include "Physics/player.hpp"
 #include "Hack/orbs.hpp"
 #include "Hack/trajectory.hpp"
+#include "Hack/predicted_world.hpp"
 #include "Logic/logic.hpp"
 
 namespace phys {
@@ -236,7 +237,7 @@ void activateForTrajectory(EffectGameObject* obj, PlayerObject* player) {
 
 void bumpPlayerFromGJBGL(GJBaseGameLayer* pl, PlayerObject* player,
                          EffectGameObject* object) {
-    if (pl->canBeActivatedByPlayer(player, object)) {
+    if (phys::canBeActivatedByPlayer(pl, player, object)) {
         cocos2d::CCPoint objPos = object->getPosition();
 
         player->m_lastPortalPos = objPos;
@@ -273,6 +274,7 @@ void bumpPlayerFromGJBGL(GJBaseGameLayer* pl, PlayerObject* player,
             }
         }
         player->m_lastActivatedPortal = object;
+        if (object->m_isReverse) player->reversePlayer(object);
         if (auto* play = PlayLayer::get()) Orbs::notePredictionPad(play, player, object);
         phys::bumpPlayer(player, force, (int)object->m_objectType,
                          false, object);
@@ -284,12 +286,15 @@ void collisionCheckObjects(GJBaseGameLayer* pl, PlayerObject* player,
                            float dt) {
     if (!objects || objectCount <= 0) return;
 
-    CCRect playerRect = player->getObjectRect();
-
-    [[maybe_unused]] float playerMinX = playerRect.getMinX();
-    [[maybe_unused]] float playerMaxX = playerRect.getMaxX();
-    [[maybe_unused]] float playerMinY = playerRect.getMinY();
-    [[maybe_unused]] float playerMaxY = playerRect.getMaxY();
+    float playerMinX, playerMaxX, playerMinY, playerMaxY;
+    auto refreshPlayerBounds = [&] {
+        CCRect playerRect = player->getObjectRect();
+        playerMinX = playerRect.getMinX();
+        playerMaxX = playerRect.getMaxX();
+        playerMinY = playerRect.getMinY();
+        playerMaxY = playerRect.getMaxY();
+    };
+    refreshPlayerBounds();
 
     for (int i = 0; i < objectCount; i++) {
         if ((size_t)i >= objects->size()) break;
@@ -301,7 +306,6 @@ void collisionCheckObjects(GJBaseGameLayer* pl, PlayerObject* player,
             object->m_objectType == GameObjectType::CollisionObject ||
             object->m_objectType == GameObjectType::SecretCoin ||
             object->m_objectType == GameObjectType::UserCoin ||
-            object->m_objectType == GameObjectType::Collectible ||
             object->m_objectType == GameObjectType::EnterEffectObject ||
             object->m_isGroupDisabled || object->m_isDisabled)
             continue;
@@ -358,7 +362,8 @@ void collisionCheckObjects(GJBaseGameLayer* pl, PlayerObject* player,
         }
 
         if (object->m_objectRadius <= 0.0) {
-            if (!playerRect.intersectsRect(rect)) continue;
+            if (rect.getMinX() > playerMaxX || playerMinX > rect.getMaxX()) continue;
+            if (rect.getMinY() > playerMaxY || playerMinY > rect.getMaxY()) continue;
         } else if (!pl->playerCircleCollision(player, object)) {
             continue;
         }
@@ -371,7 +376,7 @@ void collisionCheckObjects(GJBaseGameLayer* pl, PlayerObject* player,
             OBB2D* box = object->getOrientedBox();
             player->updateOrientedBox();
             OBB2D* playerBox = ((GameObject*)(player))->getOrientedBox();
-            overlaps = box->overlaps1Way(playerBox);
+            overlaps = box->overlaps1Way(playerBox) && playerBox->overlaps1Way(box);
         }
 
         if (object->m_objectType == GameObjectType::Slope) {
@@ -381,7 +386,7 @@ void collisionCheckObjects(GJBaseGameLayer* pl, PlayerObject* player,
         if (!overlaps) continue;
 
         if (object->m_objectID == 286 || object->m_objectID == 287) {
-            if (Trajectory::get().isFake(player) && pl->canBeActivatedByPlayer(player, obj)) {
+            if (Trajectory::get().isFake(player) && phys::canBeActivatedByPlayer(pl, player, obj)) {
                 activateForTrajectory(obj, player);
                 Trajectory::get().dualPortal(pl, player, obj, object->m_objectID == 286);
             }
@@ -394,20 +399,12 @@ void collisionCheckObjects(GJBaseGameLayer* pl, PlayerObject* player,
                 player->m_lastActivatedPortal = object;
                 activateForTrajectory(obj, player);
                 phys::flipGravity(player, true, true);
-                playerMinX = player->getObjectRect().getMinX();
-                playerMaxX = player->getObjectRect().getMaxX();
-                playerMinY = player->getObjectRect().getMinY();
-                playerMaxY = player->getObjectRect().getMaxY();
                 break;
             case GameObjectType::NormalGravityPortal:
                 player->m_lastPortalPos = object->getPosition();
                 player->m_lastActivatedPortal = object;
                 activateForTrajectory(obj, player);
                 phys::flipGravity(player, false, true);
-                playerMinX = player->getObjectRect().getMinX();
-                playerMaxX = player->getObjectRect().getMaxX();
-                playerMinY = player->getObjectRect().getMinY();
-                playerMaxY = player->getObjectRect().getMaxY();
                 break;
             case GameObjectType::GravityTogglePortal:
                 player->m_lastPortalPos = object->getPosition();
@@ -416,11 +413,12 @@ void collisionCheckObjects(GJBaseGameLayer* pl, PlayerObject* player,
                 phys::flipGravity(player, !player->m_isUpsideDown, true);
                 break;
             case GameObjectType::TeleportPortal:
-                if (pl->canBeActivatedByPlayer(player,
+                if (phys::canBeActivatedByPlayer(pl, player,
                                                (EffectGameObject*)object)) {
                     phys::teleportPlayer(pl, (TeleportPortalObject*)object,
                                          player);
                     activateForTrajectory(obj, player);
+                    refreshPlayerBounds();
                 }
                 break;
             case GameObjectType::Slope:
@@ -433,12 +431,7 @@ void collisionCheckObjects(GJBaseGameLayer* pl, PlayerObject* player,
                     player->handleRotatedCollisionInternal(
                         dt, object, emptyRect, false, false, true);
                 }
-
-                playerMinX = player->getObjectRect().getMinX();
-                playerMaxX = player->getObjectRect().getMaxX();
-                playerMinY = player->getObjectRect().getMinY();
-                playerMaxY = player->getObjectRect().getMaxY();
-
+                refreshPlayerBounds();
                 break;
             case GameObjectType::CustomRing:
             case GameObjectType::DashRing:
@@ -464,6 +457,7 @@ void collisionCheckObjects(GJBaseGameLayer* pl, PlayerObject* player,
                     if (!used && player->m_ringRelatedSet.count(object->m_uniqueID) != 0)
                         activateForTrajectory(obj, player);
                 }
+                if (object->m_objectType == GameObjectType::TeleportOrb) refreshPlayerBounds();
                 break;
             case GameObjectType::YellowJumpPad:
             case GameObjectType::PinkJumpPad:
@@ -479,7 +473,7 @@ void collisionCheckObjects(GJBaseGameLayer* pl, PlayerObject* player,
                     isFacingDown = object->isFacingDown();
                 }
 
-                bool canBeActivated = pl->canBeActivatedByPlayer(player, obj);
+                bool canBeActivated = phys::canBeActivatedByPlayer(pl, player, obj);
                 if (player->m_isUpsideDown == isFacingDown && canBeActivated) {
                     if (obj->m_isReverse) {
                         player->reversePlayer(obj);
@@ -497,7 +491,7 @@ void collisionCheckObjects(GJBaseGameLayer* pl, PlayerObject* player,
                 break;
             }
             case GameObjectType::MiniSizePortal:
-                if (pl->canBeActivatedByPlayer(player, obj)) {
+                if (phys::canBeActivatedByPlayer(pl, player, obj)) {
                     player->m_lastPortalPos = obj->getPosition();
                     player->m_lastActivatedPortal = obj;
                     activateForTrajectory(obj, player);
@@ -506,7 +500,7 @@ void collisionCheckObjects(GJBaseGameLayer* pl, PlayerObject* player,
                 }
                 break;
             case GameObjectType::RegularSizePortal:
-                if (pl->canBeActivatedByPlayer(player, obj)) {
+                if (phys::canBeActivatedByPlayer(pl, player, obj)) {
                     player->m_lastPortalPos = obj->getPosition();
                     player->m_lastActivatedPortal = obj;
                     activateForTrajectory(obj, player);
@@ -562,6 +556,9 @@ void collisionCheckObjects(GJBaseGameLayer* pl, PlayerObject* player,
                 if (obj->m_isTouchTriggered) {
                     phys::triggerObject(obj, pl, player);
                 }
+                break;
+            case GameObjectType::Collectible:
+                PredictedWorld::get().collect(Logic::as_play(pl), obj, player);
                 break;
             default:
                 break;
@@ -639,7 +636,8 @@ void triggerObject(EffectGameObject* object, GJBaseGameLayer* pl,
             break;
         }
         case 3022: {
-            phys::teleportPlayer(pl, (TeleportPortalObject*)object, player);
+            if (!Trajectory::get().is_second_fake(player))
+                phys::teleportPlayer(pl, (TeleportPortalObject*)object, player);
             break;
         }
         case 901:

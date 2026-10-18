@@ -117,6 +117,10 @@ void Logic::attach_overlay(CCNode* node, GJBaseGameLayer* play) {
     sync_to_object_layer(node, play->m_objectLayer);
 }
 
+void Logic::sync_overlay(CCNode* node, GJBaseGameLayer* play) {
+    if (play) sync_to_object_layer(node, play->m_objectLayer);
+}
+
 void Logic::reattach_overlays(GJBaseGameLayer* play) {
     if (!play || !play->m_objectLayer) return;
     if (auto* node = find_hitbox_node(play)) attach_overlay(node, play);

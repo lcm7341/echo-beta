@@ -527,7 +527,7 @@ void Logic::poll_advance_hold() {
         return;
     }
     if (advance_queued) return;
-    int steps = owed_hold_steps(advance_steps_owed, unlocked_step_cap());
+    int steps = owed_hold_steps(advance_steps_owed, real_time_now() ? unlocked_step_cap() : 1);
     if (steps == 0) return;
     last_advance_step = now;
     advance_steps = steps;

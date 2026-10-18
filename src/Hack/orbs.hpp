@@ -41,6 +41,7 @@ namespace Orbs {
 	void begin_step();
 	void arm_tool(bool on);
 	bool blockHoldRing(PlayerObject* player, GameObject* object);
+	bool assist_clicks_orb(PlayerObject* player, GameObject* orb);
 	void click_pads(PlayLayer* play, PlayerObject* player, int object_type, GameObject* pad);
 	void flush_pads(PlayLayer* play);
 	void note_dash(PlayLayer* play, PlayerObject* player, GameObject* ring);

@@ -492,6 +492,11 @@ bool Orbs::blockHoldRing(PlayerObject* player, GameObject* object) {
     return (player2 ? claimed_orbs_p2 : claimed_orbs_p1).contains(object->m_uniqueID);
 }
 
+bool Orbs::assist_clicks_orb(PlayerObject* player, GameObject* orb) {
+    if (!player || !orb || !Orbs::click_orb_assist(is_player2_icon(player))) return false;
+    return orb_fits_gamemode(player, orb_type_of(orb));
+}
+
 void Orbs::begin_push(PlayerObject* player) {
     if (!player) return;
     bool player2 = is_player2_icon(player);

@@ -11,18 +11,37 @@
 #include <Geode/binding/PlayLayer.hpp>
 #include <Geode/binding/PlayerObject.hpp>
 #include <Geode/modify/GJBaseGameLayer.hpp>
+#include <Geode/loader/Priority.hpp>
+#ifdef GEODE_IS_WINDOWS
+#include <Windows.h>
+#elif defined(GEODE_IS_ANDROID)
+#include <fstream>
+#elif defined(GEODE_IS_MACOS)
+#include <mach/mach.h>
+#include <sys/sysctl.h>
+#endif
 #include <algorithm>
 #include <chrono>
 #include <array>
+#include <bit>
 #include <cmath>
 #include <cstddef>
 #include <cstring>
+#include <map>
+#include <set>
+#include <utility>
 
 using namespace geode::prelude;
 
 #define POSITION_TOLERANCE 0.3
 #define TIMELINE_SECONDS 30.0
-#define RECORD_BYTES_LIMIT (96u << 20)
+#define VARINT_BASE (128)
+#define ENTRY_FLAG_VALUES (2)
+#define STEPS_PER_SECOND (60.f)
+#define MAX_RECORD_BYTES 512
+#define TRIGGERED_IDS_OFFSET 0x558
+#define GAME_EVENT_LINKS_OFFSET 0x588
+#define GAME_EVENT_ROUNDS_OFFSET 0x598
 
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Winvalid-offsetof"
@@ -44,29 +63,97 @@ static const std::array SAVED_FIELD_SPANS = {
 	OBJECT_FIELD_SPAN(m_scaleX, m_scaleY),
 	OBJECT_FIELD_SPAN(m_lastPosition, m_unk4CC),
 	FieldSpan{ (unsigned short)offsetof(GameObject, m_useTextureRectForSelection), 4 },
+	FieldSpan{ (unsigned short)offsetof(GameObject, m_isDisabled2), 1 },
+	FieldSpan{ (unsigned short)offsetof(GameObject, m_isDisabled), 1 },
+	FieldSpan{ (unsigned short)offsetof(GameObject, m_isGroupDisabled), 2 },
+	FieldSpan{ (unsigned short)offsetof(GameObject, m_enabledGroupsCounter), 4 },
 };
 #undef OBJECT_FIELD_SPAN
 
-#define COMPACT_FIRST_SPAN 2
+#define COMPACT_FIRST_SPAN 0
+#define POSITION_SPAN 2
+#define NODE_FLOATS 4
 
-static const std::size_t COMPACT_POSITION_OFFSET = offsetof(GameObject, m_positionX) - SAVED_FIELD_SPANS[COMPACT_FIRST_SPAN].begin;
+static const std::size_t COMPACT_POSITION_OFFSET = [] {
+	std::size_t before = 0;
+	for (std::size_t i = COMPACT_FIRST_SPAN; i < POSITION_SPAN; ++i)
+		before += SAVED_FIELD_SPANS[i].size;
+	return before + offsetof(GameObject, m_positionX) - SAVED_FIELD_SPANS[POSITION_SPAN].begin;
+}();
 #pragma clang diagnostic pop
 
 static const std::size_t RECORD_SIZE = [] {
-	std::size_t total = 0;
+	std::size_t total = NODE_FLOATS * sizeof(float);
 	for (const auto& span : SAVED_FIELD_SPANS)
 		total += span.size;
 	return total;
 }();
 
 static const std::size_t COMPACT_SIZE = [] {
-	std::size_t total = 0;
+	std::size_t total = NODE_FLOATS * sizeof(float);
 	for (std::size_t i = COMPACT_FIRST_SPAN; i < SAVED_FIELD_SPANS.size(); ++i)
 		total += SAVED_FIELD_SPANS[i].size;
 	return total;
 }();
 
-static const std::size_t ENTRY_SIZE = sizeof(unsigned) + 2 * sizeof(float) + COMPACT_SIZE;
+static void save_node_fields(const GameObject* object, unsigned char* out) {
+	auto* node = const_cast<GameObject*>(object);
+	float values[NODE_FLOATS] = { node->getRotationX(), node->getRotationY(), node->getScaleX(), node->getScaleY() };
+	std::memcpy(out, values, sizeof(values));
+}
+
+static void load_node_fields(GameObject* object, const unsigned char* in) {
+	float values[NODE_FLOATS];
+	std::memcpy(values, in, sizeof(values));
+	if (object->getRotationX() != values[0]) object->setRotationX(values[0]);
+	if (object->getRotationY() != values[1]) object->setRotationY(values[1]);
+	if (object->getScaleX() != values[2]) object->setScaleX(values[2]);
+	if (object->getScaleY() != values[3]) object->setScaleY(values[3]);
+}
+
+static const std::size_t COMPACT_WORDS = (COMPACT_SIZE + sizeof(unsigned) - 1) / sizeof(unsigned);
+static const std::size_t COMPACT_STRIDE = COMPACT_WORDS * sizeof(unsigned);
+
+static unsigned long long changed_words(const unsigned char* now, const unsigned char* before) {
+	unsigned long long mask = 0;
+	for (std::size_t word = 0; word < COMPACT_WORDS; ++word)
+		if (std::memcmp(now + word * sizeof(unsigned), before + word * sizeof(unsigned), sizeof(unsigned)) != 0)
+			mask |= 1ull << word;
+	return mask;
+}
+
+static void write_entry_start(std::vector<unsigned char>& out, unsigned slot_step, bool new_mask) {
+	unsigned long long value = (unsigned long long)slot_step * ENTRY_FLAG_VALUES + (new_mask ? 1 : 0);
+	while (value >= VARINT_BASE) {
+		out.push_back((unsigned char)(value % VARINT_BASE + VARINT_BASE));
+		value /= VARINT_BASE;
+	}
+	out.push_back((unsigned char)value);
+}
+
+static const unsigned char* read_entry_start(const unsigned char* in, unsigned& slot, bool& new_mask) {
+	unsigned long long value = 0, scale = 1;
+	while (*in >= VARINT_BASE) {
+		value += (unsigned long long)(*in++ - VARINT_BASE) * scale;
+		scale *= VARINT_BASE;
+	}
+	value += (unsigned long long)*in++ * scale;
+	slot += (unsigned)(value / ENTRY_FLAG_VALUES);
+	new_mask = value % ENTRY_FLAG_VALUES == 1;
+	return in;
+}
+
+static const unsigned char* read_entry_fields(const unsigned char* in, bool new_mask, unsigned long long& mask, unsigned char* compact) {
+	if (new_mask) {
+		std::memcpy(&mask, in, sizeof(mask));
+		in += sizeof(mask);
+	}
+	for (unsigned long long words = mask; words; words &= words - 1) {
+		std::memcpy(compact + (std::size_t)std::countr_zero(words) * sizeof(unsigned), in, sizeof(unsigned));
+		in += sizeof(unsigned);
+	}
+	return in;
+}
 
 static void save_object_fields(const GameObject* object, unsigned char* out) {
 	const auto* raw = reinterpret_cast<const unsigned char*>(object);
@@ -74,16 +161,48 @@ static void save_object_fields(const GameObject* object, unsigned char* out) {
 		std::memcpy(out, raw + span.begin, span.size);
 		out += span.size;
 	}
+	save_node_fields(object, out);
 }
 
-static void load_object_fields(GameObject* object, const unsigned char* in) {
+static bool node_fields_differ(GameObject* object, const unsigned char* in) {
+	float values[NODE_FLOATS];
+	std::memcpy(values, in, sizeof(values));
+	return object->getRotationX() != values[0] || object->getRotationY() != values[1] || object->getScaleX() != values[2] || object->getScaleY() != values[3];
+}
+
+static const unsigned char* load_span_fields(GameObject* object, const unsigned char* in) {
 	auto* raw = reinterpret_cast<unsigned char*>(object);
 	for (const auto& span : SAVED_FIELD_SPANS) {
 		std::memcpy(raw + span.begin, in, span.size);
 		in += span.size;
 	}
+	return in;
+}
+
+static void load_object_fields(GameObject* object, const unsigned char* in) {
+	load_node_fields(object, load_span_fields(object, in));
 	object->m_isObjectRectDirty = true;
 	object->m_isOrientedBoxDirty = true;
+}
+
+#ifdef ECHO_THREADED_MOVE
+#define WORLD_PARTS MovingObjects::MoveThreads::PARTS
+#else
+#define WORLD_PARTS 1
+#endif
+
+template <class Work>
+static void run_in_parts(std::size_t count, Work&& work) {
+#ifdef ECHO_THREADED_MOVE
+	if (count >= MovingObjects::threaded_minimum) {
+		auto job = [&](unsigned part) {
+			work(count * part / WORLD_PARTS, count * (part + 1) / WORLD_PARTS, part);
+		};
+		MovingObjects::MoveThreads::get().run(job);
+		return;
+	}
+#endif
+	work(0, count, 0);
 }
 
 static void save_compact_fields(const GameObject* object, unsigned char* out) {
@@ -92,6 +211,7 @@ static void save_compact_fields(const GameObject* object, unsigned char* out) {
 		std::memcpy(out, raw + SAVED_FIELD_SPANS[i].begin, SAVED_FIELD_SPANS[i].size);
 		out += SAVED_FIELD_SPANS[i].size;
 	}
+	save_node_fields(object, out);
 }
 
 static void load_compact_fields(GameObject* object, const unsigned char* in) {
@@ -100,6 +220,7 @@ static void load_compact_fields(GameObject* object, const unsigned char* in) {
 		std::memcpy(raw + SAVED_FIELD_SPANS[i].begin, in, SAVED_FIELD_SPANS[i].size);
 		in += SAVED_FIELD_SPANS[i].size;
 	}
+	load_node_fields(object, in);
 	object->m_isObjectRectDirty = true;
 	object->m_isOrientedBoxDirty = true;
 }
@@ -237,16 +358,15 @@ unsigned PredictedWorld::touch(GameObject* object) {
 		slot_round[uid] = round;
 		auto& entry = tracked.emplace_back();
 		entry.object = object;
-		entry.horizon_counter = object->m_enabledGroupsCounter;
-		entry.horizon_group_disabled = object->m_isGroupDisabled;
-		entry.horizon_group_disabled_temp = object->m_isGroupDisabledTemp;
 		live_fields.resize(live_fields.size() + RECORD_SIZE);
 		horizon_fields.resize(horizon_fields.size() + RECORD_SIZE);
-		latest_fields.resize(latest_fields.size() + COMPACT_SIZE);
-		expected_fields.resize(expected_fields.size() + COMPACT_SIZE);
+		latest_fields.resize(latest_fields.size() + COMPACT_STRIDE);
+		expected_fields.resize(expected_fields.size() + COMPACT_STRIDE);
+		latest_masks.push_back(0);
+		expected_masks.push_back(0);
 		save_object_fields(object, horizon_fields.data() + (std::size_t)at * RECORD_SIZE);
-		save_compact_fields(object, latest_fields.data() + (std::size_t)at * COMPACT_SIZE);
-		save_compact_fields(object, expected_fields.data() + (std::size_t)at * COMPACT_SIZE);
+		save_compact_fields(object, latest_fields.data() + (std::size_t)at * COMPACT_STRIDE);
+		save_compact_fields(object, expected_fields.data() + (std::size_t)at * COMPACT_STRIDE);
 	}
 	touch_session(at);
 	mark_changed(at);
@@ -254,10 +374,14 @@ unsigned PredictedWorld::touch(GameObject* object) {
 }
 
 void PredictedWorld::touch_session(unsigned at) {
+	if (join_session(at)) session_list.push_back(at);
+}
+
+bool PredictedWorld::join_session(unsigned at) {
 	auto& entry = tracked[at];
-	if (entry.session == session_round) return;
+	entry.dormant = false;
+	if (entry.session == session_round) return false;
 	entry.session = session_round;
-	session_list.push_back(at);
 	auto* object = entry.object;
 	save_object_fields(object, live_fields.data() + (std::size_t)at * RECORD_SIZE);
 	auto& look = entry.look;
@@ -269,11 +393,9 @@ void PredictedWorld::touch_session(unsigned at) {
 	look.node_position = object->CCNode::getPosition();
 	if (object->m_colorSprite) look.detail_position = object->m_colorSprite->getPosition();
 	entry.indexes_saved = false;
-	entry.live_counter = object->m_enabledGroupsCounter;
-	entry.live_group_disabled = object->m_isGroupDisabled;
-	entry.live_group_disabled_temp = object->m_isGroupDisabledTemp;
-	entry.applied_offset = UINT_MAX;
-	entry.pending_offset = UINT_MAX;
+	entry.applied = false;
+	entry.pending = false;
+	return true;
 }
 
 void PredictedWorld::save_group(GJBaseGameLayer* layer, int group) {
@@ -289,6 +411,7 @@ void PredictedWorld::save_group(GJBaseGameLayer* layer, int group) {
 }
 
 void PredictedWorld::mark_changed(unsigned at) {
+	tracked[at].changed_step = horizon_step + 1;
 	if (changed_round.size() < tracked.size()) changed_round.resize(tracked.size(), 0);
 	if (changed_round[at] == change_round) return;
 	changed_round[at] = change_round;
@@ -303,7 +426,9 @@ void PredictedWorld::mark_group_changed(GJBaseGameLayer* layer, int group) {
 		auto* object = static_cast<GameObject*>(members->objectAtIndex(i));
 		if (!object) continue;
 		unsigned at = slot(object);
-		if (at != UINT_MAX) mark_changed(at);
+		if (at == UINT_MAX) continue;
+		touch_session(at);
+		mark_changed(at);
 	}
 }
 
@@ -311,6 +436,7 @@ void PredictedWorld::mark_live_dirty(unsigned at) {
 	if (live_dirty.size() < tracked.size()) live_dirty.resize(tracked.size(), 0);
 	if (live_dirty[at]) return;
 	live_dirty[at] = 1;
+	tracked[at].dormant = false;
 	live_dirty_slots.push_back(at);
 }
 
@@ -327,9 +453,12 @@ void PredictedWorld::mark_group_live_dirty(GJBaseGameLayer* layer, int group) {
 
 void PredictedWorld::save_command_groups(GJBaseGameLayer* layer) {
 	for (const auto& command : shadow->m_unkVector560) {
+		if (command.m_commandType == 0) continue;
 		mark_group_changed(layer, command.m_targetGroupID);
 		mark_group_changed(layer, command.m_centerGroupID);
 	}
+	for (auto* follow : shadow->m_unkVector6d8)
+		if (follow) mark_group_changed(layer, follow->getTag());
 	for (auto* follow : shadow->m_unkVector6f0)
 		if (follow) mark_group_changed(layer, follow->getTag());
 	const auto& state = layer->m_gameState;
@@ -361,7 +490,28 @@ PredictedWorld::SavedCell* PredictedWorld::save_cell(GJBaseGameLayer* layer, int
 }
 
 void PredictedWorld::restore_live(PlayLayer* play) {
-	for (unsigned at : session_list) {
+	needs_setters.assign(session_list.size(), 0);
+	run_in_parts(session_list.size(), [&](std::size_t from, std::size_t to, unsigned) {
+		for (std::size_t i = from; i < to; ++i) {
+			unsigned at = session_list[i];
+			auto& entry = tracked[at];
+			auto* object = entry.object;
+			const auto* node_fields = load_span_fields(object, live_fields.data() + (std::size_t)at * RECORD_SIZE);
+			const auto& look = entry.look;
+			auto* detail = object->m_colorSprite;
+			bool setters = node_fields_differ(object, node_fields) || object->getRotationX() != look.rotation_x || object->getRotationY() != look.rotation_y || object->getScaleX() != look.scale_x ||
+				object->getScaleY() != look.scale_y || object->getOpacity() != look.opacity || !object->CCNode::getPosition().equals(look.node_position) ||
+				(detail && !object->m_colorSpriteLocked && !detail->getPosition().equals(look.detail_position));
+			if (setters) needs_setters[i] = 1;
+			else {
+				object->m_isObjectRectDirty = true;
+				object->m_isOrientedBoxDirty = true;
+			}
+		}
+	});
+	for (std::size_t i = 0; i < session_list.size(); ++i) {
+		if (!needs_setters[i]) continue;
+		unsigned at = session_list[i];
 		auto& entry = tracked[at];
 		auto* object = entry.object;
 		load_object_fields(object, live_fields.data() + (std::size_t)at * RECORD_SIZE);
@@ -374,9 +524,6 @@ void PredictedWorld::restore_live(PlayLayer* play) {
 		if (!object->CCNode::getPosition().equals(look.node_position)) object->CCNode::setPosition(look.node_position);
 		if (auto* detail = object->m_colorSprite; detail && !object->m_colorSpriteLocked && !detail->getPosition().equals(look.detail_position))
 			detail->setPosition(look.detail_position);
-		object->m_enabledGroupsCounter = entry.live_counter;
-		object->m_isGroupDisabled = entry.live_group_disabled;
-		object->m_isGroupDisabledTemp = entry.live_group_disabled_temp;
 	}
 	for (auto& [key, cell] : cells) {
 		int x = cell.x, y = cell.y;
@@ -422,7 +569,65 @@ void PredictedWorld::drop_shadow() {
 
 void PredictedWorld::invalidate() {
 	valid = false;
-	if (!session_open) drop_shadow();
+	if (session_open) return;
+	drop_shadow();
+	drop_records();
+}
+
+void PredictedWorld::drop_records() {
+	record_blocks.clear();
+	record_bytes_held = 0;
+	step_records.clear();
+}
+
+static bool system_memory(unsigned long long& total, unsigned long long& available) {
+	const unsigned long long bytes_per_kilobyte = 1024;
+#ifdef GEODE_IS_WINDOWS
+	MEMORYSTATUSEX status{};
+	status.dwLength = sizeof(status);
+	if (!GlobalMemoryStatusEx(&status)) return false;
+	total = status.ullTotalPhys;
+	available = status.ullAvailPhys;
+	return true;
+#elif defined(GEODE_IS_ANDROID)
+	std::ifstream in("/proc/meminfo");
+	std::string name;
+	unsigned long long kilobytes = 0;
+	total = available = 0;
+	while (in >> name >> kilobytes) {
+		if (name == "MemTotal:") total = kilobytes * bytes_per_kilobyte;
+		else if (name == "MemAvailable:") available = kilobytes * bytes_per_kilobyte;
+		in.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
+	}
+	return total > 0 && available > 0;
+#elif defined(GEODE_IS_MACOS)
+	std::size_t size = sizeof(total);
+	if (sysctlbyname("hw.memsize", &total, &size, nullptr, 0) != 0) return false;
+	vm_statistics64_data_t pages{};
+	mach_msg_type_number_t count = HOST_VM_INFO64_COUNT;
+	if (host_statistics64(mach_host_self(), HOST_VM_INFO64, (host_info64_t)&pages, &count) != KERN_SUCCESS)
+		return false;
+	available = ((unsigned long long)pages.free_count + pages.inactive_count + pages.purgeable_count) * vm_page_size;
+	return true;
+#else
+	return false;
+#endif
+}
+
+void PredictedWorld::refresh_record_limit() {
+	const unsigned long long min_record_bytes = 96ull << 20;
+	const unsigned long long keep_free_bytes = 2ull << 30;
+	const int keep_free_share = 8;
+	const int most_record_share = 4;
+	const int free_record_share = 2;
+	record_bytes_limit = min_record_bytes;
+	unsigned long long total = 0, available = 0;
+	if (!system_memory(total, available)) return;
+	unsigned long long keep_free = std::max(total / keep_free_share, keep_free_bytes);
+	unsigned long long usable = available + record_bytes_held;
+	if (usable <= keep_free) return;
+	unsigned long long most = std::min(total / most_record_share, (unsigned long long)std::numeric_limits<std::size_t>::max() / most_record_share);
+	record_bytes_limit = (std::size_t)std::clamp((usable - keep_free) / free_record_share, min_record_bytes, std::max(most, min_record_bytes));
 }
 
 bool PredictedWorld::usable(PlayLayer* play, int now, float delta) const {
@@ -431,10 +636,10 @@ bool PredictedWorld::usable(PlayLayer* play, int now, float delta) const {
 }
 
 bool PredictedWorld::full() const {
-	return record_bytes.size() - record_front >= RECORD_BYTES_LIMIT;
+	return record_bytes_held >= record_bytes_limit;
 }
 
-bool PredictedWorld::matches_live(PlayLayer* play, int now) {
+bool PredictedWorld::matches_live(PlayLayer* play, int now, const CCRect& region) {
 	mismatch.clear();
 	if (!usable(play, now, step_delta)) {
 		mismatch = fmt::format("timeline unusable valid={} horizon={} start={}", valid, horizon_step, start_step);
@@ -447,7 +652,9 @@ bool PredictedWorld::matches_live(PlayLayer* play, int now) {
 	for (std::size_t at = 0; at < tracked.size(); ++at) {
 		auto* object = tracked[at].object;
 		if (object->m_isDecoration2 || object->m_objectType == GameObjectType::Decoration || object == play->m_player1CollisionBlock || object == play->m_player2CollisionBlock) continue;
-		CCPoint expected = compact_position(expected_fields.data() + at * COMPACT_SIZE);
+		CCPoint expected = compact_position(expected_fields.data() + at * COMPACT_STRIDE);
+		if (!region.containsPoint(expected) && !region.containsPoint({ (float)object->m_positionX, (float)object->m_positionY }))
+			continue;
 		if (std::fabs((double)expected.x - object->m_positionX) > POSITION_TOLERANCE || std::fabs((double)expected.y - object->m_positionY) > POSITION_TOLERANCE) {
 			watch_uid = object->m_uniqueID;
 			mismatch = fmt::format("object uid={} id={} expected=({:.3f},{:.3f}) live=({:.3f},{:.3f})", object->m_uniqueID, object->m_objectID, expected.x, expected.y,
@@ -491,7 +698,7 @@ std::string PredictedWorld::near_report(CCPoint at, float reach) const {
 	std::string out;
 	for (std::size_t slot = 0; slot < tracked.size(); ++slot) {
 		auto* object = tracked[slot].object;
-		CCPoint expected = compact_position(expected_fields.data() + slot * COMPACT_SIZE);
+		CCPoint expected = compact_position(expected_fields.data() + slot * COMPACT_STRIDE);
 		float live_x = (float)object->m_positionX, live_y = (float)object->m_positionY;
 		bool close = std::fabs(expected.x - at.x) <= reach && std::fabs(expected.y - at.y) <= reach;
 		if (!close) close = std::fabs(live_x - at.x) <= reach && std::fabs(live_y - at.y) <= reach;
@@ -506,26 +713,22 @@ std::string PredictedWorld::near_report(CCPoint at, float reach) const {
 
 void PredictedWorld::trim(int now) {
 	if (!valid) return;
-	while (!step_records.empty() && step_records.front().step <= now) {
-		const auto& first = step_records.front();
-		const auto* in = record_bytes.data() + first.begin;
-		for (unsigned i = 0; i < first.count; ++i, in += ENTRY_SIZE) {
-			unsigned at = 0;
-			std::memcpy(&at, in, sizeof(at));
-			std::memcpy(expected_fields.data() + (std::size_t)at * COMPACT_SIZE, in + sizeof(unsigned) + 2 * sizeof(float), COMPACT_SIZE);
+	std::size_t done = 0;
+	while (done < step_records.size() && step_records[done].step <= now) {
+		const auto& first = step_records[done];
+		const auto* in = first.bytes;
+		unsigned slot = 0;
+		for (unsigned i = 0; i < first.count; ++i) {
+			bool new_mask = false;
+			in = read_entry_start(in, slot, new_mask);
+			in = read_entry_fields(in, new_mask, expected_masks[slot], expected_fields.data() + (std::size_t)slot * COMPACT_STRIDE);
 		}
-		record_front = first.begin + first.count * (unsigned)ENTRY_SIZE;
-		step_records.erase(step_records.begin());
+		++done;
 	}
-	if (step_records.empty()) {
-		record_bytes.clear();
-		record_front = 0;
-	}
-	else if (record_front > record_bytes.size() / 2) {
-		record_bytes.erase(record_bytes.begin(), record_bytes.begin() + record_front);
-		for (auto& records : step_records)
-			records.begin -= record_front;
-		record_front = 0;
+	step_records.erase(step_records.begin(), step_records.begin() + (std::ptrdiff_t)done);
+	while (!record_blocks.empty() && (step_records.empty() || record_blocks.front().last_step < step_records.front().step)) {
+		record_bytes_held -= record_blocks.front().size;
+		record_blocks.pop_front();
 	}
 	start_step = std::max(start_step, now);
 }
@@ -538,6 +741,7 @@ void PredictedWorld::rebuild(PlayLayer* play, float delta, int now) {
 	this->play = play;
 	step_delta = delta;
 	start_step = horizon_step = now;
+	last_change_step = -1;
 	++round;
 	tracked.clear();
 	live_dirty.clear();
@@ -548,9 +752,12 @@ void PredictedWorld::rebuild(PlayLayer* play, float delta, int now) {
 	horizon_fields.clear();
 	latest_fields.clear();
 	expected_fields.clear();
-	record_bytes.clear();
-	record_front = 0;
-	step_records.clear();
+	pass_fields.clear();
+	pass_field_round.clear();
+	latest_masks.clear();
+	expected_masks.clear();
+	pass_masks.clear();
+	drop_records();
 	fired.clear();
 	rolls.clear();
 	rebuild_slots(play);
@@ -579,23 +786,41 @@ void PredictedWorld::rebuild(PlayLayer* play, float delta, int now) {
 	driver_known = false;
 }
 
+#ifdef GEODE_IS_WINDOWS
+static std::map<std::pair<int, int>, int>& event_round_map(PlayLayer* play) {
+	return *reinterpret_cast<std::map<std::pair<int, int>, int>*>(reinterpret_cast<unsigned char*>(play) + GAME_EVENT_ROUNDS_OFFSET);
+}
+
+static std::map<std::pair<int, int>, std::vector<EventLink>>& event_link_map(PlayLayer* play) {
+	return *reinterpret_cast<std::map<std::pair<int, int>, std::vector<EventLink>>*>(reinterpret_cast<unsigned char*>(play) + GAME_EVENT_LINKS_OFFSET);
+}
+#endif
+
 void PredictedWorld::begin_session(PlayLayer* play) {
 	if (session_open) end_session(this->play);
+	suspended = false;
+	suspended_applied.clear();
+	suspended_pending.clear();
 	if (!valid || play != this->play) return;
+	refresh_record_limit();
 	session_open = true;
 	horizon_loaded = false;
 	++session_round;
+	++placed_round;
 	session_list.clear();
 	applied.clear();
 	pending.clear();
+	pending_scanned = false;
+	begin_pass();
 	cells.clear();
 	deactivated_ids.clear();
-	for (auto& entry : tracked)
-		entry.applied_offset = entry.pending_offset = UINT_MAX;
 	save_list(calc_non_effect, &play->m_calcNonEffectObjects, &play->m_calcNonEffectObjectsSize);
 	save_list(calc_blocks, &play->m_calcCollisionBlockObjects, &play->m_calcCollisionBlockObjectsSize);
 	moved_count = play->m_movedCount;
 	live_spawn_tuples = play->m_spawnTuples;
+#ifdef GEODE_IS_WINDOWS
+	live_event_links = event_link_map(play);
+#endif
 	for (auto& trigger : fired) {
 		const auto* raw = reinterpret_cast<const unsigned char*>(trigger.object) + sizeof(GameObject);
 		trigger.live_bytes.assign(raw, raw + trigger.live_bytes.size());
@@ -611,29 +836,57 @@ void PredictedWorld::begin_session(PlayLayer* play) {
 }
 
 void PredictedWorld::resume_horizon(PlayLayer* play) {
+	const unsigned char resume_differs = 1;
+	const unsigned char resume_node = 2;
+	const unsigned char resume_section = 4;
 	if (!session_open || horizon_loaded || play != this->play) return;
 	horizon_loaded = true;
-	unsigned char current[512];
+	std::size_t count = tracked.size();
+	horizon_differs.resize(count);
+	joined_parts.resize(WORLD_PARTS);
+	for (auto& joined : joined_parts) joined.clear();
+	run_in_parts(count, [&](std::size_t from, std::size_t to, unsigned part) {
+		unsigned char current[MAX_RECORD_BYTES];
+		for (std::size_t at = from; at < to; ++at) {
+			auto& entry = tracked[at];
+			horizon_differs[at] = 0;
+			if (entry.dormant) continue;
+			auto* object = entry.object;
+			const auto* horizon = horizon_fields.data() + at * RECORD_SIZE;
+			save_object_fields(object, current);
+			if (std::memcmp(current, horizon, RECORD_SIZE) == 0) {
+				bool live_wrote = at < live_dirty.size() && live_dirty[at];
+				if (!live_wrote && entry.changed_step <= start_step) entry.dormant = true;
+				continue;
+			}
+			if (join_session((unsigned)at)) joined_parts[part].push_back((unsigned)at);
+			const auto* node_fields = load_span_fields(object, horizon);
+			unsigned char work = resume_differs;
+			if (node_fields_differ(object, node_fields)) work |= resume_node;
+			else {
+				object->m_isObjectRectDirty = true;
+				object->m_isOrientedBoxDirty = true;
+			}
+			if (!far_away(object) && !MovingObjects::same_section(play, object))
+				work |= resume_section;
+			horizon_differs[at] = work;
+		}
+	});
+	for (const auto& joined : joined_parts)
+		session_list.insert(session_list.end(), joined.begin(), joined.end());
 	int missed_logs = 0;
-	for (unsigned at = 0; at < tracked.size(); ++at) {
+	for (unsigned at = 0; at < count; ++at) {
+		if (!horizon_differs[at]) continue;
 		auto& entry = tracked[at];
 		const auto* horizon = horizon_fields.data() + (std::size_t)at * RECORD_SIZE;
-		save_object_fields(entry.object, current);
-		bool same = std::memcmp(current, horizon, RECORD_SIZE) == 0 && entry.object->m_enabledGroupsCounter == entry.horizon_counter &&
-			entry.object->m_isGroupDisabled == entry.horizon_group_disabled && entry.object->m_isGroupDisabledTemp == entry.horizon_group_disabled_temp;
-		if (same) continue;
 		if (at >= live_dirty.size() || !live_dirty[at]) {
 			++live_misses;
 			if (Logic::get().trace_logging && ++missed_logs <= 8)
 				Trajectory::log_line(fmt::format("XCHECK frame={} uid={} id={} live=({:.3f},{:.3f}) differs from the horizon with no live write seen by the hooks", Logic::get().step_frame, entry.object->m_uniqueID,
 					entry.object->m_objectID, entry.object->m_positionX, entry.object->m_positionY));
 		}
-		touch_session(at);
-		load_object_fields(entry.object, horizon);
-		entry.object->m_enabledGroupsCounter = entry.horizon_counter;
-		entry.object->m_isGroupDisabled = entry.horizon_group_disabled;
-		entry.object->m_isGroupDisabledTemp = entry.horizon_group_disabled_temp;
-		if (!far_away(entry.object)) play->updateObjectSection(entry.object);
+		if (horizon_differs[at] & resume_node) load_object_fields(entry.object, horizon);
+		if (horizon_differs[at] & resume_section) play->updateObjectSection(entry.object);
 	}
 	for (unsigned at : live_dirty_slots) live_dirty[at] = 0;
 	live_dirty_slots.clear();
@@ -651,13 +904,14 @@ void PredictedWorld::resume_horizon(PlayLayer* play) {
 void PredictedWorld::pause_horizon(PlayLayer* play) {
 	if (!session_open || !horizon_loaded || play != this->play) return;
 	horizon_loaded = false;
-	for (unsigned at = 0; at < tracked.size(); ++at) {
-		auto& entry = tracked[at];
-		save_object_fields(entry.object, horizon_fields.data() + (std::size_t)at * RECORD_SIZE);
-		entry.horizon_counter = entry.object->m_enabledGroupsCounter;
-		entry.horizon_group_disabled = entry.object->m_isGroupDisabled;
-		entry.horizon_group_disabled_temp = entry.object->m_isGroupDisabledTemp;
-	}
+	std::size_t count = tracked.size();
+	run_in_parts(count, [&](std::size_t from, std::size_t to, unsigned) {
+		for (std::size_t at = from; at < to; ++at) {
+			auto& entry = tracked[at];
+			if (entry.dormant) continue;
+			save_object_fields(entry.object, horizon_fields.data() + at * RECORD_SIZE);
+		}
+	});
 	for (auto& trigger : fired) {
 		const auto* raw = reinterpret_cast<const unsigned char*>(trigger.object) + sizeof(GameObject);
 		trigger.horizon_bytes.assign(raw, raw + trigger.live_bytes.size());
@@ -673,42 +927,111 @@ void PredictedWorld::pause_horizon(PlayLayer* play) {
 }
 
 void PredictedWorld::record_moved() {
+	const int sort_changed_share = 16;
+	const unsigned record_block_bytes = 4u << 20;
 	StepRecords records;
 	records.step = horizon_step;
-	records.begin = (unsigned)record_bytes.size();
-	unsigned char compact[256];
-	std::sort(changed_slots.begin(), changed_slots.end());
-	for (unsigned at : changed_slots) {
-		auto* changed = tracked[at].object;
-		if (changed->m_isDecoration2 || changed->m_objectType == GameObjectType::Decoration) continue;
-		save_compact_fields(changed, compact);
-		auto* latest = latest_fields.data() + (std::size_t)at * COMPACT_SIZE;
-		if (std::memcmp(compact, latest, COMPACT_SIZE) == 0) continue;
-		std::memcpy(latest, compact, COMPACT_SIZE);
-		CCPoint position = compact_position(compact);
-		std::size_t end = record_bytes.size();
-		record_bytes.resize(end + ENTRY_SIZE);
-		auto* out = record_bytes.data() + end;
-		std::memcpy(out, &at, sizeof(at));
-		std::memcpy(out + sizeof(unsigned), &position.x, sizeof(float));
-		std::memcpy(out + sizeof(unsigned) + sizeof(float), &position.y, sizeof(float));
-		std::memcpy(out + sizeof(unsigned) + 2 * sizeof(float), compact, COMPACT_SIZE);
-		++records.count;
+	if (changed_slots.size() * sort_changed_share < tracked.size())
+		std::sort(changed_slots.begin(), changed_slots.end());
+	else {
+		changed_slots.clear();
+		for (unsigned at = 0; at < tracked.size(); ++at)
+			if (changed_round[at] == change_round) changed_slots.push_back(at);
 	}
+	std::size_t count = changed_slots.size();
+	encoded_parts.resize(WORLD_PARTS);
+	for (auto& part : encoded_parts) {
+		part.bytes.clear();
+		part.count = 0;
+	}
+	run_in_parts(count, [&](std::size_t from, std::size_t to, unsigned part_index) {
+		auto& part = encoded_parts[part_index];
+		unsigned char compact[MAX_RECORD_BYTES] = {};
+		unsigned previous_slot = 0;
+		for (std::size_t i = from; i < to; ++i) {
+			unsigned at = changed_slots[i];
+			auto* changed = tracked[at].object;
+			if (changed->m_isDecoration2 || changed->m_objectType == GameObjectType::Decoration) continue;
+			save_compact_fields(changed, compact);
+			auto* latest = latest_fields.data() + (std::size_t)at * COMPACT_STRIDE;
+			unsigned long long mask = changed_words(compact, latest);
+			if (!mask) continue;
+			std::memcpy(latest, compact, COMPACT_STRIDE);
+			bool new_mask = mask != latest_masks[at];
+			latest_masks[at] = mask;
+			if (part.count == 0) {
+				part.first_slot = at;
+				part.first_new_mask = new_mask;
+			}
+			write_entry_start(part.bytes, at - previous_slot, new_mask);
+			if (part.count == 0) part.first_size = part.bytes.size();
+			previous_slot = at;
+			std::size_t end = part.bytes.size();
+			part.bytes.resize(end + (new_mask ? sizeof(mask) : 0) + (std::size_t)std::popcount(mask) * sizeof(unsigned));
+			auto* out = part.bytes.data() + end;
+			if (new_mask) {
+				std::memcpy(out, &mask, sizeof(mask));
+				out += sizeof(mask);
+			}
+			for (; mask; mask &= mask - 1) {
+				std::memcpy(out, compact + (std::size_t)std::countr_zero(mask) * sizeof(unsigned), sizeof(unsigned));
+				out += sizeof(unsigned);
+			}
+			part.last_slot = at;
+			++part.count;
+		}
+	});
+	unsigned previous_slot = 0;
+	step_bytes.clear();
+	for (const auto& part : encoded_parts) {
+		if (!part.count) continue;
+		write_entry_start(step_bytes, part.first_slot - previous_slot, part.first_new_mask);
+		step_bytes.insert(step_bytes.end(), part.bytes.begin() + (std::ptrdiff_t)part.first_size, part.bytes.end());
+		previous_slot = part.last_slot;
+		records.count += part.count;
+	}
+	if (!step_bytes.empty()) {
+		if (record_blocks.empty() || record_blocks.back().size - record_blocks.back().used < step_bytes.size()) {
+			RecordBlock block;
+			block.size = std::max<std::size_t>(record_block_bytes, step_bytes.size());
+			block.bytes.reset(new unsigned char[block.size]);
+			record_bytes_held += block.size;
+			record_blocks.push_back(std::move(block));
+		}
+		auto& block = record_blocks.back();
+		std::memcpy(block.bytes.get() + block.used, step_bytes.data(), step_bytes.size());
+		records.bytes = block.bytes.get() + block.used;
+		block.used += step_bytes.size();
+		block.last_step = records.step;
+	}
+	if (records.count > 0) last_change_step = records.step;
 	step_records.push_back(records);
 	changed_slots.clear();
 	++change_round;
 }
 
-void PredictedWorld::step(PlayLayer* play, PlayerObject* driver1, PlayerObject* driver2, bool last_step) {
-	if (!session_open || !horizon_loaded || play != this->play) return;
-	auto* live_manager = play->m_effectManager;
-	auto* real1 = play->m_player1;
-	auto* real2 = play->m_player2;
+void PredictedWorld::enter(PlayLayer* play, PlayerObject* driver1, PlayerObject* driver2) {
+	if (enter_depth++ > 0) return;
+	entered_manager = play->m_effectManager;
+	entered_player1 = play->m_player1;
+	entered_player2 = play->m_player2;
 	play->m_effectManager = shadow;
 	play->m_player1 = driver1;
 	if (driver2) play->m_player2 = driver2;
 	inside_step = true;
+}
+
+void PredictedWorld::leave(PlayLayer* play) {
+	if (--enter_depth > 0) return;
+	inside_step = false;
+	play->m_player1 = entered_player1;
+	play->m_player2 = entered_player2;
+	play->m_effectManager = entered_manager;
+}
+
+void PredictedWorld::begin_step(PlayLayer* play, PlayerObject* driver1, PlayerObject* driver2) {
+	if (!session_open || !horizon_loaded || play != this->play) return;
+	enter(play, driver1, driver2);
 	save_command_groups(play);
 	auto& state = play->m_gameState;
 	CCPoint at = driver1->getPosition();
@@ -716,23 +1039,41 @@ void PredictedWorld::step(PlayLayer* play, PlayerObject* driver1, PlayerObject* 
 		driver_known = true;
 		driver_start = at;
 	}
+	CCPoint ahead = at - driver_start;
+	CCPoint shift = driver1->m_isSideways ? CCPoint{ 0.f, ahead.y } : CCPoint{ ahead.x, 0.f };
+	CCPoint camera = camera_start + shift;
+	state.m_cameraStepDiff = camera - state.m_cameraPosition;
+	state.m_cameraPosition = camera;
+	state.m_cameraPosition2 = camera2_start + shift;
+	float seconds = step_delta / STEPS_PER_SECOND;
+	play->m_spawnTuples.clear();
+	shadow->updateSpawnTriggers(seconds);
+	state.m_unkUint4 = state.m_commandIndex;
+	state.m_commandIndex += 2;
+	play->m_spawnTuples.clear();
+	for (auto& [group, flag] : shadow->m_unkMap288) flag = false;
+	leave(play);
+}
+
+void PredictedWorld::move_step(PlayLayer* play, PlayerObject* driver1, PlayerObject* driver2, bool last_step) {
+	if (!session_open || !horizon_loaded || play != this->play) return;
+	enter(play, driver1, driver2);
+	auto& state = play->m_gameState;
+	CCPoint at = driver1->getPosition();
 	float dx = at.x - driver1->m_lastPosition.x, dy = at.y - driver1->m_lastPosition.y;
 	if (std::abs(dy - driver1->m_yVelocityRelated3) > step_delta * 16.f) dy = 0.f;
 	shadow->m_unk780 = dx;
 	shadow->m_unk784 = dy;
-	CCPoint ahead = at - driver_start;
-	CCPoint shift = driver1->m_isSideways ? CCPoint{ 0.f, ahead.y } : CCPoint{ ahead.x, 0.f };
-	state.m_cameraPosition = camera_start + shift;
-	state.m_cameraPosition2 = camera2_start + shift;
-	float seconds = step_delta / 60.f;
+	shadow->m_unk788 = -state.m_cameraStepDiff.x;
+	shadow->m_unk78C = -state.m_cameraStepDiff.y;
+	shadow->m_unk790 = driver1->getRotation() - driver1->m_unkUnused3;
+	float seconds = step_delta / STEPS_PER_SECOND;
 	auto mark = std::chrono::steady_clock::now();
 	auto lap = [&](int part) {
 		auto now = std::chrono::steady_clock::now();
 		part_ms[part] += std::chrono::duration<double, std::milli>(now - mark).count();
 		mark = now;
 	};
-	lap(0);
-	shadow->updateSpawnTriggers(seconds);
 	shadow->updateTimers(seconds, state.m_timeWarp);
 	lap(1);
 	shadow->prepareMoveActions(seconds, !last_step);
@@ -742,59 +1083,155 @@ void PredictedWorld::step(PlayLayer* play, PlayerObject* driver1, PlayerObject* 
 	shadow->postMoveActions();
 	play->updateCollisionBlocks();
 	lap(4);
-	inside_step = false;
-	play->m_player1 = real1;
-	play->m_player2 = real2;
-	play->m_effectManager = live_manager;
+	leave(play);
+	last_driver_dy = dy;
+}
+
+static void save_follow_positions(PlayLayer* play) {
+	auto& state = play->m_gameState;
+	const int follow_save_gap = 1000;
+	if (state.m_unkUint5 != 0 && state.m_unkUint5 + follow_save_gap > state.m_unkUint6) return;
+	state.m_unkUint5 = state.m_unkUint6;
+	++state.m_unkUint11;
+	auto& history = state.m_unkVecFloat1;
+	for (const auto& [key, size] : play->m_savePositionValues) {
+		const CCPoint* at;
+		int base;
+		if (key > 0) {
+			auto found = play->m_savePositionObjects.find(key);
+			if (found == play->m_savePositionObjects.end() || !found->second) continue;
+			at = &found->second->m_lastPosition;
+			base = found->second->m_unk52C;
+		} else if (key == -1) {
+			at = &play->m_player1->m_lastPosition;
+			base = play->m_player1->m_unk52C;
+		} else if (key == -2) {
+			at = &play->m_player2->m_lastPosition;
+			base = play->m_player2->m_unk52C;
+		} else if (key == -3) {
+			at = &state.m_cameraPosition2;
+			base = state.m_unkUint12;
+		} else continue;
+		if (size <= 0 || base < 0) continue;
+		std::size_t slot = (std::size_t)(state.m_unkUint11 % size + base) * 2;
+		if (slot + 1 >= history.size()) continue;
+		history[slot] = at->x;
+		history[slot + 1] = at->y;
+	}
+}
+
+void PredictedWorld::end_step(PlayLayer* play, PlayerObject* driver1, PlayerObject* driver2) {
+	if (!session_open || !horizon_loaded || play != this->play) return;
+	enter(play, driver1, driver2);
+	save_follow_positions(play);
+	shadow->postCollisionCheck();
+	leave(play);
 	++horizon_step;
 	auto record_began = std::chrono::steady_clock::now();
 	record_moved();
 	part_ms[5] += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - record_began).count();
 	if (Logic::get().trace_logging && watch_uid >= 0 && horizon_step - start_step <= 12 && (std::size_t)watch_uid < slot_of_uid.size() && slot_round[(std::size_t)watch_uid] == round) {
 		auto* object = tracked[slot_of_uid[(std::size_t)watch_uid]].object;
+		CCPoint at = driver1->getPosition();
 		Trajectory::log_line(fmt::format("WSTEP step={} uid={} pos=({:.3f},{:.3f}) driver=({:.3f},{:.3f}) dy={:.4f} commands={} follows={}", horizon_step, watch_uid, object->m_positionX, object->m_positionY,
-			at.x, at.y, dy, shadow->m_unkVector560.size(), shadow->m_unkVector6f0.size()));
+			at.x, at.y, last_driver_dy, shadow->m_unkVector560.size(), shadow->m_unkVector6f0.size()));
 	}
 }
 
 void PredictedWorld::fire_spawn_triggers(PlayLayer* play, PlayerObject* driver1, PlayerObject* driver2) {
 	if (!session_open || !horizon_loaded || play != this->play) return;
-	auto* live_manager = play->m_effectManager;
-	auto* real1 = play->m_player1;
-	auto* real2 = play->m_player2;
-	play->m_effectManager = shadow;
-	play->m_player1 = driver1;
-	if (driver2) play->m_player2 = driver2;
-	inside_step = true;
+	enter(play, driver1, driver2);
 	auto spawn_began = std::chrono::steady_clock::now();
 	play->checkSpawnObjects();
+	play->m_effectManager->postCollisionCheck();
 	part_ms[6] += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - spawn_began).count();
-	inside_step = false;
-	play->m_player1 = real1;
-	play->m_player2 = real2;
-	play->m_effectManager = live_manager;
+	leave(play);
 }
 
-void PredictedWorld::after_players(PlayLayer* play) {
+void PredictedWorld::collect(PlayLayer* play, EffectGameObject* object, PlayerObject* body) {
+	if (!inside_step || !session_open || !horizon_loaded || play != this->play) return;
+#ifdef GEODE_IS_WINDOWS
+	auto* manager = play->m_effectManager;
+	auto& triggered = *reinterpret_cast<std::set<std::pair<int, int>>*>(reinterpret_cast<unsigned char*>(manager) + TRIGGERED_IDS_OFFSET);
+	if (triggered.count({ object->m_uniqueID, 0 })) return;
+	manager->storeTriggeredID(object->m_uniqueID, 0);
+	object->triggerObject(play, body->m_uniqueID, nullptr);
+#endif
+}
+
+void PredictedWorld::player_button(PlayLayer* play, PlayerObject* driver1, PlayerObject* driver2, bool down, bool player1, bool handled, int button) {
+	const int button_down_event = 69;
+	const int button_up_event = 70;
+	const int button_event_stride = 2;
 	if (!session_open || !horizon_loaded || play != this->play) return;
-	auto* live_manager = play->m_effectManager;
-	play->m_effectManager = shadow;
-	inside_step = true;
-	shadow->postCollisionCheck();
-	inside_step = false;
-	play->m_effectManager = live_manager;
+	enter(play, driver1, driver2);
+	if (handled) {
+		bool two_player = play->m_levelSettings && play->m_levelSettings->m_twoPlayerMode;
+		int player_id = two_player && play->m_gameState.m_isDualMode && !player1 ? 2 : 1;
+		play->gameEventTriggered((GJGameEvent)((down ? button_down_event : button_up_event) + (button - 1) * button_event_stride), 0, player_id);
+	}
+	if (!play->m_player1->m_isDead) play->m_effectManager->playerButton(down, player1);
+	leave(play);
 }
 
-void PredictedWorld::apply_record(PlayLayer* play, unsigned at, unsigned offset) {
+void PredictedWorld::note_event(PlayLayer* play, int event, int material, int player_id) {
+	const int material_key_scale = 10000;
+	if (!session_open || play != this->play) return;
+	std::pair<int, int> key{ event, material * material_key_scale + player_id };
+	for (const auto& round : event_rounds)
+		if (round.key == key) return;
+#ifdef GEODE_IS_WINDOWS
+	auto& rounds = event_round_map(play);
+	auto found = rounds.find(key);
+	event_rounds.push_back({ key, found == rounds.end() ? 0 : found->second });
+#endif
+}
+
+CCPoint PredictedWorld::placed_position(unsigned at) {
+	auto& entry = tracked[at];
+	if (entry.placed_round != placed_round) {
+		entry.placed_round = placed_round;
+		entry.placed = CCPoint((float)entry.object->m_positionX, (float)entry.object->m_positionY);
+	}
+	return entry.placed;
+}
+
+void PredictedWorld::begin_pass() {
+	++pass_round;
+	pass_step = start_step;
+}
+
+unsigned char* PredictedWorld::pass_compact(unsigned at) {
+	if (pass_field_round.size() < tracked.size()) {
+		pass_field_round.resize(tracked.size(), 0);
+		pass_fields.resize(tracked.size() * COMPACT_STRIDE);
+		pass_masks.resize(tracked.size(), 0);
+	}
+	auto* compact = pass_fields.data() + (std::size_t)at * COMPACT_STRIDE;
+	if (pass_field_round[at] != pass_round) {
+		pass_field_round[at] = pass_round;
+		std::memcpy(compact, expected_fields.data() + (std::size_t)at * COMPACT_STRIDE, COMPACT_STRIDE);
+		pass_masks[at] = expected_masks[at];
+	}
+	return compact;
+}
+
+void PredictedWorld::apply_pass_fields(PlayLayer* play, unsigned at) {
 	touch_session(at);
 	auto& entry = tracked[at];
-	load_compact_fields(entry.object, record_bytes.data() + offset + sizeof(unsigned) + 2 * sizeof(float));
-	if (!far_away(entry.object)) play->updateObjectSection(entry.object);
-	if (entry.applied_offset == UINT_MAX) applied.push_back(at);
-	entry.applied_offset = offset;
+	const auto* compact = pass_compact(at);
+	load_compact_fields(entry.object, compact);
+	entry.placed = compact_position(compact);
+	entry.placed_round = placed_round;
+	if (!far_away(entry.object) && !MovingObjects::same_section(play, entry.object))
+		play->updateObjectSection(entry.object);
+	if (!entry.applied) applied.push_back(at);
+	entry.applied = true;
+	entry.pending = false;
 }
 
 void PredictedWorld::apply_records(PlayLayer* play, int step, const CCRect& window) {
+	const float pending_margin = 20.f;
 	if (!session_open || horizon_loaded || play != this->play) return;
 	auto apply_began = std::chrono::steady_clock::now();
 	struct ApplyTimer {
@@ -802,41 +1239,44 @@ void PredictedWorld::apply_records(PlayLayer* play, int step, const CCRect& wind
 		std::chrono::steady_clock::time_point began;
 		~ApplyTimer() { total += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - began).count(); }
 	} apply_timer{ part_ms[7], apply_began };
-	auto close = [&](unsigned at, unsigned offset) {
-		float x = 0.f, y = 0.f;
-		std::memcpy(&x, record_bytes.data() + offset + sizeof(unsigned), sizeof(float));
-		std::memcpy(&y, record_bytes.data() + offset + sizeof(unsigned) + sizeof(float), sizeof(float));
-		if (window.containsPoint({ x, y })) return true;
-		auto* object = tracked[at].object;
-		return window.containsPoint({ (float)object->m_positionX, (float)object->m_positionY });
+	bool rescan = !pending_scanned || window.getMinX() < pending_window.getMinX() || window.getMaxX() > pending_window.getMaxX() || window.getMinY() < pending_window.getMinY() ||
+		window.getMaxY() > pending_window.getMaxY();
+	if (rescan) {
+		pending_window = { window.origin.x - pending_margin, window.origin.y - pending_margin, window.size.width + 2.f * pending_margin, window.size.height + 2.f * pending_margin };
+		pending_scanned = true;
+	}
+	auto close = [&](unsigned at, CCPoint position) {
+		return pending_window.containsPoint(position) || pending_window.containsPoint(placed_position(at));
 	};
-	if (!step_records.empty() && step >= step_records.front().step) {
-		std::size_t index = (std::size_t)(step - step_records.front().step);
-		if (index < step_records.size()) {
-			const auto& records = step_records[index];
-			for (unsigned i = 0; i < records.count; ++i) {
-				unsigned offset = records.begin + i * (unsigned)ENTRY_SIZE;
-				unsigned at = 0;
-				std::memcpy(&at, record_bytes.data() + offset, sizeof(at));
-				if (close(at, offset)) {
-					apply_record(play, at, offset);
-					tracked[at].pending_offset = UINT_MAX;
-					continue;
-				}
-				if (tracked[at].pending_offset == UINT_MAX) pending.push_back(at);
-				tracked[at].pending_offset = offset;
+	int first_step = step_records.empty() ? step + 1 : std::max(pass_step + 1, step_records.front().step);
+	for (int record_step = first_step; record_step <= step; ++record_step) {
+		std::size_t index = (std::size_t)(record_step - step_records.front().step);
+		if (index >= step_records.size()) break;
+		const auto& records = step_records[index];
+		const auto* in = records.bytes;
+		unsigned at = 0;
+		for (unsigned i = 0; i < records.count; ++i) {
+			bool new_mask = false;
+			in = read_entry_start(in, at, new_mask);
+			auto* compact = pass_compact(at);
+			in = read_entry_fields(in, new_mask, pass_masks[at], compact);
+			auto& entry = tracked[at];
+			if (close(at, compact_position(compact))) {
+				apply_pass_fields(play, at);
+				continue;
 			}
+			if (!entry.pending) pending.push_back(at);
+			entry.pending = true;
 		}
 	}
-	for (std::size_t i = 0; i < pending.size();) {
+	pass_step = std::max(pass_step, step);
+	for (std::size_t i = 0; rescan && i < pending.size();) {
 		unsigned at = pending[i];
-		unsigned offset = tracked[at].pending_offset;
-		if (offset != UINT_MAX && !close(at, offset)) {
+		if (tracked[at].pending && !close(at, compact_position(pass_compact(at)))) {
 			++i;
 			continue;
 		}
-		if (offset != UINT_MAX) apply_record(play, at, offset);
-		tracked[at].pending_offset = UINT_MAX;
+		if (tracked[at].pending) apply_pass_fields(play, at);
 		pending[i] = pending.back();
 		pending.pop_back();
 	}
@@ -845,14 +1285,17 @@ void PredictedWorld::apply_records(PlayLayer* play, int step, const CCRect& wind
 void PredictedWorld::reapply_records(PlayLayer* play) {
 	if (!session_open || horizon_loaded || play != this->play) return;
 	for (unsigned at : applied)
-		if (tracked[at].applied_offset != UINT_MAX) apply_record(play, at, tracked[at].applied_offset);
+		if (tracked[at].applied) apply_pass_fields(play, at);
 }
 
 void PredictedWorld::reset_applied() {
-	for (unsigned at : applied) tracked[at].applied_offset = UINT_MAX;
-	for (unsigned at : pending) tracked[at].pending_offset = UINT_MAX;
+	++placed_round;
+	for (unsigned at : applied) tracked[at].applied = false;
+	for (unsigned at : pending) tracked[at].pending = false;
 	applied.clear();
 	pending.clear();
+	pending_scanned = false;
+	begin_pass();
 }
 
 void PredictedWorld::pause_session(PlayLayer* play) {
@@ -879,15 +1322,65 @@ void PredictedWorld::end_session(PlayLayer* play) {
 			place_node(object, position);
 		}
 	}
+#ifdef GEODE_IS_WINDOWS
+	if (play == this->play) {
+		auto& rounds = event_round_map(play);
+		for (const auto& round : event_rounds)
+			if (auto found = rounds.find(round.key); found != rounds.end())
+				found->second = round.live_round;
+		event_link_map(play) = live_event_links;
+	}
+#endif
+	event_rounds.clear();
 	session_open = false;
 	horizon_loaded = false;
 	inside_step = false;
 	session_list.clear();
+	for (unsigned at : applied)
+		if (at < tracked.size()) tracked[at].applied = false;
+	for (unsigned at : pending)
+		if (at < tracked.size()) tracked[at].pending = false;
 	applied.clear();
 	pending.clear();
+	pending_scanned = false;
 	cells.clear();
 	grouped_positions.clear();
 	if (!valid) drop_shadow();
+}
+
+void PredictedWorld::suspend_session(PlayLayer* play) {
+	if (!session_open || play != this->play) return;
+	suspended_applied.clear();
+	suspended_pending.clear();
+	for (unsigned at : applied)
+		if (tracked[at].applied) suspended_applied.push_back(at);
+	for (unsigned at : pending)
+		if (tracked[at].pending) suspended_pending.push_back(at);
+	suspended_pass_round = pass_round;
+	suspended_pass_step = pass_step;
+	end_session(play);
+	suspended = true;
+}
+
+void PredictedWorld::resume_session(PlayLayer* play) {
+	if (!suspended) return;
+	auto saved_applied = std::move(suspended_applied);
+	auto saved_pending = std::move(suspended_pending);
+	begin_session(play);
+	if (!session_open) return;
+	pass_round = suspended_pass_round;
+	pass_step = suspended_pass_step;
+	for (unsigned at : saved_applied) {
+		touch_session(at);
+		tracked[at].applied = true;
+		applied.push_back(at);
+	}
+	for (unsigned at : saved_pending) {
+		touch_session(at);
+		tracked[at].pending = true;
+		pending.push_back(at);
+	}
+	pending_scanned = false;
 }
 
 void PredictedWorld::note_trigger(EffectGameObject* object) {
@@ -934,6 +1427,18 @@ void PredictedWorld::note_moved(GJBaseGameLayer* layer, CCArray* objects) {
 	}
 }
 
+void PredictedWorld::note_moved_one(GJBaseGameLayer* layer, GameObject* object) {
+	if (layer != play || !object) return;
+	if (!session_open) {
+		if (!valid || live_unknown) return;
+		unsigned at = slot(object);
+		if (at == UINT_MAX) live_unknown = true;
+		else mark_live_dirty(at);
+		return;
+	}
+	touch(object);
+}
+
 void PredictedWorld::note_toggle(GJBaseGameLayer* layer, int group) {
 	if (layer != play) return;
 	if (!session_open) {
@@ -941,6 +1446,7 @@ void PredictedWorld::note_toggle(GJBaseGameLayer* layer, int group) {
 		return;
 	}
 	++toggles;
+	if (horizon_loaded) last_change_step = std::max(last_change_step, horizon_step + 1);
 	if (group <= 0 || (std::size_t)group >= layer->m_groups.size()) return;
 	auto* members = layer->m_groups[(std::size_t)group];
 	for (unsigned i = 0; members && i < members->count(); ++i) {
@@ -1026,6 +1532,7 @@ static void add_world_hook(auto& self, const char* name) {
 	auto hook = self.getHook(name);
 	if (!hook) return;
 	hook.unwrap()->setAutoEnable(false);
+	hook.unwrap()->setPriority(Priority::First);
 	g_world_hooks.push_back(hook.unwrap());
 }
 
@@ -1036,8 +1543,8 @@ class $modify(WorldSections, GJBaseGameLayer) {
 		add_world_hook(self, "GJBaseGameLayer::updateObjectSection");
 		add_world_hook(self, "GJBaseGameLayer::moveObjects");
 		add_world_hook(self, "GJBaseGameLayer::rotateObjects");
+		add_world_hook(self, "GJBaseGameLayer::rotateObject");
 		add_world_hook(self, "GJBaseGameLayer::toggleGroup");
-		add_world_hook(self, "GJBaseGameLayer::processAdvancedFollowActions");
 		add_world_hook(self, "GJBaseGameLayer::processAreaEffects");
 		add_world_hook(self, "GJBaseGameLayer::processAreaMoveGroupAction");
 		add_world_hook(self, "GJBaseGameLayer::processAreaRotateGroupAction");
@@ -1045,7 +1552,9 @@ class $modify(WorldSections, GJBaseGameLayer) {
 	}
 
 	void removeObjectFromSection(GameObject* object) {
-		PredictedWorld::get().before_section_change(this, object);
+		auto& world = PredictedWorld::get();
+		if (world.running() && object && far_away(object)) return;
+		world.before_section_change(this, object);
 		GJBaseGameLayer::removeObjectFromSection(object);
 	}
 
@@ -1078,15 +1587,15 @@ class $modify(WorldSections, GJBaseGameLayer) {
 		GJBaseGameLayer::rotateObjects(objects, rotation, position, offset, finished, unused);
 	}
 
+	void rotateObject(GameObject* object, float rotation) {
+		PredictedWorld::get().note_moved_one(this, object);
+		GJBaseGameLayer::rotateObject(object, rotation);
+	}
+
 	void toggleGroup(int group, bool activate) {
 		PredictedWorld::get().note_toggle(this, group);
 		if (Logic::get().trace_logging) PredictedWorld::get().log_toggle(this, group, activate);
 		GJBaseGameLayer::toggleGroup(group, activate);
-	}
-
-	void processAdvancedFollowActions(float dt) {
-		if (PredictedWorld::get().running()) return;
-		GJBaseGameLayer::processAdvancedFollowActions(dt);
 	}
 
 	void processAreaEffects(gd::vector<EnterEffectInstance>* effects, GJAreaActionType type, float dt, bool visibleFrame) {

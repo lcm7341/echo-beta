@@ -7,4 +7,6 @@ namespace phys {
 bool activatedPlatformer(EnhancedGameObject* object, bool isPlatformer);
 
 bool hasBeenActivatedByPlayer(PlayerObject* player, EnhancedGameObject* object);
+
+bool canBeActivatedByPlayer(GJBaseGameLayer* layer, PlayerObject* player, EffectGameObject* object);
 }

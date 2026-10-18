@@ -1,3 +1,25 @@
+# v2.2.1
+
+- Macrobuff tint: in the editor the screen turns red if something u place or move would kill u on ur last playtest
+- Trajectory is way more accurate now and predicts moving objects (still a lil weird in some levels)
+- Trajectory keeps updating while frame advancing, including the clicks u queue up
+- Trajectory length is based on how much ram u have instead of cutting off early
+- Fixed Frame Cadence: moving objects update at a steady rate so the trajectory can actually predict them
+- Skip Far Moving Objects: only checks moving objects that can reach u, way less lag
+- Lowest FPS in real time settings
+- Holding frame advance doesnt skip frames anymore unless real time is on
+- Stacked orbs and big piles of effects lag a lot less (Batched Effects, Prefetch Helper)
+- Default Art for layout mode
+- Position decimals for labels
+- 8K 60 and 8K 120 render presets
+- typing a frame rate in the renderer actually uses that number now (120 isnt 360 anymore lol)
+- Real Time Rendering is pc only now, and it works with True Real Time on
+- fixed keybinds
+- fixed predicted dash orb spins going way too fast
+- fixed the p2 trajectory line jumping after dual portals
+- cleaned up a lot of the code
+- probably more that i forgot
+
 # v2.2.0
 
 ## New

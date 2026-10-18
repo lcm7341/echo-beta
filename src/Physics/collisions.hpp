@@ -17,7 +17,7 @@ void activateForTrajectory(EffectGameObject* obj, PlayerObject* player);
 
 inline bool activatingPortal(GJBaseGameLayer* pl, PlayerObject* player,
                              EffectGameObject* portal) {
-    if (pl->canBeActivatedByPlayer(player, portal)) {
+    if (phys::canBeActivatedByPlayer(pl, player, portal)) {
         if (Trajectory::get().fakeActivated(player, portal)) {
             return false;
         }
@@ -43,7 +43,6 @@ inline bool activatingPortal(GJBaseGameLayer* pl, PlayerObject* player,
              (!(player->m_isShip || player->m_isBall || player->m_isBird ||
                 player->m_isDart || player->m_isSpider || player->m_isSwing)));
 
-        cocos2d::CCPoint position = player->getPosition();
         player->switchedToMode(portal->m_objectType);
 
         switch (portal->m_objectType) {
@@ -71,10 +70,6 @@ inline bool activatingPortal(GJBaseGameLayer* pl, PlayerObject* player,
             default:
                 break;
         }
-
-        player->setPosition(position);
-        player->m_iconSprite->setPosition(position);
-        player->m_vehicleSprite->setPosition(position);
 
         player->m_lastPortalPos = portal->getPosition();
         player->m_lastActivatedPortal = portal;

@@ -122,6 +122,8 @@ static void draw_traj_settings() {
     auto& logic = Logic::get();
     if (toggle("Moving Object Support", logic.traj_moving_objects)) Logic::get().reset_traj();
     tip("Moves moving objects along with the trajectory. Turning this off is faster but less accurate.");
+    if (toggle("Fixed Frame Cadence", logic.fixed_cadence)) Logic::get().reset_traj();
+    tip("Makes moving objects update at a steady rate based on your FPS cap, so lag can't change them and the trajectory can predict them.");
     if (toggle("Follow Hide Player", logic.traj_follow_hide_player)) Logic::get().reset_traj();
     tip("Will hide the trajectory of the hidden player.");
     ImGui::BeginDisabled(logic.traj_follow_hide_player);
@@ -337,8 +339,10 @@ static void draw_video_shape(bool& open_save_preset) {
         { "1080p 120", 1920, 1080, 120, 30 },
         { "1440p 60", 2560, 1440, 60, 30 },
         { "4K 60", 3840, 2160, 60, 50 },
+        { "8K 60", 7680, 4320, 60, 120 },
+        { "8K 120", 7680, 4320, 120, 200 },
     };
-    static const int SIZES[][2] = { { 640, 360 }, { 854, 480 }, { 1280, 720 }, { 1600, 900 }, { 1920, 1080 }, { 2560, 1440 }, { 3840, 2160 } };
+    static const int SIZES[][2] = { { 640, 360 }, { 854, 480 }, { 1280, 720 }, { 1600, 900 }, { 1920, 1080 }, { 2560, 1440 }, { 3840, 2160 }, { 7680, 4320 } };
     static const int RATES[] = { 24, 30, 48, 50, 60, 72, 90, 100, 120, 144, 165, 180, 240, 360 };
     auto matches = [&](int width, int height, int fps) {
         return logic.render_width == width && logic.render_height == height && logic.render_fps == fps;
@@ -436,31 +440,38 @@ static void draw_video_shape(bool& open_save_preset) {
             ImGui::EndDisabled();
         }
         else {
-            if (EchoUI::DragInt("##render-width", &width, 2.f, 2, 3840, "%d px"))
+            if (EchoUI::DragInt("##render-width", &width, 2.f, 2, 7680, "%d px"))
                 logic.render_width = std::clamp(width, 2, 7680);
             saved_on_release();
         }
         EchoUI::Row("Height");
-        if (EchoUI::DragInt("##render-height", &height, 2.f, 2, 2160, "%d px"))
+        if (EchoUI::DragInt("##render-height", &height, 2.f, 2, 4320, "%d px"))
             logic.render_height = std::clamp(height, 2, 4320);
         saved_on_release();
     }
     EchoUI::Checkbox("Custom size", &custom_size);
     tip("Lets you type a custom width and height.");
 
-    int rate_index = 0;
-    for (int i = 0; i < IM_ARRAYSIZE(RATES); ++i) {
-        if (std::abs(RATES[i] - logic.render_fps) < std::abs(RATES[rate_index] - logic.render_fps))
-            rate_index = i;
-    }
+    const int max_typed_fps = 1000;
     EchoUI::Row("Frame rate");
-    auto rate = fmt::format("{} FPS", logic.render_fps);
-    if (EchoUI::DragInt("##render-fps", &rate_index, .04f, 0, IM_ARRAYSIZE(RATES) - 1, rate.c_str()))
-        logic.render_fps = RATES[std::clamp(rate_index, 0, IM_ARRAYSIZE(RATES) - 1)];
+    bool typing_rate = ImGui::TempInputIsActive(ImGui::GetID("##render-fps"));
+    int fps = logic.render_fps;
+    if (EchoUI::DragInt("##render-fps", &fps, .04f, RATES[0], RATES[IM_ARRAYSIZE(RATES) - 1], "%d FPS")) {
+        if (typing_rate) {
+            logic.render_fps = std::clamp(fps, 1, max_typed_fps);
+        } else {
+            int next = fps > logic.render_fps ? RATES[IM_ARRAYSIZE(RATES) - 1] : RATES[0];
+            for (int rate : RATES) {
+                if (fps > logic.render_fps && rate > logic.render_fps && rate < next) next = rate;
+                if (fps < logic.render_fps && rate < logic.render_fps && rate > next) next = rate;
+            }
+            logic.render_fps = next;
+        }
+    }
     saved_on_release();
     float mbps = (float)(logic.render_bitrate) / 1000000.f;
     EchoUI::Row("Bitrate");
-    if (EchoUI::DragFloat("##render-bitrate", &mbps, 0.1f, 0.f, 100.f, mbps <= 0.f ? "Lossless" : "%.1f Mbps"))
+    if (EchoUI::DragFloat("##render-bitrate", &mbps, 0.1f, 0.f, 200.f, mbps <= 0.f ? "Lossless" : "%.1f Mbps"))
         logic.render_bitrate = mbps <= 0.f ? 0 : std::max((int)(mbps * 1000000.f), 1000);
     saved_on_release();
 }
@@ -693,7 +704,13 @@ void GUI::main() {
     if (open_real_time) ImGui::OpenPopup("Real Time Settings");
     if (EchoUI::BeginModal("Real Time Settings", 20.f)) {
         if (toggle("True Real Time", logic.true_real_time)) GUI::get().drop_carry();
-        tip("Runs every step as close to real time as the game allows. Accuracy is untested.");
+        tip("Runs every step as close to real time as the game allows. Will be laggy.");
+        EchoUI::Row("Lowest FPS", "How low your FPS can drop to give physics more time");
+        const int max_lowest_fps = 60;
+        int& lowest_fps = logic.lowest_playback_fps;
+        if (EchoUI::DragInt("##lowest-playback-fps", &lowest_fps, 0.2f, 0, max_lowest_fps, lowest_fps > 0 ? "%d fps" : "Off"))
+            lowest_fps = std::clamp(lowest_fps, 0, max_lowest_fps);
+        saved_on_release();
         EchoUI::EndModal();
     }
     if (open_sync_audio) ImGui::OpenPopup("Sync Audio Settings");
@@ -960,7 +977,13 @@ void GUI::draw_visuals() {
         if (toggle("No Mirror Portals", logic.no_mirror_portals)) GUI::get().apply_no_mirror();
         tip("Stops mirror portals from flipping the level.");
         toggle("Stacked Orb Optimization", optimize_effects);
-        tip("Clicking many orbs on the same frame only shows one effect.");
+        tip("Draws stacked orb effects as one to reduce lag.");
+#ifdef GEODE_IS_WINDOWS
+        toggle("Batched Effects", logic.batched_effects);
+        tip("Draws many effects all at once using more CPU cores");
+        toggle("Prefetch Helper", logic.prefetch_helper);
+        tip("Uses another CPU core to help the game load effects faster");
+#endif
     }
     EchoUI::EndCard();
     EchoUI::EndCardRow();
@@ -1274,8 +1297,10 @@ void GUI::renderer() {
         GUI::get().drag_float_setting("##render-after-end", logic.render_after_end, 0.05f, 0.f, 5.f, "%.2f s");
         toggle("SSB Fix", logic.render_ssb_fix);
         tip("Fixes audio sync because of the game's scroll speed bug when rendering.");
+#ifndef GEODE_IS_MOBILE
         toggle("Real Time Rendering", logic.render_real_time);
         tip("Renders the end of the level faster by letting its animation skip steps. Gameplay still renders every step.");
+#endif
     }
     EchoUI::EndCard();
     EchoUI::EndCardRow();
