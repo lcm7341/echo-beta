@@ -3227,7 +3227,8 @@ static void run_shown_camera(GJBaseGameLayer* layer) {
 
 static bool skip_mirror(GJBaseGameLayer* layer) {
     const auto& pace = g_camera_pace;
-    return pace.in_picture_call || pace.mirror_depth > 0 || pace.layer != layer || !pace.have_shown || camera_step_interval() <= 1;
+    return pace.in_picture_call || pace.mirror_depth > 0 || pace.layer != layer || !pace.have_shown || camera_step_interval() <= 1 ||
+           Logic::get().predicting;
 }
 
 template <class F>
