@@ -282,10 +282,10 @@ void GUI::editor() {
     float sort_w = ImGui::GetFrameHeight() + edit_style.ItemInnerSpacing.x + ImGui::CalcTextSize("Sort Automatically").x + edit_style.ItemSpacing.x + ImGui::CalcTextSize("(?)").x;
     float edit_single = std::max(GUI::get().label_width("Set to Current Frame"), std::max(check_w, sort_w));
     float edit_inner = std::max(edit_single, edit_row), edit_w = edit_inner + edit_pad;
-    float card_em = Logic::get().docked_menu ? 21.f : 18.f;
+    float card_em = GUI::get().card_width();
     bool editor_shown = EchoUI::BeginTileOfCards("Input Editor", card_em * 2.f + 1.2f);
     if (editor_shown) {
-        if (!Logic::get().docked_menu)
+        if (!GUI::get().docked())
             card_em = (ImGui::GetContentRegionAvail().x - edit_style.ItemSpacing.x) * .5f / ImGui::GetFontSize();
         EchoUI::BeginCardRow("editor-0");
         bool list_shown = EchoUI::BeginCard("Inputs", card_em);

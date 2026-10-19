@@ -2,6 +2,8 @@
 #include "Hooks/opt.hpp"
 #include "GUI/gui.hpp"
 #include "GUI/logo_texture.hpp"
+#include "GUI/theme_script.hpp"
+#include "Script/host.hpp"
 #include "Hack/label_types.hpp"
 #include "Logic/conversions/codecs.hpp"
 
@@ -21,8 +23,10 @@ namespace fs = std::filesystem;
 
 using namespace geode::prelude;
 
-static float card_width() {
-    return Logic::get().docked_menu ? 21.f : 18.f;
+float GUI::card_width() {
+    const auto& layout = ThemeScript::layout();
+    if (layout.card_width > 0.f) return layout.card_width;
+    return GUI::get().docked() ? 21.f : 18.f;
 }
 
 static const char* const PLAYERS[] = { "Both", "Player 1", "Player 2" };
@@ -1041,7 +1045,7 @@ void GUI::draw_macro() {
         tip("Converts every replay in the replays folder to .echo. Old Echo replays are renamed to .old.echo.");
         ImGui::SameLine();
         if (EchoUI::Button("Open Folder", ImVec2(half, 0.f)))
-            geode::utils::file::openFolder(Logic::get().save_root() / "replays");
+            GUI::get().open_folder(Logic::get().save_root() / "replays");
     }
     EchoUI::EndCard();
     if (EchoUI::BeginCard("Saving", card_width())) {
@@ -1212,7 +1216,7 @@ void GUI::renderer() {
             auto folder = Logic::get().save_root() / "renders";
             std::error_code ignored;
             fs::create_directories(folder, ignored);
-            geode::utils::file::openFolder(folder);
+            GUI::get().open_folder(folder);
         }
         tip("Opens the folder your videos are saved in.");
         if (logic.merge_busy) {
@@ -1324,6 +1328,7 @@ void GUI::renderer() {
 }
 
 CCTexture2D* GUI::theme_logo_texture() {
+    if (auto* image = ThemeScript::logo()) return image;
     const auto& name = Logic::get().theme_name;
     for (int i = 1; i < EchoUI::preset_count(); ++i) {
         if (name != EchoUI::preset(i).name) continue;
@@ -1363,8 +1368,10 @@ void GUI::draw_theme() {
             if (i % 6 != 0)
                 ImGui::SameLine(0.f, (EchoUI::RowButton(6) - EchoUI::em(2.5f)) + ImGui::GetStyle().ItemSpacing.x);
             auto sprite = i == 0 ? std::string("logo.png"_spr) : fmt::format("{}/echo-logo-{}.png", Mod::get()->getID(), gui.lower_copy(preset.name));
-            if (EchoUI::ThemeTile(preset.name, EchoUI::logo_image(sprite.c_str()), logic.theme_name == preset.name))
+            if (EchoUI::ThemeTile(preset.name, EchoUI::logo_image(sprite.c_str()), logic.theme_name == preset.name)) {
+                ThemeScript::unload();
                 gui.use_palette(preset.palette, preset.name);
+            }
             tip(preset.name);
         }
         float half = EchoUI::RowButton(2);
@@ -1372,6 +1379,7 @@ void GUI::draw_theme() {
         tip("Picks a random color for the menu and logo.");
         ImGui::SameLine();
         if (EchoUI::Button("Reset", ImVec2(half, 0.f))) {
+            ThemeScript::unload();
             gui.restore_base_sizes();
             EchoUI::apply_metrics();
             gui.on_style_replaced();
@@ -1394,11 +1402,11 @@ void GUI::draw_theme() {
     if (EchoUI::BeginCard("Interface", card_width())) {
         EchoUI::Row("Size");
         float drag_max = gui.scale_cap;
-        float& menu_size = logic.docked_menu ? logic.menu_scale : logic.menu_scale_undocked;
+        float& menu_size = gui.docked() ? logic.menu_scale : logic.menu_scale_undocked;
         if (EchoUI::DragFloat("##menu-scale", &menu_size, 0.01f, 0.35f, drag_max, "%.2fx"))
             menu_size = std::clamp(menu_size, 0.35f, drag_max);
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip(logic.docked_menu ? "The docked menu's size. The undocked menu has its own." : "The undocked menu's size. The docked menu has its own.");
+            ImGui::SetTooltip(gui.docked() ? "The docked menu's size. The undocked menu has its own." : "The undocked menu's size. The docked menu has its own.");
         if (ImGui::IsItemActivated()) gui.scale_dragging = true;
         if (ImGui::IsItemDeactivated()) {
             gui.scale_dragging = false;
@@ -1429,8 +1437,14 @@ void GUI::draw_theme() {
             logic.menu_anim_speed = std::clamp(logic.menu_anim_speed, 0.25f, 4.f);
         saved_on_release();
 #ifndef GEODE_IS_MOBILE
-        if (EchoUI::Checkbox("One window (docked)", &logic.docked_menu)) save();
-        tip("Turning this off makes every page its own window.");
+        bool docked = GUI::get().docked();
+        ImGui::BeginDisabled(ThemeScript::layout().docked >= 0);
+        if (EchoUI::Checkbox("One window (docked)", &docked)) {
+            logic.docked_menu = docked;
+            save();
+        }
+        ImGui::EndDisabled();
+        tip(ThemeScript::layout().docked >= 0 ? "Set by the theme script while it's running" : "Turning this off makes every page its own window.");
 #endif
 #ifdef GEODE_IS_MOBILE
         bool floating_logo = true;
@@ -1456,19 +1470,20 @@ void GUI::draw_theme() {
         tip("Saves a trace of each playback for bug reports.");
         EchoUI::RowHalf();
         if (EchoUI::Button("Open Logs Folder"))
-            geode::utils::file::openFolder(logic.save_root() / "logs");
+            gui.open_folder(logic.save_root() / "logs");
         tip("Opens the folder the logs are saved in.");
         if (EchoUI::Checkbox("Button Effects", &EchoUI::g_button_effects))
             gui.export_theme(gui.theme_path("current"));
         tip("Enables button animations for the animated themes.");
         EchoUI::RowHalf();
-        bool sharp = style.CircleTessellationMaxError >= 2.5f;
+        bool sharp = EchoUI::sharp_setting();
+        ImGui::BeginDisabled(ThemeScript::forces_sharp());
         if (EchoUI::Checkbox("Sharp Edges", &sharp)) {
-            style.CircleTessellationMaxError = sharp ? 5.f : 0.1f;
-            gui.base_style.CircleTessellationMaxError = style.CircleTessellationMaxError;
+            EchoUI::set_sharp(sharp);
             gui.export_theme(gui.theme_path("current"));
         }
-        tip("Draws curves with fewer segments.");
+        ImGui::EndDisabled();
+        tip(ThemeScript::forces_sharp() ? "Forced on by the theme script" : "Makes every corner square and draws curves with fewer segments");
         bool disabled = Logic::bot_disabled();
         if (EchoUI::Checkbox("Disable Bot", &disabled)) Logic::set_bot_disabled(disabled);
         tip("Completely disables the bot.");

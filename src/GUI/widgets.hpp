@@ -6,9 +6,14 @@
 #include <string>
 #include <unordered_map>
 #include <utility>
+#include <vector>
 
 namespace EchoUI {
 	float ease(ImGuiID id, float target, float speed = 14.f);
+	float noise(float x, float y);
+	float unit_random(unsigned item, unsigned seed);
+	void soft_disc(ImDrawList* draw, ImVec2 at, float radius, ImVec4 tint, float squash = 1.f, int sides = 16);
+	void beam(ImDrawList* draw, ImVec2 from, ImVec2 left, ImVec2 right, ImVec4 tint);
 
 	bool Checkbox(const char* label, bool* value);
 	bool Button(const char* label, const ImVec2& size = ImVec2(0.f, 0.f));
@@ -26,12 +31,13 @@ namespace EchoUI {
 		Sequence,
 		Clickbot,
 		Render,
-		Theme
+		Theme,
+		Script
 	};
 	bool ActionButton(const char* label, Icon icon, bool active, const ImVec2& size, ImVec4 tint = ImVec4(0.f, 0.f, 0.f, 0.f));
-	bool NavItem(const char* label, Icon icon, bool selected, float width, float height = 0.f);
+	bool NavItem(const char* label, Icon icon, bool selected, float width, float height = 0.f, bool labelled = true);
 	float nav_icon_width();
-	void NavMarker(ImVec2 min, ImVec2 max);
+	void NavMarker(ImVec2 min, ImVec2 max, bool under = false);
 
 	void begin_field(const char* label, float fill = -1.f, int parts = 1, float trim = 0.f);
 	void end_field();
@@ -109,10 +115,32 @@ namespace EchoUI {
 	void Help();
 	void ProgressBar(float fraction, const ImVec2& size, const char* overlay = nullptr);
 	void StatusDot(const ImVec4& tint);
+	void StatusText(const ImVec4& tint, const char* text);
+	ImVec4 mix(const ImVec4& a, const ImVec4& b, float t);
+
+	extern const ImVec4 ERROR_RED;
+	extern const ImVec4 RUNNING_GREEN;
 
 	void WindowRims(float alpha);
-	bool Header(const char* title, const char* version, ImTextureID logo);
+
+	struct HeaderLook {
+		std::string title = "Echo";
+		bool logo = true, version = true, close = true;
+		float height = 1.2f;
+	};
+
+	bool Header(const HeaderLook& look, const char* version, ImTextureID logo);
+	void Logo(ImTextureID logo, float side);
 	bool TitleBar(const char* title, Icon icon = Icon::None, bool closable = true, float width = 0.f);
+	bool BeginNavBar(const char* id, const ImVec2& size, bool sideways);
+	void EndNavBar();
+	void StatusBack(ImVec2 min, ImVec2 max);
+	void BarBack(ImVec2 min, ImVec2 max);
+	bool sharp();
+	bool sharp_setting();
+	void set_sharp(bool on);
+	void sharpen(ImGuiStyle& live);
+	float corner(float rounding);
 
 	bool CollapseBar(const char* title, Icon icon, bool open);
 
@@ -142,8 +170,18 @@ namespace EchoUI {
 	float glide_in(float t);
 	void BeginEntrance(float t);
 	void EndEntrance();
-	bool BeginCard(const char* title, float width_em = 20.f);
+	bool BeginCard(const char* title, float width_em = 20.f, float fixed_height = 0.f);
 	void EndCard();
+
+	struct CardPlan {
+		std::vector<std::string> cards;
+		std::vector<float> widths;
+		std::vector<std::string> pages;
+	};
+
+	void BeginCardPlan(const CardPlan& plan, float width_em, float gap, int columns);
+	void CardPage(const char* page);
+	void EndCardPlan();
 	void BeginCardRow(const char* id);
 	void EndCardRow();
 	ImGuiID& last_card_row();
@@ -157,10 +195,19 @@ namespace EchoUI {
 	bool Gear(const char* id);
 	bool BeginModal(const char* title, float width_em = 22.f, bool closable = true);
 	void EndModal();
+	bool BeginBigModal(const char* title, ImVec2 size, ImVec2 least);
 
 	bool ColorEdit4(const char* label, float* rgba, ImGuiColorEditFlags flags = 0);
 	bool ColorEdit3(const char* label, float* rgb, ImGuiColorEditFlags flags = 0);
-	bool InputTextMultiline(const char* label, std::string* text, const ImVec2& size = ImVec2(0.f, 0.f));
+	bool InputTextMultiline(const char* label, std::string* text, const ImVec2& size = ImVec2(0.f, 0.f), ImGuiInputTextFlags flags = 0, ImGuiInputTextCallback callback = nullptr, void* user_data = nullptr);
+
+	struct CodeEditorState {
+		int error_line = 0;
+		int jump_to_line = 0;
+		int line = 1, column = 1;
+		bool wrap = false;
+	};
+	bool CodeEditor(const char* label, std::string* text, const ImVec2& size, const std::vector<std::string>& names, CodeEditorState& state);
 	bool Slider(const char* label, float* value, float min, float max, const char* format = "%.2f", bool rainbow = false);
 	bool ThemeTile(const char* id, ImTextureID logo, bool selected);
 

@@ -1,4 +1,5 @@
 #include "GUI/gui.hpp"
+#include "GUI/theme_script.hpp"
 
 #include <Geode/ui/OverlayManager.hpp>
 #include <imgui-cocos.hpp>
@@ -32,6 +33,12 @@ namespace EchoUI {
     static double now() {
         using namespace std::chrono;
         return duration<double>(steady_clock::now().time_since_epoch()).count();
+    }
+
+    static bool imgui_ready() {
+        if (!ImGuiCocos::get().isInitialized() || ImGui::GetFrameCount() == 0) return false;
+        ImTextureData* atlas = ImGui::GetIO().Fonts->TexData;
+        return atlas && atlas->TexID != ImTextureID_Invalid;
     }
 
     class FloatingLogo : public CCNode, public CCTouchDelegate {
@@ -73,8 +80,30 @@ namespace EchoUI {
             CCNode::visit();
         }
 
+        void draw() override {
+            if (!m_scripted || !ThemeScript::begin_floating_logo(CCDirector::get()->getDeltaTime())) return;
+            float side = size();
+            float inset = side * (1.f - (m_touching ? PRESS : 1.f)) * .5f;
+            ThemeScript::Widget widget;
+            widget.hook = ThemeScript::Hook::FloatingLogo;
+            widget.id = ImHashStr("##echo-floating-logo");
+            widget.min = ImGuiCocos::cocosToFrame(convertToWorldSpace({ inset, side - inset }));
+            widget.max = ImGuiCocos::cocosToFrame(convertToWorldSpace({ side - inset, inset }));
+            widget.hover = widget.down = m_touching ? 1.f : 0.f;
+            static ImDrawList list(nullptr);
+            list._SetDrawListSharedData(ImGui::GetDrawListSharedData());
+            list._ResetForNewFrame();
+            list.PushTexture(ImGui::GetIO().Fonts->TexRef);
+            auto win = CCDirector::get()->getWinSize();
+            list.PushClipRect(ImVec2(0.f, 0.f), ImGuiCocos::cocosToFrame({ win.width, 0.f }));
+            ThemeScript::draw(widget, &list, m_fade, [&] { list.AddCallback([](const ImDrawList*, const ImDrawCmd*) {}, nullptr); });
+            render(list);
+            list._SetDrawListSharedData(nullptr);
+        }
+
     private:
         static inline const float SLOP = 8.f;
+        static inline const float PRESS = .92f;
         static inline const double AWAKE = 2.5;
         static inline const double FADE = .4;
 
@@ -100,14 +129,65 @@ namespace EchoUI {
             }
             float side = size();
             setContentSize({ side, side });
-            float press = m_touching ? .92f : 1.f;
+            m_scripted = ThemeScript::has(ThemeScript::Hook::FloatingLogo) && imgui_ready();
+            m_logo->setVisible(!m_scripted);
+            float press = m_touching ? PRESS : 1.f;
             m_logo->setScale(side / m_logo->getContentWidth() * press);
             m_logo->setPosition({ side * .5f, side * .5f });
             if (m_touching || g_preview) m_active = now();
             double idle = now() - m_active - AWAKE;
             float rest = (float)std::clamp(idle / FADE, 0.0, 1.0);
             m_logo->setOpacity((GLubyte)(240.f - (240.f - 95.f) * rest));
+            m_fade = m_logo->getOpacity() / 255.f;
             if (!m_touching) setPosition(home());
+        }
+
+        void use_list_drawing() {
+            auto* shader = CCShaderCache::sharedShaderCache()->programForKey(kCCShader_PositionTextureColor);
+            shader->use();
+            shader->setUniformsForBuiltins();
+            ccGLEnableVertexAttribs(kCCVertexAttribFlag_PosColorTex);
+            ccGLBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+            glBindBuffer(GL_ARRAY_BUFFER, 0);
+            glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
+        }
+
+        void render(ImDrawList& list) {
+            CCAffineTransform to_node = worldToNodeTransform();
+            for (ImDrawVert& vertex : list.VtxBuffer) {
+                CCPoint local = CCPointApplyAffineTransform(ImGuiCocos::frameToCocos(vertex.pos), to_node);
+                vertex.pos = ImVec2(local.x, local.y);
+            }
+            GLboolean was_clipped = glIsEnabled(GL_SCISSOR_TEST);
+            GLint old_clip[4] = {};
+            glGetIntegerv(GL_SCISSOR_BOX, old_clip);
+            glEnable(GL_SCISSOR_TEST);
+            use_list_drawing();
+            auto* view = CCDirector::get()->getOpenGLView();
+            for (const ImDrawCmd& command : list.CmdBuffer) {
+                CCPoint top_left = ImGuiCocos::frameToCocos(ImVec2(command.ClipRect.x, command.ClipRect.y));
+                CCPoint bottom_right = ImGuiCocos::frameToCocos(ImVec2(command.ClipRect.z, command.ClipRect.w));
+                if (bottom_right.x <= top_left.x || bottom_right.y >= top_left.y) continue;
+                view->setScissorInPoints(top_left.x, bottom_right.y, bottom_right.x - top_left.x, top_left.y - bottom_right.y);
+                if (command.UserCallback) {
+                    kmGLPushMatrix();
+                    m_logo->transform();
+                    m_logo->draw();
+                    kmGLPopMatrix();
+                    use_list_drawing();
+                    continue;
+                }
+                ImTextureID texture = command.TexRef._TexData ? command.TexRef._TexData->TexID : command.TexRef._TexID;
+                if (command.ElemCount == 0 || texture == ImTextureID_Invalid) continue;
+                ccGLBindTexture2D((GLuint)texture);
+                const ImDrawVert* vertices = list.VtxBuffer.Data + command.VtxOffset;
+                glVertexAttribPointer(kCCVertexAttrib_Position, 2, GL_FLOAT, GL_FALSE, sizeof(ImDrawVert), &vertices->pos);
+                glVertexAttribPointer(kCCVertexAttrib_TexCoords, 2, GL_FLOAT, GL_FALSE, sizeof(ImDrawVert), &vertices->uv);
+                glVertexAttribPointer(kCCVertexAttrib_Color, 4, GL_UNSIGNED_BYTE, GL_TRUE, sizeof(ImDrawVert), &vertices->col);
+                glDrawElements(GL_TRIANGLES, command.ElemCount, GL_UNSIGNED_SHORT, list.IdxBuffer.Data + command.IdxOffset);
+            }
+            if (was_clipped) glScissor(old_clip[0], old_clip[1], old_clip[2], old_clip[3]);
+            else glDisable(GL_SCISSOR_TEST);
         }
 
         CCPoint clamp_to_window(CCPoint at) const {
@@ -167,6 +247,8 @@ namespace EchoUI {
         CCPoint m_origin;
         double m_active = 0.0;
         PlayLayer* m_renderedIn = nullptr;
+        float m_fade = 1.f;
+        bool m_scripted = false;
         bool m_touching = false;
         bool m_moved = false;
     };

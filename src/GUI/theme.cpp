@@ -1,5 +1,7 @@
 #include <imgui_internal.h>
 #include "GUI/gui.hpp"
+#include "GUI/theme_script.hpp"
+#include "Script/host.hpp"
 #include "Logic/conversions/codecs.hpp"
 #include <imgui-cocos.hpp>
 #include <imgui.h>
@@ -73,6 +75,7 @@ ImVec2 GUI::unscaled(ImVec2 value) {
 
 matjson::Value GUI::style_json() {
     ImGuiStyle style = GUI::get().has_base ? GUI::get().base_style : ImGui::GetStyle();
+    style.CircleTessellationMaxError = .1f;
     for (int i = 0; i < ImGuiCol_COUNT; ++i)
         style.Colors[i] = ImGui::GetStyle().Colors[i];
     auto& logic = Logic::get();
@@ -82,6 +85,8 @@ matjson::Value GUI::style_json() {
     json["rainbow_rim"] = EchoUI::g_rainbow_rim;
     json["button_effects"] = EchoUI::g_button_effects;
     json["scene"] = EchoUI::scene_name(EchoUI::g_scene);
+    std::string script = ThemeScript::saved_name();
+    if (!script.empty()) json["script"] = script;
     if (GUI::get().has_palette) {
         const auto& palette = GUI::get().palette;
         matjson::Value saved;
@@ -127,7 +132,7 @@ matjson::Value GUI::style_json() {
     json["AntiAliasedFill"] = true;
     json["CurveTessellationTol"] = style.CurveTessellationTol;
     json["CircleTessellationMaxError"] = style.CircleTessellationMaxError;
-    json["SharpEdges"] = style.CircleTessellationMaxError >= 2.5f;
+    json["SharpEdges"] = EchoUI::sharp_setting();
     json["colors"] = matjson::Value::array();
     for (int i = 0; i < ImGuiCol_COUNT; ++i)
         json["colors"].push(GUI::get().color_json(style.Colors[i]));
@@ -208,15 +213,9 @@ void GUI::apply_style_json(const matjson::Value& json) {
     number("TabRounding", style.TabRounding);
     number("CurveTessellationTol", style.CurveTessellationTol);
     number("CircleTessellationMaxError", style.CircleTessellationMaxError);
-    if (auto flag = json["SharpEdges"].asBool()) {
-        style.CircleTessellationMaxError = flag.unwrap() ? 5.f : 0.1f;
-    }
-    else if (style.CircleTessellationMaxError >= 2.5f) {
-        style.CircleTessellationMaxError = 5.f;
-    }
-    else {
-        style.CircleTessellationMaxError = 0.1f;
-    }
+    if (auto flag = json["SharpEdges"].asBool()) EchoUI::set_sharp(flag.unwrap());
+    else EchoUI::set_sharp(style.CircleTessellationMaxError >= 2.5f);
+    style.CircleTessellationMaxError = 0.1f;
     style.AntiAliasedLines = true;
     style.AntiAliasedLinesUseTex = true;
     style.AntiAliasedFill = true;
@@ -265,6 +264,9 @@ void GUI::apply_style_json(const matjson::Value& json) {
         style.TabRounding *= bake;
     }
     GUI::get().on_style_replaced();
+    std::string script = json["script"].asString().unwrapOr("");
+    if (script.empty()) ThemeScript::unload();
+    else ThemeScript::load(ThemeScript::from_saved_name(script), false);
 }
 
 fs::path GUI::theme_path(const std::string& name) {
@@ -355,18 +357,23 @@ void GUI::paint_editor_from_theme() {
     GUI::get().paint_editor(logic.editor_sel_p2, blend(second, .62f));
 }
 
-void GUI::use_palette(const EchoUI::Palette& palette, const std::string& name) {
+void GUI::preview_palette(const EchoUI::Palette& palette, const std::string& name) {
     EchoUI::apply_palette(palette);
     GUI::get().palette = palette;
     GUI::get().has_palette = true;
     auto& logic = Logic::get();
     GUI::get().paint_editor_from_theme();
     logic.theme_name = name;
+}
+
+void GUI::use_palette(const EchoUI::Palette& palette, const std::string& name) {
+    GUI::get().preview_palette(palette, name);
     GUI::get().export_theme(GUI::get().theme_path("current"));
     Logic::get().save_settings_file();
 }
 
 void GUI::randomize_theme() {
+    ThemeScript::unload();
     std::mt19937 rng{ std::random_device{}() };
     std::uniform_real_distribution<float> unit(0.f, 1.f);
     EchoUI::Palette palette;
@@ -1134,6 +1141,10 @@ ThemePicker& GUI::themes() {
     return GUI::get().theme_picker;
 }
 
+static bool is_theme_script(const fs::path& path) {
+    return GUI::get().lower_copy(geode::utils::string::pathToString(path.extension())) == ".lua";
+}
+
 void GUI::refresh_themes() {
     auto& state = GUI::get().themes();
     state.files.clear();
@@ -1150,6 +1161,11 @@ void GUI::refresh_themes() {
     std::sort(state.files.begin(), state.files.end(), [](const fs::path& a, const fs::path& b) {
         return GUI::get().lower_copy(geode::utils::string::pathToString(a.filename())) < GUI::get().lower_copy(geode::utils::string::pathToString(b.filename()));
     });
+    const auto& host = ThemeScript::host();
+    for (const auto& script : host.files())
+        state.files.push_back(script);
+    for (const auto& example : host.examples())
+        state.files.push_back(example);
 }
 
 void GUI::open_theme_picker() {
@@ -1178,19 +1194,44 @@ void GUI::draw_theme_picker() {
     ImGui::BeginChild("##theme-list", ImVec2(picker_wide, 240.f * picker_scale), ImGuiChildFlags_Borders);
     std::string needle = GUI::get().lower_copy(state.filter);
     int shown = 0;
-    for (const auto& path : state.files) {
-        std::string name = geode::utils::string::pathToString(path.filename());
-        if (name.ends_with(".ui.json")) name.resize(name.size() - 8);
-        else if (name.ends_with(".ui")) name.resize(name.size() - 3);
-        if (!needle.empty() && GUI::get().lower_copy(name).find(needle) == std::string::npos)
-            continue;
-        ++shown;
-        if (EchoUI::Selectable(name.c_str(), false)) {
-            GUI::get().import_theme(path);
-            ImGui::CloseCurrentPopup();
+    auto list = [&](bool scripts, const char* heading, const char* empty) {
+        EchoUI::SectionLabel(heading);
+        int listed = 0;
+        for (const auto& path : state.files) {
+            bool example = ThemeScript::is_bundled(path);
+            bool script = is_theme_script(path);
+            if (script != scripts) continue;
+            std::string name = script ? ThemeScript::host().label(path) : geode::utils::string::pathToString(path.filename());
+            if (name.ends_with(".ui.json")) name.resize(name.size() - 8);
+            else if (name.ends_with(".ui")) name.resize(name.size() - 3);
+            if (!needle.empty() && GUI::get().lower_copy(name).find(needle) == std::string::npos)
+                continue;
+            ++shown;
+            ++listed;
+            bool running = script && !example && path == ThemeScript::file();
+            if (example) name += " (example)";
+            else if (running) name += " (running)";
+            if (script) {
+                ImGui::AlignTextToFramePadding();
+                EchoUI::StatusDot(running ? EchoUI::RUNNING_GREEN : ImGui::GetStyleColorVec4(ImGuiCol_CheckMark));
+                ImGui::SameLine(0.f, ImGui::GetStyle().ItemInnerSpacing.x);
+            }
+            if (EchoUI::Selectable(name.c_str(), running)) {
+                if (example) {
+                    fs::path made;
+                    if (ThemeScript::install(path, made)) ThemeScript::load(made, true);
+                }
+                else if (script) ThemeScript::load(path, true);
+                else GUI::get().import_theme(path);
+                ImGui::CloseCurrentPopup();
+            }
         }
-    }
-    if (shown == 0) ImGui::TextDisabled("No themes match");
+        if (listed == 0) ImGui::TextDisabled("%s", empty);
+    };
+    list(true, "Script Themes", "No script themes yet. Press New on the Scripting page to make one");
+    ImGui::Dummy(ImVec2(0.f, ImGui::GetStyle().ItemSpacing.y));
+    list(false, "Themes", "No saved themes. Save as on the Theme card keeps one.");
+    if (shown == 0 && !needle.empty()) ImGui::TextDisabled("No themes match");
     ImGui::EndChild();
     if (EchoUI::Button("Refresh", ImVec2(picker_wide, 0.f))) GUI::get().refresh_themes();
     ImGui::EndPopup();

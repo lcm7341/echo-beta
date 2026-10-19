@@ -1,5 +1,6 @@
 #include "GUI/widgets.hpp"
 #include "GUI/gui.hpp"
+#include "GUI/theme_script.hpp"
 
 #include <imgui_internal.h>
 
@@ -18,9 +19,12 @@
 using namespace geode::prelude;
 
 namespace EchoUI {
-    static ImVec4 mix(const ImVec4& a, const ImVec4& b, float t) {
+    ImVec4 mix(const ImVec4& a, const ImVec4& b, float t) {
         return ImVec4(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, a.z + (b.z - a.z) * t, a.w + (b.w - a.w) * t);
     }
+
+    const ImVec4 ERROR_RED(1.f, .36f, .44f, 1.f);
+    const ImVec4 RUNNING_GREEN(.3f, .85f, .45f, 1.f);
 
     static ImVec4 color(ImGuiCol slot) {
         return ImGui::GetStyleColorVec4(slot);
@@ -65,7 +69,7 @@ namespace EchoUI {
         return x;
     }
 
-    static float unit_random(unsigned item, unsigned seed) {
+    float unit_random(unsigned item, unsigned seed) {
         return (float)(random_bits(item ^ random_bits(seed)) & 16777215) / 16777215.f;
     }
 
@@ -141,6 +145,46 @@ namespace EchoUI {
 
     static ImGuiID sub(ImGuiID id, const char* what) {
         return ImHashStr(what, 0, id);
+    }
+
+    static bool just_pressed(ImGuiID id) {
+        ImGuiContext& g = *GImGui;
+        return g.ActiveId == id && g.ActiveIdIsJustActivated;
+    }
+
+    template <class Look>
+    static void skinned(const ThemeScript::Widget& widget, ImDrawList* draw, Look&& look) {
+        if (!ThemeScript::draw(widget, draw, ImGui::GetStyle().Alpha, look)) look();
+    }
+
+    static bool g_sharp = false;
+
+    bool sharp() {
+        return g_sharp || ThemeScript::forces_sharp();
+    }
+
+    bool sharp_setting() {
+        return g_sharp;
+    }
+
+    void set_sharp(bool on) {
+        g_sharp = on;
+    }
+
+    void sharpen(ImGuiStyle& live) {
+        if (!sharp()) return;
+        live.WindowRounding = live.ChildRounding = live.PopupRounding = live.FrameRounding = 0.f;
+        live.GrabRounding = live.ScrollbarRounding = live.TabRounding = 0.f;
+        live.CircleTessellationMaxError = 5.f;
+    }
+
+    float corner(float rounding) {
+        return sharp() ? 0.f : rounding;
+    }
+
+    static void disc_or_square(ImDrawList* draw, ImVec2 mid, float radius, ImU32 col, int segments) {
+        if (sharp()) draw->AddRectFilled(ImVec2(mid.x - radius, mid.y - radius), ImVec2(mid.x + radius, mid.y + radius), col);
+        else circle_filled_cached(draw, mid, radius, col, segments);
     }
 
     float ease(ImGuiID id, float target, float speed) {
@@ -242,24 +286,27 @@ namespace EchoUI {
         ImRect box(pos, ImVec2(pos.x + side, pos.y + side));
         float sink = held && hovered ? side * .04f : 0.f;
         box.Expand(-sink);
-        float rounding = std::max(style.FrameRounding, side * .28f);
-        ImVec4 off = mix(color(ImGuiCol_FrameBg), color(ImGuiCol_FrameBgHovered), hot);
-        draw->AddRectFilled(box.Min, box.Max, ImGui::GetColorU32(mix(off, color(ImGuiCol_CheckMark), on)), rounding);
-        ImVec4 edge = mix(color(ImGuiCol_Border), color(ImGuiCol_CheckMark), hot * .7f);
-        draw->AddRect(box.Min, box.Max, ImGui::GetColorU32(faded(edge, 1.f - on)), rounding, 0, std::max(1.f, side * .06f));
-        if (on > .01f) {
-            ImVec2 mid = box.GetCenter();
-            float reach = side * (.55f + .45f * on);
-            auto at = [&](float x, float y) {
-                return ImVec2(mid.x + (x - .5f) * reach, mid.y + (y - .5f) * reach);
-            };
-            ImVec4 tick = color(ImGuiCol_WindowBg);
-            tick.w = 1.f;
-            draw->PathLineTo(at(.27f, .52f));
-            draw->PathLineTo(at(.44f, .69f));
-            draw->PathLineTo(at(.74f, .33f));
-            draw->PathStroke(ImGui::GetColorU32(faded(tick, on)), 0, std::max(1.5f, side * .11f));
-        }
+        float rounding = corner(std::max(style.FrameRounding, side * .28f));
+        ThemeScript::Widget skin{ .hook = ThemeScript::Hook::Checkbox, .id = id, .min = box.Min, .max = box.Max, .label = label, .hover = hot, .down = sink > 0.f ? 1.f : 0.f, .on = on, .rounding = rounding, .pressed = just_pressed(id), .clicked = pressed };
+        skinned(skin, draw, [&] {
+            ImVec4 off = mix(color(ImGuiCol_FrameBg), color(ImGuiCol_FrameBgHovered), hot);
+            draw->AddRectFilled(box.Min, box.Max, ImGui::GetColorU32(mix(off, color(ImGuiCol_CheckMark), on)), rounding);
+            ImVec4 edge = mix(color(ImGuiCol_Border), color(ImGuiCol_CheckMark), hot * .7f);
+            draw->AddRect(box.Min, box.Max, ImGui::GetColorU32(faded(edge, 1.f - on)), rounding, 0, std::max(1.f, side * .06f));
+            if (on > .01f) {
+                ImVec2 mid = box.GetCenter();
+                float reach = side * (.55f + .45f * on);
+                auto at = [&](float x, float y) {
+                    return ImVec2(mid.x + (x - .5f) * reach, mid.y + (y - .5f) * reach);
+                };
+                ImVec4 tick = color(ImGuiCol_WindowBg);
+                tick.w = 1.f;
+                draw->PathLineTo(at(.27f, .52f));
+                draw->PathLineTo(at(.44f, .69f));
+                draw->PathLineTo(at(.74f, .33f));
+                draw->PathStroke(ImGui::GetColorU32(faded(tick, on)), 0, std::max(1.5f, side * .11f));
+            }
+        });
         if (label_size.x > 0.f)
             ImGui::RenderText(ImVec2(pos.x + side + style.ItemInnerSpacing.x, pos.y + style.FramePadding.y), label);
         return pressed;
@@ -286,16 +333,19 @@ namespace EchoUI {
         ImDrawList* draw = window->DrawList;
         ImRect body = bb;
         body.Expand(-down * std::max(1.f, size.y * .04f));
-        ImVec4 fill = mix(mix(color(ImGuiCol_Button), color(ImGuiCol_ButtonHovered), hot), color(ImGuiCol_ButtonActive), down);
-        draw->AddRectFilled(body.Min, body.Max, ImGui::GetColorU32(fill), style.FrameRounding);
-        gloss(draw, body, style.FrameRounding);
         bool tinted = false;
         for (const auto& pushed : g.ColorStack)
             tinted = tinted || pushed.Col == ImGuiCol_Button;
         ImVec4 own = color(ImGuiCol_Button);
-        button_skin(draw, body, style.FrameRounding, id, hot, down, 1.f, tinted ? &own : nullptr);
-        if (hot > .01f)
-            draw->AddRect(body.Min, body.Max, ImGui::GetColorU32(faded(color(ImGuiCol_CheckMark), hot * .55f)), style.FrameRounding, 0, 1.f);
+        ThemeScript::Widget skin{ .hook = ThemeScript::Hook::Button, .id = id, .min = body.Min, .max = body.Max, .label = label, .hover = hot, .down = down, .rounding = style.FrameRounding, .pressed = just_pressed(id), .clicked = pressed, .tint = tinted ? own : ImVec4(0.f, 0.f, 0.f, 0.f) };
+        skinned(skin, draw, [&] {
+            ImVec4 fill = mix(mix(color(ImGuiCol_Button), color(ImGuiCol_ButtonHovered), hot), color(ImGuiCol_ButtonActive), down);
+            draw->AddRectFilled(body.Min, body.Max, ImGui::GetColorU32(fill), style.FrameRounding);
+            gloss(draw, body, style.FrameRounding);
+            button_skin(draw, body, style.FrameRounding, id, hot, down, 1.f, tinted ? &own : nullptr);
+            if (hot > .01f)
+                draw->AddRect(body.Min, body.Max, ImGui::GetColorU32(faded(color(ImGuiCol_CheckMark), hot * .55f)), style.FrameRounding, 0, 1.f);
+        });
         ImGui::RenderNavCursor(bb, id);
         ImGui::RenderTextClipped(ImVec2(bb.Min.x + style.FramePadding.x, bb.Min.y + style.FramePadding.y), ImVec2(bb.Max.x - style.FramePadding.x, bb.Max.y - style.FramePadding.y),
             label, nullptr, &label_size, style.ButtonTextAlign, &bb);
@@ -465,7 +515,7 @@ namespace EchoUI {
         return at.x + reach < back.a.x || at.x - reach > back.b.x || at.y + reach < back.a.y || at.y - reach > back.b.y;
     }
 
-    static void soft_disc(ImDrawList* draw, ImVec2 at, float radius, ImVec4 tint, float squash = 1.f, int sides = 16) {
+    void soft_disc(ImDrawList* draw, ImVec2 at, float radius, ImVec4 tint, float squash, int sides) {
         ImU32 middle = ImGui::ColorConvertFloat4ToU32(tint);
         ImU32 half = ImGui::ColorConvertFloat4ToU32(faded(tint, .38f));
         ImU32 edge = middle & ~IM_COL32_A_MASK;
@@ -499,7 +549,7 @@ namespace EchoUI {
         }
     }
 
-    static void beam(ImDrawList* draw, ImVec2 from, ImVec2 left, ImVec2 right, ImVec4 tint) {
+    void beam(ImDrawList* draw, ImVec2 from, ImVec2 left, ImVec2 right, ImVec4 tint) {
         ImU32 near_col = ImGui::ColorConvertFloat4ToU32(tint), far_col = near_col & ~IM_COL32_A_MASK;
         ImVec2 uv = draw->_Data->TexUvWhitePixel;
         draw->PrimReserve(3, 3);
@@ -514,7 +564,7 @@ namespace EchoUI {
 
     const unsigned NOISE_X = 374761393u, NOISE_Y = 668265263u, NOISE_MIX = 1274126177u;
 
-    static float noise(float x, float y) {
+    float noise(float x, float y) {
         auto lattice = [](int ix, int iy) {
             unsigned mixed = (unsigned)ix * NOISE_X + (unsigned)iy * NOISE_Y;
             mixed = (mixed ^ (mixed >> 13)) * NOISE_MIX;
@@ -1248,15 +1298,13 @@ namespace EchoUI {
             return (p.x >= box.Min.x + rounding && p.x <= box.Max.x - rounding) ? 1 : (p.y >= box.Min.y + rounding && p.y <= box.Max.y - rounding) ? 2 : 0;
         };
         ImVector<ImDrawIdx> indices;
-        indices.reserve(draw->IdxBuffer.Size);
-        for (int i = 0; i < idx_from; ++i)
-            indices.push_back(draw->IdxBuffer[i]);
+        indices.reserve(draw->IdxBuffer.Size - idx_from);
         std::vector<ImDrawVert> poly, next;
         for (int c = std::max(cmd_from, 0); c < draw->CmdBuffer.Size; ++c) {
             ImDrawCmd& cmd = draw->CmdBuffer[c];
             unsigned begin = cmd.IdxOffset, end = cmd.IdxOffset + cmd.ElemCount;
             unsigned start = std::max(begin, (unsigned)idx_from);
-            unsigned new_offset = begin < (unsigned)idx_from ? begin : (unsigned)indices.Size;
+            unsigned new_offset = begin < (unsigned)idx_from ? begin : (unsigned)(idx_from + indices.Size);
             for (unsigned i = start; i + 3 <= end; i += 3) {
                 ImDrawIdx tri[3] = { draw->IdxBuffer[i], draw->IdxBuffer[i + 1], draw->IdxBuffer[i + 2] };
                 const ImDrawVert* at[3] = { &draw->VtxBuffer[cmd.VtxOffset + tri[0]], &draw->VtxBuffer[cmd.VtxOffset + tri[1]], &draw->VtxBuffer[cmd.VtxOffset + tri[2]] };
@@ -1288,9 +1336,12 @@ namespace EchoUI {
                 }
             }
             cmd.IdxOffset = new_offset;
-            cmd.ElemCount = (unsigned)indices.Size - new_offset;
+            cmd.ElemCount = (unsigned)(idx_from + indices.Size) - new_offset;
         }
-        draw->IdxBuffer.swap(indices);
+        draw->IdxBuffer.resize(idx_from);
+        draw->IdxBuffer.reserve(idx_from + indices.Size);
+        for (ImDrawIdx index : indices)
+            draw->IdxBuffer.push_back(index);
         draw->_VtxWritePtr = draw->VtxBuffer.Data + draw->VtxBuffer.Size;
         draw->_IdxWritePtr = draw->IdxBuffer.Data + draw->IdxBuffer.Size;
         draw->_VtxCurrentIdx = (unsigned)draw->VtxBuffer.Size - draw->CmdBuffer.back().VtxOffset;
@@ -1338,19 +1389,123 @@ namespace EchoUI {
         round_off(back.draw, idx_from, cmd_from, ImRect(back.a, back.b), back.rounding);
     }
 
+    static ThemeScript::Widget window_skin(ImGuiWindow* window, ThemeScript::Hook hook, bool plain) {
+        ImGuiContext& g = *GImGui;
+        ImRect box = window->Rect();
+        return ThemeScript::Widget{ .hook = hook, .id = window->ID, .min = box.Min, .max = box.Max, .label = window->Name, .hover = g.HoveredWindow == window ? 1.f : 0.f, .on = g.NavWindow == window ? 1.f : 0.f, .rounding = window->WindowRounding, .popup = plain };
+    }
+
+    static ImDrawList g_background_scene(nullptr);
+
+    static bool gets_rims(ImGuiWindow* window) {
+        if (!window->Active || window->Hidden || (window->Flags & ImGuiWindowFlags_ChildWindow)) return false;
+        if (window->Size.x < 4.f || window->Size.y < 4.f || window->IsFallbackWindow) return false;
+        return !(window->Flags & ImGuiWindowFlags_NoBackground);
+    }
+
+    static bool is_plain(ImGuiWindow* window) {
+        return (window->Flags & (ImGuiWindowFlags_Popup | ImGuiWindowFlags_Tooltip)) != 0;
+    }
+
+    static bool draw_background_scene(float alpha) {
+        ImGuiContext& g = *GImGui;
+        ImRect area(FLT_MAX, FLT_MAX, -FLT_MAX, -FLT_MAX);
+        for (ImGuiWindow* window : g.Windows)
+            if (gets_rims(window) && !is_plain(window)) area.Add(window->Rect());
+        if (area.Min.x > area.Max.x) return false;
+        g_background_scene._SetDrawListSharedData(&g.DrawListSharedData);
+        g_background_scene._ResetForNewFrame();
+        g_background_scene.PushTexture(g.IO.Fonts->TexRef);
+        g_background_scene.PushClipRect(ImVec2(0.f, 0.f), g.IO.DisplaySize, false);
+        ThemeScript::draw_background(&g_background_scene, alpha, area.Min, area.Max);
+        return true;
+    }
+
+    static void copy_background_scene(ImDrawList* draw, const ImRect& box) {
+        const unsigned CHUNK_INDICES = 3 * 8000;
+        static std::vector<int> copied_in, copied_to;
+        static int copy_pass = 0;
+        const ImDrawList& scene = g_background_scene;
+        if ((int)copied_in.size() < scene.VtxBuffer.Size) {
+            copied_in.resize(scene.VtxBuffer.Size, 0);
+            copied_to.resize(scene.VtxBuffer.Size, 0);
+        }
+        for (const ImDrawCmd& cmd : scene.CmdBuffer) {
+            if (cmd.UserCallback || cmd.ElemCount == 0) continue;
+            ImRect clip(cmd.ClipRect);
+            clip.ClipWithFull(box);
+            if (clip.Min.x >= clip.Max.x || clip.Min.y >= clip.Max.y) continue;
+            draw->PushClipRect(clip.Min, clip.Max, true);
+            draw->PushTexture(draw->_CmdHeader.TexRef);
+            draw->_SetTexture(cmd.TexRef);
+            for (unsigned first = 0; first < cmd.ElemCount; first += CHUNK_INDICES) {
+                unsigned count = std::min(CHUNK_INDICES, cmd.ElemCount - first);
+                bool offsets = (draw->Flags & ImDrawListFlags_AllowVtxOffset) != 0;
+                if (sizeof(ImDrawIdx) == 2 && !offsets && draw->_VtxCurrentIdx + count >= (1 << 16)) break;
+                draw->PrimReserve((int)count, (int)count);
+                unsigned base = draw->_VtxCurrentIdx;
+                int verts = 0, indices = 0;
+                ++copy_pass;
+                for (unsigned i = first; i + 3 <= first + count; i += 3) {
+                    const ImDrawIdx* tri = &scene.IdxBuffer.Data[cmd.IdxOffset + i];
+                    const ImVec2& a = scene.VtxBuffer.Data[cmd.VtxOffset + tri[0]].pos;
+                    const ImVec2& b = scene.VtxBuffer.Data[cmd.VtxOffset + tri[1]].pos;
+                    const ImVec2& c = scene.VtxBuffer.Data[cmd.VtxOffset + tri[2]].pos;
+                    if (std::max({ a.x, b.x, c.x }) <= clip.Min.x || std::min({ a.x, b.x, c.x }) >= clip.Max.x) continue;
+                    if (std::max({ a.y, b.y, c.y }) <= clip.Min.y || std::min({ a.y, b.y, c.y }) >= clip.Max.y) continue;
+                    for (int k = 0; k < 3; ++k) {
+                        int from = (int)cmd.VtxOffset + tri[k];
+                        if (copied_in[from] != copy_pass) {
+                            copied_in[from] = copy_pass;
+                            copied_to[from] = verts;
+                            draw->_VtxWritePtr[verts++] = scene.VtxBuffer.Data[from];
+                        }
+                        draw->_IdxWritePtr[indices++] = (ImDrawIdx)(base + copied_to[from]);
+                    }
+                }
+                draw->PrimUnreserve((int)count - indices, (int)count - verts);
+                draw->_VtxCurrentIdx += verts;
+            }
+            draw->PopTexture();
+            draw->PopClipRect();
+        }
+    }
+
+    static void script_background(ImGuiWindow* window, float alpha, bool scene) {
+        bool own = ThemeScript::has(ThemeScript::Hook::WindowBackground);
+        if (!own && !scene) return;
+        ImDrawList* draw = ImGui::GetBackgroundDrawList();
+        ImRect box = window->Rect();
+        int idx_from = draw->IdxBuffer.Size;
+        int cmd_from = draw->CmdBuffer.Size - 1;
+        auto look = [&] {
+            draw->AddRectFilled(box.Min, box.Max, ImGui::ColorConvertFloat4ToU32(faded(ThemeScript::window_color(), alpha)), window->WindowRounding);
+        };
+        draw->PushClipRect(box.Min, box.Max, true);
+        if (scene) copy_background_scene(draw, box);
+        if (own && !ThemeScript::draw(window_skin(window, ThemeScript::Hook::WindowBackground, false), draw, alpha, look))
+            look();
+        draw->PopClipRect();
+        round_off(draw, idx_from, cmd_from, box, window->WindowRounding);
+    }
+
     void WindowRims(float alpha) {
         if (alpha <= .01f) return;
         ImGuiContext& g = *GImGui;
+        bool scene = ThemeScript::has_background() && draw_background_scene(alpha);
         for (ImGuiWindow* window : g.Windows) {
-            if (!window->Active || window->Hidden || (window->Flags & ImGuiWindowFlags_ChildWindow))
-                continue;
-            if (window->Size.x < 4.f || window->Size.y < 4.f || window->IsFallbackWindow) continue;
-            if (window->Flags & ImGuiWindowFlags_NoBackground) continue;
-            bool plain = (window->Flags & (ImGuiWindowFlags_Popup | ImGuiWindowFlags_Tooltip)) != 0;
+            if (!gets_rims(window)) continue;
+            bool plain = is_plain(window);
             if (g_rainbow_rim && !plain) rainbow_body(window, alpha);
             if (g_scene != Scene::None && !plain) drawScene(window, alpha);
-            rim(window, alpha);
+            if (!plain) script_background(window, alpha, scene);
+            auto look = [&] {
+                rim(window, alpha);
+            };
+            if (!ThemeScript::draw(window_skin(window, ThemeScript::Hook::WindowFrame, plain), window->DrawList, alpha, look))
+                look();
         }
+        if (scene) g_background_scene._SetDrawListSharedData(nullptr);
     }
 
     struct FieldState {
@@ -1368,28 +1523,31 @@ namespace EchoUI {
 
     static FocusedField g_field;
 
-    static void draw_field(ImGuiWindow* window, ImGuiID id, const ImRect& bb, float fill, const FieldState& state) {
+    static void draw_field(ImGuiWindow* window, ImGuiID id, const ImRect& bb, float fill, const FieldState& state, const char* label) {
         const ImGuiStyle& style = ImGui::GetStyle();
         float hot = ease(sub(id, "field-hot"), state.hovered ? 1.f : 0.f);
         float act = ease(sub(id, "field-act"), state.active ? 1.f : 0.f);
         ImDrawList* draw = window->DrawList;
         float rounding = style.FrameRounding;
-        draw->AddRectFilled(bb.Min, bb.Max, ImGui::GetColorU32(mix(color(ImGuiCol_FrameBg), color(ImGuiCol_FrameBgHovered), hot)), rounding);
-        gloss(draw, bb, rounding);
-        if (fill > .004f) {
-            float edge = bb.Min.x + bb.GetWidth() * std::min(fill, 1.f);
-            draw->PushClipRect(bb.Min, ImVec2(edge, bb.Max.y), true);
-            draw->AddRectFilled(bb.Min, bb.Max, ImGui::GetColorU32(faded(color(ImGuiCol_CheckMark), .16f + .08f * hot)), rounding);
-            draw->PopClipRect();
-        }
-        ImVec4 edge = mix(faded(color(ImGuiCol_Border), .55f), color(ImGuiCol_CheckMark), std::max(hot * .5f, act));
-        draw->AddRect(bb.Min, bb.Max, ImGui::GetColorU32(edge), rounding, 0, 1.f);
-        if (act > .01f) {
-            float half = bb.GetWidth() * .32f * act;
-            float mid = (bb.Min.x + bb.Max.x) * .5f;
-            float thick = std::max(2.f, ImGui::GetFontSize() * .11f);
-            draw->AddRectFilled(ImVec2(mid - half, bb.Max.y - thick), ImVec2(mid + half, bb.Max.y), ImGui::GetColorU32(faded(color(ImGuiCol_CheckMark), act)), thick * .5f);
-        }
+        ThemeScript::Widget skin{ .hook = ThemeScript::Hook::Field, .id = id, .min = bb.Min, .max = bb.Max, .label = label, .hover = hot, .on = act, .value = fill, .rounding = rounding };
+        skinned(skin, draw, [&] {
+            draw->AddRectFilled(bb.Min, bb.Max, ImGui::GetColorU32(mix(color(ImGuiCol_FrameBg), color(ImGuiCol_FrameBgHovered), hot)), rounding);
+            gloss(draw, bb, rounding);
+            if (fill > .004f) {
+                float edge = bb.Min.x + bb.GetWidth() * std::min(fill, 1.f);
+                draw->PushClipRect(bb.Min, ImVec2(edge, bb.Max.y), true);
+                draw->AddRectFilled(bb.Min, bb.Max, ImGui::GetColorU32(faded(color(ImGuiCol_CheckMark), .16f + .08f * hot)), rounding);
+                draw->PopClipRect();
+            }
+            ImVec4 edge = mix(faded(color(ImGuiCol_Border), .55f), color(ImGuiCol_CheckMark), std::max(hot * .5f, act));
+            draw->AddRect(bb.Min, bb.Max, ImGui::GetColorU32(edge), rounding, 0, 1.f);
+            if (act > .01f) {
+                float half = bb.GetWidth() * .32f * act;
+                float mid = (bb.Min.x + bb.Max.x) * .5f;
+                float thick = std::max(2.f, ImGui::GetFontSize() * .11f);
+                draw->AddRectFilled(ImVec2(mid - half, bb.Max.y - thick), ImVec2(mid + half, bb.Max.y), ImGui::GetColorU32(faded(color(ImGuiCol_CheckMark), act)), corner(thick * .5f));
+            }
+        });
     }
 
     static void push_clear_frame() {
@@ -1505,6 +1663,14 @@ namespace EchoUI {
             draw->PathArcTo(c, s * .36f, -1.5707963f, 1.5707963f, 16);
             draw->PathFillConvex(ink);
             break;
+        case Icon::Script: {
+            ImVec2 left[] = { at(-.18f, -.26f), at(-.44f, 0.f), at(-.18f, .26f) };
+            ImVec2 right[] = { at(.18f, -.26f), at(.44f, 0.f), at(.18f, .26f) };
+            draw->AddPolyline(left, 3, ink, 0, t);
+            draw->AddPolyline(right, 3, ink, 0, t);
+            draw->AddLine(at(.08f, -.36f), at(-.08f, .36f), ink, t);
+            break;
+        }
         case Icon::None:
             break;
         }
@@ -1533,7 +1699,7 @@ namespace EchoUI {
         g_field = { id, bb, window };
         if (!window->SkipItems && ImGui::IsRectVisible(bb.Min, bb.Max)) {
             if (parts <= 1) {
-                draw_field(window, id, bb, fill, g_field_states[id]);
+                draw_field(window, id, bb, fill, g_field_states[id], label);
             }
             else {
                 float gap = ImGui::GetStyle().ItemInnerSpacing.x;
@@ -1545,7 +1711,7 @@ namespace EchoUI {
                     draw_field(window, sub(id, i == 0 ? "part0" : i == 1 ? "part1"
                                                               : i == 2   ? "part2"
                                                                          : "part3"),
-                        ImRect(ImVec2(x, pos.y), ImVec2(x + w, bb.Max.y)), -1.f, g_field_states[id]);
+                        ImRect(ImVec2(x, pos.y), ImVec2(x + w, bb.Max.y)), -1.f, g_field_states[id], label);
                     x += w + gap;
                 }
             }
@@ -1585,7 +1751,7 @@ namespace EchoUI {
         auto& state = g_field_states[id];
         float turned = ease(sub(id, "combo-open"), state.active ? 1.f : 0.f, 16.f);
         if (!window->SkipItems && ImGui::IsRectVisible(bb.Min, bb.Max)) {
-            draw_field(window, id, bb, -1.f, state);
+            draw_field(window, id, bb, -1.f, state, label);
             ImVec2 mid(bb.Max.x - side * .5f, (bb.Min.y + bb.Max.y) * .5f);
             float arm = side * .16f;
             float flip = 1.f - 2.f * turned;
@@ -1645,16 +1811,18 @@ namespace EchoUI {
         float on = ease(sub(id, "row-on"), selected ? 1.f : 0.f, 18.f);
         layers.SetCurrentChannel(draw, 0);
         float strength = std::max(hot * .75f, on);
-        if (strength > .01f) {
-            float edge = ImGui::GetFontSize() * .38f;
-            float right = window->Pos.x + window->Size.x - edge - (window->ScrollbarY ? ImGui::GetStyle().ScrollbarSize : 0.f);
-            row.Min.x = std::max(row.Min.x, window->Pos.x + edge);
-            row.Max.x = std::min(row.Max.x, right);
-            row.Min.y += 1.f;
-            row.Max.y -= 1.f;
-            float rounding = std::min(ImGui::GetStyle().FrameRounding, row.GetHeight() * .4f);
-            draw->AddRectFilled(row.Min, row.Max, ImGui::GetColorU32(faded(mix(color(ImGuiCol_HeaderHovered), color(ImGuiCol_Header), on), strength)), rounding);
-        }
+        float edge = ImGui::GetFontSize() * .38f;
+        float right = window->Pos.x + window->Size.x - edge - (window->ScrollbarY ? ImGui::GetStyle().ScrollbarSize : 0.f);
+        row.Min.x = std::max(row.Min.x, window->Pos.x + edge);
+        row.Max.x = std::min(row.Max.x, right);
+        row.Min.y += 1.f;
+        row.Max.y -= 1.f;
+        float rounding = corner(std::min(ImGui::GetStyle().FrameRounding, row.GetHeight() * .4f));
+        ThemeScript::Widget skin{ .hook = ThemeScript::Hook::Selectable, .id = id, .min = row.Min, .max = row.Max, .label = label, .hover = hot, .on = on, .rounding = rounding, .pressed = just_pressed(id), .clicked = pressed };
+        skinned(skin, draw, [&] {
+            if (strength > .01f)
+                draw->AddRectFilled(row.Min, row.Max, ImGui::GetColorU32(faded(mix(color(ImGuiCol_HeaderHovered), color(ImGuiCol_Header), on), strength)), rounding);
+        });
         layers.Merge(draw);
         return pressed;
     }
@@ -1682,13 +1850,16 @@ namespace EchoUI {
         ImDrawList* draw = window->DrawList;
         ImRect body = bb;
         body.Expand(-down * std::max(1.f, size.y * .04f));
-        ImVec4 idle = mix(mix(color(ImGuiCol_Button), color(ImGuiCol_ButtonHovered), hot), color(ImGuiCol_ButtonActive), down);
         ImVec4 running = mix(accent, ImVec4(1.f, 1.f, 1.f, accent.w), hot * .12f);
-        ImVec4 fill = mix(idle, running, on);
-        draw->AddRectFilled(body.Min, body.Max, ImGui::GetColorU32(fill), style.FrameRounding);
-        gloss(draw, body, style.FrameRounding);
-        button_skin(draw, body, style.FrameRounding, id, hot, down, 1.f, &running, on);
-        draw->AddRect(body.Min, body.Max, ImGui::GetColorU32(faded(accent, std::max(hot * .55f, .35f * (1.f - on)))), style.FrameRounding, 0, 1.f);
+        ThemeScript::Widget skin{ .hook = ThemeScript::Hook::ActionButton, .id = id, .min = body.Min, .max = body.Max, .label = label, .hover = hot, .down = down, .on = on, .rounding = style.FrameRounding, .pressed = just_pressed(id), .clicked = pressed, .tint = accent };
+        skinned(skin, draw, [&] {
+            ImVec4 idle = mix(mix(color(ImGuiCol_Button), color(ImGuiCol_ButtonHovered), hot), color(ImGuiCol_ButtonActive), down);
+            ImVec4 fill = mix(idle, running, on);
+            draw->AddRectFilled(body.Min, body.Max, ImGui::GetColorU32(fill), style.FrameRounding);
+            gloss(draw, body, style.FrameRounding);
+            button_skin(draw, body, style.FrameRounding, id, hot, down, 1.f, &running, on);
+            draw->AddRect(body.Min, body.Max, ImGui::GetColorU32(faded(accent, std::max(hot * .55f, .35f * (1.f - on)))), style.FrameRounding, 0, 1.f);
+        });
         ImVec4 ink = mix(color(ImGuiCol_Text), ink_on(running), on);
         float glyph = ImGui::GetFontSize() * .78f;
         float gap = style.ItemInnerSpacing.x * .8f;
@@ -1716,14 +1887,14 @@ namespace EchoUI {
         return nav_pad() * 2.f + ImGui::GetFontSize() + nav_gap();
     }
 
-    bool NavItem(const char* label, Icon icon, bool selected, float width, float height) {
+    bool NavItem(const char* label, Icon icon, bool selected, float width, float height, bool labelled) {
         ImGuiWindow* window = ImGui::GetCurrentWindow();
         if (window->SkipItems) return false;
         const ImGuiStyle& style = ImGui::GetStyle();
         ImGuiID id = window->GetID(label);
-        ImVec2 label_size = ImGui::CalcTextSize(label, nullptr, true);
+        ImVec2 label_size = labelled ? ImGui::CalcTextSize(label, nullptr, true) : ImVec2(0.f, 0.f);
         ImVec2 pos = window->DC.CursorPos;
-        ImVec2 size(width + nav_icon_width(), height > 0.f ? height : ImGui::GetFrameHeight());
+        ImVec2 size(width + (labelled ? nav_icon_width() : nav_pad() * 2.f + ImGui::GetFontSize()), height > 0.f ? height : ImGui::GetFrameHeight());
         ImRect bb(pos, ImVec2(pos.x + size.x, pos.y + size.y));
         ImGui::ItemSize(size, style.FramePadding.y);
         if (!ImGui::ItemAdd(bb, id)) return false;
@@ -1734,16 +1905,24 @@ namespace EchoUI {
         float on = ease(sub(id, "on"), selected ? 1.f : 0.f);
         ImDrawList* draw = window->DrawList;
         float plate = std::max(hot * .7f, on);
-        if (plate > .01f)
-            draw->AddRectFilled(bb.Min, bb.Max, ImGui::GetColorU32(faded(mix(color(ImGuiCol_FrameBgHovered), color(ImGuiCol_Header), on), plate)), style.FrameRounding);
+        ThemeScript::Widget skin{ .hook = ThemeScript::Hook::NavItem, .id = id, .min = bb.Min, .max = bb.Max, .label = label, .hover = hot, .on = on, .rounding = style.FrameRounding, .pressed = just_pressed(id), .clicked = pressed };
+        skinned(skin, draw, [&] {
+            if (plate > .01f)
+                draw->AddRectFilled(bb.Min, bb.Max, ImGui::GetColorU32(faded(mix(color(ImGuiCol_FrameBgHovered), color(ImGuiCol_Header), on), plate)), style.FrameRounding);
+        });
         float glyph = ImGui::GetFontSize();
         float x = bb.Min.x + nav_pad();
         ImVec4 ink = mix(color(ImGuiCol_TextDisabled), color(ImGuiCol_Text), std::max(hot, on));
         stroke_icon(draw, ImVec2(x + glyph * .5f, (bb.Min.y + bb.Max.y) * .5f), glyph, icon, ImGui::GetColorU32(mix(ink, color(ImGuiCol_CheckMark), on)));
-        ImGui::PushStyleColor(ImGuiCol_Text, ink);
-        ImVec2 text(std::round(x + glyph + nav_gap()), std::round((bb.Min.y + bb.Max.y - label_size.y) * .5f));
-        ImGui::RenderText(text, label);
-        ImGui::PopStyleColor();
+        if (labelled) {
+            ImGui::PushStyleColor(ImGuiCol_Text, ink);
+            ImVec2 text(std::round(x + glyph + nav_gap()), std::round((bb.Min.y + bb.Max.y - label_size.y) * .5f));
+            ImGui::RenderText(text, label);
+            ImGui::PopStyleColor();
+        }
+        else if (hovered) {
+            ImGui::SetTooltip("%s", label);
+        }
         return pressed;
     }
 
@@ -1755,18 +1934,21 @@ namespace EchoUI {
         ImDrawList* draw = ImGui::GetWindowDrawList();
         ImU32 line = ImGui::GetColorU32(ImGuiCol_Separator);
         ImU32 clear = ImGui::GetColorU32(faded(color(ImGuiCol_Separator), 0.f));
-        if (b.x - a.x >= b.y - a.y) {
-            float y = std::floor((a.y + b.y) * .5f);
-            float mid = (a.x + b.x) * .5f;
-            draw->AddRectFilledMultiColor(ImVec2(a.x, y), ImVec2(mid, y + 1.f), clear, line, line, clear);
-            draw->AddRectFilledMultiColor(ImVec2(mid, y), ImVec2(b.x, y + 1.f), line, clear, clear, line);
-        }
-        else {
-            float x = std::floor((a.x + b.x) * .5f);
-            float mid = (a.y + b.y) * .5f;
-            draw->AddRectFilledMultiColor(ImVec2(x, a.y), ImVec2(x + 1.f, mid), clear, clear, line, line);
-            draw->AddRectFilledMultiColor(ImVec2(x, mid), ImVec2(x + 1.f, b.y), line, line, clear, clear);
-        }
+        ThemeScript::Widget skin{ .hook = ThemeScript::Hook::Separator, .id = ImGui::GetItemID(), .min = a, .max = b };
+        skinned(skin, draw, [&] {
+            if (b.x - a.x >= b.y - a.y) {
+                float y = std::floor((a.y + b.y) * .5f);
+                float mid = (a.x + b.x) * .5f;
+                draw->AddRectFilledMultiColor(ImVec2(a.x, y), ImVec2(mid, y + 1.f), clear, line, line, clear);
+                draw->AddRectFilledMultiColor(ImVec2(mid, y), ImVec2(b.x, y + 1.f), line, clear, clear, line);
+            }
+            else {
+                float x = std::floor((a.x + b.x) * .5f);
+                float mid = (a.y + b.y) * .5f;
+                draw->AddRectFilledMultiColor(ImVec2(x, a.y), ImVec2(x + 1.f, mid), clear, clear, line, line);
+                draw->AddRectFilledMultiColor(ImVec2(x, mid), ImVec2(x + 1.f, b.y), line, line, clear, clear);
+            }
+        });
     }
 
     void SectionLabel(const char* label) {
@@ -1775,7 +1957,11 @@ namespace EchoUI {
         ImVec2 pos = ImGui::GetCursorScreenPos();
         ImDrawList* draw = ImGui::GetWindowDrawList();
         float tick = std::max(2.f, font * .16f);
-        draw->AddRectFilled(ImVec2(pos.x, pos.y + font * .18f), ImVec2(pos.x + tick, pos.y + font * .86f), ImGui::GetColorU32(ImGuiCol_CheckMark), tick * .5f);
+        ImVec2 tick_min(pos.x, pos.y + font * .18f), tick_max(pos.x + tick, pos.y + font * .86f);
+        ThemeScript::Widget skin{ .hook = ThemeScript::Hook::Heading, .id = ImGui::GetID(label), .min = tick_min, .max = tick_max, .label = label, .rounding = corner(tick * .5f) };
+        skinned(skin, draw, [&] {
+            draw->AddRectFilled(tick_min, tick_max, ImGui::GetColorU32(ImGuiCol_CheckMark), corner(tick * .5f));
+        });
         ImGui::SetCursorPosX(ImGui::GetCursorPosX() + tick + font * .38f);
         ImGui::PushStyleColor(ImGuiCol_Text, color(ImGuiCol_TextDisabled));
         ImGui::TextUnformatted(label);
@@ -1797,11 +1983,14 @@ namespace EchoUI {
         ImDrawList* draw = ImGui::GetWindowDrawList();
         ImVec2 mid(pos.x + size.x * .5f, pos.y + size.y * .5f);
         float radius = size.y * .42f;
-        ImVec4 ink = mix(color(ImGuiCol_TextDisabled), color(ImGuiCol_CheckMark), hot);
-        draw->AddCircle(mid, radius, ImGui::GetColorU32(ink), 20, std::max(1.f, size.y * .07f));
-        float mark_size = ImGui::GetFontSize() * .72f;
-        ImVec2 mark = ImGui::GetFont()->CalcTextSizeA(mark_size, FLT_MAX, 0.f, "?");
-        draw->AddText(ImGui::GetFont(), mark_size, ImVec2(mid.x - mark.x * .5f, mid.y - mark.y * .5f), ImGui::GetColorU32(ink), "?");
+        ThemeScript::Widget skin{ .hook = ThemeScript::Hook::Help, .id = id, .min = pos, .max = ImVec2(pos.x + size.x, pos.y + size.y), .hover = hot };
+        skinned(skin, draw, [&] {
+            ImVec4 ink = mix(color(ImGuiCol_TextDisabled), color(ImGuiCol_CheckMark), hot);
+            draw->AddCircle(mid, radius, ImGui::GetColorU32(ink), 20, std::max(1.f, size.y * .07f));
+            float mark_size = ImGui::GetFontSize() * .72f;
+            ImVec2 mark = ImGui::GetFont()->CalcTextSizeA(mark_size, FLT_MAX, 0.f, "?");
+            draw->AddText(ImGui::GetFont(), mark_size, ImVec2(mid.x - mark.x * .5f, mid.y - mark.y * .5f), ImGui::GetColorU32(ink), "?");
+        });
     }
 
     void ProgressBar(float fraction, const ImVec2& size_arg, const char* overlay) {
@@ -1811,26 +2000,35 @@ namespace EchoUI {
         ImGui::Dummy(size);
         ImDrawList* draw = ImGui::GetWindowDrawList();
         ImVec2 max(pos.x + size.x, pos.y + size.y);
-        float rounding = std::min(style.FrameRounding, size.y * .5f);
-        draw->AddRectFilled(pos, max, ImGui::GetColorU32(ImGuiCol_FrameBg), rounding);
-        ImU32 fill = ImGui::GetColorU32(mix(color(ImGuiCol_FrameBg), color(ImGuiCol_CheckMark), .6f));
-        float from = 0.f, to = std::clamp(fraction, 0.f, 1.f);
-        if (fraction < 0.f) {
-            float sweep = .5f + .5f * std::sin((float)(ImGui::GetTime()) * 2.2f);
-            from = sweep * .7f;
-            to = from + .3f;
-        }
-        if (to > from + .002f) {
-            draw->PushClipRect(ImVec2(pos.x + size.x * from, pos.y), ImVec2(pos.x + size.x * to, max.y), true);
-            draw->AddRectFilled(pos, max, fill, rounding);
-            draw->PopClipRect();
-        }
-        draw->AddRect(pos, max, ImGui::GetColorU32(faded(color(ImGuiCol_Border), .55f)), rounding);
+        float rounding = corner(std::min(style.FrameRounding, size.y * .5f));
+        ThemeScript::Widget skin{ .hook = ThemeScript::Hook::Progress, .id = ImGui::GetItemID(), .min = pos, .max = max, .label = overlay, .value = fraction < 0.f ? -1.f : std::clamp(fraction, 0.f, 1.f), .rounding = rounding };
+        skinned(skin, draw, [&] {
+            draw->AddRectFilled(pos, max, ImGui::GetColorU32(ImGuiCol_FrameBg), rounding);
+            ImU32 fill = ImGui::GetColorU32(mix(color(ImGuiCol_FrameBg), color(ImGuiCol_CheckMark), .6f));
+            float from = 0.f, to = std::clamp(fraction, 0.f, 1.f);
+            if (fraction < 0.f) {
+                float sweep = .5f + .5f * std::sin((float)(ImGui::GetTime()) * 2.2f);
+                from = sweep * .7f;
+                to = from + .3f;
+            }
+            if (to > from + .002f) {
+                draw->PushClipRect(ImVec2(pos.x + size.x * from, pos.y), ImVec2(pos.x + size.x * to, max.y), true);
+                draw->AddRectFilled(pos, max, fill, rounding);
+                draw->PopClipRect();
+            }
+            draw->AddRect(pos, max, ImGui::GetColorU32(faded(color(ImGuiCol_Border), .55f)), rounding);
+        });
         if (overlay && *overlay) {
             ImVec2 text = ImGui::CalcTextSize(overlay);
             ImRect box(pos, max);
             ImGui::RenderTextClipped(pos, max, overlay, nullptr, &text, ImVec2(.5f, .5f), &box);
         }
+    }
+
+    void StatusText(const ImVec4& tint, const char* text) {
+        StatusDot(tint);
+        ImGui::SameLine(0.f, ImGui::GetStyle().ItemInnerSpacing.x);
+        ImGui::TextUnformatted(text);
     }
 
     void StatusDot(const ImVec4& tint) {
@@ -1840,10 +2038,13 @@ namespace EchoUI {
         ImGui::Dummy(ImVec2(font * .62f, font));
         ImDrawList* draw = ImGui::GetWindowDrawList();
         ImVec2 mid(pos.x + font * .31f, pos.y + font * .52f);
-        ImVec4 shown = tint;
-        shown.w *= ImGui::GetStyle().Alpha;
-        circle_filled_cached(draw, mid, font * .32f, ImGui::ColorConvertFloat4ToU32(faded(shown, .22f)), 20);
-        circle_filled_cached(draw, mid, font * .19f, ImGui::ColorConvertFloat4ToU32(shown), 16);
+        ThemeScript::Widget skin{ .hook = ThemeScript::Hook::StatusDot, .min = ImVec2(mid.x - font * .32f, mid.y - font * .32f), .max = ImVec2(mid.x + font * .32f, mid.y + font * .32f), .tint = tint };
+        skinned(skin, draw, [&] {
+            ImVec4 shown = tint;
+            shown.w *= ImGui::GetStyle().Alpha;
+            circle_filled_cached(draw, mid, font * .32f, ImGui::ColorConvertFloat4ToU32(faded(shown, .22f)), 20);
+            circle_filled_cached(draw, mid, font * .19f, ImGui::ColorConvertFloat4ToU32(shown), 16);
+        });
     }
 
     float em(float n) {
@@ -1851,6 +2052,103 @@ namespace EchoUI {
     }
 
     static ImVector<float> g_row_widths;
+
+    static std::unordered_map<std::string, ImVec2> g_card_sizes;
+
+    struct PlanState {
+        bool on = false;
+        const CardPlan* plan = nullptr;
+        ImVec2 start;
+        float height = 0.f;
+        std::vector<ImVec2> at;
+        std::vector<float> widths;
+    };
+
+    struct OpenCard {
+        std::string key;
+        bool skipped = false;
+    };
+
+    static PlanState g_plan;
+    static bool tiles_on();
+    static std::string g_page;
+    static std::vector<OpenCard> g_open_cards;
+
+    static std::string card_key(const char* title) {
+        const char* end = ImGui::FindRenderedTextEnd(title);
+        return g_page + "/" + std::string(title, end);
+    }
+
+    static int plan_slot(const std::string& key) {
+        if (!g_plan.plan) return -1;
+        const auto& cards = g_plan.plan->cards;
+        std::string_view title = std::string_view(key).substr(key.find('/') + 1);
+        for (int i = 0; i < (int)cards.size(); ++i) {
+            if (cards[(size_t)i] == key) return i;
+            if (cards[(size_t)i].find('/') == std::string::npos && cards[(size_t)i] == title) return i;
+        }
+        return -1;
+    }
+
+    void CardPage(const char* page) {
+        g_page = page ? page : "";
+    }
+
+    void BeginCardPlan(const CardPlan& plan, float width_em, float gap, int columns) {
+        g_plan = {};
+        g_plan.on = true;
+        g_plan.plan = &plan;
+        if (tiles_on()) return;
+        g_plan.start = ImGui::GetCursorScreenPos();
+        float width = em(width_em);
+        g_plan.at.assign(plan.cards.size(), g_plan.start);
+        g_plan.widths.assign(plan.cards.size(), width);
+        columns = std::max(1, columns);
+        std::vector<float> below((size_t)columns, g_plan.start.y);
+        for (size_t i = 0; i < plan.cards.size(); ++i) {
+            float wanted = i < plan.widths.size() && plan.widths[i] > 0.f ? em(plan.widths[i]) : width;
+            int span = std::clamp((int)std::ceil((wanted + gap - 1.f) / (width + gap)), 1, columns);
+            g_plan.widths[i] = width * (float)(span) + gap * (float)(span - 1);
+            int best = 0;
+            float best_y = FLT_MAX;
+            for (int c = 0; c + span <= columns; ++c) {
+                float y = 0.f;
+                for (int k = 0; k < span; ++k)
+                    y = std::max(y, below[(size_t)(c + k)]);
+                if (y < best_y - .5f) {
+                    best_y = y;
+                    best = c;
+                }
+            }
+            g_plan.at[i] = ImVec2(g_plan.start.x + (float)(best) * (width + gap), best_y);
+            auto known = g_card_sizes.find(plan.cards[i]);
+            float tall = known != g_card_sizes.end() ? known->second.y : em(8.f);
+            for (int k = 0; k < span; ++k)
+                below[(size_t)(best + k)] = best_y + tall + gap;
+        }
+        g_plan.height = 0.f;
+        for (float y : below)
+            g_plan.height = std::max(g_plan.height, y - gap - g_plan.start.y);
+    }
+
+    void EndCardPlan() {
+        if (tiles_on() || g_plan.at.empty()) {
+            g_plan = {};
+            g_page.clear();
+            return;
+        }
+        float height = g_plan.height;
+        ImVec2 start = g_plan.start;
+        float wide = 0.f;
+        for (size_t i = 0; i < g_plan.at.size(); ++i)
+            wide = std::max(wide, g_plan.at[i].x + g_plan.widths[i] - start.x);
+        g_plan = {};
+        g_page.clear();
+        ImGuiWindow* window = ImGui::GetCurrentWindow();
+        window->DC.CursorMaxPos.x = std::max(window->DC.CursorMaxPos.x, start.x + wide);
+        ImGui::SetCursorScreenPos(ImVec2(start.x, start.y + height));
+        ImGui::Dummy(ImVec2(wide, 0.f));
+    }
 
     static float row_width() {
         return g_row_widths.empty() ? ImGui::GetContentRegionAvail().x : g_row_widths.back();
@@ -1868,14 +2166,17 @@ namespace EchoUI {
         bool pressed = ImGui::ButtonBehavior(bb, id, &hovered, &held);
         float hot = ease(id, hovered ? 1.f : 0.f);
         ImDrawList* draw = window->DrawList;
-        ImVec2 mid = bb.GetCenter();
-        float side = bb.GetWidth();
-        circle_filled_cached(draw, mid, side * .5f, ImGui::GetColorU32(faded(color(ImGuiCol_FrameBgHovered), hot)), 24);
-        float arm = side * .2f;
-        ImU32 ink = ImGui::GetColorU32(mix(color(ImGuiCol_TextDisabled), color(ImGuiCol_Text), hot));
-        float thick = std::max(1.5f, side * .09f);
-        draw->AddLine(ImVec2(mid.x - arm, mid.y - arm), ImVec2(mid.x + arm, mid.y + arm), ink, thick);
-        draw->AddLine(ImVec2(mid.x - arm, mid.y + arm), ImVec2(mid.x + arm, mid.y - arm), ink, thick);
+        ThemeScript::Widget skin{ .hook = ThemeScript::Hook::CloseButton, .id = id, .min = bb.Min, .max = bb.Max, .hover = hot, .down = held && hovered ? 1.f : 0.f, .rounding = corner(bb.GetWidth() * .5f), .pressed = just_pressed(id), .clicked = pressed };
+        skinned(skin, draw, [&] {
+            ImVec2 mid = bb.GetCenter();
+            float side = bb.GetWidth();
+            disc_or_square(draw, mid, side * .5f, ImGui::GetColorU32(faded(color(ImGuiCol_FrameBgHovered), hot)), 24);
+            float arm = side * .2f;
+            ImU32 ink = ImGui::GetColorU32(mix(color(ImGuiCol_TextDisabled), color(ImGuiCol_Text), hot));
+            float thick = std::max(1.5f, side * .09f);
+            draw->AddLine(ImVec2(mid.x - arm, mid.y - arm), ImVec2(mid.x + arm, mid.y + arm), ink, thick);
+            draw->AddLine(ImVec2(mid.x - arm, mid.y + arm), ImVec2(mid.x + arm, mid.y - arm), ink, thick);
+        });
         return pressed;
     }
 
@@ -1886,6 +2187,9 @@ namespace EchoUI {
         float height = ImGui::GetFrameHeight();
         float start_y = ImGui::GetCursorPosY();
         ImVec2 screen = ImGui::GetCursorScreenPos();
+        float bar_right = width > 0.f ? window->Pos.x + style.WindowPadding.x + width : window->Pos.x + window->Size.x - style.WindowPadding.x;
+        ThemeScript::Widget bar_skin{ .hook = ThemeScript::Hook::TitleBar, .id = window->GetID("##echo-title-bar"), .min = screen, .max = ImVec2(bar_right, screen.y + height), .label = title, .on = closable ? 1.f : 0.f };
+        skinned(bar_skin, window->DrawList, [] {});
         float x = 0.f;
         if (icon != Icon::None) {
             float glyph = ImGui::GetFontSize() * .86f;
@@ -1941,6 +2245,8 @@ namespace EchoUI {
         float hot = ease(id, hovered ? 1.f : 0.f);
         float turned = ease(sub(id, "open"), open ? 1.f : 0.f, 16.f);
         ImDrawList* draw = window->DrawList;
+        ThemeScript::Widget skin{ .hook = ThemeScript::Hook::CollapseBar, .id = id, .min = bb.Min, .max = bb.Max, .label = title, .hover = hot, .down = held && hovered ? 1.f : 0.f, .on = turned, .rounding = style.FrameRounding, .pressed = just_pressed(id), .clicked = pressed };
+        skinned(skin, draw, [] {});
         ImVec4 ink = mix(color(ImGuiCol_Text), color(ImGuiCol_CheckMark), hot * .6f);
         if (icon != Icon::None)
             stroke_icon(draw, ImVec2(pos.x + glyph * .5f, pos.y + height * .5f), glyph, icon, ImGui::GetColorU32(ImGuiCol_CheckMark));
@@ -1969,8 +2275,10 @@ namespace EchoUI {
     static std::unordered_map<ImGuiID, float> g_row_extras;
 
     void EndCardRow() {
-        g_row_heights[g_card_rows.back().id] = g_card_rows.back().tallest;
-        g_last_card_row = g_card_rows.back().id;
+        if (!g_plan.on) {
+            g_row_heights[g_card_rows.back().id] = g_card_rows.back().tallest;
+            g_last_card_row = g_card_rows.back().id;
+        }
         g_card_rows.pop_back();
     }
 
@@ -2001,7 +2309,10 @@ namespace EchoUI {
         float x = box.Max.x - wide;
         ImDrawList* draw = window->DrawList;
         draw->PushClipRect(box.Min, box.Max, false);
-        draw->AddRectFilled(ImVec2(x, at), ImVec2(x + wide, at + thumb), ImGui::GetColorU32(faded(color(ImGuiCol_CheckMark), .7f)), wide * .5f);
+        ThemeScript::Widget skin{ .hook = ThemeScript::Hook::ScrollMark, .id = window->ID, .min = ImVec2(x, at), .max = ImVec2(x + wide, at + thumb), .value = window->Scroll.y / window->ScrollMax.y, .rounding = corner(wide * .5f) };
+        skinned(skin, draw, [&] {
+            draw->AddRectFilled(ImVec2(x, at), ImVec2(x + wide, at + thumb), ImGui::GetColorU32(faded(color(ImGuiCol_CheckMark), .7f)), corner(wide * .5f));
+        });
         draw->PopClipRect();
     }
 
@@ -2030,6 +2341,10 @@ namespace EchoUI {
 
     static TileLayout g_tiles;
 
+    static bool tiles_on() {
+        return g_tiles.on;
+    }
+
     static std::unordered_map<ImGuiID, float> g_tile_widths;
 
     static void card_heading(const char* title) {
@@ -2038,7 +2353,12 @@ namespace EchoUI {
         float font = ImGui::GetFontSize();
         ImVec2 pos = ImGui::GetCursorScreenPos();
         float tick = std::max(2.f, font * .16f);
-        ImGui::GetWindowDrawList()->AddRectFilled(ImVec2(pos.x, pos.y + font * .16f), ImVec2(pos.x + tick, pos.y + font * .88f), ImGui::GetColorU32(ImGuiCol_CheckMark), tick * .5f);
+        ImDrawList* draw = ImGui::GetWindowDrawList();
+        ImVec2 tick_min(pos.x, pos.y + font * .16f), tick_max(pos.x + tick, pos.y + font * .88f);
+        ThemeScript::Widget skin{ .hook = ThemeScript::Hook::Heading, .id = ImGui::GetID(title), .min = tick_min, .max = tick_max, .label = title, .rounding = corner(tick * .5f) };
+        skinned(skin, draw, [&] {
+            draw->AddRectFilled(tick_min, tick_max, ImGui::GetColorU32(ImGuiCol_CheckMark), corner(tick * .5f));
+        });
         ImGui::SetCursorPosX(ImGui::GetCursorPosX() + tick + font * .4f);
         ImGui::PushStyleColor(ImGuiCol_Text, color(ImGuiCol_TextDisabled));
         ImGui::TextUnformatted(title, end);
@@ -2150,10 +2470,12 @@ namespace EchoUI {
         if (!shown) return false;
 
         ImVec2 start = ImGui::GetCursorPos(), start_screen = ImGui::GetCursorScreenPos();
-        card_heading(title);
-        ImVec2 after = ImGui::GetCursorPos();
         float bar = ImGui::GetFontSize() * 1.15f;
         float cross = bar;
+        ThemeScript::Widget bar_skin{ .hook = ThemeScript::Hook::TileBar, .id = window->GetID("##echo-tile-bar"), .min = start_screen, .max = ImVec2(start_screen.x + inner, start_screen.y + bar), .label = title, .on = state.pinned ? 1.f : 0.f };
+        skinned(bar_skin, window->DrawList, [] {});
+        card_heading(title);
+        ImVec2 after = ImGui::GetCursorPos();
         ImGui::SetCursorPos(start);
         ImGui::InvisibleButton("##echo-tile-grab", ImVec2(std::max(1.f, inner - cross - style.ItemInnerSpacing.x), bar));
         if (ImGui::IsItemHovered() || ImGui::IsItemActive())
@@ -2182,7 +2504,7 @@ namespace EchoUI {
         }
         if (state.pinned) {
             ImVec2 dot(cross_box.Min.x - bar * .45f, start_screen.y + bar * .5f);
-            circle_filled_cached(window->DrawList, dot, bar * .14f, ImGui::GetColorU32(ImGuiCol_CheckMark), 12);
+            disc_or_square(window->DrawList, dot, bar * .14f, ImGui::GetColorU32(ImGuiCol_CheckMark), 12);
         }
         ImGui::SetCursorPos(after);
         return true;
@@ -2275,36 +2597,99 @@ namespace EchoUI {
         float at = g_tiles.top + (track - thumb) * (g_tiles.scroll / over);
         float x = g.IO.DisplaySize.x - em(.32f);
         float wide = std::max(2.f, em(.16f));
-        draw->AddRectFilled(ImVec2(x, at), ImVec2(x + wide, at + thumb), ImGui::GetColorU32(faded(color(ImGuiCol_CheckMark), .8f)), wide * .5f);
+        draw->AddRectFilled(ImVec2(x, at), ImVec2(x + wide, at + thumb), ImGui::GetColorU32(faded(color(ImGuiCol_CheckMark), .8f)), corner(wide * .5f));
     }
 
-    bool BeginCard(const char* title, float width_em) {
+    static bool begin_skinned_child(const char* id, const ImVec2& size, ImGuiChildFlags flags, ThemeScript::Hook hook, const char* label, float on) {
+        bool skin_on = ThemeScript::has(hook);
+        if (skin_on) {
+            ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.f, 0.f, 0.f, 0.f));
+            ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.f, 0.f, 0.f, 0.f));
+        }
+        bool shown = ImGui::BeginChild(id, size, flags);
+        if (!skin_on) return shown;
+        ImGui::PopStyleColor(2);
+        const ImGuiStyle& style = ImGui::GetStyle();
+        ImGuiWindow* window = ImGui::GetCurrentWindow();
+        ImDrawList* draw = window->DrawList;
+        ImRect box = window->Rect();
+        float hot = ease(sub(window->ID, "child-hot"), ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows) ? 1.f : 0.f);
+        draw->PushClipRect(window->OuterRectClipped.Min, window->OuterRectClipped.Max, false);
+        ThemeScript::Widget skin{ .hook = hook, .id = window->ID, .min = box.Min, .max = box.Max, .label = label, .hover = hot, .on = on, .rounding = style.ChildRounding };
+        skinned(skin, draw, [&] {
+            draw->AddRectFilled(box.Min, box.Max, ImGui::GetColorU32(ImGuiCol_ChildBg), style.ChildRounding);
+            if (style.ChildBorderSize > 0.f)
+                draw->AddRect(box.Min, box.Max, ImGui::GetColorU32(ImGuiCol_Border), style.ChildRounding, 0, style.ChildBorderSize);
+        });
+        draw->PopClipRect();
+        return shown;
+    }
+
+    static bool skip_card() {
+        g_open_cards.push_back({ "", true });
+        g_row_widths.push_back(0.f);
+        return false;
+    }
+
+    bool BeginCard(const char* title, float width_em, float fixed_height) {
+        OpenCard card;
+        int slot = -1;
+        if (g_plan.on) {
+            card.key = card_key(title);
+            slot = plan_slot(card.key);
+            if (slot < 0) return skip_card();
+            float planned = g_plan.plan->widths.size() > (size_t)slot ? g_plan.plan->widths[(size_t)slot] : 0.f;
+            if (planned > 0.f) width_em = planned;
+        }
+        else if (!g_page.empty() && !ThemeScript::layout().cards.empty()) {
+            if (const auto* rule = ThemeScript::card_layout(g_page, std::string(title, ImGui::FindRenderedTextEnd(title)))) {
+                if (rule->hidden) return skip_card();
+                if (rule->width > 0.f) width_em = rule->width;
+            }
+        }
+        g_open_cards.push_back(std::move(card));
         if (g_tiles.on) return begin_tile(title, width_em);
         const ImGuiStyle& style = ImGui::GetStyle();
-        float width = em(width_em), height = 0.f;
+        float width = em(width_em), height = fixed_height;
         if (g_single_column) width = std::max(width, ImGui::GetContentRegionAvail().x);
-        if (!g_card_rows.empty() && !g_single_column) {
+        if (slot >= 0) {
+            ImGui::SetCursorScreenPos(g_plan.at[(size_t)slot]);
+            width = g_plan.widths[(size_t)slot];
+            height = 0.f;
+        }
+        else if (!g_card_rows.empty() && !g_single_column) {
             if (g_card_rows.back().cards++ > 0) ImGui::SameLine();
             auto known = g_row_heights.find(g_card_rows.back().id);
             if (known != g_row_heights.end())
                 height = known->second + card_row_extra(g_card_rows.back().id);
         }
         g_card_needs = -1.f;
-        bool shown = ImGui::BeginChild(title, ImVec2(width, height), height > 0.f ? ImGuiChildFlags_Borders : ImGuiChildFlags_Borders | ImGuiChildFlags_AutoResizeY);
+        bool shown = begin_skinned_child(title, ImVec2(width, height), height > 0.f ? ImGuiChildFlags_Borders : ImGuiChildFlags_Borders | ImGuiChildFlags_AutoResizeY, ThemeScript::Hook::Card, title, 0.f);
         g_row_widths.push_back(width - style.WindowPadding.x * 2.f);
         if (shown) card_heading(title);
         return shown;
     }
 
     void EndCard() {
+        OpenCard card;
+        if (!g_open_cards.empty()) {
+            card = std::move(g_open_cards.back());
+            g_open_cards.pop_back();
+        }
+        if (card.skipped) {
+            g_row_widths.pop_back();
+            g_card_needs = -1.f;
+            return;
+        }
         if (g_tiles.on) {
             g_card_needs = -1.f;
             end_tile();
             return;
         }
         g_row_widths.pop_back();
-        if (!g_card_rows.empty()) {
-            ImGuiWindow* window = ImGui::GetCurrentWindow();
+        ImGuiWindow* window = ImGui::GetCurrentWindow();
+        if (!card.key.empty()) g_card_sizes[card.key] = window->Size;
+        if (!g_card_rows.empty() && !g_plan.on) {
             float needs = g_card_needs >= 0.f ? g_card_needs : window->DC.CursorMaxPos.y - window->Pos.y + ImGui::GetStyle().WindowPadding.y;
             g_card_rows.back().tallest = std::max(g_card_rows.back().tallest, needs);
         }
@@ -2356,8 +2741,11 @@ namespace EchoUI {
         bool pressed = ImGui::ButtonBehavior(bb, id, &hovered, &held);
         float hot = ease(id, hovered ? 1.f : 0.f);
         ImDrawList* draw = window->DrawList;
-        draw->AddRectFilled(bb.Min, bb.Max, ImGui::GetColorU32(faded(color(ImGuiCol_FrameBgHovered), .35f + .65f * hot)), ImGui::GetStyle().FrameRounding);
-        stroke_icon(draw, bb.GetCenter(), side * .64f, Icon::Gear, ImGui::GetColorU32(mix(color(ImGuiCol_TextDisabled), color(ImGuiCol_CheckMark), hot)));
+        ThemeScript::Widget skin{ .hook = ThemeScript::Hook::Gear, .id = id, .min = bb.Min, .max = bb.Max, .hover = hot, .down = held && hovered ? 1.f : 0.f, .rounding = ImGui::GetStyle().FrameRounding, .pressed = just_pressed(id), .clicked = pressed };
+        skinned(skin, draw, [&] {
+            draw->AddRectFilled(bb.Min, bb.Max, ImGui::GetColorU32(faded(color(ImGuiCol_FrameBgHovered), .35f + .65f * hot)), ImGui::GetStyle().FrameRounding);
+            stroke_icon(draw, bb.GetCenter(), side * .64f, Icon::Gear, ImGui::GetColorU32(mix(color(ImGuiCol_TextDisabled), color(ImGuiCol_CheckMark), hot)));
+        });
         return pressed;
     }
 
@@ -2389,6 +2777,18 @@ namespace EchoUI {
         ImGui::EndPopup();
     }
 
+    bool BeginBigModal(const char* title, ImVec2 size, ImVec2 least) {
+        ImGuiWindowFlags flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
+        ImVec2 display = ImGui::GetIO().DisplaySize;
+        ImGui::SetNextWindowSizeConstraints(least, ImVec2(display.x * .98f, display.y * .98f));
+        ImGui::SetNextWindowSize(ImVec2(std::min(size.x, display.x * .98f), std::min(size.y, display.y * .98f)), ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowPos(ImVec2(display.x * .5f, display.y * .5f), ImGuiCond_Appearing, ImVec2(.5f, .5f));
+        if (!ImGui::BeginPopupModal(title, nullptr, flags)) return false;
+        g_row_widths.push_back(ImGui::GetContentRegionAvail().x);
+        if (TitleBar(title, Icon::None, true, 0.f)) ImGui::CloseCurrentPopup();
+        return true;
+    }
+
     bool ColorEdit4(const char* label, float* rgba, ImGuiColorEditFlags flags) {
         ImGuiWindow* window = ImGui::GetCurrentWindow();
         if (window->SkipItems) return false;
@@ -2405,20 +2805,24 @@ namespace EchoUI {
         if (ImGui::ItemAdd(total, id)) {
             bool hovered = false;
             bool held = false;
-            if (ImGui::ButtonBehavior(total, id, &hovered, &held)) ImGui::OpenPopup("##echo-color");
+            bool clicked = ImGui::ButtonBehavior(total, id, &hovered, &held);
+            if (clicked) ImGui::OpenPopup("##echo-color");
             float hot = ease(id, hovered ? 1.f : 0.f);
             ImDrawList* draw = window->DrawList;
             ImVec2 mid(pos.x + side * .5f, pos.y + side * .5f);
-            float radius = side * (.38f + .03f * hot);
             ImVec4 shown(rgba[0], rgba[1], rgba[2], alpha ? rgba[3] : 1.f);
-            if (shown.w < .995f) {
-                circle_filled_cached(draw, mid, radius, IM_COL32(60, 60, 60, (int)(255 * style.Alpha)), 24);
-                draw->PathArcTo(mid, radius, -1.5707963f, 1.5707963f, 12);
-                draw->PathFillConvex(IM_COL32(200, 200, 200, (int)(255 * style.Alpha)));
-            }
-            shown.w *= style.Alpha;
-            circle_filled_cached(draw, mid, radius, ImGui::ColorConvertFloat4ToU32(shown), 24);
-            draw->AddCircle(mid, radius, ImGui::GetColorU32(mix(color(ImGuiCol_Border), color(ImGuiCol_CheckMark), hot)), 24, std::max(1.f, side * .06f));
+            ThemeScript::Widget skin{ .hook = ThemeScript::Hook::Swatch, .id = id, .min = pos, .max = ImVec2(pos.x + side, pos.y + side), .label = label, .hover = hot, .down = held && hovered ? 1.f : 0.f, .rounding = side * .5f, .pressed = just_pressed(id), .clicked = clicked, .tint = shown };
+            skinned(skin, draw, [&] {
+                float radius = side * (.38f + .03f * hot);
+                if (shown.w < .995f) {
+                    circle_filled_cached(draw, mid, radius, IM_COL32(60, 60, 60, (int)(255 * style.Alpha)), 24);
+                    draw->PathArcTo(mid, radius, -1.5707963f, 1.5707963f, 12);
+                    draw->PathFillConvex(IM_COL32(200, 200, 200, (int)(255 * style.Alpha)));
+                }
+                shown.w *= style.Alpha;
+                circle_filled_cached(draw, mid, radius, ImGui::ColorConvertFloat4ToU32(shown), 24);
+                draw->AddCircle(mid, radius, ImGui::GetColorU32(mix(color(ImGuiCol_Border), color(ImGuiCol_CheckMark), hot)), 24, std::max(1.f, side * .06f));
+            });
             if (label_size.x > 0.f)
                 ImGui::RenderText(ImVec2(pos.x + side + style.ItemInnerSpacing.x, pos.y + style.FramePadding.y), label);
         }
@@ -2480,7 +2884,7 @@ namespace EchoUI {
         return true;
     }
 
-    bool InputTextMultiline(const char* label, std::string* text, const ImVec2& size_arg) {
+    bool InputTextMultiline(const char* label, std::string* text, const ImVec2& size_arg, ImGuiInputTextFlags flags, ImGuiInputTextCallback callback, void* user_data) {
         ImGuiWindow* window = ImGui::GetCurrentWindow();
         const ImGuiStyle& style = ImGui::GetStyle();
         ImGuiID id = window->GetID(label);
@@ -2489,9 +2893,9 @@ namespace EchoUI {
         ImRect bb(pos, ImVec2(pos.x + size.x, pos.y + size.y));
         g_field = { id, bb, window };
         if (!window->SkipItems && ImGui::IsRectVisible(bb.Min, bb.Max))
-            draw_field(window, id, bb, -1.f, g_field_states[id]);
+            draw_field(window, id, bb, -1.f, g_field_states[id], label);
         push_clear_frame();
-        bool changed = ImGui::InputTextMultiline(label, text, size_arg);
+        bool changed = ImGui::InputTextMultiline(label, text, size_arg, flags, callback, user_data);
         end_field();
         return changed;
     }
@@ -2532,30 +2936,33 @@ namespace EchoUI {
         ImVec2 a(left, mid_y - thick * .5f);
         ImVec2 b(right, mid_y + thick * .5f);
         float alpha = style.Alpha;
-        if (rainbow) {
-            for (int i = 0; i < 6; ++i) {
-                float t0 = (float)(i) / 6.f, t1 = (float)(i + 1) / 6.f;
-                ImVec4 c0(0.f, 0.f, 0.f, alpha);
-                ImVec4 c1(0.f, 0.f, 0.f, alpha);
-                ImGui::ColorConvertHSVtoRGB(t0, .7f, 1.f, c0.x, c0.y, c0.z);
-                ImGui::ColorConvertHSVtoRGB(t1 >= 1.f ? 0.f : t1, .7f, 1.f, c1.x, c1.y, c1.z);
-                ImU32 u0 = ImGui::ColorConvertFloat4ToU32(c0), u1 = ImGui::ColorConvertFloat4ToU32(c1);
-                draw->AddRectFilledMultiColor(ImVec2(a.x + (b.x - a.x) * t0, a.y), ImVec2(a.x + (b.x - a.x) * t1 + .5f, b.y), u0, u1, u1, u0);
+        ThemeScript::Widget skin{ .hook = ThemeScript::Hook::Slider, .id = id, .min = ImVec2(left, frame.Min.y), .max = ImVec2(right, frame.Max.y), .label = label, .hover = hot, .down = held ? 1.f : 0.f, .value = t, .rounding = corner(thick * .5f), .pressed = just_pressed(id), .clicked = changed, .rainbow = rainbow };
+        skinned(skin, draw, [&] {
+            if (rainbow) {
+                for (int i = 0; i < 6; ++i) {
+                    float t0 = (float)(i) / 6.f, t1 = (float)(i + 1) / 6.f;
+                    ImVec4 c0(0.f, 0.f, 0.f, alpha);
+                    ImVec4 c1(0.f, 0.f, 0.f, alpha);
+                    ImGui::ColorConvertHSVtoRGB(t0, .7f, 1.f, c0.x, c0.y, c0.z);
+                    ImGui::ColorConvertHSVtoRGB(t1 >= 1.f ? 0.f : t1, .7f, 1.f, c1.x, c1.y, c1.z);
+                    ImU32 u0 = ImGui::ColorConvertFloat4ToU32(c0), u1 = ImGui::ColorConvertFloat4ToU32(c1);
+                    draw->AddRectFilledMultiColor(ImVec2(a.x + (b.x - a.x) * t0, a.y), ImVec2(a.x + (b.x - a.x) * t1 + .5f, b.y), u0, u1, u1, u0);
+                }
+                draw->AddRect(ImVec2(a.x - 1.f, a.y - 1.f), ImVec2(b.x + 1.f, b.y + 1.f), ImGui::GetColorU32(ImGuiCol_WindowBg), corner(thick * .5f), 0, 2.f);
             }
-            draw->AddRect(ImVec2(a.x - 1.f, a.y - 1.f), ImVec2(b.x + 1.f, b.y + 1.f), ImGui::GetColorU32(ImGuiCol_WindowBg), thick * .5f, 0, 2.f);
-        }
-        else {
-            draw->AddRectFilled(a, b, ImGui::GetColorU32(ImGuiCol_FrameBg), thick * .5f);
-            draw->AddRectFilled(a, ImVec2(left + (right - left) * t, b.y), ImGui::GetColorU32(faded(color(ImGuiCol_CheckMark), .75f)), thick * .5f);
-        }
-        ImVec2 at(left + (right - left) * t, mid_y);
-        ImVec4 knob_fill = color(ImGuiCol_Text);
-        if (rainbow) {
-            ImGui::ColorConvertHSVtoRGB(t >= 1.f ? 0.f : t, .7f, 1.f, knob_fill.x, knob_fill.y, knob_fill.z);
-            knob_fill.w = 1.f;
-        }
-        circle_filled_cached(draw, at, knob * (1.f + .15f * hot), ImGui::GetColorU32(knob_fill), 24);
-        draw->AddCircle(at, knob * (1.f + .15f * hot), ImGui::GetColorU32(mix(color(ImGuiCol_WindowBg), color(ImGuiCol_CheckMark), hot)), 24, std::max(1.5f, height * .07f));
+            else {
+                draw->AddRectFilled(a, b, ImGui::GetColorU32(ImGuiCol_FrameBg), corner(thick * .5f));
+                draw->AddRectFilled(a, ImVec2(left + (right - left) * t, b.y), ImGui::GetColorU32(faded(color(ImGuiCol_CheckMark), .75f)), corner(thick * .5f));
+            }
+            ImVec2 at(left + (right - left) * t, mid_y);
+            ImVec4 knob_fill = color(ImGuiCol_Text);
+            if (rainbow) {
+                ImGui::ColorConvertHSVtoRGB(t >= 1.f ? 0.f : t, .7f, 1.f, knob_fill.x, knob_fill.y, knob_fill.z);
+                knob_fill.w = 1.f;
+            }
+            circle_filled_cached(draw, at, knob * (1.f + .15f * hot), ImGui::GetColorU32(knob_fill), 24);
+            draw->AddCircle(at, knob * (1.f + .15f * hot), ImGui::GetColorU32(mix(color(ImGuiCol_WindowBg), color(ImGuiCol_CheckMark), hot)), 24, std::max(1.5f, height * .07f));
+        });
         if (held && format && *format) ImGui::SetTooltip(format, *value);
         if (label_size.x > 0.f)
             ImGui::RenderText(ImVec2(frame.Max.x + style.ItemInnerSpacing.x, pos.y + style.FramePadding.y), label);
@@ -2578,51 +2985,114 @@ namespace EchoUI {
         float on = ease(sub(id, "on"), selected ? 1.f : 0.f);
         ImDrawList* draw = window->DrawList;
         float inset = side * (.12f - .05f * hot);
-        if (logo)
-            draw->AddImage(ImTextureRef(logo), ImVec2(bb.Min.x + inset, bb.Min.y + inset), ImVec2(bb.Max.x - inset, bb.Max.y - inset), ImVec2(0.f, 0.f), ImVec2(1.f, 1.f), ImGui::GetColorU32(ImVec4(1.f, 1.f, 1.f, 1.f)));
-        if (on > .01f)
-            draw->AddRect(bb.Min, bb.Max, ImGui::GetColorU32(faded(color(ImGuiCol_Text), on)), side * .26f, 0, std::max(2.f, side * .05f));
+        ThemeScript::Widget skin{ .hook = ThemeScript::Hook::ThemeTile, .id = id, .min = bb.Min, .max = bb.Max, .label = id_text, .hover = hot, .down = held && hovered ? 1.f : 0.f, .on = on, .rounding = corner(side * .26f), .pressed = just_pressed(id), .clicked = pressed };
+        skinned(skin, draw, [&] {
+            if (logo)
+                draw->AddImage(ImTextureRef(logo), ImVec2(bb.Min.x + inset, bb.Min.y + inset), ImVec2(bb.Max.x - inset, bb.Max.y - inset), ImVec2(0.f, 0.f), ImVec2(1.f, 1.f), ImGui::GetColorU32(ImVec4(1.f, 1.f, 1.f, 1.f)));
+            if (on > .01f)
+                draw->AddRect(bb.Min, bb.Max, ImGui::GetColorU32(faded(color(ImGuiCol_Text), on)), corner(side * .26f), 0, std::max(2.f, side * .05f));
+        });
         return pressed;
     }
 
-    bool Header(const char* title, const char* version, ImTextureID logo) {
+    bool Header(const HeaderLook& look, const char* version, ImTextureID logo) {
         ImGuiWindow* window = ImGui::GetCurrentWindow();
         if (window->SkipItems) return false;
         const ImGuiStyle& style = ImGui::GetStyle();
-        float height = ImGui::GetFrameHeight() * 1.2f;
+        float height = ImGui::GetFrameHeight() * std::max(look.height, .5f);
         float start_y = ImGui::GetCursorPosY();
         ImVec2 screen = ImGui::GetCursorScreenPos();
-        if (logo) {
-            ImGui::Image(ImTextureRef(logo), ImVec2(height, height));
+        float right = window->Pos.x + window->Size.x - style.WindowPadding.x;
+        ThemeScript::Widget skin{ .hook = ThemeScript::Hook::Header, .id = window->GetID("##echo-header"), .min = screen, .max = ImVec2(right, screen.y + height), .label = look.title.c_str() };
+        skinned(skin, window->DrawList, [] {});
+        if (logo && look.logo) {
+            Logo(logo, height);
             ImGui::SameLine();
         }
         float big = 1.25f;
         ImGui::SetWindowFontScale(big);
         ImGui::SetCursorPosY(start_y + (height - ImGui::GetFontSize()) * .5f);
-        ImGui::TextUnformatted(title);
+        ImGui::TextUnformatted(look.title.c_str());
         float title_bottom = ImGui::GetItemRectMax().y;
         ImGui::SetWindowFontScale(1.f);
-        ImGui::SameLine();
-        ImGui::SetCursorPosY(ImGui::GetCursorPosY() + (title_bottom - ImGui::GetCursorScreenPos().y) - ImGui::GetFontSize() - ImGui::GetFontSize() * .06f);
-        ImGui::TextDisabled("%s", version);
+        if (look.version) {
+            ImGui::SameLine();
+            ImGui::SetCursorPosY(ImGui::GetCursorPosY() + (title_bottom - ImGui::GetCursorScreenPos().y) - ImGui::GetFontSize() - ImGui::GetFontSize() * .06f);
+            ImGui::TextDisabled("%s", version);
+        }
 
-        float side = height * .82f;
-        float right = window->Pos.x + window->Size.x - style.WindowPadding.x;
-        ImRect bb(ImVec2(right - side, screen.y + (height - side) * .5f), ImVec2(right, screen.y + (height + side) * .5f));
-        bool pressed = close_button(window, bb, "##echo-close");
+        bool pressed = false;
+        if (look.close) {
+            float side = height * .82f;
+            ImRect bb(ImVec2(right - side, screen.y + (height - side) * .5f), ImVec2(right, screen.y + (height + side) * .5f));
+            pressed = close_button(window, bb, "##echo-close");
+        }
         ImGui::SetCursorPosY(start_y + height + style.ItemSpacing.y);
         return pressed;
     }
 
-    void NavMarker(ImVec2 min, ImVec2 max) {
+    bool BeginNavBar(const char* id, const ImVec2& size, bool sideways) {
+        return begin_skinned_child(id, size, ImGuiChildFlags_Borders | (sideways ? ImGuiChildFlags_AutoResizeY : ImGuiChildFlags_AutoResizeX), ThemeScript::Hook::NavBar, nullptr, sideways ? 1.f : 0.f);
+    }
+
+    void EndNavBar() {
+        ImGui::EndChild();
+    }
+
+    static void hook_only(ThemeScript::Hook hook, const char* id, ImVec2 min, ImVec2 max, float rounding) {
+        ImGuiWindow* window = ImGui::GetCurrentWindow();
+        ThemeScript::Widget skin{ .hook = hook, .id = window->GetID(id), .min = min, .max = max, .rounding = rounding };
+        skinned(skin, window->DrawList, [] {});
+    }
+
+    void StatusBack(ImVec2 min, ImVec2 max) {
+        hook_only(ThemeScript::Hook::StatusBar, "##echo-status", min, max, ImGui::GetStyle().FrameRounding);
+    }
+
+    void BarBack(ImVec2 min, ImVec2 max) {
+        hook_only(ThemeScript::Hook::Bar, "##echo-bar-back", min, max, ImGui::GetCurrentWindow()->WindowRounding);
+    }
+
+    void Logo(ImTextureID logo, float side) {
+        ImGuiWindow* window = ImGui::GetCurrentWindow();
+        if (window->SkipItems) return;
+        float border = ImGui::GetStyle().ImageBorderSize;
+        ImVec2 at = window->DC.CursorPos;
+        ImRect bb(at, ImVec2(at.x + side + border * 2.f, at.y + side + border * 2.f));
+        ImGui::ItemSize(bb);
+        if (!ImGui::ItemAdd(bb, 0)) return;
+        ImGuiID id = window->GetID("##echo-logo");
+        float hot = ease(id, ImGui::IsItemHovered() ? 1.f : 0.f);
+        ThemeScript::Widget skin{ .hook = ThemeScript::Hook::Logo, .id = id, .min = bb.Min, .max = bb.Max, .hover = hot };
+        skinned(skin, window->DrawList, [&] {
+            if (border > 0.f) window->DrawList->AddRect(bb.Min, bb.Max, ImGui::GetColorU32(ImGuiCol_Border), 0.f, ImDrawFlags_None, border);
+            window->DrawList->AddImage(ImTextureRef(logo), ImVec2(bb.Min.x + border, bb.Min.y + border), ImVec2(bb.Max.x - border, bb.Max.y - border), ImVec2(0.f, 0.f), ImVec2(1.f, 1.f), ImGui::GetColorU32(ImVec4(1.f, 1.f, 1.f, 1.f)));
+        });
+    }
+
+    void NavMarker(ImVec2 min, ImVec2 max, bool under) {
         ImGuiWindow* window = ImGui::GetCurrentWindow();
         ImGuiID id = window->GetID("##echo-nav-marker");
+        float width = std::max(2.f, ImGui::GetFontSize() * .16f);
+        if (under) {
+            float left = window->Pos.x + ease(id, min.x - window->Pos.x, 18.f);
+            float right = window->Pos.x + ease(sub(id, "right"), max.x - window->Pos.x, 18.f);
+            float inset = (right - left) * .2f;
+            float y = max.y - width * 2.f;
+            ThemeScript::Widget skin{ .hook = ThemeScript::Hook::NavMarker, .id = id, .min = ImVec2(left, min.y), .max = ImVec2(right, max.y), .on = 1.f, .rounding = corner(width * .5f) };
+            skinned(skin, window->DrawList, [&] {
+                window->DrawList->AddRectFilled(ImVec2(left + inset, y), ImVec2(right - inset, y + width), ImGui::GetColorU32(ImGuiCol_CheckMark), corner(width * .5f));
+            });
+            return;
+        }
         float top = window->Pos.y + ease(id, min.y - window->Pos.y, 18.f);
         float bottom = window->Pos.y + ease(sub(id, "bottom"), max.y - window->Pos.y, 18.f);
         float inset = (bottom - top) * .2f;
-        float width = std::max(2.f, ImGui::GetFontSize() * .16f);
         float x = min.x + width;
-        window->DrawList->AddRectFilled(ImVec2(x, top + inset), ImVec2(x + width, bottom - inset), ImGui::GetColorU32(ImGuiCol_CheckMark), width * .5f);
+        ThemeScript::Widget skin{ .hook = ThemeScript::Hook::NavMarker, .id = id, .min = ImVec2(min.x, top), .max = ImVec2(max.x, bottom), .rounding = corner(width * .5f) };
+        skinned(skin, window->DrawList, [&] {
+            window->DrawList->AddRectFilled(ImVec2(x, top + inset), ImVec2(x + width, bottom - inset), ImGui::GetColorU32(ImGuiCol_CheckMark), corner(width * .5f));
+        });
     }
 
     bool g_rainbow_rim = false;
@@ -2815,6 +3285,7 @@ namespace EchoUI {
         set(ImGuiCol_NavWindowingHighlight, ImVec4(1.f, 1.f, 1.f, .7f));
         set(ImGuiCol_NavWindowingDimBg, ImVec4(.2f, .2f, .2f, .2f));
         set(ImGuiCol_ModalWindowDimBg, ImVec4(0.f, 0.f, 0.f, .5f));
+        ThemeScript::recolor();
     }
 
     void apply_echo_theme() {

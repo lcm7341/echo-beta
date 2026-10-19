@@ -35,6 +35,10 @@
 		"files": [
 			"resources/*.ttf",
 			"resources/logos/*.png",
+			"resources/themes/*.lua",
+			"resources/themes/*.md",
+			"resources/macro-scripts/*.lua",
+			"resources/macro-scripts/*.md",
 			"logo.png"
 		]
 	},

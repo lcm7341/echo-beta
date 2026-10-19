@@ -74,8 +74,12 @@ struct RenderPicker {
 };
 
 struct TabPage {
-	const char* name;
-	void (*draw)();
+	std::string name;
+	std::string icon;
+	std::function<void()> draw;
+	bool fits_room = false;
+	std::string source;
+	EchoUI::CardPlan plan;
 };
 
 struct StyleVarGuard {
@@ -146,6 +150,10 @@ public:
 	void clickbot();
 	void editor();
 	void draw_theme();
+	void draw_scripting();
+	void edit_script(const fs::path& file);
+	float card_width();
+	ImVec2 page_room{};
 	void ui_editor();
 	ImTextureID theme_logo();
 	CCTexture2D* theme_logo_texture();
@@ -175,6 +183,7 @@ public:
 	bool at_scale_cap = false;
 	float nav_needs = 0.f;
 	float dock_least_tall = 0.f;
+	bool remeasure = false;
 	bool shelf_packed = true;
 	std::unordered_map<std::string, ShelfMotion> shelf_motion;
 	ImVec2 dock_home = ImVec2(72.f, 36.f), dock_size = ImVec2(480.f, 320.f);
@@ -346,7 +355,7 @@ public:
 	}
 
 	void load_menu_font();
-	std::vector<TabPage> ordered_pages();
+	const std::vector<TabPage>& ordered_pages();
 	float smoothstep01(float t);
 	void ease_toward(float& current, float target, float dt);
 	void ease_toward(ImVec2& current, ImVec2 target, float dt);
@@ -360,10 +369,12 @@ public:
 	float shelf_shown(int index, int count);
 	void layout_shelf(const std::vector<TabPage>& pages, std::vector<ImVec2>& targets);
 	float max_fitting_scale();
-	void fade_page(const char* name, void (*draw)());
+	void fade_page(const TabPage& page);
+	void draw_page(const TabPage& page);
 	const TabPage* active_page(const std::vector<TabPage>& pages);
 	ImGuiWindowFlags menu_flags();
-	void draw_nav(const std::vector<TabPage>& pages, float height);
+	void draw_nav(const std::vector<TabPage>& pages, float height, bool sideways, float across);
+	bool docked();
 	void draw_floating(const std::vector<TabPage>& pages);
 	void draw_window();
 	ImGuiChildFlags fit_card();
@@ -390,6 +401,7 @@ public:
 	void paint_editor(float* dest, ImVec4 color);
 	void paint_editor_from_theme();
 	void randomize_theme();
+	void preview_palette(const EchoUI::Palette& palette, const std::string& name);
 	void use_palette(const EchoUI::Palette& palette, const std::string& name);
 	void color_row(const char* label, float* color, int id);
 	std::optional<enumKeyCodes> cocos_key(ImGuiKey key);
@@ -409,6 +421,7 @@ public:
 	void refresh_clickpacks();
 	RenderPicker& renders();
 	void refresh_renders();
+	void open_folder(const fs::path& folder);
 };
 
 namespace EchoUI {
