@@ -243,6 +243,16 @@ void Logic::pull_settings() {
                     if (auto text = key.asString()) label_order.push_back(text.unwrap());
                 }
             }
+            if (auto flag = json["show_scripts"].asBool()) show_scripts = flag.unwrap();
+            scripts_label = read_placement(json["scripts_label"], scripts_label);
+            if (json["autorun_scripts"].isArray()) {
+                autorun_scripts.clear();
+                for (const auto& name : json["autorun_scripts"]) {
+                    if (auto text = name.asString()) autorun_scripts.push_back(text.unwrap());
+                }
+            }
+            if (auto flag = json["script_wrap"].asBool()) script_wrap = flag.unwrap();
+            if (auto flag = json["script_full_access"].asBool()) script_full_access = flag.unwrap();
             if (auto flag = json["show_death_next"].asBool()) show_death_next = flag.unwrap();
             if (auto flag = json["click_dash_orbs"].asBool()) click_dash_orbs = flag.unwrap();
             if (auto flag = json["click_black_orbs"].asBool()) click_black_orbs = flag.unwrap();
@@ -768,6 +778,13 @@ void Logic::save_settings_file() {
     json["label_order"] = matjson::Value::array();
     for (const auto& key : label_order)
         json["label_order"].push(key);
+    json["show_scripts"] = show_scripts;
+    json["scripts_label"] = placement_json(scripts_label);
+    json["autorun_scripts"] = matjson::Value::array();
+    for (const auto& name : autorun_scripts)
+        json["autorun_scripts"].push(name);
+    json["script_wrap"] = script_wrap;
+    json["script_full_access"] = script_full_access;
     json["show_death_next"] = show_death_next;
     json["click_dash_orbs"] = click_dash_orbs;
     json["click_black_orbs"] = click_black_orbs;

@@ -5,6 +5,7 @@
 #include "Logic/logic.hpp"
 #include "Hack/trajectory.hpp"
 #include "Hack/label_types.hpp"
+#include "Hack/script_labels.hpp"
 #include <Geode/binding/PlayLayer.hpp>
 #include <Geode/binding/PlayerObject.hpp>
 #include <Geode/binding/GameObject.hpp>
@@ -74,7 +75,116 @@ static LabelInfo const LABELS[] = {
     { "Debug Stats", "debug", &Logic::show_debug, &Logic::debug_label, DEBUG_STATS_TAG },
     { "Show Speed", "speed", &Logic::show_speed, &Logic::speed_label, SPEED_TAG },
     { "Show SSB", "ssb", &Logic::show_ssb, &Logic::ssb_label, SSB_TAG },
+    { "Running Scripts", "scripts", &Logic::show_scripts, &Logic::scripts_label, SCRIPTS_TAG },
 };
+
+struct ScriptLabel {
+    int owner = 0;
+    int tag = 0;
+    std::string name, text;
+    ScriptLabels::Look look;
+};
+
+struct LabelOverride {
+    int owner = 0;
+    std::string text;
+};
+
+static std::vector<ScriptLabel> g_script_labels;
+static std::unordered_map<int, LabelOverride> g_overrides;
+static std::vector<int> g_dropped_tags;
+static std::string g_running_names;
+
+static bool labels_shown() {
+    auto& logic = Logic::get();
+    return !(logic.render_hide_labels && logic.render_capturing());
+}
+
+static ScriptLabel* script_label_named(int owner, std::string const& name) {
+    for (auto& label : g_script_labels) {
+        if (label.owner == owner && label.name == name) return &label;
+    }
+    return nullptr;
+}
+
+static int free_script_tag() {
+    for (int tag = SCRIPT_FIRST_TAG; tag <= SCRIPT_LAST_TAG; ++tag) {
+        bool used = false;
+        for (auto const& label : g_script_labels)
+            used = used || label.tag == tag;
+        if (!used) return tag;
+    }
+    return 0;
+}
+
+static void drop_script_label(size_t index) {
+    g_dropped_tags.push_back(g_script_labels[index].tag);
+    g_script_labels.erase(g_script_labels.begin() + (long)index);
+}
+
+namespace ScriptLabels {
+    bool set(int owner, std::string const& name, std::string const& text, Look const* look) {
+        if (auto* label = script_label_named(owner, name)) {
+            label->text = text;
+            if (look) label->look = *look;
+            return true;
+        }
+        int tag = free_script_tag();
+        if (!tag) return false;
+        ScriptLabel label;
+        label.owner = owner;
+        label.tag = tag;
+        label.name = name;
+        label.text = text;
+        if (look) label.look = *look;
+        if (!label.look.placed) label.look.place.y -= 12.f * (float)(g_script_labels.size());
+        g_script_labels.push_back(std::move(label));
+        return true;
+    }
+
+    bool remove(int owner, std::string const& name) {
+        for (size_t i = 0; i < g_script_labels.size(); ++i) {
+            if (g_script_labels[i].owner != owner || g_script_labels[i].name != name) continue;
+            drop_script_label(i);
+            return true;
+        }
+        return false;
+    }
+
+    void clear(int owner) {
+        for (size_t i = g_script_labels.size(); i-- > 0;) {
+            if (g_script_labels[i].owner == owner) drop_script_label(i);
+        }
+        std::erase_if(g_overrides, [owner](auto const& entry) {
+            return entry.second.owner == owner;
+        });
+    }
+
+    void clear_all() {
+        for (size_t i = g_script_labels.size(); i-- > 0;)
+            drop_script_label(i);
+        g_overrides.clear();
+    }
+
+    bool set_override(int owner, std::string const& key, std::string const* text) {
+        auto* info = label_info(key);
+        if (!info) return false;
+        if (text) g_overrides[info->tag] = { owner, *text };
+        else g_overrides.erase(info->tag);
+        return true;
+    }
+
+    std::string const* override_text(int tag) {
+        auto found = g_overrides.find(tag);
+        return found == g_overrides.end() ? nullptr : &found->second.text;
+    }
+
+    void set_running_scripts(std::vector<std::string> const& names) {
+        g_running_names.clear();
+        for (auto const& name : names)
+            g_running_names += (g_running_names.empty() ? "" : "\n") + name;
+    }
+}
 
 static std::vector<std::string> build_font_names() {
     std::vector<std::string> names{ "Pusab", "Gold Pusab", "Chat" };
@@ -136,8 +246,11 @@ int label_font_index(std::string const& file) {
     return 0;
 }
 
-void Labels::sync_label(PlayLayer* play, int tag, bool visible, LabelPlacement const& place, std::string const& text, ccColor3B color) {
+void Labels::sync_label(PlayLayer* play, int tag, bool visible, LabelPlacement const& place, std::string const& shown_text, ccColor3B color) {
     auto* label = typeinfo_cast<CCLabelBMFont*>(play->getChildByTag(tag));
+    std::string const* over = ScriptLabels::override_text(tag);
+    std::string const& text = over ? *over : shown_text;
+    if (over) visible = labels_shown();
     if (!visible) {
         if (label) label->removeFromParent();
         return;
@@ -184,7 +297,6 @@ void Labels::layout(PlayLayer* play) {
     const float MARGIN = 3.f;
     const float GAP = 2.f;
     auto order = ordered_labels(logic);
-    if (bottom) std::ranges::reverse(order);
     float radius = 0.f;
 #ifdef GEODE_IS_IOS
     // 1.15: apples corners are not circles belief it or no
@@ -197,12 +309,12 @@ void Labels::layout(PlayLayer* play) {
         return radius - std::sqrt(std::max(0.f, radius * radius - up * up));
     };
     float stacked_height = 0.f;
-    for (auto* info : order) {
-        auto* label = typeinfo_cast<CCLabelBMFont*>(play->getChildByTag(info->tag));
-        if (!label || !label->isVisible()) continue;
+    auto stack = [&](int tag) {
+        auto* label = typeinfo_cast<CCLabelBMFont*>(play->getChildByTag(tag));
+        if (!label || !label->isVisible()) return;
         CCPoint anchor{ right ? 1.f : 0.f, bottom ? 0.f : 1.f };
         if (label->getAnchorPoint() != anchor) label->setAnchorPoint(anchor);
-        auto& alignment = alignments[info->tag];
+        auto& alignment = alignments[tag];
         auto wanted = right ? kCCTextAlignmentRight : kCCTextAlignmentLeft;
         if (alignment != wanted) {
             alignment = wanted;
@@ -213,7 +325,27 @@ void Labels::layout(PlayLayer* play) {
         CCPoint position{ right ? win.width - edge_inset : edge_inset, bottom ? MARGIN + stacked_height : win.height - MARGIN - stacked_height };
         if (label->getPosition() != position) label->setPosition(position);
         stacked_height += height + GAP;
+    };
+    std::vector<int> tags;
+    for (auto* info : order)
+        tags.push_back(info->tag);
+    for (auto const& label : g_script_labels)
+        tags.push_back(label.tag);
+    if (bottom) std::ranges::reverse(tags);
+    for (int tag : tags)
+        stack(tag);
+}
+
+void ScriptLabels::sync(PlayLayer* play, bool shown) {
+    for (int tag : g_dropped_tags) {
+        if (auto* gone = play->getChildByTag(tag)) gone->removeFromParent();
     }
+    g_dropped_tags.clear();
+    for (auto const& label : g_script_labels)
+        Labels::get().sync_label(play, label.tag, shown && !label.text.empty(), label.look.place, label.text, label.look.color);
+    auto const& logic = Logic::get();
+    bool scripts_shown = shown && logic.show_scripts && !g_running_names.empty();
+    Labels::get().sync_label(play, SCRIPTS_TAG, scripts_shown, logic.scripts_label, logic.scripts_label.prefix ? "Scripts:\n" + g_running_names : g_running_names, { 120, 230, 160 });
 }
 
 std::string Labels::format_clock(double seconds) {
@@ -290,7 +422,7 @@ void Logic::draw_overlay(PlayLayer* play) {
             if (auto* old = play->getChildByTag(info.tag)) old->removeFromParent();
         }
     }
-    bool show_labels = !(logic.render_hide_labels && Logic::get().render_capturing());
+    bool show_labels = labels_shown();
     Labels::get().sync_label(play, FRAME_TAG, show_labels && logic.show_frame, logic.frame_label, with_label_name(logic.frame_label, "Frame", fmt::format("{}", Logic::get().get_frame(play) + 1)), { 255, 255, 255 });
 
     unsigned cps_p1 = Logic::get().count_presses_in_last_second(false);
@@ -471,6 +603,7 @@ void Logic::draw_overlay(PlayLayer* play) {
     }
     Labels::get().sync_label(play, SAFE_MODE_TAG, !cheats_text.empty(), logic.safe_mode_label, cheats_text, { 255, 60, 60 });
     sync_perf_labels(play, show_labels);
+    ScriptLabels::sync(play, show_labels);
     for (int tag = 60432; tag <= 60447; ++tag) {
         if (auto* leftover = play->getChildByTag(tag)) leftover->removeFromParent();
     }

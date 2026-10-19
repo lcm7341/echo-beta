@@ -663,6 +663,12 @@ public:
 	float label_scale = 1.f;
 	std::string label_font = "bigFont.fnt";
 	std::vector<std::string> label_order;
+	bool show_scripts = true;
+	LabelPlacement scripts_label{ 3.f, 92.f, 0.35f, 70 };
+	std::vector<std::string> autorun_scripts;
+	bool script_wrap = false;
+	bool script_full_access = false;
+	bool script_changed_game = false;
 	std::deque<HitboxTrailPoint> trail_p1, trail_p2;
 	std::vector<GameObject*> hidden_decorations;
 	std::vector<CpsBreak> cps_notes_p1, cps_notes_p2;

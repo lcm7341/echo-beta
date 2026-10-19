@@ -48,6 +48,7 @@ std::vector<std::string_view> Logic::active_cheats() const {
     add(show_hitboxes, "Hitboxes");
     add(layout_mode, "Layout");
     add(hide_p1 || hide_p2, "Hide Player");
+    add(script_changed_game, "Full Game Access");
     return out;
 }
 

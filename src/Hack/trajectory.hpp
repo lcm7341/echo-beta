@@ -78,6 +78,7 @@ public:
 	void lookahead(PlayLayer* play);
 	void autoclick(PlayLayer* play);
 	int flip_survival(PlayLayer* play, bool player1, int& full, std::vector<CCPoint>* path = nullptr, int limit = 0);
+	int click_survival(PlayLayer* play, bool player1, ClickType click, int& full, int limit);
 
 	bool held_next(PlayLayer* play, bool player1) const {
 		return next_click(play, player1) == ClickType::Hold;
@@ -295,7 +296,6 @@ private:
 	void draw_lines();
 	void paint_paths(int skip);
 	void store_results();
-	int click_survival(PlayLayer* play, bool player1, ClickType click, int& full, int limit);
 	ccColor4F path_color(bool icon2, ClickType click) const;
 	float line_width(PlayLayer* play) const;
 };

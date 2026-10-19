@@ -4,6 +4,7 @@
 #include "Hooks/step.hpp"
 #include "Hooks/opt.hpp"
 #include "Hack/trajectory.hpp"
+#include "Logic/macro_script.hpp"
 #include "Physics/moving_objects.hpp"
 #include "Physics/collision_bounds.hpp"
 #include "Physics/prediction_art.hpp"
@@ -375,14 +376,17 @@ void Logic::run_frame(GJBaseGameLayer* play, float dt, const std::function<void(
     bool pause_kill = pause_before_kill && is_recording() && !rendering;
     // NOT while a macro plays. it made every step a whole update (75k tps = 1250 updates a frame)
     bool traj_click = traj_autoclicker && !rendering && !(is_playing() && !is_recording());
+    bool script_steps = MacroScript::g_before_step && !rendering && !(is_playing() && !is_recording());
+    bool step_by_step = traj_click || script_steps;
     auto lookahead = [&] {
         if (pause_kill && !show_traj) Trajectory::get().lookahead(PlayLayer::get());
     };
     auto autoclick = [&] {
         if (traj_click) Trajectory::get().autoclick(PlayLayer::get());
+        if (script_steps) MacroScript::before_step(PlayLayer::get());
     };
     if (auto& traj = Trajectory::get(); traj.job_pending()) {
-        bool plain = !force_step && !(frame_advance && !rendering) && !pause_kill && !traj_click;
+        bool plain = !force_step && !(frame_advance && !rendering) && !pause_kill && !step_by_step;
         if (plain) {
             traj.refresh(Logic::as_play(play));
             return;
@@ -402,7 +406,7 @@ void Logic::run_frame(GJBaseGameLayer* play, float dt, const std::function<void(
     }
     bool can_batch = step_patched || sample_rate() == VANILLA_TPS;
     bool single_steps = frame_advance && !rendering;
-    if (!force_step && !single_steps && !pause_kill && !traj_click && can_batch) {
+    if (!force_step && !single_steps && !pause_kill && !step_by_step && can_batch) {
         int steps = count_unlocked_steps(play, frame_dt);
         steps = std::min(steps, pause_kill_safe_steps());
         if (steps <= 0) {
@@ -451,7 +455,7 @@ void Logic::run_frame(GJBaseGameLayer* play, float dt, const std::function<void(
                     break;
                 }
                 // DONT resim mid frame
-                if (traj_click && i > 0) autoclick();
+                if (step_by_step && i > 0) autoclick();
                 if (pause_kill && i > 0 && !traj_click) lookahead();
                 if (pause_kill && pause_kill_safe_steps() <= 0) {
                     check_advance_pause(PlayLayer::get());
@@ -506,7 +510,7 @@ void Logic::run_frame(GJBaseGameLayer* play, float dt, const std::function<void(
     play->m_extraDelta = 0.0;
     steps_left = 0;
     // held w/ nothing to check between steps it goes in batches like playing. 1 whole update a step never got near the speedhack
-    bool batched = can_batch && !pause_kill && !traj_click && limit > 1;
+    bool batched = can_batch && !pause_kill && !step_by_step && limit > 1;
     for (int taken = 0; taken < limit; ++taken) {
         if (died()) break;
         if (batched) {

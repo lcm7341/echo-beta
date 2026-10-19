@@ -1,5 +1,6 @@
 #include "Physics/object_counters.hpp"
 #include "Logic/logic.hpp"
+#include "Logic/macro_script.hpp"
 #include "Logic/perf.hpp"
 #include "Hooks/rotation.hpp"
 #include "Hooks/step.hpp"
@@ -557,6 +558,7 @@ static void leave_level(PlayLayer* play) {
     clear_tilt();
     trace_flush();
     Logic::get().on_quit(play);
+    Logic::get().script_changed_game = false;
     Trajectory::get().detach();
     forget_effect_copies();
     drop_dud_waves();
@@ -678,6 +680,7 @@ class $modify(EchoPlayLayer, PlayLayer) {
         Logic::get().cancel_steps();
         if (!logic.in_scheduler && !logic.backstepping) Logic::get().draw_hitboxes(this);
         Logic::get().sync_time_scale();
+        if (MacroScript::g_running) MacroScript::attempt_started(this);
     }
 
     void loadFromCheckpoint(CheckpointObject* checkpoint) {
@@ -737,6 +740,7 @@ class $modify(EchoPlayLayer, PlayLayer) {
         if (m_playerDied) {
             Logic::get().sync_time_scale();
             Logic::get().note_death_hold(this);
+            if (MacroScript::g_running) MacroScript::player_died(this, player);
         }
     }
 
@@ -775,6 +779,7 @@ class $modify(EchoPlayLayer, PlayLayer) {
         Logic::get().update_safe_mode(this);
         Logic::get().hold_safe_mode_test_mode(this);
         Logic::get().on_complete(this);
+        if (MacroScript::g_running) MacroScript::level_finished(this);
         PlayLayer::levelComplete();
     }
 
@@ -962,6 +967,7 @@ void step_end(GJBaseGameLayer* self, GJBaseGameLayer* layer, bool is_half_tick) 
     if (play) {
         Logic::get().tick_autoclicker(play);
         Logic::get().tick_straight(play);
+        if (MacroScript::g_running) MacroScript::after_step(play);
     }
     dash_spin_post(is_half_tick);
 }
