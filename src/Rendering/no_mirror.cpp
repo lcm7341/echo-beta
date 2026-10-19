@@ -64,6 +64,15 @@ static void mirror_object(GameObject* object) {
     if ((int)turn % degrees_per_quarter != 0) object->setRotation(-object->getRotation());
 }
 
+static void unslide_wave(CCCircleWave* wave) {
+    if (!wave->m_target) return;
+    for (const auto& flip : g_screen_flips) {
+        if (flip.object.data() != wave->m_target || wave->m_target->getPosition() != flip.after) continue;
+        wave->setPosition(flip.before);
+        return;
+    }
+}
+
 static bool offsets_player(GJBaseGameLayer* layer, PlayerObject* body) {
     if (!body) return false;
 #ifdef GEODE_IS_WINDOWS
@@ -187,18 +196,21 @@ class $modify(NoMirrorObjects, PlayLayer) {
 #endif
         if (after != before || mirrored) g_screen_flips.push_back({ object, before, after, mirrored });
     }
+
+    void postUpdate(float dt) {
+        PlayLayer::postUpdate(dt);
+#ifdef ECHO_NO_MIRROR_DRAW
+        if (!Logic::get().no_mirror_portals || g_screen_flips.empty() || !m_circleWaveArray) return;
+        for (auto* wave : CCArrayExt<CCCircleWave*>(m_circleWaveArray)) unslide_wave(wave);
+#endif
+    }
 };
 
 class $modify(NoMirrorCircle, CCCircleWave) {
     void updatePosition(float dt) {
         CCCircleWave::updatePosition(dt);
 #ifdef ECHO_NO_MIRROR_DRAW
-        if (!Logic::get().no_mirror_portals || !m_target) return;
-        for (const auto& flip : g_screen_flips) {
-            if (flip.object.data() != m_target || m_target->getPosition() != flip.after) continue;
-            setPosition(flip.before);
-            return;
-        }
+        if (Logic::get().no_mirror_portals) unslide_wave(this);
 #endif
     }
 };
