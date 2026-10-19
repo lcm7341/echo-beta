@@ -1449,10 +1449,9 @@ void GUI::draw_theme() {
         toggle("TPS Changes During Playback", logic.playback_tps_changes);
         tip("Lets you set the macro's starting TPS while it is playing.");
         if (toggle("Practice Music Hack", logic.practice_music_hack)) {
-            if (auto* play = PlayLayer::get(); play && logic.practice_music_hack)
-                play->m_practiceMusicSync = true;
+            if (auto* play = PlayLayer::get()) play->toggleMusicInPractice();
         }
-        tip("Plays the level music in practice mode.");
+        tip("Plays the level music and sound effects in practice mode, synced to your checkpoints.");
         toggle("Logging", logic.trace_logging);
         tip("Saves a trace of each playback for bug reports.");
         EchoUI::RowHalf();

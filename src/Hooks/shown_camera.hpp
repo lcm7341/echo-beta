@@ -8,3 +8,4 @@ class GJBaseGameLayer;
 struct ShownCamera;
 std::shared_ptr<ShownCamera> save_shown_camera(GJBaseGameLayer* layer);
 void load_shown_camera(GJBaseGameLayer* layer, const ShownCamera* saved);
+void update_camera_keeping_nodes(GJBaseGameLayer* layer);

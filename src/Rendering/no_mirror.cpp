@@ -1,5 +1,6 @@
 #include "Logic/logic.hpp"
 #include <Geode/Geode.hpp>
+#include <Geode/modify/CCCircleWave.hpp>
 #include <Geode/modify/GJBaseGameLayer.hpp>
 #include <Geode/modify/PlayLayer.hpp>
 #include <cstdint>
@@ -14,6 +15,7 @@ using namespace geode::prelude;
 struct ScreenFlip {
     Ref<GameObject> object;
     CCPoint before, after;
+    bool mirrored = false, swapped = false;
 };
 
 static std::vector<ScreenFlip> g_screen_flips;
@@ -43,6 +45,25 @@ static float& mirror_direction(GJBaseGameLayer* layer) {
     return layer_float(layer, MIRROR_DIRECTION);
 }
 
+static bool mid_flip(GJBaseGameLayer* layer) {
+    float progress = layer->m_gameState.m_levelFlipProgress;
+    return progress > 0.f && progress < 1.f;
+}
+
+static bool in_mirrored_half(GJBaseGameLayer* layer) {
+    float progress = layer->m_gameState.m_levelFlipProgress;
+    return mirror_direction(layer) == 1.f ? progress >= .5f : progress <= .5f;
+}
+
+static void mirror_object(GameObject* object) {
+    const float quarter_turn = 90.f, three_quarter_turn = 270.f;
+    const int degrees_per_quarter = 90;
+    float turn = std::abs(object->getRotation());
+    if (turn == quarter_turn || turn == three_quarter_turn) object->setFlipY(!object->isFlipY());
+    else object->setFlipX(!object->isFlipX());
+    if ((int)turn % degrees_per_quarter != 0) object->setRotation(-object->getRotation());
+}
+
 static bool offsets_player(GJBaseGameLayer* layer, PlayerObject* body) {
     if (!body) return false;
 #ifdef GEODE_IS_WINDOWS
@@ -56,16 +77,29 @@ static bool offsets_player(GJBaseGameLayer* layer, PlayerObject* body) {
 #endif
 
 class $modify(NoMirrorLayer, GJBaseGameLayer) {
+    static void onModify(auto& self) {
+        (void)self.setHookPriority("GJBaseGameLayer::visit", Priority::VeryLate);
+    }
+
+    void update(float dt) {
+        GJBaseGameLayer::update(dt);
+#ifdef ECHO_NO_MIRROR_DRAW
+        if (!Logic::get().no_mirror_portals || !Logic::as_play(this) || !mid_flip(this)) return;
+        for (auto* body : { m_player1, m_player2 }) {
+            if (offsets_player(this, body)) body->setPosition(body->m_position);
+        }
+#endif
+    }
+
     void visit() {
 #ifdef ECHO_NO_MIRROR_DRAW
-        float progress = m_gameState.m_levelFlipProgress;
-        if (!Logic::get().no_mirror_portals || !Logic::as_play(this) || !(progress > 0.f && progress < 1.f)) {
+        if (!Logic::get().no_mirror_portals || !Logic::as_play(this) || !mid_flip(this)) {
             g_screen_flips.clear();
             GJBaseGameLayer::visit();
             return;
         }
         bool plain = layer_float(this, PLAIN_DRAW) < 1.f;
-        bool flipped = !plain && m_player1 && (mirror_direction(this) == 1.f ? progress >= .5f : progress <= .5f);
+        bool flipped = !plain && m_player1 && in_mirrored_half(this);
         std::vector<std::pair<PlayerObject*, CCPoint>> players;
         for (auto* body : { m_player1, m_player2 }) {
             if (!offsets_player(this, body)) continue;
@@ -74,13 +108,18 @@ class $modify(NoMirrorLayer, GJBaseGameLayer) {
         }
         auto& flips = g_screen_flips;
         for (auto& flip : flips) {
-            if (flip.object->getPosition() == flip.after) flip.object->setPosition(flip.before);
+            flip.swapped = flip.object->getPosition() == flip.after;
+            if (!flip.swapped) continue;
+            flip.object->setPosition(flip.before);
+            if (flip.mirrored) mirror_object(flip.object);
         }
         if (flipped) flipObjects();
         GJBaseGameLayer::visit();
         if (flipped) flipObjects();
         for (auto& flip : flips) {
-            if (flip.object->getPosition() == flip.before) flip.object->setPosition(flip.after);
+            if (!flip.swapped) continue;
+            if (flip.mirrored) mirror_object(flip.object);
+            flip.object->setPosition(flip.after);
         }
         for (auto& [body, position] : players)
             body->setPosition(position);
@@ -141,7 +180,25 @@ class $modify(NoMirrorObjects, PlayLayer) {
         auto before = object->getPosition();
         PlayLayer::screenFlipObject(object);
         auto after = object->getPosition();
-        if (after != before)
-            g_screen_flips.push_back({ object, before, after });
+#ifdef ECHO_NO_MIRROR_DRAW
+        bool mirrored = in_mirrored_half(this);
+#else
+        bool mirrored = false;
+#endif
+        if (after != before || mirrored) g_screen_flips.push_back({ object, before, after, mirrored });
+    }
+};
+
+class $modify(NoMirrorCircle, CCCircleWave) {
+    void updatePosition(float dt) {
+        CCCircleWave::updatePosition(dt);
+#ifdef ECHO_NO_MIRROR_DRAW
+        if (!Logic::get().no_mirror_portals || !m_target) return;
+        for (const auto& flip : g_screen_flips) {
+            if (flip.object.data() != m_target || m_target->getPosition() != flip.after) continue;
+            setPosition(flip.before);
+            return;
+        }
+#endif
     }
 };

@@ -579,7 +579,6 @@ class $modify(EchoPlayLayer, PlayLayer) {
         reseed_variance();
         Logic::get().clear_layout_hidden();
         if (!PlayLayer::init(level, useReplay, dontCreateObjects)) return false;
-        if (Logic::get().practice_music_hack) m_practiceMusicSync = true;
         Logic::get().prepare_lvl_view(this);
         Trajectory::get().attach(this);
         Logic::get().on_play_init(this);
@@ -823,6 +822,11 @@ class $modify(EchoPlayLayer, PlayLayer) {
     void onQuit() {
         leave_level(this);
         PlayLayer::onQuit();
+    }
+
+    void toggleMusicInPractice() {
+        PlayLayer::toggleMusicInPractice();
+        if (Logic::get().practice_music_hack) m_practiceMusicSync = true;
     }
 };
 
@@ -3074,6 +3078,13 @@ static void restore_nodes(const std::vector<SavedNode>& saved) {
         spot.node->setSkewX(spot.skew_x);
         spot.node->setSkewY(spot.skew_y);
     }
+}
+
+void update_camera_keeping_nodes(GJBaseGameLayer* layer) {
+    std::vector<SavedNode> nodes;
+    save_nodes(layer, nodes);
+    layer->updateCamera(0.f);
+    restore_nodes(nodes);
 }
 
 struct CameraPace {

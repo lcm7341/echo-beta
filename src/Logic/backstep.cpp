@@ -152,13 +152,14 @@ static bool pinned_this_frame = false;
 
 static void show_camera(PlayLayer* play, const CameraState& state) {
     state.apply(play);
-    play->updateCamera(0.f);
+    update_camera_keeping_nodes(play);
     state.apply(play);
     if (auto* layer = play->m_objectLayer) {
         layer->setPosition(state.layer_position);
         layer->setScaleX(state.layer_scale_x);
         layer->setScaleY(state.layer_scale_y);
         layer->setRotation(state.layer_rotation);
+        play->updateExtraGameLayers();
     }
 }
 
@@ -443,7 +444,8 @@ bool Logic::step_to(PlayLayer* play, int target, int keep_up_to) {
     play->m_checkpointArray->addObject(save.object);
     checkpoints.push_back(save.checkpoint);
     bool music_sync = play->m_practiceMusicSync;
-    play->m_practiceMusicSync = true;
+    bool held = holding_back && chrono::steady_clock::now() >= back_hold_start + chrono::milliseconds(advance_hold_ms);
+    play->m_practiceMusicSync = !held;
     play->resetLevel();
     play->m_practiceMusicSync = music_sync;
     play->m_checkpointArray->removeObject(save.object, true);
