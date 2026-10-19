@@ -107,11 +107,7 @@ public:
 		data.insert(data.end(), value.begin(), value.end());
 	}
 
-	bool save(const fs::path& path) const {
-		std::ofstream file(path, std::ios::binary);
-		file.write(reinterpret_cast<const char*>(data.data()), (std::streamsize)data.size());
-		return (bool)file;
-	}
+	bool save(const fs::path& path) const;
 };
 
 class ReplayIO {
@@ -120,8 +116,12 @@ public:
 
 	static std::string lower_ext(const fs::path& path);
 	static std::string sanitize(std::string name);
+	static fs::path utf8_path(const std::string& text);
 	static std::string strip_numbering(const std::string& base, const std::string& format);
-	static fs::path unique_file(const fs::path& directory, const std::string& base, const std::string& ext);
+	static fs::path unique_file(const fs::path& directory, const std::string& base, const std::string& ext, bool keep_numbering = false);
+	static fs::path temp_path(const fs::path& path);
+	static bool finish_temp_file(std::ofstream& file, const fs::path& temp, const fs::path& path);
+	static std::optional<matjson::Value> parse_json(std::string_view text);
 	static bool read_boolish(const matjson::Value& json);
 	static double read_number(const matjson::Value& json, double fallback);
 	static int read_int(const matjson::Value& json, int fallback);

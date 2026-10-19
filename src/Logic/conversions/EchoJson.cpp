@@ -178,7 +178,8 @@ bool ReplayIO::write_echo_json(const fs::path& path, const MacroData& macro) {
     }
     inputs.swap(sorted);
     poses.swap(sorted_poses);
-    std::ofstream file(path);
+    auto temp = ReplayIO::temp_path(path);
+    std::ofstream file(temp);
     if (!file) return false;
     file << "{\n";
     file << "\t\"format\": \"echo\",\n";
@@ -207,14 +208,15 @@ bool ReplayIO::write_echo_json(const fs::path& path, const MacroData& macro) {
         file << (i == 0 ? "\n\t\t" : ",\n\t\t") << EchoJson::input_line(inputs[i], debug ? poses[i] : FramePose{}, debug);
     }
     file << (inputs.empty() ? "]\n}\n" : "\n\t]\n}\n");
-    return (bool)file;
+    return ReplayIO::finish_temp_file(file, temp, path);
 }
 
 bool ReplayIO::read_echo_json(const fs::path& path, MacroData& out) {
     std::ifstream file(path);
-    auto parsed = matjson::Value::parse(file);
+    std::string text{ std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>() };
+    auto parsed = ReplayIO::parse_json(text);
     if (!parsed) return false;
-    const auto& json = parsed.unwrap();
+    const auto& json = *parsed;
     if (!json.contains("inputs") || !json["inputs"].isArray()) return false;
     return EchoJson::is_current(json) ? EchoJson::read_current(json, out) : EchoJson::read_old(json, out);
 }

@@ -9,7 +9,9 @@ void GUI::rewrite_selected(const std::function<void(Frame&)>& edit) {
     auto& inputs = Logic::get().inputs;
     int first = 0, last = 0;
     if (!selection_span(first, last)) return;
-    std::ranges::for_each(inputs.begin() + first, inputs.begin() + last + 1, edit);
+    for (int i = first; i <= last; ++i) {
+        if (editor_shows(inputs[(size_t)i])) edit(inputs[(size_t)i]);
+    }
     if (selected >= first && selected <= last) draft = inputs[(size_t)selected];
     if (selected >= 0) selected_id = Logic::get().input_id((size_t)selected);
     Logic::get().mark_inputs_changed();
@@ -69,8 +71,8 @@ void GUI::add_input(int frame) {
     }
     else {
         inputs.insert(inputs.begin() + idx, created);
-        Logic::get().mark_inputs_changed();
     }
+    Logic::get().mark_inputs_changed();
     insert_side(logic.poses, FramePose{}, true);
     insert_side(logic.input_ids, 0ull, false);
     select_input(idx);
@@ -85,16 +87,10 @@ void GUI::delete_selected() {
     auto& inputs = logic.inputs;
     int first = 0, last = 0;
     if (!selection_span(first, last)) return;
-    auto erase_span = [&](auto& side) {
-        if (side.size() != inputs.size()) {
-            side.clear();
-            return;
-        }
-        side.erase(side.begin() + first, side.begin() + last + 1);
-    };
-    erase_span(logic.poses);
-    erase_span(logic.input_ids);
-    inputs.erase(inputs.begin() + first, inputs.begin() + last + 1);
+    compact_inputs(inputs, logic.poses, logic.input_ids, [&](const Frame& input) {
+        int index = (int)(&input - inputs.data());
+        return index < first || index > last || !editor_shows(input);
+    });
     Logic::get().mark_inputs_changed();
     Logic::get().refresh_live_hold();
     select_input(std::min(first, (int)inputs.size() - 1));

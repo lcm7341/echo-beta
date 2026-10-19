@@ -109,6 +109,14 @@ namespace EchoUI {
         return t * t * (3.f - 2.f * t);
     }
 
+    static float light_text_flip(const ImVec4& panel) {
+        auto linear = [](float c) {
+            return std::pow(c, 2.2f);
+        };
+        float luminance = .2126f * linear(panel.x) + .7152f * linear(panel.y) + .0722f * linear(panel.z);
+        return luminance < .18f ? 1.f : 0.f;
+    }
+
     static ImVec4 turned(ImVec4 tint, const ColorGrade& grade) {
         if (grade.plain()) return tint;
         float h, sat, val;
@@ -136,14 +144,30 @@ namespace EchoUI {
     }
 
     float ease(ImGuiID id, float target, float speed) {
-        static std::unordered_map<ImGuiID, float> values;
-        auto [at, fresh] = values.try_emplace(id, target);
+        struct Eased {
+            float value = 0.f;
+            int frame = 0;
+        };
+
+        static std::unordered_map<ImGuiID, Eased> values;
+        static int swept_at = 0;
+        const int FORGET_AFTER_FRAMES = 600;
+        int frame = ImGui::GetFrameCount();
+        if (frame - swept_at >= FORGET_AFTER_FRAMES) {
+            swept_at = frame;
+            std::erase_if(values, [&](const auto& entry) {
+                return frame - entry.second.frame >= FORGET_AFTER_FRAMES;
+            });
+        }
+        auto [at, fresh] = values.try_emplace(id, Eased{ target, frame });
+        at->second.frame = frame;
         if (fresh) return target;
         float dt = std::min(ImGui::GetIO().DeltaTime, 1.f / 30.f);
         float step = std::min(1.f, dt * speed * GUI::get().anim_rate());
-        at->second += (target - at->second) * step;
-        if (std::abs(target - at->second) < .002f) at->second = target;
-        return at->second;
+        float& value = at->second.value;
+        value += (target - value) * step;
+        if (std::abs(target - value) < .002f) value = target;
+        return value;
     }
 
     float glide_in(float t) {
@@ -1072,6 +1096,7 @@ namespace EchoUI {
                     circle_filled_cached(draw, at, radius, ImGui::ColorConvertFloat4ToU32(faded(turned(liquid.drop, accent_turn), alpha)), 10);
                 }
             }
+            if (presses.empty()) g_splashes.erase(id);
         };
         switch (g_button_effects ? which : Scene::None) {
         case Scene::Halloween: {
@@ -2024,7 +2049,8 @@ namespace EchoUI {
     static bool begin_tile(const char* title, float width_em) {
         const ImGuiStyle& style = ImGui::GetStyle();
         ImGuiContext& g = *GImGui;
-        std::string key = g_tiles.group + "/" + title;
+        const char* id_part = std::strstr(title, "###");
+        std::string key = g_tiles.group + "/" + (id_part ? id_part + 3 : title);
         TileState& state = g_tile_states[key];
         state.seen = g_tiles.frame;
         g_tiles.open = &state;
@@ -2072,6 +2098,7 @@ namespace EchoUI {
             return ImVec2(std::lerp(away.x, at.x, landed), std::lerp(away.y, at.y, landed));
         };
         if (state.pinned) {
+            g_tiles.span = 0;
             ImVec2 at(state.x * display.x, state.y * display.y);
             at.x = std::clamp(at.x, 0.f, std::max(0.f, display.x - width));
             at.y = std::clamp(at.y, 0.f, std::max(0.f, display.y - em(2.f)));
@@ -2347,7 +2374,7 @@ namespace EchoUI {
             ImGuiContext& g = *ImGui::GetCurrentContext();
             ImGuiWindow* window = ImGui::GetCurrentWindow();
             bool top = g.OpenPopupStack.Size > 0 && g.OpenPopupStack.back().Window == window;
-            if (top && !ImGui::IsWindowAppearing() && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !window->Rect().Contains(g.IO.MousePos))
+            if (closable && top && !ImGui::IsWindowAppearing() && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !window->Rect().Contains(g.IO.MousePos))
                 ImGui::CloseCurrentPopup();
         }
         float width = em(width_em);
@@ -2414,7 +2441,7 @@ namespace EchoUI {
                     snprintf(text, sizeof(text), "%02X%02X%02X", byte(rgba[0]), byte(rgba[1]), byte(rgba[2]));
                 return std::string(text);
             };
-            bool typing = hex_for == id && ImGui::IsPopupOpen("##echo-color") && ImGui::GetActiveID() == ImGui::GetID("##hex");
+            bool typing = hex_for == id && ImGui::GetActiveID() == ImGui::GetID("##hex");
             if (!typing) {
                 hex = to_hex();
                 hex_for = id;
@@ -2658,6 +2685,12 @@ namespace EchoUI {
         }
     }
 
+    void sync_night_menu(const Palette& palette) {
+        night_menu = 0.f;
+        if (palette.light)
+            night_menu = std::max(night_fade(palette.depth), light_text_flip(color(ImGuiCol_PopupBg)));
+    }
+
     void apply_palette(const Palette& palette) {
         ImGuiStyle& style = ImGui::GetStyle();
         auto hsv = [](float h, float s, float v, float a = 1.f) {
@@ -2700,11 +2733,7 @@ namespace EchoUI {
             ColorSet day = light_set(std::min(1.f, .85f + .15f * (d - NIGHT_LOW) / (1.f - NIGHT_LOW)));
             ColorSet dark = dark_set(.8f + (std::min(d, NIGHT_TOP) - .5f) / (NIGHT_TOP - .5f) * .7f);
             ImVec4 under = mix(day.panel, dark.panel, fade);
-            auto linear = [](float c) {
-                return std::pow(c, 2.2f);
-            };
-            float luminance = .2126f * linear(under.x) + .7152f * linear(under.y) + .0722f * linear(under.z);
-            float flip = luminance < .18f ? 1.f : 0.f;
+            float flip = light_text_flip(under);
             // the buttons go dark w/ the text, light text on a still light button is unreadable too
             float buttons = std::max(fade, flip);
             night_menu = buttons;

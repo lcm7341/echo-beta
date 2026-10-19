@@ -28,16 +28,18 @@ bool ReplayIO::read_plain(const fs::path& path, MacroData& out) {
         input.player2 = player2 != 0;
         inputs.push_back(input);
     }
+    if (!file.eof()) return false;
     ReplayIO::adopt_inputs(out, std::move(inputs), fps);
     return true;
 }
 
 bool ReplayIO::write_plain(const fs::path& path, const MacroData& macro) {
-    std::ofstream file(path);
+    auto temp = ReplayIO::temp_path(path);
+    std::ofstream file(temp);
     if (!file) return false;
-    file << macro.fps << "\n";
+    file << fmt::format("{}", macro.fps) << "\n";
     for (const auto& input : macro.inputs) {
         file << input.number << " " << (input.holding ? 1 : 0) << " " << (input.player2 ? 1 : 0) << "\n";
     }
-    return true;
+    return ReplayIO::finish_temp_file(file, temp, path);
 }

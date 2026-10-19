@@ -343,11 +343,11 @@ void ringJump(PlayerObject* player, RingObject* ring) {
     if (ring->m_objectType == GameObjectType::SpiderOrb) {
         if (!player->m_isSideways) {
             if (ring->isFacingDown() != player->m_isUpsideDown) {
-                flipGravity(player, !player->m_isUpsideDown, true);
+                flipGravity(player, !player->m_isUpsideDown);
             }
         } else {
             if (ring->isFacingLeft() != player->m_isUpsideDown) {
-                flipGravity(player, !player->m_isUpsideDown, true);
+                flipGravity(player, !player->m_isUpsideDown);
             }
         }
 
@@ -357,6 +357,7 @@ void ringJump(PlayerObject* player, RingObject* ring) {
     }
 
     if (ring->m_objectType == GameObjectType::DashRing) {
+        gameEvent(player, (int)GJGameEvent::DashOrb);
         startDashing(player, (DashRingObject*)ring);
 
         finishRingJump(player);
@@ -419,22 +420,22 @@ void ringJump(PlayerObject* player, RingObject* ring) {
 
     float yStart = player->m_yStart;
     if (ring->m_objectType == GameObjectType::GravityRing) {
-        yStart *= 0.8;
+        yStart *= 0.8f;
     } else {
         if (ring->m_objectType == GameObjectType::GreenRing) {
             if (player->m_isShip) {
-                yStart *= 0.7;
+                yStart *= 0.7f;
             }
         } else {
             if (ring->m_objectType == GameObjectType::PinkJumpRing) {
                 if (player->m_isShip) {
-                    yStart *= 0.37;
+                    yStart *= 0.37f;
                 } else if (player->m_isBird) {
-                    yStart *= 0.42;
+                    yStart *= 0.42f;
                 } else if (player->m_isBall) {
-                    yStart *= 0.77;
+                    yStart *= 0.77f;
                 } else {
-                    yStart *= 0.72;
+                    yStart *= 0.72f;
                 }
             } else {
                 if (ring->m_objectType == GameObjectType::RedJumpRing) {
@@ -442,24 +443,24 @@ void ringJump(PlayerObject* player, RingObject* ring) {
                     if (!player->m_isShip) {
                         if (player->m_isBird) {
                             if (player->m_vehicleSize == 1.0) {
-                                yStart *= 1.02;
+                                yStart *= 1.02f;
                             } else {
-                                yStart *= 1.36;
+                                yStart *= 1.36f;
                             }
                         } else if (player->m_isBall) {
-                            yStart *= 1.34;
+                            yStart *= 1.34f;
                         } else if (player->m_isRobot) {
-                            yStart *= 1.28;
+                            yStart *= 1.28f;
                         } else if (player->m_isSpider) {
-                            yStart *= 1.34;
+                            yStart *= 1.34f;
                         } else {
-                            yStart *= 1.38;
+                            yStart *= 1.38f;
                         }
                     } else if (player->m_vehicleSize != 1.0) {
-                        yStart *= 1.4;
+                        yStart *= 1.4f;
                     }
                 } else if (player->m_isRobot) {
-                    yStart *= 0.9;
+                    yStart *= 0.9f;
                 }
             }
         }

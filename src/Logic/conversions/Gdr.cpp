@@ -205,9 +205,9 @@ bool ReplayIO::read_gdr(const fs::path& path, MacroData& out) {
     });
     matjson::Value json;
     if (start != data.end() && *start == '{') {
-        auto parsed = matjson::parse(std::string_view(reinterpret_cast<const char*>(data.data()), data.size()));
+        auto parsed = ReplayIO::parse_json(std::string_view(reinterpret_cast<const char*>(data.data()), data.size()));
         if (!parsed) return false;
-        json = parsed.unwrap();
+        json = std::move(*parsed);
     }
     else {
         json = GdrReplay::decode(in);
@@ -225,6 +225,10 @@ bool ReplayIO::read_gdr(const fs::path& path, MacroData& out) {
         inputs.push_back(input);
     }
     ReplayIO::adopt_inputs(out, std::move(inputs), (float)ReplayIO::read_number(json["framerate"], 240.0));
+    if (ReplayIO::read_boolish(json["ldm"])) {
+        out.ldm = true;
+        out.ldm_known = true;
+    }
     return true;
 }
 
@@ -256,7 +260,7 @@ bool ReplayIO::write_gdr(const fs::path& path, const MacroData& macro) {
     GdrReplay::write_key(out, "coins");
     GdrReplay::write_integer(out, 0);
     GdrReplay::write_key(out, "ldm");
-    GdrReplay::write_bool(out, false);
+    GdrReplay::write_bool(out, macro.ldm_known && macro.ldm);
     GdrReplay::write_key(out, "bot");
     GdrReplay::map_header(out, 2);
     GdrReplay::write_key(out, "name");

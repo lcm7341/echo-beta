@@ -61,6 +61,7 @@ using namespace geode::prelude;
 #include <cerrno>
 #include <cstdlib>
 #include <fcntl.h>
+#include <libproc.h>
 #include <signal.h>
 #include <spawn.h>
 #include <sys/wait.h>
@@ -200,6 +201,8 @@ private:
     std::ofstream raw_audio_file;
     double captured_seconds = 0.0;
     float saved_music_volume = 1.f, saved_sfx_volume = 1.f;
+    FMOD_OUTPUTTYPE saved_output_type = FMOD_OUTPUTTYPE_AUTODETECT;
+    int speaker_channels = 2;
     float effects_volume = 1.f;
     double last_song_position = 0.0;
     unsigned long long frames_mixed_at_last_check = 0;
@@ -225,7 +228,7 @@ public:
     bool connect_pipe(HANDLE pipe);
     bool write_all(HANDLE pipe, const void* data, size_t size);
     fs::path game_directory();
-    std::string ffmpeg_path();
+    fs::path ffmpeg_path();
     std::string run_hidden(std::string command, const fs::path& log_path);
     bool setup_nv12();
     void create_nv12_targets();
@@ -445,6 +448,9 @@ void AudioCapture::keep_effects_playing() {
 bool AudioCapture::attach(float music, float sfx, const fs::path& file) {
     auto* engine = FMODAudioEngine::get();
     if (attached || !engine || !engine->m_system) return false;
+    sample_rate = 0;
+    channels = 0;
+    frames_written = 0;
     auto* system = engine->m_system;
     FMOD_DSP_DESCRIPTION description{};
     description.pluginsdkversion = FMOD_PLUGIN_SDK_VERSION;
@@ -469,15 +475,18 @@ bool AudioCapture::attach(float music, float sfx, const fs::path& file) {
         song_ms = engine->getMusicTimeMS(0);
     }
     raw_audio_file.open(file, std::ios::binary | std::ios::trunc);
+    system->getOutput(&saved_output_type);
     if (!raw_audio_file || system->setOutput(FMOD_OUTPUTTYPE_NOSOUND_NRT) != FMOD_OK) {
         raw_audio_file.close();
         master_group->removeDSP(capture_dsp);
         capture_dsp->release();
         capture_dsp = nullptr;
-        system->setOutput(FMOD_OUTPUTTYPE_AUTODETECT);
+        system->setOutput(saved_output_type);
         return false;
     }
-    system->getSoftwareFormat(&sample_rate, nullptr, nullptr);
+    FMOD_SPEAKERMODE speaker_mode = FMOD_SPEAKERMODE_STEREO;
+    system->getSoftwareFormat(&sample_rate, &speaker_mode, nullptr);
+    system->getSpeakerModeChannels(speaker_mode, &speaker_channels);
     if (!song_path.empty()) {
         engine->stopAndRemoveMusic(0);
         if (auto it = engine->m_fmodMusic.find(0); it != engine->m_fmodMusic.end() && it->second.m_sound) {
@@ -524,8 +533,6 @@ bool AudioCapture::attach(float music, float sfx, const fs::path& file) {
     attach_to_master_group();
     keep_effects_playing();
     pending_samples.clear();
-    channels = 0;
-    frames_written = 0;
     captured_seconds = 0.0;
     song_tracked = false;
     undecodable_paths.clear();
@@ -554,7 +561,7 @@ void AudioCapture::detach() {
     for (const auto& [group, parent] : original_parent_groups)
         parent->addGroup(group, true, nullptr);
     original_parent_groups.clear();
-    engine->m_system->setOutput(FMOD_OUTPUTTYPE_AUTODETECT);
+    engine->m_system->setOutput(saved_output_type);
 }
 
 // freezes all sound between frames
@@ -716,7 +723,7 @@ void AudioCapture::advance(float dt, float fade) {
         if (engine->m_backgroundMusicChannel) engine->m_backgroundMusicChannel->setPaused(true);
         captured_seconds += (double)(dt);
         unsigned long long target = (unsigned long long)std::llround(captured_seconds * (double)(sample_rate));
-        int channel_count = channels > 0 ? channels : 2;
+        int channel_count = channels > 0 ? channels : speaker_channels;
         if (frames_written < target) {
             size_t frames = (size_t)(target - frames_written);
             std::vector<float> silence(frames * (size_t)channel_count, 0.f);
@@ -816,15 +823,15 @@ bool Recorder::write_all(HANDLE pipe, const void* data, size_t size) {
 }
 
 fs::path Recorder::game_directory() {
-    char module[MAX_PATH] = {};
-    if (!GetModuleFileNameA(nullptr, module, MAX_PATH))
+    wchar_t module[MAX_PATH] = {};
+    if (!GetModuleFileNameW(nullptr, module, MAX_PATH))
         return {};
     return fs::path(module).parent_path();
 }
 
-std::string Recorder::ffmpeg_path() {
+fs::path Recorder::ffmpeg_path() {
     auto beside = Recorder::get().game_directory() / "ffmpeg.exe";
-    if (fs::exists(beside)) return beside.string();
+    if (fs::exists(beside)) return beside;
     return "ffmpeg.exe";
 }
 
@@ -832,10 +839,10 @@ std::string Recorder::run_hidden(std::string command, const fs::path& log_path) 
     SECURITY_ATTRIBUTES security{};
     security.nLength = sizeof(security);
     security.bInheritHandle = TRUE;
-    HANDLE log = CreateFileA(log_path.string().c_str(), GENERIC_WRITE, FILE_SHARE_READ, &security, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    HANDLE log = CreateFileW(log_path.c_str(), GENERIC_WRITE, FILE_SHARE_READ, &security, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (log == INVALID_HANDLE_VALUE) return "could not open the ffmpeg log";
     HANDLE input = CreateFileA("NUL", GENERIC_READ, FILE_SHARE_READ, &security, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
-    STARTUPINFOA startup{};
+    STARTUPINFOW startup{};
     startup.cb = sizeof(startup);
     startup.dwFlags = STARTF_USESHOWWINDOW | STARTF_USESTDHANDLES;
     startup.wShowWindow = SW_HIDE;
@@ -843,9 +850,8 @@ std::string Recorder::run_hidden(std::string command, const fs::path& log_path) 
     startup.hStdOutput = log;
     startup.hStdError = log;
     PROCESS_INFORMATION process{};
-    std::vector<char> mutable_command(command.begin(), command.end());
-    mutable_command.push_back('\0');
-    if (!CreateProcessA(nullptr, mutable_command.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW, nullptr, nullptr, &startup, &process)) {
+    std::wstring mutable_command = geode::utils::string::utf8ToWide(command);
+    if (!CreateProcessW(nullptr, mutable_command.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW, nullptr, nullptr, &startup, &process)) {
         CloseHandle(log);
         if (input != INVALID_HANDLE_VALUE) CloseHandle(input);
         return "could not start ffmpeg";
@@ -872,7 +878,7 @@ std::string Recorder::run_hidden(std::string command, const fs::path& log_path) 
 }
 
 static std::string quote_arg(const fs::path& path) {
-    return "\"" + path.string() + "\"";
+    return "\"" + geode::utils::string::pathToString(path) + "\"";
 }
 
 static fs::path ffprobe_path() {
@@ -885,18 +891,18 @@ static std::string run_logged(std::string command, const fs::path& log_path, con
     SECURITY_ATTRIBUTES security{};
     security.nLength = sizeof(security);
     security.bInheritHandle = TRUE;
-    HANDLE log = CreateFileA(log_path.string().c_str(), GENERIC_WRITE, FILE_SHARE_READ, &security, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    HANDLE log = CreateFileW(log_path.c_str(), GENERIC_WRITE, FILE_SHARE_READ, &security, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
     HANDLE input = CreateFileA("NUL", GENERIC_READ, FILE_SHARE_READ, &security, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
     HANDLE output_handle = capture.empty()
                      ? log
-                     : CreateFileA(capture.string().c_str(), GENERIC_WRITE, FILE_SHARE_READ, &security, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+                     : CreateFileW(capture.c_str(), GENERIC_WRITE, FILE_SHARE_READ, &security, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (log == INVALID_HANDLE_VALUE || output_handle == INVALID_HANDLE_VALUE) {
         if (log != INVALID_HANDLE_VALUE) CloseHandle(log);
         if (output_handle != INVALID_HANDLE_VALUE && output_handle != log) CloseHandle(output_handle);
         if (input != INVALID_HANDLE_VALUE) CloseHandle(input);
         return "could not open the ffmpeg log";
     }
-    STARTUPINFOA startup{};
+    STARTUPINFOW startup{};
     startup.cb = sizeof(startup);
     startup.dwFlags = STARTF_USESHOWWINDOW | STARTF_USESTDHANDLES;
     startup.wShowWindow = SW_HIDE;
@@ -904,9 +910,8 @@ static std::string run_logged(std::string command, const fs::path& log_path, con
     startup.hStdOutput = output_handle;
     startup.hStdError = log;
     PROCESS_INFORMATION process{};
-    std::vector<char> mutable_command(command.begin(), command.end());
-    mutable_command.push_back('\0');
-    if (!CreateProcessA(nullptr, mutable_command.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW | BELOW_NORMAL_PRIORITY_CLASS, nullptr, nullptr, &startup, &process)) {
+    std::wstring mutable_command = geode::utils::string::utf8ToWide(command);
+    if (!CreateProcessW(nullptr, mutable_command.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW | BELOW_NORMAL_PRIORITY_CLASS, nullptr, nullptr, &startup, &process)) {
         CloseHandle(log);
         if (output_handle != log) CloseHandle(output_handle);
         if (input != INVALID_HANDLE_VALUE) CloseHandle(input);
@@ -1041,13 +1046,15 @@ void Logic::merge_renders(const fs::path& first_path, const fs::path& second_pat
     merge_busy = true;
     merge_seconds = 0.f;
     merge_folder = folder;
-    merge_label = fmt::format("{} & {}", first_path.stem().string(), second_path.stem().string());
+    merge_label = fmt::format("{} & {}", geode::utils::string::pathToString(first_path.stem()), geode::utils::string::pathToString(second_path.stem()));
     notify("Joining in the background", true);
     std::thread([this, folder, first_path, second_path, encode = merge_encoder_args()] {
         std::string failure;
         fs::path dest;
         try {
-            dest = ReplayIO::unique_file(folder, ReplayIO::sanitize(first_path.stem().string() + "_" + second_path.stem().string()), ".mp4");
+            auto first_stem = geode::utils::string::pathToString(first_path.stem());
+            auto second_stem = geode::utils::string::pathToString(second_path.stem());
+            dest = ReplayIO::unique_file(folder, ReplayIO::sanitize(first_stem + "_" + second_stem), ".mp4");
             failure = join_videos(first_path, second_path, dest, encode);
         }
         catch (const std::exception& ex) {
@@ -1056,7 +1063,7 @@ void Logic::merge_renders(const fs::path& first_path, const fs::path& second_pat
         Loader::get()->queueInMainThread([this, failure, dest] {
             merge_busy = false;
             if (failure.empty())
-                notify(fmt::format("Joined {}", dest.filename().string()), true);
+                notify(fmt::format("Joined {}", geode::utils::string::pathToString(dest.filename())), true);
             else notify(failure, false);
         });
     }).detach();
@@ -1109,8 +1116,15 @@ static pid_t spawn_tool(const std::vector<std::string>& args, int input, const f
     return failed ? 0 : pid;
 }
 
-static int wait_tool(pid_t pid, double timeout_seconds) {
+static unsigned long long process_cpu_time(pid_t pid) {
+    rusage_info_v2 usage{};
+    if (proc_pid_rusage(pid, RUSAGE_INFO_V2, reinterpret_cast<rusage_info_t*>(&usage)) != 0) return 0;
+    return usage.ri_user_time + usage.ri_system_time;
+}
+
+static int wait_tool(pid_t pid, double timeout_seconds, bool while_working = false) {
     auto started = chrono::steady_clock::now();
+    unsigned long long last_cpu = 0;
     while (true) {
         int status = 0;
         pid_t waited = waitpid(pid, &status, timeout_seconds > 0.0 ? WNOHANG : 0);
@@ -1118,6 +1132,13 @@ static int wait_tool(pid_t pid, double timeout_seconds) {
         if (waited < 0 && errno == ECHILD) return 0;
         if (waited < 0 && errno != EINTR) return -1;
         if (timeout_seconds > 0.0) {
+            if (while_working) {
+                unsigned long long cpu = process_cpu_time(pid);
+                if (cpu != last_cpu) {
+                    last_cpu = cpu;
+                    started = chrono::steady_clock::now();
+                }
+            }
             if (chrono::duration<double>(chrono::steady_clock::now() - started).count() > timeout_seconds) {
                 kill(pid, SIGKILL);
                 waitpid(pid, &status, 0);
@@ -2309,10 +2330,32 @@ void Recorder::stop_encode_thread() {
 #ifdef GEODE_IS_WINDOWS
 #define FFMPEG_EXIT_TIMEOUT_MS 30000
 
+static unsigned long long process_cpu_time(HANDLE process) {
+    FILETIME created, exited, kernel, user;
+    if (!GetProcessTimes(process, &created, &exited, &kernel, &user)) return 0;
+    ULARGE_INTEGER kernel_time, user_time;
+    kernel_time.LowPart = kernel.dwLowDateTime;
+    kernel_time.HighPart = kernel.dwHighDateTime;
+    user_time.LowPart = user.dwLowDateTime;
+    user_time.HighPart = user.dwHighDateTime;
+    return kernel_time.QuadPart + user_time.QuadPart;
+}
+
 void Recorder::close_ffmpeg_process() {
     Recorder::get().close_handle(video_pipe);
     if (ffmpeg_process) {
-        if (WaitForSingleObject(ffmpeg_process, FFMPEG_EXIT_TIMEOUT_MS) != WAIT_OBJECT_0) TerminateProcess(ffmpeg_process, 0);
+        const DWORD check_every_ms = 1000;
+        unsigned long long last_cpu = process_cpu_time(ffmpeg_process);
+        DWORD idle_ms = 0;
+        while (WaitForSingleObject(ffmpeg_process, check_every_ms) == WAIT_TIMEOUT) {
+            unsigned long long cpu = process_cpu_time(ffmpeg_process);
+            idle_ms = cpu == last_cpu ? idle_ms + check_every_ms : 0;
+            last_cpu = cpu;
+            if (idle_ms >= FFMPEG_EXIT_TIMEOUT_MS) {
+                TerminateProcess(ffmpeg_process, 0);
+                break;
+            }
+        }
         CloseHandle(ffmpeg_process);
         ffmpeg_process = nullptr;
     }
@@ -2328,7 +2371,7 @@ void Recorder::close_ffmpeg_process() {
     if (video_pipe >= 0) close(video_pipe);
     video_pipe = -1;
     if (ffmpeg_process) {
-        int code = wait_tool(ffmpeg_process, FFMPEG_EXIT_TIMEOUT_SECONDS);
+        int code = wait_tool(ffmpeg_process, FFMPEG_EXIT_TIMEOUT_SECONDS, true);
         ffmpeg_process = 0;
         if (code != 0) {
             encode_error = last_log_line(ffmpeg_log, FFMPEG_ERROR_LINE_LIMIT);
@@ -2577,7 +2620,7 @@ void Recorder::save_api_render() {
         auto& logic = Logic::get();
         if (failed.empty()) {
             logic.message = "Render stopped";
-            logic.notify(fmt::format("Saved {}", video.filename().string()), true);
+            logic.notify(fmt::format("Saved {}", geode::utils::string::pathToString(video.filename())), true);
         }
         else {
             logic.message = "Video saved, audio mux failed: " + failed;
@@ -2594,14 +2637,18 @@ void Recorder::save_api_render() {
     saving = true;
     int audio_source_rate = (int)std::max(1ll, std::llround((double)(audio_capture.sample_rate) * std::max(audio_speed, 0.01f)));
     std::thread([finish_saving, video = output, raw = raw_audio_path, rate = audio_source_rate, channels = audio_capture.channels] {
-        auto folder = video.parent_path();
-        auto wav = folder / (video.stem().string() + ".audio.wav");
-        auto temp = folder / (video.stem().string() + ".part" + video.extension().string());
+        auto wav = fs::path(video).replace_extension(".audio.wav");
+        auto temp = fs::path(video).replace_extension(".part");
+        temp += video.extension();
         std::string failed;
         std::error_code error;
         std::vector<float> stereo;
         try {
+#ifdef GEODE_IS_IOS
             stereo = read_captured_stereo(raw, channels);
+#else
+            if (rate == 44100) stereo = read_captured_stereo(raw, channels);
+#endif
         }
         catch (const std::exception& error) {
             failed = error.what();
@@ -2639,7 +2686,8 @@ void Recorder::save_api_render() {
         if (failed.empty() && !fs::exists(temp, error))
             failed = "FFmpeg API did not write the video";
         if (failed.empty()) {
-            auto backup = folder / (video.filename().string() + ".unmuxed");
+            auto backup = video;
+            backup += ".unmuxed";
             fs::rename(video, backup, error);
             if (!error) {
                 fs::rename(temp, video, error);
@@ -2656,9 +2704,9 @@ void Recorder::save_api_render() {
             fs::remove(temp, error);
             if (write_wav(raw, wav, rate, channels)) {
                 fs::remove(raw, error);
-                failed += "; audio kept in " + wav.filename().string();
+                failed += "; audio kept in " + geode::utils::string::pathToString(wav.filename());
             }
-            else failed += "; raw audio kept in " + raw.filename().string();
+            else failed += "; raw audio kept in " + geode::utils::string::pathToString(raw.filename());
         }
         Loader::get()->queueInMainThread([finish_saving, video, failed] {
             finish_saving(video, failed);
@@ -2679,9 +2727,10 @@ bool Recorder::mux_audio() {
     }
     auto folder = output.parent_path();
     auto log = folder / "echo-ffmpeg.log";
-    auto temp = folder / (output.stem().string() + ".part" + output.extension().string());
+    auto temp = fs::path(output).replace_extension(".part");
+    temp += output.extension();
     bool lossless = Logic::get().render_bitrate <= 0;
-    auto extension = output.extension().string();
+    auto extension = geode::utils::string::pathToString(output.extension());
     std::transform(extension.begin(), extension.end(), extension.begin(), [](unsigned char c) {
         return (char)std::tolower(c);
     });
@@ -2690,14 +2739,14 @@ bool Recorder::mux_audio() {
     long long source_rate = std::max(1ll, std::llround((double)(audio_capture.sample_rate) * std::max(audio_speed, 0.01f)));
     std::string command = fmt::format(
         "\"{}\" -y -nostdin -loglevel error -i \"{}\" -f f32le -ar {} -ac {} -i \"{}\" -map 0:v:0 -map 1:a:0 -c:v copy {} -ar {} -ac 2 -muxdelay 0 -muxpreload 0 -shortest \"{}\"",
-        Recorder::get().ffmpeg_path(),
-        output.string(),
+        geode::utils::string::pathToString(Recorder::get().ffmpeg_path()),
+        geode::utils::string::pathToString(output),
         source_rate,
         audio_capture.channels,
-        raw_audio_path.string(),
+        geode::utils::string::pathToString(raw_audio_path),
         audio_codec,
         audio_capture.sample_rate,
-        temp.string());
+        geode::utils::string::pathToString(temp));
     std::string failed = Recorder::get().run_hidden(command, log);
     fs::remove(log, error);
     if (failed.empty()) {
@@ -2709,13 +2758,13 @@ bool Recorder::mux_audio() {
         return true;
     }
     fs::remove(temp, error);
-    auto wav = output.parent_path() / (output.stem().string() + ".wav");
+    auto wav = fs::path(output).replace_extension(".wav");
     if (write_wav(raw_audio_path, wav, (int)source_rate, audio_capture.channels)) {
         fs::remove(raw_audio_path, error);
-        failed += "; audio kept in " + wav.filename().string();
+        failed += "; audio kept in " + geode::utils::string::pathToString(wav.filename());
     }
     else {
-        failed += "; raw audio kept in " + raw_audio_path.filename().string();
+        failed += "; raw audio kept in " + geode::utils::string::pathToString(raw_audio_path.filename());
     }
     Logic::get().message = "Video saved, audio mux failed: " + failed;
     return false;
@@ -3142,6 +3191,8 @@ void Logic::stop_render() {
     if (!recorder.encode_error.empty()) {
         message = "Render failed: " + recorder.encode_error;
         notify(message, false);
+        std::error_code ignored;
+        fs::remove(recorder.raw_audio_path, ignored);
     }
     else if (recorder.mux_audio()) {
         message = "Render stopped";
@@ -3156,7 +3207,8 @@ void Logic::stop_render() {
 
 static void reset_for_new_render(Logic& logic, Recorder& recorder, const fs::path& output, const fs::path& folder) {
     recorder.output = output;
-    recorder.raw_audio_path = folder / (output.stem().string() + ".audio.raw");
+    recorder.raw_audio_path = folder / output.stem();
+    recorder.raw_audio_path += ".audio.raw";
     recorder.paused = false;
     recorder.frames = 0;
     g_render_timing.reset();
@@ -3202,7 +3254,9 @@ static std::string ffmpeg_command(const Logic& logic, const Recorder& recorder, 
     bool hardware_encoder = codec.find("nvenc") != std::string::npos || codec.find("amf") != std::string::npos || codec.find("qsv") != std::string::npos;
     const char* output_pixel_format = logic.render_bitrate <= 0 && !hardware_encoder ? "yuv444p" : "yuv420p";
     // shader already did bt709 DONT do it twice
-    std::string color_fix = logic.render_color_fix && !recorder.nv12 ? "-vf colorspace=all=bt709:iall=bt470bg:fast=1 " : "";
+    std::string video_filter;
+    if (!recorder.nv12)
+        video_filter = logic.render_color_fix ? "-vf vflip,colorspace=all=bt709:iall=bt470bg:fast=1 " : "-vf vflip ";
     auto has_arg = [&](const char* key) {
         return logic.render_args.find(key) != std::string::npos;
     };
@@ -3214,29 +3268,28 @@ static std::string ffmpeg_command(const Logic& logic, const Recorder& recorder, 
     return fmt::format(
         "\"{}\" -y -nostdin -loglevel error -f rawvideo -pix_fmt {} -s {}x{} -r {} -probesize 32 -analyzeduration 0 -fflags nobuffer -i {} -an "
         "{}-c:v {}{}{}{}{} \"{}\"",
-        Recorder::get().ffmpeg_path(),
+        geode::utils::string::pathToString(Recorder::get().ffmpeg_path()),
         recorder.nv12 ? "nv12" : "bgra",
         width,
         height,
         fps,
         video_name,
-        color_fix,
+        video_filter,
         codec,
         rate_control_args(codec, logic.render_bitrate, logic.render_args),
         pixel_format_args,
         colorspace_args,
         extra,
-        output.string());
+        geode::utils::string::pathToString(output));
 }
 
 static bool launch_hidden(const std::string& command, PROCESS_INFORMATION& process) {
-    STARTUPINFOA startup{};
+    STARTUPINFOW startup{};
     startup.cb = sizeof(startup);
     startup.dwFlags = STARTF_USESHOWWINDOW;
     startup.wShowWindow = SW_HIDE;
-    std::vector<char> mutable_command(command.begin(), command.end());
-    mutable_command.push_back('\0');
-    return CreateProcessA(nullptr, mutable_command.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, nullptr, &startup, &process);
+    std::wstring mutable_command = geode::utils::string::utf8ToWide(command);
+    return CreateProcessW(nullptr, mutable_command.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, nullptr, &startup, &process);
 }
 
 static void finish_starting_render(bool connected) {

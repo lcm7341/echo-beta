@@ -26,6 +26,8 @@ struct PlayerHitbox {
     bool is_wave = false;
     bool dies_on_head_hit = false;
     bool is_upside_down = false;
+    bool player2 = false;
+    float land_reach = 0.f;
 };
 
 struct MacrobuffPlacement {
@@ -115,26 +117,45 @@ static bool hazard_touches(GameObject* object, CCRect const& hitbox, PlayerHitbo
     return hitbox.intersectsRect(player.outer) && rotated_box_also_touches(object, player.rotated);
 }
 
-static bool block_kills(GameObject* object, CCRect const& hitbox, PlayerHitbox const& player) {
-    if (hitbox.intersectsRect(player.inner))
-        return rotated_box_also_touches(object, corners_of(player.inner));
-    if (!player.dies_on_head_hit || !hitbox.intersectsRect(player.outer)) return false;
-    bool above_head = player.is_upside_down ? hitbox.getMaxY() < player.outer.getMidY() : hitbox.getMinY() > player.outer.getMidY();
-    return above_head && rotated_box_also_touches(object, player.rotated);
+static bool overlaps(CCRect const& a, CCRect const& b) {
+    return a.getMaxX() > b.getMinX() && b.getMaxX() > a.getMinX() && a.getMaxY() > b.getMinY() && b.getMaxY() > a.getMinY();
 }
 
-static bool would_kill_player(GameObject* object, CCRect const& hitbox, PlayerHitbox const& player, bool fix_radius) {
-    if (is_hazard(object) || player.is_wave)
-        return hazard_touches(object, hitbox, player, fix_radius);
-    return block_kills(object, hitbox, player);
+static bool came_from_head_side(CCRect const& block, PlayerHitbox const& before) {
+    return before.is_upside_down ? before.outer.getMinY() >= block.getMaxY() : before.outer.getMaxY() <= block.getMinY();
+}
+
+static float depth_below_landing_side(CCRect const& block, PlayerHitbox const& player) {
+    return player.is_upside_down ? player.outer.getMaxY() - block.getMinY() : block.getMaxY() - player.outer.getMinY();
+}
+
+static bool block_kills_on_path(GameObject* object, CCRect const& hitbox, std::vector<PlayerHitbox> const& path, bool player2, bool fix_radius) {
+    PlayerHitbox const* before = nullptr;
+    for (auto const& player : path) {
+        if (player.player2 != player2) continue;
+        PlayerHitbox const* previous = before;
+        before = &player;
+        if (player.is_wave) {
+            if (hazard_touches(object, hitbox, player, fix_radius)) return true;
+            continue;
+        }
+        if (!overlaps(hitbox, player.outer) || !rotated_box_also_touches(object, player.rotated)) continue;
+        if (depth_below_landing_side(hitbox, player) <= player.land_reach) return false;
+        bool first_touch = previous && !overlaps(hitbox, previous->outer);
+        if (first_touch && came_from_head_side(hitbox, *previous)) return player.dies_on_head_hit;
+        if (overlaps(hitbox, player.inner) && rotated_box_also_touches(object, corners_of(player.inner))) return true;
+    }
+    return false;
 }
 
 static bool kills_somewhere_on_path(GameObject* object, std::vector<PlayerHitbox> const& path, bool fix_radius) {
     CCRect hitbox = Logic::object_hitbox(object);
+    if (!is_hazard(object))
+        return block_kills_on_path(object, hitbox, path, false, fix_radius) || block_kills_on_path(object, hitbox, path, true, fix_radius);
     float reach = object->m_objectRadius > 0.f ? scaled_radius(object) : 0.f;
     CCRect nearby(hitbox.getMinX() - reach, hitbox.getMinY() - reach, hitbox.size.width + reach * 2.f, hitbox.size.height + reach * 2.f);
     for (auto const& player : path) {
-        if (nearby.intersectsRect(player.outer) && would_kill_player(object, hitbox, player, fix_radius))
+        if (nearby.intersectsRect(player.outer) && hazard_touches(object, hitbox, player, fix_radius))
             return true;
     }
     return false;
@@ -178,6 +199,7 @@ void Logic::record_macrobuff_player_hitboxes(GJBaseGameLayer* layer, bool died) 
         state.recording.clear();
         state.player_died = false;
     }
+    const float cube_land_reach = 10.f, vehicle_land_reach = 6.f, platformer_land_reach = 5.f;
     for (auto* player : { layer->m_player1, layer->m_player2 }) {
         if (!player || Logic::get().is_traj_player(player)) continue;
         if (player == layer->m_player2 && !layer->m_gameState.m_isDualMode) continue;
@@ -190,6 +212,9 @@ void Logic::record_macrobuff_player_hitboxes(GJBaseGameLayer* layer, bool died) 
         hitbox.is_wave = player->m_isDart;
         hitbox.dies_on_head_hit = !player->m_isPlatformer && !player->m_isShip && !player->m_isBird && !player->m_isBall && !player->m_isDart && !player->m_isSpider && !player->m_isSwing;
         hitbox.is_upside_down = player->m_isUpsideDown;
+        hitbox.player2 = player == layer->m_player2;
+        bool vehicle = player->m_isShip || player->m_isBird || player->m_isDart || player->m_isSwing;
+        hitbox.land_reach = player->m_isPlatformer ? platformer_land_reach : vehicle ? vehicle_land_reach : cube_land_reach;
         state.recording.push_back(hitbox);
     }
 }

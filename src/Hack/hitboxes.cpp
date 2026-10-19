@@ -21,6 +21,7 @@
 #include <array>
 #include <chrono>
 #include <cmath>
+#include <cstddef>
 #include <deque>
 #include <span>
 #include <unordered_set>
@@ -160,7 +161,11 @@ float collision_radius(GameObject* object) {
 
 // drawing a hitbox fucks with cached
 class HitboxStateGuard {
-    static const size_t OBJECT_BYTES_FROM = 0x2e0, OBJECT_BYTES_TO = 0x370, BOX_BYTES_FROM = 0x140, BOX_BYTES_TO = 0x1b8;
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Winvalid-offsetof"
+    static const size_t OBJECT_BYTES_FROM = offsetof(GameObject, m_orientedBox), OBJECT_BYTES_TO = offsetof(GameObject, m_linkedGroup);
+    static const size_t BOX_BYTES_FROM = offsetof(OBB2D, m_corners), BOX_BYTES_TO = sizeof(OBB2D);
+#pragma clang diagnostic pop
     GameObject* m_object;
     std::array<unsigned char, OBJECT_BYTES_TO - OBJECT_BYTES_FROM> m_objectBytes{};
     OBB2D* m_originalBox;
@@ -756,7 +761,7 @@ void Hitboxes::draw_object_hitbox(CCDrawNode* node, GJBaseGameLayer* play, GameO
                 auto const& c = verts[k];
                 if ((c.x == a.x && c.y == b.y) || (c.x == b.x && c.y == a.y)) corner = k;
             }
-            std::array<CCPoint, 4> shape;
+            std::array<CCPoint, 5> shape;
             int corner_count = 0;
             for (int k = 0; k < 3; ++k) {
                 auto const& p = verts[(corner + k) % 3];

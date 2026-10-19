@@ -903,7 +903,7 @@ static bool load_version1(std::istream& file, unsigned char flags, EchoFile& out
         int code = (high << 1) | stream.bit();
         input.button = ReplayIO::code_button(code);
         unsigned delta = stream.gamma();
-        if (delta == 0) return false;
+        if (delta == 0 || delta - 1 > (unsigned)(INT_MAX - frame)) return false;
         frame += (int)(delta - 1);
         input.number = frame;
         out.inputs.push_back(input);
@@ -965,7 +965,7 @@ static void store_echo_body(EchoFile& body, MacroData& out) {
     out.poses = std::move(body.poses);
     if (out.poses.size() != out.inputs.size()) out.poses.clear();
     out.rates = std::move(body.rates);
-    out.fps = body.fps > 0.f ? body.fps : 240.f;
+    out.fps = std::isfinite(body.fps) && body.fps > 0.f ? body.fps : 240.f;
     out.end_x = body.end_x;
     out.recording_seconds = body.seconds;
     out.attempts = (int)body.attempts;
@@ -1002,7 +1002,8 @@ bool ReplayIO::write_echo(const fs::path& path, const MacroData& macro) {
     if (macro.lvl_seed_known) code_bits(writer, macro.lvl_seed, 64);
     writer.finish();
 
-    std::ofstream file(path, std::ios::binary);
+    auto temp = ReplayIO::temp_path(path);
+    std::ofstream file(temp, std::ios::binary);
     if (!file) return false;
     char magic[4] = { 'E', 'C', 'H', '2' };
     file.write(magic, 4);
@@ -1016,7 +1017,7 @@ bool ReplayIO::write_echo(const fs::path& path, const MacroData& macro) {
     ReplayIO::write_pod(file, flags);
     if (!writer.bytes.empty())
         file.write(reinterpret_cast<const char*>(writer.bytes.data()), (std::streamsize)writer.bytes.size());
-    return (bool)file;
+    return ReplayIO::finish_temp_file(file, temp, path);
 }
 
 bool ReplayIO::read_echo(const fs::path& path, MacroData& out) {

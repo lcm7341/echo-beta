@@ -124,7 +124,7 @@ struct AutoClick {
 	int swifts = 0;
 	int since_press = 0, since_release = 0;
 	bool pressed = false;
-	int disable_in = 1;
+	int disable_in = 1, disable_after = 1;
 };
 
 struct LabelPlacement {
@@ -513,6 +513,8 @@ public:
 	bool jump_held_p1 = false, jump_held_p2 = false;
 	int assist_clicks[2][2] = {};
 	int restored_clicks[2][2] = {};
+	int tool_clicks[2][2] = {};
+	bool jump_set_by_tool[2] = {};
 	bool assist_input = false;
 	bool find_best_queued = false;
 	int best_frame_range = 120;
@@ -575,7 +577,7 @@ public:
 	bool applying_playback = false;
 	bool hold_sync = false, keep_checkpoint_hold = true;
 	bool immediate_restart = false, arm_immediate_restart = false;
-	bool suppress_auto_hold = false;
+	bool suppress_auto_hold = false, jump_held_since_death = false;
 	bool routing_input = false;
 	std::map<int, int> routed_keys;
 	bool key_jump_p1 = false, key_jump_p2 = false, key_left_p1 = false, key_right_p1 = false;
@@ -779,6 +781,7 @@ public:
 	void poll_advance_hold();
 	int backstep_interval() const;
 	void save_backstep(PlayLayer* play);
+	void note_idle_input(bool down, bool player1, int button);
 	void note_shown_camera(PlayLayer* play, bool stepped);
 	int follow_steps() const;
 	bool follow_active(GJBaseGameLayer* play) const;
@@ -823,6 +826,7 @@ public:
 	bool vanilla_click_physics() const;
 	bool defer_physics();
 	double click_stamp() const;
+	void queue_tool_click(GJBaseGameLayer* play, bool down, bool player2);
 	void note_direction_press(const PlayerButtonCommand& cmd);
 	void restore_holds(PlayLayer* play);
 	void on_play_init(PlayLayer* play);
@@ -837,6 +841,8 @@ public:
 	void clear_rand_triggers();
 	unsigned long long game_random_state();
 	void set_game_random_state(unsigned long long state);
+	bool jump_input_down(PlayLayer* play) const;
+	void note_death_hold(PlayLayer* play);
 	void capture_restart_holds(PlayLayer* play);
 	void match_live_holds(PlayLayer* play);
 	void poll_hold_block();

@@ -3,6 +3,7 @@
 #include "GUI/gui.hpp"
 #include "GUI/logo_texture.hpp"
 #include "Hack/label_types.hpp"
+#include "Logic/conversions/codecs.hpp"
 
 #include <imgui-cocos.hpp>
 #include <imgui.h>
@@ -386,7 +387,9 @@ static void draw_video_shape(bool& open_save_preset) {
         if (shown == preset.name) shown = sized(preset.name, preset.width, preset.height);
     }
     if (mine >= 0) shown = sized(shown, logic.render_width, logic.render_height);
+    bool rendering = logic.render_active();
     EchoUI::RowWith("Preset", mine >= 0 ? 4.4f : 0.f);
+    ImGui::BeginDisabled(rendering);
     if (EchoUI::BeginCombo("##render-preset", shown.c_str())) {
         for (const auto& preset : DEFAULTS) {
             auto label = sized(preset.name, preset.width, preset.height) + "##" + preset.name;
@@ -406,6 +409,7 @@ static void draw_video_shape(bool& open_save_preset) {
         if (EchoUI::Selectable("Save current as...")) open_save_preset = true;
         ImGui::EndCombo();
     }
+    ImGui::EndDisabled();
     if (mine >= 0) {
         float delete_w = EchoUI::RowRight(4.4f);
         if (EchoUI::Button("Delete", ImVec2(delete_w, 0.f))) {
@@ -456,6 +460,7 @@ static void draw_video_shape(bool& open_save_preset) {
     EchoUI::Row("Frame rate");
     bool typing_rate = ImGui::TempInputIsActive(ImGui::GetID("##render-fps"));
     int fps = logic.render_fps;
+    ImGui::BeginDisabled(rendering);
     if (EchoUI::DragInt("##render-fps", &fps, .04f, RATES[0], RATES[IM_ARRAYSIZE(RATES) - 1], "%d FPS")) {
         if (typing_rate) {
             logic.render_fps = std::clamp(fps, 1, max_typed_fps);
@@ -468,6 +473,7 @@ static void draw_video_shape(bool& open_save_preset) {
             logic.render_fps = next;
         }
     }
+    ImGui::EndDisabled();
     saved_on_release();
     float mbps = (float)(logic.render_bitrate) / 1000000.f;
     EchoUI::Row("Bitrate");
@@ -911,10 +917,10 @@ void GUI::tools() {
         toggle("Turn off by itself", logic.autoclick_auto_disable);
         ImGui::BeginDisabled(!logic.autoclick_auto_disable);
         EchoUI::Row("After");
-        int disable_in = logic.auto_click.disable_in;
-        if (EchoUI::DragInt("##autoclick-disable", &disable_in, 1.f, 1, 10000, "%d frames"))
-            logic.auto_click.disable_in = std::max(disable_in, 1);
-        saved_on_release();
+        int disable_after = logic.auto_click.disable_after;
+        if (EchoUI::DragInt("##autoclick-disable", &disable_after, 1.f, 1, 10000, "%d frames"))
+            logic.auto_click.disable_in = logic.auto_click.disable_after = std::max(disable_after, 1);
+        persist_on_release();
         ImGui::EndDisabled();
         EchoUI::EndModal();
     }
@@ -982,7 +988,7 @@ void GUI::draw_visuals() {
         toggle("Batched Effects", logic.batched_effects);
         tip("Draws many effects all at once using more CPU cores");
         toggle("Prefetch Helper", logic.prefetch_helper);
-        tip("Uses another CPU core to help the game load effects faster");
+        tip("Uses another CPU core to help the game load effects and on-screen objects faster");
 #endif
     }
     EchoUI::EndCard();
@@ -1103,24 +1109,15 @@ void GUI::clickbot() {
         std::error_code folder_error;
         for (const auto& entry : fs::directory_iterator(folders_root, folder_error)) {
             if (!entry.is_directory(folder_error)) continue;
-            try {
-                folders.push_back(entry.path().filename().string());
-            }
-            catch (...) {
-            }
+            folders.push_back(geode::utils::string::pathToString(entry.path().filename()));
         }
-        std::string cur;
-        try {
-            cur = fs::path(pack).filename().string();
-        }
-        catch (...) {
-        }
+        std::string cur = geode::utils::string::pathToString(ReplayIO::utf8_path(pack).filename());
         if (cur.empty()) cur = pack;
         EchoUI::RowWith("Click pack", 5.f);
         if (EchoUI::BeginCombo(player == 0 ? "##clickpack-p1" : "##clickpack-p2", cur.empty() ? "None" : cur.c_str())) {
             for (const auto& folder : folders) {
                 if (EchoUI::Selectable(folder.c_str(), folder == cur)) {
-                    pack = (folders_root / folder).string();
+                    pack = geode::utils::string::pathToString(folders_root / ReplayIO::utf8_path(folder));
                     GUI::get().persist();
                 }
             }
@@ -1200,6 +1197,7 @@ void GUI::renderer() {
         }
         EchoUI::Row("Video name", "Leave empty to name the video after the macro");
         EchoUI::InputTextWithHint("##render-name", logic.macro_name.empty() ? "Replay" : logic.macro_name.c_str(), &logic.render_name);
+        saved_on_release();
         float half = EchoUI::RowButton(2);
         ImGui::BeginDisabled(logic.merge_busy);
         if (EchoUI::Button("Join Two Videos", ImVec2(half, 0.f))) GUI::get().open_render_picker();

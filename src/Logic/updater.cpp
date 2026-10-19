@@ -435,6 +435,7 @@ void Logic::run_frame(GJBaseGameLayer* play, float dt, const std::function<void(
         steps = std::min(steps, pause_kill_safe_steps());
         int ran = 0;
         if (steps <= 0) {
+            g_single_path = false;
             check_advance_pause(PlayLayer::get());
             Trajectory::get().refresh(PlayLayer::get());
             return;
@@ -691,7 +692,7 @@ void Logic::click_best_frame(PlayLayer* play) {
     }
     bool player1 = best_frame_click_p1;
     bool held = Trajectory::get().held_next(play, player1);
-    play->queueButton(JUMP, !held, !player1, click_stamp());
+    queue_tool_click(play, !held, !player1);
     best_frame_clicked_at = step_frame;
     best_hold_owned = true;
     best_hold = !held;

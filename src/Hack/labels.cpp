@@ -309,9 +309,11 @@ void Logic::draw_overlay(PlayLayer* play) {
         Labels::get().sync_label(play, CPS_TAG, show_labels && logic.show_cps, logic.cps_label, with_label_name(logic.cps_label, "CPS", fmt::format("{}", cps_p1)), cps_color);
 
     static PlayLayer* peak_level = nullptr;
+    static GJGameLevel* peak_game_level = nullptr;
     static unsigned peak_cps_p1 = 0, peak_cps_p2 = 0;
-    if (peak_level != play) {
+    if (peak_level != play || peak_game_level != play->m_level) {
         peak_level = play;
+        peak_game_level = play->m_level;
         peak_cps_p1 = peak_cps_p2 = 0;
     }
     peak_cps_p1 = std::max(peak_cps_p1, cps_p1);

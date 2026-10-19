@@ -18,6 +18,7 @@ void each_container(A& a, B& b, Visit visit) {
 	visit(a.m_gameObjectPhysics, b.m_gameObjectPhysics);
 	visit(a.m_unkVecFloat1, b.m_unkVecFloat1);
 	visit(a.m_activatedObjectIDs, b.m_activatedObjectIDs);
+	visit(a.m_stateObjects, b.m_stateObjects);
 	visit(a.m_unkMapPairGJGameEventIntVectorEventTriggerInstance, b.m_unkMapPairGJGameEventIntVectorEventTriggerInstance);
 	visit(a.m_unkMapPairGJGameEventIntInt, b.m_unkMapPairGJGameEventIntInt);
 	visit(a.m_enterEffectInstanceVectors, b.m_enterEffectInstanceVectors);
@@ -43,7 +44,7 @@ void each_container(A& a, B& b, Visit visit) {
 // copies everything thats NOT a container
 inline void copy_plain_bytes(void* dst, const GJGameState& src) {
 	auto* base = reinterpret_cast<const std::byte*>(&src);
-	std::array<std::pair<std::size_t, std::size_t>, 26> skip{};
+	std::array<std::pair<std::size_t, std::size_t>, 27> skip{};
 	std::size_t n = 0;
 	each_container(src, src, [&](const auto& member, const auto&) {
 		skip[n++] = { (std::size_t)(reinterpret_cast<const std::byte*>(&member) - base), sizeof(member) };

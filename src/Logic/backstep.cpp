@@ -259,9 +259,11 @@ void Logic::release_backstep(BackstepSave& save) {
 
 void Logic::clear_backsteps() {
     ++attempt_number;
+    if (!backstep) g_drift_history = std::vector<std::pair<int, DriftProbe>>();
     for (auto& slot : g_drift_history)
         slot.first = -1;
     g_drift_reported = false;
+    g_check_drift = false;
     for (auto& save : backsteps)
         release_backstep(save);
     g_pinned_camera.reset();
@@ -312,10 +314,6 @@ void Logic::save_backstep(PlayLayer* play) {
         backstep_saved_state = mode;
     }
     int frame = step_frame;
-    if (mode == RunState::Idle && !resim) {
-        for (const auto& cmd : play->m_queuedButtons)
-            backstep_inputs.push_back({ frame + 1, (unsigned char)cmd.m_button, cmd.m_isPush, cmd.m_isPlayer2 });
-    }
     check_drift(play, frame, resim);
     bool shown = save_shown_step;
     save_shown_step = false;
@@ -359,8 +357,16 @@ void Logic::save_backstep(PlayLayer* play) {
         backstep_save_sec = backstep_save_sec > 0.0 ? backstep_save_sec + (took - backstep_save_sec) * 0.2 : took;
 }
 
+void Logic::note_idle_input(bool down, bool player1, int button) {
+    if (!backstep || state != RunState::Idle || backstepping || resetting || refreshing_visuals || render_capturing())
+        return;
+    if (button != 0 && button != JUMP && button != LEFT && button != RIGHT) return;
+    backstep_inputs.push_back({ step_frame + 1, (unsigned char)(button == 0 ? JUMP : button), down, !player1 });
+}
+
 void Logic::trim_backsteps(PlayLayer* play) {
     ++attempt_number;
+    g_check_drift = false;
     g_pinned_camera.reset();
     pinned_this_frame = false;
     if (backsteps.empty()) return;

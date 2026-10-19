@@ -550,6 +550,18 @@ void check_physics_step_patch();
 void guard_step_site();
 #endif
 
+static void leave_level(PlayLayer* play) {
+    forget_camera(play);
+    restore_tilt(play->m_player1);
+    restore_tilt(play->m_player2);
+    clear_tilt();
+    trace_flush();
+    Logic::get().on_quit(play);
+    Trajectory::get().detach();
+    forget_effect_copies();
+    drop_dud_waves();
+}
+
 class $modify(EchoPlayLayer, PlayLayer) {
     bool init(GJGameLevel* level, bool useReplay, bool dontCreateObjects) {
 #ifdef GEODE_IS_WINDOWS
@@ -723,7 +735,10 @@ class $modify(EchoPlayLayer, PlayLayer) {
                 player == m_player2 ? "p2" : "p1", player->getPositionX(), player->getPositionY(), player->m_yVelocity, player->m_isUpsideDown, player->m_isDashing, player->m_isOnGround, killer));
         }
         PlayLayer::destroyPlayer(player, object);
-        if (m_playerDied) Logic::get().sync_time_scale();
+        if (m_playerDied) {
+            Logic::get().sync_time_scale();
+            Logic::get().note_death_hold(this);
+        }
     }
 
     void delayedResetLevel() {
@@ -806,15 +821,7 @@ class $modify(EchoPlayLayer, PlayLayer) {
     }
 
     void onQuit() {
-        forget_camera(this);
-        restore_tilt(m_player1);
-        restore_tilt(m_player2);
-        clear_tilt();
-        trace_flush();
-        Logic::get().on_quit(this);
-        Trajectory::get().detach();
-        forget_effect_copies();
-        drop_dud_waves();
+        leave_level(this);
         PlayLayer::onQuit();
     }
 };
@@ -865,6 +872,11 @@ class $modify(EchoPauseLayer, PauseLayer) {
     void onRestartFull(CCObject* sender) {
         PauseLayer::onRestartFull(sender);
         if (auto* play = PlayLayer::get()) Logic::get().resume_attempt(play);
+    }
+
+    void goEdit() {
+        if (auto* play = PlayLayer::get()) leave_level(play);
+        PauseLayer::goEdit();
     }
 };
 
@@ -1328,10 +1340,12 @@ class $modify(EchoGameLayer, GJBaseGameLayer) {
         Logic::get().flatten_click_times(this);
         if (auto* play = Logic::as_play(this)) {
             Logic::get().play_macro(play, this, dt, clearInputQueue);
+            std::memset(Logic::get().tool_clicks, 0, sizeof(Logic::get().tool_clicks));
             return;
         }
         if (Logic::get().editor_testing && Logic::as_editor(this)) {
             Logic::get().play_macro(this, this, dt, clearInputQueue);
+            std::memset(Logic::get().tool_clicks, 0, sizeof(Logic::get().tool_clicks));
             return;
         }
         GJBaseGameLayer::processQueuedButtons(dt, clearInputQueue);
@@ -1359,7 +1373,15 @@ class $modify(EchoGameLayer, GJBaseGameLayer) {
                 }
             }
         }
-        if (flips && mine && m_levelSettings && m_levelSettings->m_twoPlayerMode)
+        bool tool_click = false;
+        if (mine && (button == 0 || button == JUMP)) {
+            int& left = value.tool_clicks[player1 ? 0 : 1][down ? 1 : 0];
+            if (left > 0) {
+                --left;
+                tool_click = true;
+            }
+        }
+        if (flips && mine && !tool_click && m_levelSettings && m_levelSettings->m_twoPlayerMode)
             player1 = !player1;
         bool auto_swift = value.auto_swift && mine && (button == 0 || button == JUMP) && !(value.is_playing() && !value.is_recording());
         if (auto_swift && !down) return;
@@ -1401,16 +1423,18 @@ class $modify(EchoGameLayer, GJBaseGameLayer) {
                 Logic::get().held_at(false, value.step_frame + 1, key))
                 player1 = true;
         }
+        bool log_follow_press = false;
+        bool down_before_inverse = down;
         {
             bool move_button = button == 0 || button == JUMP || button == LEFT || button == RIGHT;
             if (move_button && !value.follow_injecting && !value.restoring_holds && !value.maintaining_gravity && !value.injecting && Logic::get().follow_active(this)) {
                 bool leader1 = value.follow_mode == 1;
                 if (!value.applying_playback) {
                     player1 = leader1;
-                    value.note_follow_press(this, down, button == 0 ? JUMP : button);
+                    log_follow_press = true;
                 }
                 else if (value.backstep_target >= 0 && player1 == leader1) {
-                    value.note_follow_press(this, down, button == 0 ? JUMP : button);
+                    log_follow_press = true;
                 }
             }
         }
@@ -1433,6 +1457,21 @@ class $modify(EchoGameLayer, GJBaseGameLayer) {
             bool two = m_levelSettings && m_levelSettings->m_twoPlayerMode;
             if (!player1 && two ? value.inverse_p2 : value.inverse_p1) down = !down;
         }
+        if (jump_button && !value.applying_playback && !value.restoring_holds && !value.maintaining_gravity && !value.injecting && !value.follow_injecting && !orb_swift) {
+            bool two = m_levelSettings && m_levelSettings->m_twoPlayerMode;
+            int icon = two && !player1 ? 1 : 0;
+            bool tool = tool_click || value.assist_input;
+            PlayerObject* body = icon == 1 ? m_player2 : m_player1;
+            if ((tool || value.jump_set_by_tool[icon]) && body && Logic::button_held(body, JUMP) == down) {
+                if (tracing())
+                    trace_event(fmt::format("DROP frame={} repeat down={} p1={} tool={}\n", value.step_frame + 1, down, player1, tool));
+                if (opened_button) in_orb_button = false;
+                return;
+            }
+            value.jump_set_by_tool[icon] = tool;
+        }
+        if (log_follow_press)
+            value.note_follow_press(this, down_before_inverse, button == 0 ? JUMP : button);
         int swifts = 0;
         if (down && jump_button && !orb_swift && !value.applying_playback && !value.injecting && !value.restoring_holds && !value.maintaining_gravity) {
             PlayerObject* body = player1 ? m_player1 : m_player2;
@@ -1466,6 +1505,8 @@ class $modify(EchoGameLayer, GJBaseGameLayer) {
             if (!logic.applying_playback && logic.is_recording() && !logic.injecting && !logic.restoring_holds) {
                 Logic::get().record_input(play, down, player1, button, orb_swift || Logic::record_every_input());
             }
+            if (!logic.applying_playback && !logic.injecting && !logic.restoring_holds)
+                logic.note_idle_input(down, player1, button);
         }
         else if (Logic::get().editor_testing && Logic::as_editor(this)) {
             auto& logic = Logic::get();

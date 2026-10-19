@@ -122,7 +122,8 @@ class $modify(NoMirrorObjects, PlayLayer) {
         std::vector<Ref<GameObject>> before;
         before.swap(g_slid_objects);
         PlayLayer::updateVisibility(dt);
-        if (before.empty()) return;
+        if (before.empty() || !(Logic::get().no_mirror_portals || Logic::get().layout_active()))
+            return;
         std::unordered_set<GameObject*> still;
         for (const auto& object : g_slid_objects)
             still.insert(object.data());

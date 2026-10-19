@@ -5,9 +5,11 @@
 #include <algorithm>
 #include <atomic>
 #include <cctype>
+#include <climits>
 #include <cmath>
 #include <fstream>
 #include <memory>
+#include <numeric>
 #include <sstream>
 #include <thread>
 
@@ -47,7 +49,7 @@ bool ReplayIO::save_macro(const fs::path& path, MacroData macro, bool (*write)(c
 }
 
 bool ReplayIO::is_autosave(const fs::path& path) {
-    auto lower = path.filename().string();
+    auto lower = geode::utils::string::pathToString(path.filename());
     std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char c) {
         return (char)std::tolower(c);
     });
@@ -57,7 +59,7 @@ bool ReplayIO::is_autosave(const fs::path& path) {
 bool Logic::autosave_replay() {
     if (inputs.empty()) return false;
     format = save_debug ? ReplayFormat::MetaDebug : ReplayFormat::Meta;
-    auto path = replays_dir() / (ReplayIO::sanitize(macro_name) + AUTOSAVE_SUFFIX + ".echo");
+    auto path = replays_dir() / ReplayIO::utf8_path(ReplayIO::sanitize(macro_name) + AUTOSAVE_SUFFIX + ".echo");
     if (autosaved_path != path) remove_autosave();
     bool ok = ReplayIO::save_as(path, ReplayIO::write_echo);
     if (ok) autosaved_path = path;
@@ -86,7 +88,7 @@ bool Logic::write_file() {
     format = save_debug ? ReplayFormat::MetaDebug : ReplayFormat::Meta;
     auto dir = replays_dir();
     auto base = ReplayIO::sanitize(macro_name);
-    auto direct = dir / (base + ".echo");
+    auto direct = dir / ReplayIO::utf8_path(base + ".echo");
     if (no_overwrite) macro_path = ReplayIO::unique_file(dir, base, ".echo");
     else if (macro_path.empty() || ReplayIO::lower_ext(macro_path) != ".echo" || ReplayIO::is_autosave(macro_path) ||
              ReplayIO::sanitize(ReplayIO::import_stem(macro_path)) != base)
@@ -98,7 +100,7 @@ bool Logic::write_file() {
     remove_autosave();
     macro_name = ReplayIO::import_stem(macro_path);
     macro_name_typed = false;
-    notify(fmt::format("Saved {}", macro_path.filename().string()), true);
+    notify(fmt::format("Saved {}", geode::utils::string::pathToString(macro_path.filename())), true);
     saved_at = std::chrono::steady_clock::now();
     return true;
 }
@@ -107,7 +109,7 @@ bool Logic::export_as(std::string_view export_type) {
     if (export_type == "JSON") {
         auto path = ReplayIO::unique_file(save_root() / "converted", ReplayIO::sanitize(macro_name), ".echo.json");
         bool ok = ReplayIO::save_as(path, ReplayIO::write_echo_json);
-        notify(ok ? fmt::format("Exported {}", path.filename().string()) : "Export failed", ok);
+        notify(ok ? fmt::format("Exported {}", geode::utils::string::pathToString(path.filename())) : "Export failed", ok);
         return ok;
     }
     const auto base = ReplayIO::sanitize(macro_name);
@@ -134,7 +136,7 @@ bool Logic::export_as(std::string_view export_type) {
         notify("Unknown convert format", false);
         return false;
     }
-    notify(ok ? fmt::format("Exported {}", path.filename().string()) : "Export failed", ok);
+    notify(ok ? fmt::format("Exported {}", geode::utils::string::pathToString(path.filename())) : "Export failed", ok);
     return ok;
 }
 
@@ -150,7 +152,7 @@ bool Logic::append_sequence_file(const fs::path& path, int amount) {
     }
     Replay clip;
     auto title = ReplayIO::import_stem(path);
-    clip.name = title.empty() ? path.stem().string() : title;
+    clip.name = title.empty() ? geode::utils::string::pathToString(path.stem()) : title;
     clip.actions = std::move(macro->inputs);
     clip.fps = macro->fps;
     clip.rates = macro->rates;
@@ -169,6 +171,26 @@ bool Logic::append_sequence_file(const fs::path& path, int amount) {
 std::optional<MacroData> ReplayIO::load_macro(const fs::path& path) {
     MacroData macro;
     if (!ReplayIO::read_any(path, macro)) return std::nullopt;
+    auto by_frame = [](const Frame& a, const Frame& b) {
+        return a.number < b.number;
+    };
+    if (std::is_sorted(macro.inputs.begin(), macro.inputs.end(), by_frame)) return macro;
+    std::vector<size_t> order(macro.inputs.size());
+    std::iota(order.begin(), order.end(), 0);
+    std::stable_sort(order.begin(), order.end(), [&](size_t a, size_t b) {
+        return by_frame(macro.inputs[a], macro.inputs[b]);
+    });
+    bool keep_poses = macro.poses.size() == macro.inputs.size();
+    std::vector<Frame> inputs;
+    std::vector<FramePose> poses;
+    inputs.reserve(order.size());
+    if (keep_poses) poses.reserve(order.size());
+    for (size_t i : order) {
+        inputs.push_back(macro.inputs[i]);
+        if (keep_poses) poses.push_back(macro.poses[i]);
+    }
+    macro.inputs = std::move(inputs);
+    macro.poses = std::move(poses);
     return macro;
 }
 
@@ -187,9 +209,10 @@ static bool read_by_extension(const fs::path& path, MacroData& out) {
         return ReplayIO::read_legacy_echo(path, out);
     }
     std::ifstream file(path);
-    auto parsed = matjson::Value::parse(file);
+    std::string text{ std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>() };
+    auto parsed = ReplayIO::parse_json(text);
     if (!parsed) return ReplayIO::read_legacy_echo(path, out);
-    const auto& json = parsed.unwrap();
+    const auto& json = *parsed;
     if (json["inputs"].isArray() && json.contains("framerate"))
         return ReplayIO::read_gdr(path, out);
     if (json.contains("inputs")) return ReplayIO::read_echo_json(path, out);
@@ -208,9 +231,9 @@ bool ReplayIO::read_any(const fs::path& path, MacroData& out) {
     }
     if (!read) return false;
     for (auto& input : out.inputs)
-        input.number += FILE_FRAME_SHIFT;
+        input.number = std::min(input.number, INT_MAX - FILE_FRAME_SHIFT) + FILE_FRAME_SHIFT;
     for (auto& change : out.rates)
-        change.frame += FILE_FRAME_SHIFT;
+        change.frame = std::min(change.frame, INT_MAX - FILE_FRAME_SHIFT) + FILE_FRAME_SHIFT;
     return true;
 }
 
@@ -227,11 +250,6 @@ bool Logic::read_file(const fs::path& path) {
     try {
         std::thread([path, title, mine] {
             auto macro = ReplayIO::load_macro(path);
-            auto by_frame = [](const Frame& a, const Frame& b) {
-                return a.number < b.number;
-            };
-            if (macro && !std::is_sorted(macro->inputs.begin(), macro->inputs.end(), by_frame))
-                std::stable_sort(macro->inputs.begin(), macro->inputs.end(), by_frame);
             geode::queueInMainThread([path, title, mine, macro = std::move(macro)]() mutable {
                 if (mine != ticket.load()) return;
                 auto& logic = Logic::get();
@@ -273,7 +291,7 @@ bool Logic::merge_replay(const fs::path& path) {
         return false;
     }
     auto title = ReplayIO::import_stem(path);
-    if (title.empty()) title = path.stem().string();
+    if (title.empty()) title = geode::utils::string::pathToString(path.stem());
     if (std::abs(macro->fps - macro_fps) > .001f || !macro->rates.empty() || !rates.empty()) {
         notify(fmt::format("Can't merge {}: it needs the same TPS ({:g} vs {:g}) and no TPS changes", title, macro->fps, macro_fps), false);
         return false;
@@ -375,7 +393,7 @@ bool ReplayIO::is_echo_file(const fs::path& path) {
 }
 
 std::string ReplayIO::import_stem(const fs::path& path) {
-    std::string file = path.filename().string();
+    std::string file = geode::utils::string::pathToString(path.filename());
     std::string lower = file;
     std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char c) {
         return (char)std::tolower(c);
@@ -396,7 +414,7 @@ std::string ReplayIO::import_stem(const fs::path& path) {
     cut(".slc");
     cut(".tcm");
     cut(".gdr");
-    if (file.empty()) file = path.stem().string();
+    if (file.empty()) file = geode::utils::string::pathToString(path.stem());
     return file;
 }
 
@@ -416,7 +434,7 @@ int Logic::convert_legacy_echoes() {
     int failed = 0;
     int skipped = 0;
     for (const auto& path : files) {
-        std::string lower = path.filename().string();
+        std::string lower = geode::utils::string::pathToString(path.filename());
         std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char c) {
             return (char)std::tolower(c);
         });
@@ -427,7 +445,7 @@ int Logic::convert_legacy_echoes() {
                      lower.ends_with(".gdr") || legacy_echo;
         if (!known) continue;
         auto stem = ReplayIO::import_stem(path);
-        if (!legacy_echo && fs::exists(dir / (stem + ".echo"))) {
+        if (!legacy_echo && fs::exists(dir / ReplayIO::utf8_path(stem + ".echo"))) {
             ++skipped;
             continue;
         }
@@ -437,7 +455,7 @@ int Logic::convert_legacy_echoes() {
             continue;
         }
         if (legacy_echo) {
-            fs::rename(path, dir / (stem + ".old.echo"), error);
+            fs::rename(path, dir / ReplayIO::utf8_path(stem + ".old.echo"), error);
             if (error) {
                 ++failed;
                 error.clear();
@@ -446,7 +464,7 @@ int Logic::convert_legacy_echoes() {
         }
         macro.name = stem;
         macro.save_debug = save_debug;
-        auto dest = ReplayIO::unique_file(dir, stem, ".echo");
+        auto dest = ReplayIO::unique_file(dir, stem, ".echo", true);
         if (!ReplayIO::save_macro(dest, macro, ReplayIO::write_echo)) {
             ++failed;
             continue;
@@ -483,7 +501,7 @@ void Logic::import_replays() {
             }
             macro.name = ReplayIO::import_stem(path);
             macro.save_debug = Logic::get().save_debug;
-            auto dest = ReplayIO::unique_file(dir, macro.name, ".echo");
+            auto dest = ReplayIO::unique_file(dir, macro.name, ".echo", true);
             if (!ReplayIO::save_macro(dest, macro, ReplayIO::write_echo)) {
                 ++failed;
                 continue;

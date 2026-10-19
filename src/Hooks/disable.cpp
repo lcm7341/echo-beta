@@ -15,6 +15,7 @@ static bool& disabled_flag() {
 
 static std::vector<Patch*> g_patches;
 static std::vector<Hook*> g_hooks;
+Hook* step_count_hook = nullptr;
 
 static void apply_disabled(bool disable) {
     if (disable) {
@@ -26,7 +27,7 @@ static void apply_disabled(bool disable) {
         for (auto* hook : Mod::get()->getHooks()) {
             auto name = std::string(hook->getDisplayName());
             bool menu = name.starts_with("cocos2d::") && name != "cocos2d::CCScheduler::update";
-            if (menu || name == "PlayerObject::update" || !hook->isEnabled()) continue;
+            if (menu || name == "PlayerObject::update" || hook == step_count_hook || !hook->isEnabled()) continue;
             (void)hook->disable();
             g_hooks.push_back(hook);
         }
@@ -52,7 +53,7 @@ void Logic::set_bot_disabled(bool on) {
     if (on == disabled_flag()) return;
     auto& logic = Logic::get();
     // half a level played by echo & half not is a mess. same rule silicate has
-    if (PlayLayer::get()) {
+    if (PlayLayer::get() || logic.editor_testing) {
         logic.message = "Leave the level first";
         Notification::create("Leave the level first", NotificationIcon::Error)->show();
         return;

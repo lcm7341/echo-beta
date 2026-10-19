@@ -1,5 +1,6 @@
 #include <imgui_internal.h>
 #include "GUI/gui.hpp"
+#include "Logic/conversions/codecs.hpp"
 #include <imgui-cocos.hpp>
 #include <imgui.h>
 #include <misc/cpp/imgui_stdlib.h>
@@ -213,7 +214,7 @@ void GUI::apply_style_json(const matjson::Value& json) {
     else if (style.CircleTessellationMaxError >= 2.5f) {
         style.CircleTessellationMaxError = 5.f;
     }
-    else if (style.CircleTessellationMaxError > 0.f) {
+    else {
         style.CircleTessellationMaxError = 0.1f;
     }
     style.AntiAliasedLines = true;
@@ -231,6 +232,7 @@ void GUI::apply_style_json(const matjson::Value& json) {
             style.Colors[i] = color;
         }
     }
+    EchoUI::sync_night_menu(GUI::get().has_palette ? GUI::get().palette : EchoUI::Palette{});
     GUI::get().read_color(json, "editor_p1", logic.editor_p1);
     GUI::get().read_color(json, "editor_p2", logic.editor_p2);
     GUI::get().read_color(json, "editor_sel_p1", logic.editor_sel_p1);
@@ -266,11 +268,8 @@ void GUI::apply_style_json(const matjson::Value& json) {
 }
 
 fs::path GUI::theme_path(const std::string& name) {
-    auto safe = name.empty() ? std::string("Default") : name;
-    for (char& glyph : safe) {
-        if (glyph == '/' || glyph == '\\' || glyph == ':') glyph = '_';
-    }
-    return Logic::get().save_root() / "themes" / (safe + ".ui.json");
+    auto safe = ReplayIO::sanitize(name.empty() ? std::string("Default") : name);
+    return Logic::get().save_root() / "themes" / ReplayIO::utf8_path(safe + ".ui.json");
 }
 
 void GUI::export_theme(const fs::path& path) {
@@ -1248,13 +1247,8 @@ void GUI::draw_clickpack_picker() {
             continue;
         ++shown;
         if (EchoUI::Selectable(name.c_str(), false)) {
-            try {
-                if (state.player == 0) Logic::get().clickpack = path.string();
-                else Logic::get().clickpack_p2 = path.string();
-            }
-            catch (...) {
-                Logic::get().notify("Rename the clickpack folder to use plain characters", false);
-            }
+            auto& pack = state.player == 0 ? Logic::get().clickpack : Logic::get().clickpack_p2;
+            pack = geode::utils::string::pathToString(path);
             Logic::get().push_runtime_settings();
             ImGui::CloseCurrentPopup();
         }

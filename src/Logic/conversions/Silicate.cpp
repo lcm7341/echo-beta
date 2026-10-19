@@ -36,6 +36,7 @@ public:
     unsigned long long frame = 0;
     unsigned long long attempt_start = 0;
     unsigned long long produced = 0;
+    unsigned long long seed = 0;
     double tps = 240.0, start_tps = 240.0;
 
     void press(int button, bool holding, bool player2) {
@@ -108,7 +109,7 @@ public:
             case Special::RestartFull:
             case Special::Death:
                 if (end - in.at < 8) return false;
-                in.uint(8);
+                seed = in.uint(8);
                 inputs.clear();
                 rates.clear();
                 start_tps = tps;
@@ -230,7 +231,7 @@ bool ReplayIO::read_silicate(const fs::path& path, MacroData& out) {
     replay.tps = in.pod<double>();
     if (!std::isfinite(replay.tps) || replay.tps < 1.0) replay.tps = 240.0;
     replay.start_tps = replay.tps;
-    unsigned long long seed = in.uint(8);
+    replay.seed = in.uint(8);
     in.at = meta_start + meta_size;
     size_t end = data.back() == SilicateReplay::footer ? data.size() - 1 : data.size();
     while (end - in.at >= 12) {
@@ -245,7 +246,7 @@ bool ReplayIO::read_silicate(const fs::path& path, MacroData& out) {
     ReplayIO::adopt_inputs(out, std::move(replay.inputs), (float)replay.start_tps);
     out.rates = std::move(replay.rates);
     tidy_rates(out.rates, out.fps);
-    out.lvl_seed = seed;
+    out.lvl_seed = replay.seed;
     out.lvl_seed_known = true;
     out.silicate_variance = true;
     return true;

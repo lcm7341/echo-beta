@@ -186,17 +186,14 @@ std::string close_video(VideoWriter* writer) {
     std::string failed;
     @autoreleasepool {
 #if TARGET_OS_IPHONE
-        failed = flush_direct_frames(writer);
+        flush_direct_frames(writer);
         if (writer->texture_cache) {
             CVOpenGLESTextureCacheFlush(writer->texture_cache, 0);
             CFRelease(writer->texture_cache);
             writer->texture_cache = nullptr;
         }
-        if (!failed.empty() && writer->writer.status == AVAssetWriterStatusWriting)
-            [writer->writer cancelWriting];
-        else
 #endif
-            if (writer->writer.status == AVAssetWriterStatusWriting) {
+        if (writer->writer.status == AVAssetWriterStatusWriting) {
             [writer->input markAsFinished];
             [writer->writer endSessionAtSourceTime:CMTimeMake(writer->frames_written, writer->fps)];
             failed = finish_writing(writer->writer);

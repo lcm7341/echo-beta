@@ -1700,8 +1700,9 @@ void Trajectory::draw_lines() {
 		auto draw_body = [&](const std::vector<CCPoint>& path, int first_step, bool icon2, int death_step, bool has_death, const CCRect& outer, const CCRect& inner) {
 			drawn_paths.push_back({ path, path_color(icon2, line.click), first_step, has_death && death_step <= last_step, outer, inner });
 		};
-		draw_body(line.path, line.start_step, !line.player1, line.death_step, line.has_death, line.death_outer, line.death_inner);
-		if (line.with_partner)
+		if (!Logic::get().traj_player_hidden(!line.player1))
+			draw_body(line.path, line.start_step, !line.player1, line.death_step, line.has_death, line.death_outer, line.death_inner);
+		if (line.with_partner && !Logic::get().traj_player_hidden(line.player1))
 			draw_body(line.partner_path, line.partner_start_step, line.player1, line.partner_death_step, line.partner_has_death, line.partner_death_outer, line.partner_death_inner);
 	};
 	if (job.use_kept) draw_line(kept);

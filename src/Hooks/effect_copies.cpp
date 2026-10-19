@@ -548,7 +548,7 @@ static void settle(const AddedChild& added) {
     const size_t longest_pattern = 8;
     auto* parent = added.parent;
     auto* child = added.child;
-    if (child->getParent() != parent || added_inside(parent)) return;
+    if (added_inside(parent) || child->getParent() != parent) return;
     auto& chain = g_chains[{ parent, child->getZOrder() }];
     if (chain.group) {
         auto* group = chain.group;

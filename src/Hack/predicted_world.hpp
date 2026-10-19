@@ -14,6 +14,7 @@ using namespace cocos2d;
 class PlayLayer;
 class GJEffectManager;
 class EffectGameObject;
+class SequenceTriggerGameObject;
 
 struct EventLink {
 	int group;
@@ -21,6 +22,11 @@ struct EventLink {
 	int control_id;
 	bool disabled;
 	gd::vector<int> keys;
+};
+
+struct SequenceProgress {
+	std::vector<std::pair<int, float>> times;
+	std::vector<std::pair<int, int>> indices;
 };
 
 class PredictedWorld {
@@ -164,7 +170,9 @@ private:
 
 	struct FiredTrigger {
 		EffectGameObject* object = nullptr;
+		SequenceTriggerGameObject* sequence = nullptr;
 		std::vector<unsigned char> live_bytes, horizon_bytes;
+		SequenceProgress live_sequence, horizon_sequence;
 	};
 
 	struct RandomRoll {

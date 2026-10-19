@@ -198,6 +198,7 @@ namespace EchoUI {
 	Scene scene_named(std::string_view name);
 	void apply_palette(const Palette& palette);
 	void sync_scene_turn(const Palette& palette);
+	void sync_night_menu(const Palette& palette);
 	void apply_metrics();
 	void apply_echo_theme();
 }

@@ -3,6 +3,7 @@
 #include "Hack/label_types.hpp"
 #include <imgui-cocos.hpp>
 #include <imgui.h>
+#include <imgui_internal.h>
 #include <misc/cpp/imgui_stdlib.h>
 #include <algorithm>
 #include <cmath>
@@ -52,7 +53,7 @@ std::string GUI::ordinal(int number) {
 
 std::string GUI::format_plain(const Logic& value) {
     std::ostringstream out;
-    out << value.fps << "\n";
+    out << value.macro_fps << "\n";
     for (size_t i = 0; i < value.inputs.size(); ++i) {
         const auto& input = value.inputs[i];
         int button = input.button == 0 ? 1 : input.button;
@@ -112,14 +113,33 @@ void GUI::draw_edit_fields(bool enabled, float column) {
     bool down = enabled ? GUI::get().draft.holding : false;
     bool player2 = enabled ? GUI::get().draft.player2 : false;
     int before_frame = frame;
+    static std::vector<int> frames_at_edit_start;
+    static int selected_at_edit_start = 0;
     ImGui::PushID(fmt::format("{}:{}:{}", GUI::get().selected_id, GUI::get().anchor_id, GUI::get().selected_id != 0 ? -1 : GUI::get().selected).c_str());
     bool frame_edited = EchoUI::InputInt("Frame", &frame);
+    bool edit_started = ImGui::IsItemActivated();
     ImGui::PopID();
+    int edit_first = 0, edit_last = 0;
+    if (enabled && edit_started && selection_span(edit_first, edit_last)) {
+        frames_at_edit_start.clear();
+        for (int i = edit_first; i <= edit_last; ++i)
+            frames_at_edit_start.push_back(inputs[(size_t)i].number);
+        selected_at_edit_start = before_frame;
+    }
     if (frame_edited && enabled) {
-        int delta = std::max(frame, 0) - before_frame;
-        rewrite_selected([&](Frame& input) {
-            input.number = std::max(input.number + delta, 0);
-        });
+        if (selection_span(edit_first, edit_last) && (int)frames_at_edit_start.size() == edit_last - edit_first + 1) {
+            int delta = std::max(frame, 0) - selected_at_edit_start;
+            rewrite_selected([&](Frame& input) {
+                size_t at = (size_t)(&input - inputs.data() - edit_first);
+                input.number = std::max(frames_at_edit_start[at] + delta, 0);
+            });
+        }
+        else {
+            int delta = std::max(frame, 0) - before_frame;
+            rewrite_selected([&](Frame& input) {
+                input.number = std::max(input.number + delta, 0);
+            });
+        }
     }
     if (EchoUI::Checkbox("Down", &down) && enabled)
         rewrite_selected([&](Frame& input) {
@@ -301,7 +321,7 @@ void GUI::editor() {
                     ImGui::EndChild();
                 }
                 if (EchoUI::Button("Close")) ImGui::CloseCurrentPopup();
-                ImGui::EndPopup();
+                EchoUI::EndModal();
             }
 
             ImGui::BeginChild("##echo-inputs", ImVec2(list_w, EchoUI::CardFill(12.f)), ImGuiChildFlags_Borders);
@@ -312,10 +332,25 @@ void GUI::editor() {
             }
             else if (GUI::get().plain) {
                 GUI::get().selected = -1;
-                if (GUI::get().plain_text.empty())
+                static unsigned long long plain_version = 0;
+                static size_t plain_count = 0;
+                static float plain_fps = 0.f;
+                bool typing = ImGui::GetActiveID() == ImGui::GetID("##echo-plain");
+                bool stale = plain_version != logic.inputs_version || plain_count != inputs.size() || plain_fps != logic.macro_fps;
+                bool synced = false;
+                if (GUI::get().plain_text.empty() || (stale && !typing)) {
                     GUI::get().plain_text = GUI::get().format_plain(logic);
-                if (ImGui::InputTextMultiline("##echo-plain", &GUI::get().plain_text, ImVec2(-1.f, -1.f)))
+                    synced = true;
+                }
+                if (ImGui::InputTextMultiline("##echo-plain", &GUI::get().plain_text, ImVec2(-1.f, -1.f))) {
                     GUI::get().apply_plain(GUI::get().plain_text);
+                    synced = true;
+                }
+                if (synced) {
+                    plain_version = logic.inputs_version;
+                    plain_count = inputs.size();
+                    plain_fps = logic.macro_fps;
+                }
             }
             else {
                 bool every_row = GUI::get().show_editor_p1 && GUI::get().show_editor_p2;

@@ -1,4 +1,5 @@
 #include "Logic/logic.hpp"
+#include "Logic/conversions/codecs.hpp"
 #include <Geode/fmod/fmod.hpp>
 #include <Geode/binding/FMODAudioEngine.hpp>
 #include <Geode/binding/PlayLayer.hpp>
@@ -89,14 +90,14 @@ std::string Clickbot::lowercase(std::string text) {
 }
 
 fs::path Clickbot::find_pack_folder(const std::string& setting) {
-    fs::path path(setting);
+    fs::path path = ReplayIO::utf8_path(setting);
     std::error_code error;
     if (!setting.empty() && fs::is_directory(path, error)) return path;
     if (setting.empty())
         return {};
-    auto nested = Logic::get().save_root() / "clickpacks" / setting;
+    auto nested = Logic::get().save_root() / "clickpacks" / path;
     if (fs::is_directory(nested, error)) return nested;
-    auto by_name = Logic::get().save_root() / "clickpacks" / fs::path(setting).filename();
+    auto by_name = Logic::get().save_root() / "clickpacks" / path.filename();
     if (fs::is_directory(by_name, error)) return by_name;
     return path;
 }
@@ -248,12 +249,12 @@ fs::path Clickbot::find_type_folder(const fs::path& pack_folder, int type, bool 
 }
 
 void Logic::play_click(PlayLayer* play, bool down, bool player1) {
-    if (!clickbot || !play) return;
+    if (!clickbot || !play || backstep_target >= 0) return;
     const auto& setting = player1 ? clickpack : clickpack_p2;
     if (Clickbot::get().refresh_pack(player1, setting).empty()) return;
     double now = play->m_gameState.m_levelTime;
     double& last = player1 ? last_click_p1 : last_click_p2;
-    double gap = last <= 0.0 ? 1.0 : now - last;
+    double gap = last <= 0.0 || now < last ? 1.0 : now - last;
     last = now;
 
     bool micros = player1 ? p1_micros : p2_micros;

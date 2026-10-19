@@ -38,6 +38,8 @@ const std::array<unsigned, 8> STEP_REPLACEMENT = {
     0xd503201f, // nop
 };
 static bool g_step_patched = false;
+extern Hook* step_count_hook;
+int vanilla_physics_steps(float dt, float time_warp);
 
 static int* step_slot() {
     return reinterpret_cast<int*>(geode::base::get() + STEP_SLOT);
@@ -102,10 +104,12 @@ $execute {
 class $modify(EchoIosStepCount, GJBaseGameLayer) {
     static void onModify(auto& self) {
         (void)self.setHookPriority("GJBaseGameLayer::update", Priority::Last);
+        if (auto hook = self.getHook("GJBaseGameLayer::update")) step_count_hook = hook.unwrap();
     }
 
     void update(float dt) {
-        if (g_step_patched) *step_slot() = Logic::get().steps_this_tick;
+        if (g_step_patched)
+            *step_slot() = Logic::bot_disabled() ? vanilla_physics_steps(dt, m_gameState.m_timeWarp) : Logic::get().steps_this_tick;
         GJBaseGameLayer::update(dt);
     }
 };

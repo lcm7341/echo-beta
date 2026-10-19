@@ -109,7 +109,7 @@ void teleportPlayer(GJBaseGameLayer* pl, TeleportPortalObject* object,
             destinationPos =
                 cocos2d::CCPoint{player->getPosition().x, portalPos.y + dy};
         } else {
-            destinationPos = destination->getPosition();
+            destinationPos = destination->getRealPosition();
         }
         if (object->m_saveOffset) {
             portalPos = object->getRealPosition();
@@ -135,7 +135,7 @@ void teleportPlayer(GJBaseGameLayer* pl, TeleportPortalObject* object,
             gravity = !player->m_isUpsideDown;
         }
 
-        phys::flipGravity(player, gravity, true);
+        phys::flipGravity(player, gravity);
     }
 
     if (destination) {
@@ -148,7 +148,7 @@ void teleportPlayer(GJBaseGameLayer* pl, TeleportPortalObject* object,
     float forceRelated;
     if (destination) {
         float gravityForceMod = 90.0;
-        int objectID = object->m_objectID;
+        int objectID = destination->m_objectID;
         if (objectID == 38 || objectID == 747 || objectID == 749 ||
             objectID == 2064 || objectID == 2902) {
             gravityForceMod = 180.0;

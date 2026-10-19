@@ -86,6 +86,7 @@ void Logic::toggle_recording() {
 }
 
 void Logic::toggle_playing() {
+    bool was_recording = is_recording();
     switch (state) {
     case RunState::Idle:
         state = RunState::Playing;
@@ -103,6 +104,7 @@ void Logic::toggle_playing() {
     if (is_playing()) set_replay_pos(PlayLayer::get());
     else hold_sync = false;
     message = state_name(state);
+    if (was_recording && !is_recording()) autosave_replay();
 }
 
 bool Logic::route_to_recorded_player(bool& player1) {
@@ -264,10 +266,23 @@ void Logic::reinforce_routed_hold(PlayerObject* body) {
     }
 }
 
+bool Logic::jump_input_down(PlayLayer* play) const {
+    bool down = Input::jump_key_down() || Input::mouse_down() || key_jump_p1 || key_jump_p2 || physical_jump_p1 || physical_jump_p2;
+    if (auto* ui = play->m_uiLayer)
+        down = down || ui->m_p1Jumping || ui->m_p2Jumping || ui->m_p1TouchId != -1 || ui->m_p2TouchId != -1;
+    return down;
+}
+
+void Logic::note_death_hold(PlayLayer* play) {
+    jump_held_since_death = play && jump_input_down(play);
+}
+
 void Logic::capture_restart_holds(PlayLayer* play) {
     restart_hold_captured = false;
     traj_flip_p1 = traj_flip_p2 = false;
     traj_flip_hold_p1 = traj_flip_hold_p2 = false;
+    bool held_through_death = jump_held_since_death;
+    jump_held_since_death = false;
     if (!play) return;
     for (const auto& cmd : play->m_queuedButtons)
         note_direction_press(cmd);
@@ -278,9 +293,11 @@ void Logic::capture_restart_holds(PlayLayer* play) {
     }
     // holding thru death must NOT hold the next attempt
     // but if nothing is down there is nothing to block (it ate the first click)
-    bool down = Input::jump_key_down() || Input::mouse_down() || key_jump_p1 || key_jump_p2 || physical_jump_p1 || physical_jump_p2;
-    if (auto* ui = play->m_uiLayer)
-        down = down || ui->m_p1Jumping || ui->m_p2Jumping || ui->m_p1TouchId != -1 || ui->m_p2TouchId != -1;
+    bool down = jump_input_down(play);
+    if (down && !held_through_death) {
+        suppress_auto_hold = false;
+        return;
+    }
     clear_physical_holds();
     if (auto* ui = play->m_uiLayer) {
         ui->m_p1Jumping = false;
@@ -294,13 +311,13 @@ void Logic::capture_restart_holds(PlayLayer* play) {
 }
 
 void Logic::poll_hold_block() {
-    if (!suppress_auto_hold) return;
+    if (!suppress_auto_hold && !jump_held_since_death) return;
     bool down = Input::jump_key_down() || Input::mouse_down();
     if (auto* play = PlayLayer::get(); play && play->m_uiLayer) {
         auto* ui = play->m_uiLayer;
         down = down || ui->m_p1Jumping || ui->m_p2Jumping || ui->m_p1TouchId != -1 || ui->m_p2TouchId != -1;
     }
-    if (!down) suppress_auto_hold = false;
+    if (!down) suppress_auto_hold = jump_held_since_death = false;
 }
 
 void Logic::match_live_holds(PlayLayer* play) {
@@ -1082,13 +1099,15 @@ void Logic::on_reset(PlayLayer* play) {
     noclip_dead_p1 = false;
     noclip_dead_p2 = false;
     Orbs::clear();
+    straight_ufo_phase[0] = straight_ufo_phase[1] = 0;
+    straight_ufo_gone[0] = straight_ufo_gone[1] = 0;
     showed_new_best = false;
     over_max_cps = false;
     cps_breaking = false;
     if (play->m_endPortal) end_x = play->m_endPortal->getPositionX();
     if (is_recording() && !backstepping) ++attempts;
 
-    if (sequence_enabled && !is_recording() && !backstepping) {
+    if (sequence_enabled && !is_recording() && !backstepping && !get_latest_checkpoint(play)) {
         auto use_clip = [&](const Replay& clip) {
             inputs = clip.actions;
             clear_input_extras();
@@ -1111,13 +1130,11 @@ void Logic::on_reset(PlayLayer* play) {
             ++replay_index;
             sort_inputs();
         }
-        else if (replay_index < sequence.size()) {
+        else if (!sequence.empty()) {
+            if (replay_index >= sequence.size()) replay_index = 0;
             use_clip(sequence[replay_index]);
             ++replay_index;
             sort_inputs();
-        }
-        else {
-            replay_index = 0;
         }
     }
 
@@ -1135,7 +1152,7 @@ void Logic::on_reset(PlayLayer* play) {
     }
     apply_rate(step_frame);
     auto replayed = [this](int frame) {
-        return frame >= step_frame;
+        return frame > step_frame;
     };
     std::erase_if(click_frames_p1, replayed);
     std::erase_if(click_frames_p2, replayed);
@@ -1353,6 +1370,8 @@ static void restore_playback_hold(Logic& logic, PlayLayer* play, bool player2, i
 
 void Logic::restore_holds(PlayLayer* play) {
     if (!play) return;
+    std::memset(tool_clicks, 0, sizeof(tool_clicks));
+    jump_set_by_tool[0] = jump_set_by_tool[1] = false;
     if (is_playing()) repair_player_order(play);
     if (!is_playing() && !is_recording()) {
         reset_holds_when_idle(*this, play);
@@ -1495,12 +1514,13 @@ void Logic::on_quit(PlayLayer*) {
         if (obj) obj->m_isHide = false;
     }
     hidden_decorations.clear();
+    clear_layout_hidden();
     clear_physical_holds();
     Input::clear_keys();
     display_fps_locked = false;
+    stop_render();
     release_level_interval();
     CCDirector::sharedDirector()->getScheduler()->setTimeScale(1.f);
-    stop_render();
     save_settings_file();
 }
 
@@ -1556,6 +1576,11 @@ void Logic::flatten_click_times(GJBaseGameLayer* play) {
 
 double Logic::click_stamp() const {
     return click_between_frames_enabled() ? std::numeric_limits<double>::min() : 0.0;
+}
+
+void Logic::queue_tool_click(GJBaseGameLayer* play, bool down, bool player2) {
+    ++tool_clicks[player2 ? 1 : 0][down ? 1 : 0];
+    play->queueButton(JUMP, down, player2, click_stamp());
 }
 
 static void drop_ignored_inputs(GJBaseGameLayer* play) {
@@ -1729,6 +1754,10 @@ void run_orb_clicks(GJBaseGameLayer* play, GJBaseGameLayer* layer, float dt) {
                 Logic::get().record_input(play, cmd.m_isPush, !cmd.m_isPlayer2, (int)cmd.m_button, Orbs::take_queued_assist() || Logic::record_every_input());
             }
         }
+        else if (!logic.restoring_holds) {
+            for (const auto& cmd : play->m_queuedButtons)
+                logic.note_idle_input(cmd.m_isPush, !cmd.m_isPlayer2, (int)cmd.m_button);
+        }
         logic.injecting = true;
         layer->GJBaseGameLayer::processQueuedButtons(dt, true);
         logic.injecting = false;
@@ -1758,6 +1787,10 @@ void Logic::play_macro(GJBaseGameLayer* play, GJBaseGameLayer* layer, float dt, 
                     for (const auto& cmd : orbs) {
                         record_input(play, cmd.m_isPush, !cmd.m_isPlayer2, (int)cmd.m_button, Orbs::take_queued_assist() || Logic::record_every_input());
                     }
+                }
+                else if (!restoring_holds) {
+                    for (const auto& cmd : orbs)
+                        note_idle_input(cmd.m_isPush, !cmd.m_isPlayer2, (int)cmd.m_button);
                 }
                 play->m_queuedButtons = orbs;
                 injecting = true;
@@ -1850,9 +1883,6 @@ void Logic::play_macro(GJBaseGameLayer* play, GJBaseGameLayer* layer, float dt, 
     applying_playback = false;
     if (is_recording() && maintain_gravity && same_gravity && !restoring_holds)
         sync_same_gravity(play);
-    if (!clear_input_queue && replay == 0) {
-        play->m_queuedButtons.assign(queued.data(), queued.data() + queued.size());
-    }
     buttons_prepared = false;
 }
 
@@ -1867,7 +1897,7 @@ void Logic::offset_frames(int delta, int first, int last) {
     first = std::max(first, 0);
     last = std::min(last, n - 1);
     for (int i = first; i <= last; ++i) {
-        if (inputs[(size_t)i].number + delta >= 0) inputs[(size_t)i].number += delta;
+        inputs[(size_t)i].number = std::max(inputs[(size_t)i].number + delta, 0);
     }
     if (all) {
         for (auto& change : rates)
@@ -1921,6 +1951,7 @@ void Logic::remove_player_inputs(bool player2) {
 void Logic::flip_input_holds() {
     for (auto& input : inputs)
         input.holding = !input.holding;
+    mark_inputs_changed();
     refresh_live_hold();
     recompute_cps();
     message = "Flipped presses and releases";
@@ -1930,6 +1961,7 @@ void Logic::flip_input_holds() {
 void Logic::flip_input_players() {
     for (auto& input : inputs)
         input.player2 = !input.player2;
+    mark_inputs_changed();
     refresh_live_hold();
     recompute_cps();
     message = "Flipped player 1 and 2";
@@ -2307,16 +2339,16 @@ void Logic::tick_autoclicker(PlayLayer* play) {
     auto press_player = [&](bool player1) {
         bool two_player = play->m_level && play->m_level->m_twoPlayerMode;
         if (!player1 && !two_player) return;
-        play->queueButton(JUMP, true, !player1, click_stamp());
+        queue_tool_click(play, true, !player1);
         for (int i = 0; i < click.swifts; ++i) {
-            play->queueButton(JUMP, false, !player1, click_stamp());
-            play->queueButton(JUMP, true, !player1, click_stamp());
+            queue_tool_click(play, false, !player1);
+            queue_tool_click(play, true, !player1);
         }
     };
     auto release_player = [&](bool player1) {
         bool two_player = play->m_level && play->m_level->m_twoPlayerMode;
         if (!player1 && !two_player) return;
-        play->queueButton(JUMP, false, !player1, click_stamp());
+        queue_tool_click(play, false, !player1);
     };
 
     if (!click.pressed && click.since_release >= click.release_interval) {
@@ -2343,7 +2375,7 @@ void Logic::tick_autoclicker(PlayLayer* play) {
         if (click.disable_in <= 0) {
             autoclicker = false;
             autoclick_auto_disable = false;
-            click.disable_in = 1;
+            click.disable_in = click.disable_after;
             Logic::write_bool("autoclicker", false);
             message = "Autoclicker disabled";
         }
@@ -2367,7 +2399,7 @@ void Logic::tick_straight(PlayLayer* play) {
         if ((player2 ? straight_fly_p2 : straight_fly_p1) && player->m_isShip) {
             double limit = player2 ? straight_fly_threshold_p2 : straight_fly_threshold_p1;
             if ((vel < -limit && !held) || (vel > limit && held))
-                play->queueButton(JUMP, !held, player2, click_stamp());
+                queue_tool_click(play, !held, player2);
         }
     };
     run(play->m_player1, false);
@@ -2400,7 +2432,7 @@ void Logic::tick_straight_ufo(PlayLayer* play) {
         int& gone = straight_ufo_gone[side];
         gone = black ? 0 : gone + 1;
         auto queue = [&](bool down) {
-            play->queueButton(JUMP, down, player2, click_stamp());
+            queue_tool_click(play, down, player2);
         };
         if (phase != 0 && gone >= 3) {
             if (phase == 1) queue(false);

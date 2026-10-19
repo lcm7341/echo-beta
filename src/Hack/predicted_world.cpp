@@ -10,6 +10,8 @@
 #include <Geode/binding/DynamicObjectAction.hpp>
 #include <Geode/binding/PlayLayer.hpp>
 #include <Geode/binding/PlayerObject.hpp>
+#include <Geode/binding/SequenceTriggerState.hpp>
+#include <Geode/binding/SequenceTriggerGameObject.hpp>
 #include <Geode/modify/GJBaseGameLayer.hpp>
 #include <Geode/loader/Priority.hpp>
 #ifdef GEODE_IS_WINDOWS
@@ -109,6 +111,30 @@ static void load_node_fields(GameObject* object, const unsigned char* in) {
 	if (object->getRotationY() != values[1]) object->setRotationY(values[1]);
 	if (object->getScaleX() != values[2]) object->setScaleX(values[2]);
 	if (object->getScaleY() != values[3]) object->setScaleY(values[3]);
+}
+
+static void save_sequence(SequenceTriggerGameObject* sequence, SequenceProgress& out) {
+	if (!sequence) return;
+	out.times.clear();
+	out.indices.clear();
+	for (const auto& [key, time] : sequence->m_sequenceState.m_sequenceTimes)
+		out.times.push_back({ key, time });
+	for (const auto& [key, index] : sequence->m_sequenceState.m_sequenceIndices)
+		out.indices.push_back({ key, index });
+}
+
+static void load_sequence(SequenceTriggerGameObject* sequence, const SequenceProgress& saved) {
+	if (!sequence) return;
+	SequenceProgress now;
+	save_sequence(sequence, now);
+	if (now.times == saved.times && now.indices == saved.indices) return;
+	auto& state = sequence->m_sequenceState;
+	state.m_sequenceTimes.clear();
+	for (const auto& [key, time] : saved.times)
+		state.m_sequenceTimes[key] = time;
+	state.m_sequenceIndices.clear();
+	for (const auto& [key, index] : saved.indices)
+		state.m_sequenceIndices[key] = index;
 }
 
 static const std::size_t COMPACT_WORDS = (COMPACT_SIZE + sizeof(unsigned) - 1) / sizeof(unsigned);
@@ -312,12 +338,6 @@ static void restore_list(const List& saved, SectionBucket* bucket, int* count, F
 
 static void set_inner_index(GameObject* object, int index) {
 	object->m_innerSectionIndex = index;
-}
-
-static void place_node(GameObject* object, CCPoint position) {
-	if (!object->CCNode::getPosition().equals(position)) object->CCNode::setPosition(position);
-	if (auto* detail = object->m_colorSprite; detail && !object->m_colorSpriteLocked && !detail->getPosition().equals(position))
-		detail->setPosition(position);
 }
 
 static std::vector<Hook*> g_world_hooks;
@@ -553,8 +573,10 @@ void PredictedWorld::restore_live(PlayLayer* play) {
 			queued->removeObjectForKey(id);
 	deactivated_ids.clear();
 	play->m_movedCount = moved_count;
-	for (auto& trigger : fired)
+	for (auto& trigger : fired) {
 		std::memcpy(reinterpret_cast<unsigned char*>(trigger.object) + sizeof(GameObject), trigger.live_bytes.data(), trigger.live_bytes.size());
+		load_sequence(trigger.sequence, trigger.live_sequence);
+	}
 	for (auto& roll : rolls)
 		*roll.state = roll.live;
 	play->m_spawnTuples = live_spawn_tuples;
@@ -696,6 +718,7 @@ std::string PredictedWorld::follow_report(PlayLayer* play) const {
 
 std::string PredictedWorld::near_report(CCPoint at, float reach) const {
 	std::string out;
+	if (!valid) return out;
 	for (std::size_t slot = 0; slot < tracked.size(); ++slot) {
 		auto* object = tracked[slot].object;
 		CCPoint expected = compact_position(expected_fields.data() + slot * COMPACT_STRIDE);
@@ -824,6 +847,7 @@ void PredictedWorld::begin_session(PlayLayer* play) {
 	for (auto& trigger : fired) {
 		const auto* raw = reinterpret_cast<const unsigned char*>(trigger.object) + sizeof(GameObject);
 		trigger.live_bytes.assign(raw, raw + trigger.live_bytes.size());
+		save_sequence(trigger.sequence, trigger.live_sequence);
 	}
 	for (auto& roll : rolls)
 		roll.live = *roll.state;
@@ -890,8 +914,10 @@ void PredictedWorld::resume_horizon(PlayLayer* play) {
 	}
 	for (unsigned at : live_dirty_slots) live_dirty[at] = 0;
 	live_dirty_slots.clear();
-	for (auto& trigger : fired)
+	for (auto& trigger : fired) {
 		std::memcpy(reinterpret_cast<unsigned char*>(trigger.object) + sizeof(GameObject), trigger.horizon_bytes.data(), trigger.horizon_bytes.size());
+		load_sequence(trigger.sequence, trigger.horizon_sequence);
+	}
 	for (auto& roll : rolls)
 		*roll.state = roll.horizon;
 	play->m_spawnTuples = horizon_spawn_tuples;
@@ -915,6 +941,7 @@ void PredictedWorld::pause_horizon(PlayLayer* play) {
 	for (auto& trigger : fired) {
 		const auto* raw = reinterpret_cast<const unsigned char*>(trigger.object) + sizeof(GameObject);
 		trigger.horizon_bytes.assign(raw, raw + trigger.live_bytes.size());
+		save_sequence(trigger.sequence, trigger.horizon_sequence);
 	}
 	for (auto& roll : rolls)
 		roll.horizon = *roll.state;
@@ -1315,11 +1342,6 @@ void PredictedWorld::end_session(PlayLayer* play) {
 			if (Logic::get().trace_logging)
 				Trajectory::log_line(fmt::format("LEAK frame={} uid={} id={} moved from ({:.3f},{:.3f}) to ({:.3f},{:.3f}) outside the journal", Logic::get().step_frame, object->m_uniqueID, object->m_objectID,
 					position.x, position.y, object->m_positionX, object->m_positionY));
-			object->m_positionX = position.x;
-			object->m_positionY = position.y;
-			object->m_isObjectRectDirty = true;
-			object->m_isOrientedBoxDirty = true;
-			place_node(object, position);
 		}
 	}
 #ifdef GEODE_IS_WINDOWS
@@ -1394,6 +1416,9 @@ void PredictedWorld::note_trigger(EffectGameObject* object) {
 	const auto* raw = reinterpret_cast<const unsigned char*>(object) + sizeof(GameObject);
 	trigger.live_bytes.assign(raw, raw + (sizeof(EffectGameObject) - sizeof(GameObject)));
 	trigger.horizon_bytes = trigger.live_bytes;
+	trigger.sequence = typeinfo_cast<SequenceTriggerGameObject*>(object);
+	save_sequence(trigger.sequence, trigger.live_sequence);
+	trigger.horizon_sequence = trigger.live_sequence;
 }
 
 void PredictedWorld::note_random_roll(unsigned long long* state) {

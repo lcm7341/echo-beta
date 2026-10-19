@@ -472,6 +472,8 @@ void Orbs::arm_tool(bool on) {
 void Orbs::begin_step() {
     used_orbs_p1.clear();
     used_orbs_p2.clear();
+    if (!step_pads_p1.pending) step_pads_p1.black_clicked_by_assist = false;
+    if (!step_pads_p2.pending) step_pads_p2.black_clicked_by_assist = false;
     if (!claimed_orbs_p1.empty() || !claimed_orbs_p2.empty()) {
         auto* layer = GJBaseGameLayer::get();
         if (!layer || !holding_jump(layer->m_player1)) claimed_orbs_p1.clear();
@@ -666,6 +668,8 @@ void Orbs::apply_prediction_pads(GJBaseGameLayer* play, PlayerObject* player, bo
 
 void Orbs::click_fake(GJBaseGameLayer* play, PlayerObject* player, bool player2, std::unordered_set<int>& used, bool fresh_click) {
     if (!play || !player) return;
+    auto& pads = player2 ? predicted_pads_p2 : predicted_pads_p1;
+    if (!pads.pending) pads.black_clicked_by_assist = false;
     auto& logic = Logic::get();
     if (!Orbs::click_orb_assist(player2)) {
         if (!fresh_click && !holding_jump(player)) used.clear();

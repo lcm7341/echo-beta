@@ -64,7 +64,7 @@ void GUI::load_menu_font() {
     config.OversampleV = 2;
     ImFont* font = nullptr;
     if (fs::exists(path)) {
-        font = io.Fonts->AddFontFromFileTTF(path.string().c_str(), 18.f, &config);
+        font = io.Fonts->AddFontFromFileTTF(geode::utils::string::pathToString(path).c_str(), 18.f, &config);
     }
     if (!font) io.Fonts->AddFontDefault();
 }
@@ -436,6 +436,41 @@ void GUI::draw_frame_bar() {
     ImGui::End();
 }
 
+// best frame, 1st time in a lvl that moves things w/ moving objects off for the trajectory
+static void draw_moving_objects_prompt() {
+    auto& logic = Logic::get();
+    static bool was_open = false;
+    bool open = ImGui::IsPopupOpen("Moving Objects");
+    if (was_open && !open) logic.ask_moving_objects = false;
+    was_open = open;
+    if (logic.ask_moving_objects && !open) {
+        ImGui::OpenPopup("Moving Objects");
+        was_open = true;
+    }
+    if (EchoUI::BeginModal("Moving Objects", 22.f)) {
+        ImGui::PushTextWrapPos(0.f);
+        ImGui::TextUnformatted("This level moves objects and the trajectory is not following them, so Best Frame may not be accurate.");
+        ImGui::TextDisabled("Turn on Moving Objects for the trajectory?");
+        ImGui::PopTextWrapPos();
+        float half = EchoUI::RowButton(2);
+        int picked = 0;
+        if (EchoUI::Button("Keep Off", ImVec2(half, 0.f))) picked = 1;
+        ImGui::SameLine();
+        if (EchoUI::Button("Turn On", ImVec2(half, 0.f))) picked = 2;
+        if (picked) {
+            if (picked == 2) {
+                logic.traj_moving_objects = true;
+                logic.save_settings_file();
+            }
+            logic.ask_moving_objects = false;
+            ImGui::CloseCurrentPopup();
+            GUI::get().begin_close();
+            logic.request_best_frame();
+        }
+        EchoUI::EndModal();
+    }
+}
+
 void GUI::draw_window() {
     if (GUI::get().bar_only) {
         GUI::get().motion.open = 0.f;
@@ -473,6 +508,7 @@ void GUI::draw_window() {
         GUI::get().draw_theme_picker();
         GUI::get().draw_clickpack_picker();
         GUI::get().draw_render_picker();
+        draw_moving_objects_prompt();
         return;
     }
     StyleVarGuard fade;
@@ -535,7 +571,7 @@ void GUI::draw_window() {
     static float page_width = 0.f;
     static float measured_at = 0.f;
     static bool settings_measured = false;
-    if (measured_at != ImGui::GetFontSize()) {
+    if (measured_at != ImGui::GetFontSize() && !ImGui::IsAnyItemActive()) {
         measured_at = ImGui::GetFontSize();
         page_height = 0.f;
         page_width = 0.f;
@@ -574,32 +610,7 @@ void GUI::draw_window() {
         GUI::get().draw_theme_picker();
         GUI::get().draw_clickpack_picker();
         GUI::get().draw_render_picker();
-        // best frame, 1st time in a lvl that moves things w/ moving objects off for the trajectory
-        auto& logic = Logic::get();
-        if (logic.ask_moving_objects && !ImGui::IsPopupOpen("Moving Objects"))
-            ImGui::OpenPopup("Moving Objects");
-        if (EchoUI::BeginModal("Moving Objects", 22.f)) {
-            ImGui::PushTextWrapPos(0.f);
-            ImGui::TextUnformatted("This level moves objects and the trajectory is not following them, so Best Frame may not be accurate.");
-            ImGui::TextDisabled("Turn on Moving Objects for the trajectory?");
-            ImGui::PopTextWrapPos();
-            float half = EchoUI::RowButton(2);
-            int picked = 0;
-            if (EchoUI::Button("Keep Off", ImVec2(half, 0.f))) picked = 1;
-            ImGui::SameLine();
-            if (EchoUI::Button("Turn On", ImVec2(half, 0.f))) picked = 2;
-            if (picked) {
-                if (picked == 2) {
-                    logic.traj_moving_objects = true;
-                    logic.save_settings_file();
-                }
-                logic.ask_moving_objects = false;
-                ImGui::CloseCurrentPopup();
-                GUI::get().begin_close();
-                logic.request_best_frame();
-            }
-            EchoUI::EndModal();
-        }
+        draw_moving_objects_prompt();
         ImGui::End();
     };
     if (roomy) {
@@ -886,5 +897,6 @@ void GUI::reveal_menu() {
     auto& imgui = ImGuiCocos::get();
     if (!imgui.isInitialized()) return;
     GUI::get().bar_only = false;
+    GUI::get().closing = false;
     if (!imgui.isVisible()) imgui.setVisible(true);
 }

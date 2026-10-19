@@ -72,11 +72,11 @@ void flipGravity(PlayerObject* player, bool gravity, bool linkPartner) {
     auto* p2 = Trajectory::get().otherFake(player);
     if (!p2) return;
     if (!(p1->m_isShip == p2->m_isShip && p1->m_isBall == p2->m_isBall &&
-          p1->m_isBird == p2->m_isBird && p1->m_isDart == p2->m_isDart &&
+          p1->m_isBird == p2->m_isBird &&
           p1->m_isSpider == p2->m_isSpider &&
           p1->m_isRobot == p2->m_isRobot &&
           p1->m_isSwing == p2->m_isSwing)) return;
-    flipGravityInner(p2, !gravity);
+    flipGravity(p2, !gravity);
 }
 
 void propellPlayer(PlayerObject* player, float force, bool, int) {
@@ -143,11 +143,11 @@ void bumpPlayer(PlayerObject* player, float force, int p2, bool playBumpEffect,
 
     if (!player->m_isSideways) {
         if (player->m_isUpsideDown != object->isFacingDown()) {
-            flipGravity(player, !player->m_isUpsideDown, true);
+            flipGravity(player, !player->m_isUpsideDown);
         }
     } else {
         if (player->m_isUpsideDown != object->isFacingLeft()) {
-            flipGravity(player, !player->m_isUpsideDown, true);
+            flipGravity(player, !player->m_isUpsideDown);
         }
     }
 

@@ -12,7 +12,7 @@ namespace fs = std::filesystem;
 using namespace geode::prelude;
 
 std::string ReplayIO::lower_ext(const fs::path& path) {
-    auto ext = path.extension().string();
+    auto ext = geode::utils::string::pathToString(path.extension());
     std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) {
         return (char)std::tolower(c);
     });
@@ -38,7 +38,21 @@ std::string ReplayIO::sanitize(std::string name) {
             break;
         }
     }
+#ifdef GEODE_IS_WINDOWS
+    std::string device = name.substr(0, name.find('.'));
+    std::transform(device.begin(), device.end(), device.begin(), [](unsigned char c) {
+        return (char)std::toupper(c);
+    });
+    bool numbered = device.size() == 4 && (device.starts_with("COM") || device.starts_with("LPT")) &&
+                    std::isdigit((unsigned char)device[3]);
+    if (device == "CON" || device == "PRN" || device == "AUX" || device == "NUL" || numbered)
+        name.insert(device.size(), "_");
+#endif
     return name;
+}
+
+fs::path ReplayIO::utf8_path(const std::string& text) {
+    return fs::path(std::u8string(text.begin(), text.end()));
 }
 
 std::string ReplayIO::strip_numbering(const std::string& base, const std::string& format) {
@@ -61,22 +75,66 @@ std::string ReplayIO::strip_numbering(const std::string& base, const std::string
     return root.empty() ? base : root;
 }
 
-fs::path ReplayIO::unique_file(const fs::path& directory, const std::string& base, const std::string& ext) {
+fs::path ReplayIO::unique_file(const fs::path& directory, const std::string& base, const std::string& ext, bool keep_numbering) {
     std::error_code error;
     fs::create_directories(directory, error);
     auto format = Logic::get().rename_format.empty() ? std::string("_#") : Logic::get().rename_format;
     if (format.find('#') == std::string::npos) format += "#";
-    auto root = ReplayIO::strip_numbering(base, format);
-    auto plain = directory / (root + ext);
+    auto root = keep_numbering ? base : ReplayIO::strip_numbering(base, format);
+    auto plain = directory / ReplayIO::utf8_path(root + ext);
     if (!fs::exists(plain)) return plain;
     for (int n = 1; n < 10000; ++n) {
         auto suffix = format;
         auto hash = suffix.find('#');
         suffix.replace(hash, 1, std::to_string(n));
-        auto candidate = directory / (root + suffix + ext);
+        auto candidate = directory / ReplayIO::utf8_path(root + suffix + ext);
         if (!fs::exists(candidate)) return candidate;
     }
     return plain;
+}
+
+fs::path ReplayIO::temp_path(const fs::path& path) {
+    auto temp = path;
+    temp += ".tmp";
+    return temp;
+}
+
+bool ReplayIO::finish_temp_file(std::ofstream& file, const fs::path& temp, const fs::path& path) {
+    file.close();
+    std::error_code error;
+    if (!file) {
+        fs::remove(temp, error);
+        return false;
+    }
+    fs::rename(temp, path, error);
+    if (!error) return true;
+    fs::remove(temp, error);
+    return false;
+}
+
+bool ByteWriter::save(const fs::path& path) const {
+    auto temp = ReplayIO::temp_path(path);
+    std::ofstream file(temp, std::ios::binary);
+    file.write(reinterpret_cast<const char*>(data.data()), (std::streamsize)data.size());
+    return ReplayIO::finish_temp_file(file, temp, path);
+}
+
+std::optional<matjson::Value> ReplayIO::parse_json(std::string_view text) {
+    const int max_depth = 64;
+    int depth = 0;
+    bool in_string = false;
+    for (size_t i = 0; i < text.size(); ++i) {
+        char c = text[i];
+        if (in_string && c == '\\') ++i;
+        else if (c == '"') in_string = !in_string;
+        else if (in_string) continue;
+        else if (c == '[' || c == '{') ++depth;
+        else if (c == ']' || c == '}') --depth;
+        if (depth > max_depth) return std::nullopt;
+    }
+    auto parsed = matjson::parse(text);
+    if (!parsed) return std::nullopt;
+    return std::move(parsed).unwrap();
 }
 
 bool ReplayIO::read_boolish(const matjson::Value& json) {

@@ -19,6 +19,7 @@ public:
     static const size_t meta_size = 64;
     static const unsigned char tps_flag = 1 << 1;
     static const unsigned char end_of_inputs = 0xCC;
+    static const int frame_shift = 2;
 
     enum class Blob {
         Action,
@@ -28,6 +29,8 @@ public:
     };
 
     std::vector<Frame> inputs;
+    std::vector<RateChange> rates;
+    float tps = 240.f, start_tps = 240.f;
 
     void push(unsigned long long frame, int button, bool holding, bool player2) {
         if (frame > (unsigned long long)(std::numeric_limits<int>::max())) return;
@@ -92,6 +95,8 @@ public:
                     break;
                 }
                 inputs.clear();
+                rates.clear();
+                start_tps = tps;
                 frame = 0;
                 next = extra ? Blob::Seed : Blob::Delta;
                 break;
@@ -101,11 +106,18 @@ public:
                 if (in.failed) return true;
                 next = Blob::Action;
                 break;
-            case Blob::Tps:
-                in.uint(4);
+            case Blob::Tps: {
+                auto value = in.pod<float>();
                 if (in.failed) return true;
+                if (std::isfinite(value) && value >= 1.f) {
+                    tps = value;
+                    if (frame <= (unsigned long long)frame_shift) start_tps = value;
+                    else if (frame - frame_shift <= (unsigned long long)(std::numeric_limits<int>::max()))
+                        rates.push_back({ (int)(frame - frame_shift), value });
+                }
                 next = Blob::Delta;
                 break;
+            }
             case Blob::Seed:
                 in.uint(8);
                 if (in.failed) return true;
@@ -170,12 +182,16 @@ bool ReplayIO::read_tcbot(const fs::path& path, MacroData& out) {
     }
     in.at = meta + TcbotReplay::meta_size;
     TcbotReplay replay;
+    replay.tps = tps;
+    replay.start_tps = tps;
     bool ok = version == 1 ? replay.read_v1(in) : version == 2 ? replay.read_v2(in)
                                                                : false;
     if (!ok) return false;
     for (auto& input : replay.inputs)
-        input.number = std::max(input.number - 2, 0);
-    ReplayIO::adopt_inputs(out, std::move(replay.inputs), tps);
+        input.number = std::max(input.number - TcbotReplay::frame_shift, 0);
+    ReplayIO::adopt_inputs(out, std::move(replay.inputs), replay.start_tps);
+    out.rates = std::move(replay.rates);
+    tidy_rates(out.rates, out.fps);
     return true;
 }
 

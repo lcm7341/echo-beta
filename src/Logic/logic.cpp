@@ -1,4 +1,5 @@
 #include "Logic/logic.hpp"
+#include "Logic/conversions/codecs.hpp"
 #include "Hooks/opt.hpp"
 #include "GUI/gui.hpp"
 #include <Geode/binding/PlayerButtonCommand.hpp>
@@ -51,7 +52,22 @@ fs::path Logic::save_root() {
 
 std::string Logic::read_folder_setting(const char* key) {
     auto value = Mod::get()->getSettingValue<fs::path>(key);
-    return value.string();
+    return geode::utils::string::pathToString(value);
+}
+
+static std::string utf8_path_text(const std::string& text) {
+    try {
+        ReplayIO::utf8_path(text);
+        return text;
+    }
+    catch (...) {
+    }
+    try {
+        return geode::utils::string::pathToString(fs::path(text));
+    }
+    catch (...) {
+        return {};
+    }
 }
 
 matjson::Value Logic::placement_json(const LabelPlacement& placement) {
@@ -462,9 +478,10 @@ void Logic::pull_settings() {
             read_color("editor_sel_p1", editor_sel_p1, 4);
             read_color("editor_sel_p2", editor_sel_p2, 4);
             if (auto text = json["rename_format"].asString()) rename_format = text.unwrap();
-            if (auto text = json["clickpack"].asString()) clickpack = text.unwrap();
+            if (auto text = json["clickpack"].asString()) clickpack = utf8_path_text(text.unwrap());
             if (json.contains("clickpack_p2")) {
-                if (auto text = json["clickpack_p2"].asString()) clickpack_p2 = text.unwrap();
+                if (auto text = json["clickpack_p2"].asString())
+                    clickpack_p2 = utf8_path_text(text.unwrap());
             }
             else {
                 clickpack_p2 = clickpack;
@@ -607,12 +624,15 @@ void Logic::pull_settings() {
     auto_click.release_interval = Logic::read_int("autoclick-release", auto_click.release_interval);
     auto_click.swifts = std::clamp(Logic::read_int("autoclick-swifts", auto_click.swifts), 0, 8);
     autoclick_auto_disable = Logic::read_bool("autoclick-auto-disable", autoclick_auto_disable);
+    auto_click.disable_after = std::max(Logic::read_int("autoclick-disable-after", auto_click.disable_after), 1);
+    auto_click.disable_in = auto_click.disable_after;
     auto pack = read_folder_setting("clickpack");
     if (!pack.empty()) clickpack = pack;
     if (clickpack.empty()) {
         auto example = save_root() / "clickpacks" / "example";
         std::error_code error;
-        if (fs::is_directory(example, error)) clickpack = example.string();
+        if (fs::is_directory(example, error))
+            clickpack = geode::utils::string::pathToString(example);
     }
     if (clickpack_p2.empty()) clickpack_p2 = clickpack;
     if (fps < 1.f) fps = 240.f;
@@ -665,7 +685,8 @@ void Logic::push_runtime_settings() {
     Logic::write_int("autoclick-release", auto_click.release_interval);
     Logic::write_int("autoclick-swifts", auto_click.swifts);
     Logic::write_bool("autoclick-auto-disable", autoclick_auto_disable);
-    Mod::get()->setSettingValue<fs::path>("clickpack", fs::path(clickpack));
+    Logic::write_int("autoclick-disable-after", auto_click.disable_after);
+    Mod::get()->setSettingValue<fs::path>("clickpack", ReplayIO::utf8_path(clickpack));
     saving_all_settings = false;
     save_settings_file();
 }
