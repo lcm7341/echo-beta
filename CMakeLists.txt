@@ -67,6 +67,60 @@ if (IOS)
 endif()
 target_link_libraries(${PROJECT_NAME} imgui-cocos)
 
+CPMAddPackage(NAME lua VERSION 5.4.7 URL https://www.lua.org/ftp/lua-5.4.7.tar.gz
+    URL_HASH SHA256=9fbf5e28ef86c69858f6d3d34eccc32e911c1a28b4120ff3e84aaa70cfbf1e30 DOWNLOAD_ONLY YES)
+file(GLOB LUA_SOURCES ${lua_SOURCE_DIR}/src/*.c)
+list(FILTER LUA_SOURCES EXCLUDE REGEX "/(lua|luac|linit|liolib|loslib|loadlib|ldblib|lstrlib)\\.c$")
+file(READ ${lua_SOURCE_DIR}/src/lstrlib.c LUA_STRLIB)
+function(patch_lua_strlib FROM TO)
+    string(FIND "${LUA_STRLIB}" "${FROM}" LUA_PATCH_AT)
+    if(LUA_PATCH_AT EQUAL -1)
+        message(FATAL_ERROR "Could not patch Lua's lstrlib.c: ${FROM}")
+    endif()
+    string(REPLACE "${FROM}" "${TO}" PATCHED "${LUA_STRLIB}")
+    set(LUA_STRLIB "${PATCHED}" PARENT_SCOPE)
+endfunction()
+patch_lua_strlib([=[#include "lualib.h"
+]=] [=[#include "lualib.h"
+
+void (*lua_pattern_work)(lua_State *L, size_t amount) = NULL;
+#define PATTERN_WORK(L, amount) if (lua_pattern_work) lua_pattern_work(L, amount)
+]=])
+patch_lua_strlib([=[    while (++s < ms->src_end) {
+]=] [=[    while (++s < ms->src_end) {
+      PATTERN_WORK(ms->L, 1);
+]=])
+patch_lua_strlib([=[  while (singlematch(ms, s + i, p, ep))
+    i++;
+]=] [=[  while (singlematch(ms, s + i, p, ep)) {
+    PATTERN_WORK(ms->L, 1);
+    i++;
+  }
+]=])
+patch_lua_strlib([=[  len = ms->capture[l].len;
+]=] [=[  len = ms->capture[l].len;
+  PATTERN_WORK(ms->L, len + 1);
+]=])
+patch_lua_strlib([=[  init: /* using goto to optimize tail recursion */
+]=] [=[  init: /* using goto to optimize tail recursion */
+  PATTERN_WORK(ms->L, 1);
+]=])
+patch_lua_strlib([=[static const char *lmemfind (const char *s1, size_t l1,
+]=] [=[static const char *lmemfind (lua_State *L, const char *s1, size_t l1,
+]=])
+patch_lua_strlib([=[      init++;   /* 1st char is already checked */
+]=] [=[      init++;   /* 1st char is already checked */
+      PATTERN_WORK(L, l2 + 1);
+]=])
+patch_lua_strlib([=[lmemfind(s + init, ls - init, p, lp)]=] [=[lmemfind(L, s + init, ls - init, p, lp)]=])
+file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/lua-patched/lstrlib.c "${LUA_STRLIB}")
+list(APPEND LUA_SOURCES ${CMAKE_CURRENT_BINARY_DIR}/lua-patched/lstrlib.c)
+set_source_files_properties(${LUA_SOURCES} PROPERTIES LANGUAGE CXX)
+add_library(echo_lua STATIC ${LUA_SOURCES})
+set_target_properties(echo_lua PROPERTIES POSITION_INDEPENDENT_CODE ON LINKER_LANGUAGE CXX)
+target_include_directories(echo_lua PUBLIC ${lua_SOURCE_DIR}/src)
+target_link_libraries(${PROJECT_NAME} echo_lua)
+
 if (WIN32)
     CPMAddPackage("gh:cursey/safetyhook#2f28386")
     target_link_libraries(${PROJECT_NAME} safetyhook)

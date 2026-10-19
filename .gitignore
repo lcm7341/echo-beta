@@ -28,4 +28,6 @@ __pycache__/
 # Kept locally, not published
 tests/
 docs/
+resources/themes/*.lua
+resources/macro-scripts/*.lua
 .DS_Store
