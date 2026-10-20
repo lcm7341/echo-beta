@@ -585,11 +585,11 @@ void Logic::poll_back_hold() {
     auto start = back_hold_start + chrono::milliseconds(advance_hold_ms);
     if (now < start) {
         back_steps_owed = 0.0;
+        last_back_step = start;
         return;
     }
-    int steps = owed_hold_steps(back_steps_owed, 1e6);
+    int steps = owed_hold_steps(back_steps_owed, last_back_step, 1e6);
     if (steps == 0) return;
-    last_back_step = now;
     if (!step_back(play, steps)) holding_back = false;
 }
 

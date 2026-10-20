@@ -777,7 +777,7 @@ public:
 	void toggle_playing();
 	void toggle_frame_advance();
 	void advance_one_frame();
-	int owed_hold_steps(double& owed, double cap);
+	int owed_hold_steps(double& owed, chrono::steady_clock::time_point& last_poll, double cap);
 	void poll_advance_hold();
 	int backstep_interval() const;
 	void save_backstep(PlayLayer* play);
