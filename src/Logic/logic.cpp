@@ -327,6 +327,12 @@ void Logic::pull_settings() {
                 render_fade_in = (float)number.unwrap();
             if (auto number = json["render_fade_out"].asDouble())
                 render_fade_out = (float)number.unwrap();
+            render_video_fade_in = render_fade_in;
+            render_video_fade_out = render_fade_out;
+            if (auto number = json["render_video_fade_in"].asDouble())
+                render_video_fade_in = (float)number.unwrap();
+            if (auto number = json["render_video_fade_out"].asDouble())
+                render_video_fade_out = (float)number.unwrap();
             if (auto number = json["render_after_end"].asDouble())
                 render_after_end = (float)number.unwrap();
             if (auto number = json["render_music"].asDouble())
@@ -829,6 +835,8 @@ void Logic::save_settings_file() {
     json["render_bitrate"] = render_bitrate;
     json["render_fade_in"] = render_fade_in;
     json["render_fade_out"] = render_fade_out;
+    json["render_video_fade_in"] = render_video_fade_in;
+    json["render_video_fade_out"] = render_video_fade_out;
     json["render_after_end"] = render_after_end;
     json["render_music"] = render_music;
     json["render_sfx"] = render_sfx;

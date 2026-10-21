@@ -445,7 +445,7 @@ bool Logic::step_to(PlayLayer* play, int target, int keep_up_to) {
     checkpoints.push_back(save.checkpoint);
     bool music_sync = play->m_practiceMusicSync;
     bool held = holding_back && chrono::steady_clock::now() >= back_hold_start + chrono::milliseconds(advance_hold_ms);
-    play->m_practiceMusicSync = !held;
+    play->m_practiceMusicSync = music_sync && !held;
     play->resetLevel();
     play->m_practiceMusicSync = music_sync;
     play->m_checkpointArray->removeObject(save.object, true);

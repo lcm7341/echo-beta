@@ -1320,6 +1320,10 @@ void GUI::renderer() {
         tip("Hides the pause button while rendering. Use the Echo icon to stop the render.");
 #endif
 #endif
+        EchoUI::Row("Fade in");
+        GUI::get().drag_float_setting("##render-video-fade-in", logic.render_video_fade_in, 0.01f, 0.f, 2.f, "%.2f s");
+        EchoUI::Row("Fade out");
+        GUI::get().drag_float_setting("##render-video-fade-out", logic.render_video_fade_out, 0.01f, 0.f, 2.f, "%.2f s");
     }
     EchoUI::EndCard();
     if (EchoUI::BeginCard("Audio", card_width())) {

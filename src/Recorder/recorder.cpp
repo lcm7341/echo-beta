@@ -337,7 +337,7 @@ public:
     int width = 0, height = 0;
     int frames = 0, seen_frames = 0;
     float time_since_end = 0.f;
-    float fade = 1.f;
+    float fade = 1.f, video_fade = 1.f;
     float audio_speed = 1.f;
     CCSize saved_frame_size{}, saved_window_pixels{};
     float saved_win_width = 0.f, ui_shift = 0.f;
@@ -500,7 +500,7 @@ bool AudioCapture::attach(float music, float sfx, const fs::path& file) {
                 if (result == FMOD_OK && sample) it->second.m_sound = sample;
             }
         }
-        engine->queueStartMusic(song_path, 1.f, 0.f, std::clamp(music, 0.f, 1.f), false, (int)song_ms, 0, 0, 0, 0, false, 0, false, false);
+        engine->queueStartMusic(song_path, 1.f, 0.f, 1.f, false, (int)song_ms, 0, 0, 0, 0, false, 0, false, false);
         engine->updateQueuedMusic();
         for (int tries = 0; tries < 600 && !engine->getActiveMusicChannel(0); ++tries) {
             std::this_thread::sleep_for(chrono::milliseconds(5));
@@ -1944,9 +1944,9 @@ void Recorder::draw_scene_into_capture(CCDirector* director) {
     kmGLPushMatrix();
     if (auto* play = PlayLayer::get()) play->visit();
     else if (auto* scene = director->getRunningScene()) scene->visit();
-    if (fade < 1.f && fade_shade) {
+    if (video_fade < 1.f && fade_shade) {
         fade_shade->setContentSize(director->getWinSize());
-        fade_shade->setOpacity((GLubyte)std::lround((1.f - fade) * 255.f));
+        fade_shade->setOpacity((GLubyte)std::lround((1.f - video_fade) * 255.f));
         fade_shade->visit();
     }
     kmGLPopMatrix();
@@ -3027,11 +3027,11 @@ void Logic::show_render_overlay() {
 #define RENDER_NOTE_EVERY_SECONDS 5
 #define MAX_RENDER_NOTES_SIZE 60000
 
-static float render_fade_amount(const Logic& logic, const Recorder& recorder, PlayLayer* play, float dt) {
-    float fade_in = logic.render_fade_in <= 0.f ? 1.f : std::clamp((float)(recorder.frames) * dt / logic.render_fade_in, 0.f, 1.f);
+static float render_fade_amount(const Logic& logic, const Recorder& recorder, PlayLayer* play, float dt, float fade_in_seconds, float fade_out_seconds) {
+    float fade_in = fade_in_seconds <= 0.f ? 1.f : std::clamp((float)(recorder.frames) * dt / fade_in_seconds, 0.f, 1.f);
     float fade_out = 1.f;
-    if (play->m_hasCompletedLevel && logic.render_fade_out > 0.f) {
-        fade_out = std::clamp((logic.render_after_end - recorder.time_since_end) / logic.render_fade_out, 0.f, 1.f);
+    if (play->m_hasCompletedLevel && fade_out_seconds > 0.f) {
+        fade_out = std::clamp((logic.render_after_end - recorder.time_since_end) / fade_out_seconds, 0.f, 1.f);
     }
     return std::min(fade_in, fade_out);
 }
@@ -3079,7 +3079,8 @@ bool Logic::capture_frame() {
             return false;
         }
     }
-    recorder.fade = render_fade_amount(*this, recorder, play, dt);
+    recorder.fade = render_fade_amount(*this, recorder, play, dt, render_fade_in, render_fade_out);
+    recorder.video_fade = render_fade_amount(*this, recorder, play, dt, render_video_fade_in, render_video_fade_out);
     if (recorder.start_progress < 0.f) recorder.start_progress = level_progress(play, recorder.last_input_frame);
     AudioCapture::get().advance(dt * recorder.audio_speed, recorder.fade);
     recorder.draw_and_read_frame();
@@ -3224,6 +3225,7 @@ static void reset_for_new_render(Logic& logic, Recorder& recorder, const fs::pat
     recorder.seen_frames = 0;
     recorder.time_since_end = 0.f;
     recorder.fade = 1.f;
+    recorder.video_fade = 1.f;
     recorder.cancel = false;
     recorder.encoding_broken = false;
     recorder.failure_reason.clear();

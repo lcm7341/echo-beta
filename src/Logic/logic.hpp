@@ -635,7 +635,7 @@ public:
 	float blocks_color[3] = { 0.28235295f, 0.49019608f, 1.f };
 	std::vector<RenderPreset> render_presets;
 	int render_width = 1920, render_height = 1080, render_fps = 60, render_bitrate = 20000000;
-	float render_fade_in = 0.5f, render_fade_out = 0.5f, render_after_end = 2.f, render_music = 1.f;
+	float render_fade_in = 0.5f, render_fade_out = 0.5f, render_video_fade_in = 0.5f, render_video_fade_out = 0.5f, render_after_end = 2.f, render_music = 1.f;
 	float render_sfx = 1.f;
 	bool render_queued = false, render_record_pause = false, render_show_lvl = true;
 	bool render_screen_shape = true, render_ssb_fix = true, render_speedhack = false;
