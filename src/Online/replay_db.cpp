@@ -248,7 +248,7 @@ static void load_temporary(std::vector<unsigned char> bytes, std::string title, 
     {
         std::ofstream file(path, std::ios::binary);
         if (!file) {
-            logic.notify("Could not open a temporary file for the macro", false);
+            logic.notify("Could not open a temporary file for the replay", false);
             return;
         }
         file.write(reinterpret_cast<const char*>(bytes.data()), (std::streamsize)bytes.size());
@@ -264,7 +264,7 @@ static void load_temporary(std::vector<unsigned char> bytes, std::string title, 
             if (mine != ticket.load()) return;
             auto& logic = Logic::get();
             if (!macro) {
-                logic.notify("That online macro could not be read", false);
+                logic.notify("That online replay could not be read", false);
                 return;
             }
             auto amount = macro->inputs.size();
@@ -305,7 +305,7 @@ void ReplayDb::download(const OnlineReplay& replay, bool keep) {
         auto path = ReplayIO::unique_file(folder, ReplayIO::sanitize(title), ".echo");
         std::ofstream file(path, std::ios::binary);
         if (!file || !file.write(reinterpret_cast<const char*>(bytes.data()), (std::streamsize)bytes.size())) {
-            fail("Could not write the macro into your replays folder");
+            fail("Could not write the replay into your replays folder");
             return;
         }
         file.close();
@@ -389,12 +389,12 @@ static std::string base64url(const std::string& text) {
 void ReplayDb::upload(const std::string& title, const std::string& notes, bool claims_completion) {
     auto& logic = Logic::get();
     if (logic.inputs.empty()) {
-        fail("Record or load a macro first");
+        fail("Record or load a replay first");
         return;
     }
     auto* level = current_level();
     if (!level) {
-        fail("Open the level this macro is for, then upload");
+        fail("Open the level this replay is for, then upload");
         return;
     }
     auto folder = logic.save_root() / "online-temp";
@@ -402,7 +402,7 @@ void ReplayDb::upload(const std::string& title, const std::string& notes, bool c
     fs::create_directories(folder, error);
     auto path = folder / "upload.echo";
     if (!ReplayIO::save_as(path, ReplayIO::write_echo)) {
-        fail("Could not pack the macro for uploading");
+        fail("Could not pack the replay for uploading");
         return;
     }
     auto bytes = ReplayIO::read_all(path);

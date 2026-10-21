@@ -1190,9 +1190,9 @@ static void draw_level_check_modal() {
     db.open_level(level_name, level_id);
     float wide = ImGui::GetContentRegionAvail().x;
     ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + wide);
-    ImGui::Text("The macro is called \"%s\" but the open level is \"%s\".", Logic::get().macro_name.c_str(), level_name.c_str());
-    if (level_id > 0) ImGui::Text("Is this macro for %s (ID %d)?", level_name.c_str(), level_id);
-    else ImGui::Text("Is this macro for %s?", level_name.c_str());
+    ImGui::Text("The replay is called \"%s\" but the open level is \"%s\".", Logic::get().macro_name.c_str(), level_name.c_str());
+    if (level_id > 0) ImGui::Text("Is this replay for %s (ID %d)?", level_name.c_str(), level_id);
+    else ImGui::Text("Is this replay for %s?", level_name.c_str());
     ImGui::TextDisabled("The upload is listed under whatever level is open right now.");
     ImGui::PopTextWrapPos();
     float half = (wide - ImGui::GetStyle().ItemSpacing.x) * .5f;
@@ -1250,11 +1250,11 @@ static void draw_upload_page(float wide, float scale) {
         draw_upload_buttons(wide, [&] { db.upload_theme(state.upload_title, state.upload_notes); });
         return;
     }
-    EchoUI::SectionLabel("Upload current macro");
+    EchoUI::SectionLabel("Upload current replay");
     ImGui::SetNextItemWidth(wide);
     EchoUI::InputTextWithHint("##upload-title", "Title (defaults to the level name)", &state.upload_title);
     EchoUI::InputTextMultiline("##upload-notes", &state.upload_notes, ImVec2(wide, 70.f * scale));
-    EchoUI::Checkbox("This macro beats the level", &state.upload_claims);
+    EchoUI::Checkbox("This replay beats the level", &state.upload_claims);
     draw_upload_buttons(wide, [&] {
         std::string level_name;
         int level_id = 0;
@@ -1325,7 +1325,7 @@ static void draw_online_list(float wide, float height) {
     ImGui::BeginChild("##online-list", ImVec2(wide, list_height), ImGuiChildFlags_Borders);
     float line = ImGui::GetTextLineHeight();
     for (int at = 0; at < shown_count(); ++at) draw_online_row(at, line);
-    const char* const nothing[] = { "No online macros match", "No clickpacks match", "No themes match" };
+    const char* const nothing[] = { "No online replays match", "No clickpacks match", "No themes match" };
     if (db.searching() && shown_count() == 0) ImGui::TextDisabled("Searching...");
     else if (db.searched && shown_count() == 0) ImGui::TextDisabled("%s", nothing[(int)online_kind()]);
     ImGui::EndChild();
@@ -1338,7 +1338,7 @@ static void draw_chosen_replay(float wide) {
     float half = (wide - ImGui::GetStyle().ItemSpacing.x) * .5f;
     bool picked = chosen_ok();
     if (!picked) {
-        ImGui::TextDisabled("Pick a macro from the list");
+        ImGui::TextDisabled("Pick a replay from the list");
         ImGui::TextDisabled(" ");
         ImGui::TextDisabled(" ");
     } else {
@@ -1462,7 +1462,7 @@ static void draw_web_code_modal() {
 }
 
 static void draw_online_account(float wide) {
-    const char* const upload_labels[] = { "Upload current macro", "Upload a clickpack", "Upload current theme" };
+    const char* const upload_labels[] = { "Upload current replay", "Upload a clickpack", "Upload current theme" };
     auto& state = *g_browser;
     auto& db = ReplayDb::get();
     float half = (wide - ImGui::GetStyle().ItemSpacing.x) * .5f;
