@@ -43,6 +43,19 @@ struct ShelfMotion {
 	bool placed = false;
 };
 
+struct OnlineBrowser {
+	bool online = false;
+	bool verified_only = false;
+	bool online_stale = true;
+	double filter_changed_at = 0.0;
+	int chosen = -1;
+	bool upload_open = false;
+	bool upload_claims = false;
+	bool confirm_level = false;
+	int upload_pack = 0;
+	std::string upload_title, upload_notes;
+};
+
 struct ReplayPicker {
 	bool want_open = false;
 	bool sequence = false;
@@ -50,19 +63,20 @@ struct ReplayPicker {
 	int amount = 1;
 	std::string filter;
 	std::vector<fs::path> files;
+	OnlineBrowser browser;
 };
 
 struct ThemePicker {
 	bool want_open = false;
 	std::string filter;
 	std::vector<fs::path> files;
+	OnlineBrowser browser;
 };
 
 struct ClickpackPicker {
-	bool want_open = false;
 	int player = 0;
 	std::string filter;
-	std::vector<fs::path> folders;
+	OnlineBrowser browser;
 };
 
 struct RenderPicker {
@@ -132,10 +146,11 @@ public:
 	void open_macro_picker(bool sequence, int amount);
 	void open_merge_picker();
 	void draw_macro_picker();
+	void draw_online_picker(OnlineBrowser& browser, int kind, std::string& filter, float wide, float height);
+	void draw_source_tabs(OnlineBrowser& browser, float wide);
+	void note_filter_edit(OnlineBrowser& browser);
 	void open_theme_picker();
 	void draw_theme_picker();
-	void open_clickpack_picker();
-	void draw_clickpack_picker();
 	void open_render_picker();
 	void draw_render_picker();
 	void main();
@@ -406,7 +421,6 @@ public:
 	ThemePicker& themes();
 	void refresh_themes();
 	ClickpackPicker& clickpacks();
-	void refresh_clickpacks();
 	RenderPicker& renders();
 	void refresh_renders();
 };

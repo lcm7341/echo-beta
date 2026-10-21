@@ -391,6 +391,7 @@ public:
 	std::vector<std::string> tab_order{ "Play", "Macro", "Editor", "Macro Tools", "Visuals", "Sequence", "Render", "Theme", "Clickbot" };
 	bool ignore_inputs = true;
 	bool no_overwrite = false;
+	bool auto_name_replay = true;
 	bool record_p1 = true, record_p2 = true, play_p1 = true, play_p2 = true;
 	bool click_both = false;
 	int follow_mode = 0;
@@ -634,7 +635,7 @@ public:
 	float blocks_color[3] = { 0.28235295f, 0.49019608f, 1.f };
 	std::vector<RenderPreset> render_presets;
 	int render_width = 1920, render_height = 1080, render_fps = 60, render_bitrate = 20000000;
-	float render_fade_in = 0.5f, render_fade_out = 0.5f, render_after_end = 2.f, render_music = 1.f;
+	float render_fade_in = 0.5f, render_fade_out = 0.5f, render_video_fade_in = 0.5f, render_video_fade_out = 0.5f, render_after_end = 2.f, render_music = 1.f;
 	float render_sfx = 1.f;
 	bool render_queued = false, render_record_pause = false, render_show_lvl = true;
 	bool render_screen_shape = true, render_ssb_fix = true, render_speedhack = false;
@@ -777,7 +778,7 @@ public:
 	void toggle_playing();
 	void toggle_frame_advance();
 	void advance_one_frame();
-	int owed_hold_steps(double& owed, double cap);
+	int owed_hold_steps(double& owed, chrono::steady_clock::time_point& last_poll, double cap);
 	void poll_advance_hold();
 	int backstep_interval() const;
 	void save_backstep(PlayLayer* play);

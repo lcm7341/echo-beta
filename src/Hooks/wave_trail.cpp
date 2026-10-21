@@ -9,6 +9,7 @@
 
 using namespace geode::prelude;
 
+#define HARD_STREAK_UPDATE_STROKE 0x2b8ef0
 #define TRAIL_EPSILON 10e-6f
 #define INNER_BAND_EDGE 0.3333333
 #define INNER_BAND_OPACITY 0.65
@@ -46,14 +47,21 @@ static TrailBand g_bands[TRAIL_BANDS] = {
 static unsigned g_triangle_counts[TRAIL_BANDS][MovingObjects::MoveThreads::PARTS];
 static unsigned g_triangle_starts[TRAIL_BANDS][MovingObjects::MoveThreads::PARTS];
 
-static bool draw_fix_matches() {
+static bool trail_drawn_by_other_mod() {
     const char* const draw_fix_id = "nytelyte.wave_trail_draw_fix";
     const char* const draw_fix_custom_key = "_custom_configuration";
-    static int matches = -1;
-    if (matches >= 0) return matches == 1;
-    auto* mod = Loader::get()->getLoadedMod(draw_fix_id);
-    matches = mod && mod->getVersion() == VersionInfo(1, 2, 0) && !mod->hasSavedValue(draw_fix_custom_key) ? 1 : 0;
-    return matches == 1;
+    static int other = -1;
+    if (other >= 0) return other == 1;
+    other = 0;
+    for (auto* mod : Loader::get()->getAllMods()) {
+        if (mod == Mod::get()) continue;
+        bool same_draw_fix = mod->getID() == draw_fix_id && mod->getVersion() == VersionInfo(1, 2, 0) && !mod->hasSavedValue(draw_fix_custom_key);
+        if (same_draw_fix) continue;
+        for (auto* hook : mod->getHooks()) {
+            if (hook->isEnabled() && hook->getAddress() == geode::base::get() + HARD_STREAK_UPDATE_STROKE) other = 1;
+        }
+    }
+    return other == 1;
 }
 
 static void split(size_t total, unsigned part, size_t& from, size_t& to) {
@@ -336,11 +344,10 @@ class $modify(EchoWaveTrail, HardStreak) {
     }
 
     void updateStroke(float dt) {
-        if (!draw_fix_matches()) return HardStreak::updateStroke(dt);
-        if (!m_drawStreak || m_pointArray->count() == 0 || getOpacity() == 0)
-            return HardStreak::updateStroke(dt);
-        if (!read_path(this)) return HardStreak::updateStroke(dt);
+        if (trail_drawn_by_other_mod()) return HardStreak::updateStroke(dt);
         clear();
+        if (!m_drawStreak || m_pointArray->count() == 0 || getOpacity() == 0) return;
+        if (!read_path(this)) return;
         draw_fixed_trail();
     }
 };

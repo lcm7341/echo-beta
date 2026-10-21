@@ -445,7 +445,7 @@ bool Logic::step_to(PlayLayer* play, int target, int keep_up_to) {
     checkpoints.push_back(save.checkpoint);
     bool music_sync = play->m_practiceMusicSync;
     bool held = holding_back && chrono::steady_clock::now() >= back_hold_start + chrono::milliseconds(advance_hold_ms);
-    play->m_practiceMusicSync = !held;
+    play->m_practiceMusicSync = music_sync && !held;
     play->resetLevel();
     play->m_practiceMusicSync = music_sync;
     play->m_checkpointArray->removeObject(save.object, true);
@@ -585,11 +585,11 @@ void Logic::poll_back_hold() {
     auto start = back_hold_start + chrono::milliseconds(advance_hold_ms);
     if (now < start) {
         back_steps_owed = 0.0;
+        last_back_step = start;
         return;
     }
-    int steps = owed_hold_steps(back_steps_owed, 1e6);
+    int steps = owed_hold_steps(back_steps_owed, last_back_step, 1e6);
     if (steps == 0) return;
-    last_back_step = now;
     if (!step_back(play, steps)) holding_back = false;
 }
 

@@ -61,7 +61,7 @@ void Logic::toggle_recording() {
             macro_ldm = play->m_level->m_lowDetailModeToggled;
             macro_ldm_known = true;
         }
-        if (inputs.empty() && !macro_name_typed && play && play->m_level && !std::string(play->m_level->m_levelName).empty()) {
+        if (auto_name_replay && inputs.empty() && !macro_name_typed && play && play->m_level && !std::string(play->m_level->m_levelName).empty()) {
             macro_name = play->m_level->m_levelName;
             macro_path.clear();
         }
@@ -521,9 +521,12 @@ void Logic::advance_one_frame() {
     advance_queued = true;
 }
 
-int Logic::owed_hold_steps(double& owed, double cap) {
+int Logic::owed_hold_steps(double& owed, chrono::steady_clock::time_point& last_poll, double cap) {
+    auto now = chrono::steady_clock::now();
+    double elapsed = chrono::duration<double>(now - last_poll).count();
+    last_poll = now;
     double rate = sample_rate() * std::clamp(advance_speed, 1.f, 200.f) / 100.0 * speedhack;
-    owed += rate * CCDirector::sharedDirector()->getAnimationInterval();
+    owed += rate * elapsed;
     double wanted = std::floor(owed);
     if (wanted < 1.0) return 0;
     int steps = (int)std::min(wanted, cap);
@@ -541,12 +544,12 @@ void Logic::poll_advance_hold() {
     auto start = advance_hold_start + chrono::milliseconds(advance_hold_ms);
     if (now < start) {
         advance_steps_owed = 0.0;
+        last_advance_step = start;
         return;
     }
     if (advance_queued) return;
-    int steps = owed_hold_steps(advance_steps_owed, real_time_now() ? unlocked_step_cap() : 1);
+    int steps = owed_hold_steps(advance_steps_owed, last_advance_step, unlocked_step_cap());
     if (steps == 0) return;
-    last_advance_step = now;
     advance_steps = steps;
     advance_queued = true;
 }
@@ -925,7 +928,7 @@ void Logic::on_play_init(PlayLayer* play) {
     hidden_decorations.clear();
     last_click_p1 = 0.0;
     last_click_p2 = 0.0;
-    if (play->m_level) {
+    if (auto_name_replay && play->m_level) {
         macro_name = play->m_level->m_levelName;
         if (macro_name.empty()) macro_name = "Replay";
         macro_name_typed = false;

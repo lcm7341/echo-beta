@@ -4,6 +4,7 @@
 #include "GUI/logo_texture.hpp"
 #include "Hack/label_types.hpp"
 #include "Logic/conversions/codecs.hpp"
+#include "Online/replay_db.hpp"
 
 #include <imgui-cocos.hpp>
 #include <imgui.h>
@@ -27,7 +28,6 @@ static float card_width() {
 
 static const char* const PLAYERS[] = { "Both", "Player 1", "Player 2" };
 static const char* const PLAYER_CHOICES[] = { "Off", "Player 1", "Player 2", "Both" };
-static const ImVec4 RECORD_RED(1.f, .36f, .44f, 1.f);
 
 static void tip(const char* text) {
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("%s", text);
@@ -510,7 +510,7 @@ void GUI::main() {
     if (EchoUI::BeginCard("Session", card_width())) {
         float half = EchoUI::RowButton(2);
         ImVec2 big(half, EchoUI::em(2.3f));
-        if (EchoUI::ActionButton(logic.is_recording() ? "Stop Recording###record" : "Record###record", EchoUI::Icon::Record, logic.is_recording(), big, RECORD_RED))
+        if (EchoUI::ActionButton(logic.is_recording() ? "Stop Recording###record" : "Record###record", EchoUI::Icon::Record, logic.is_recording(), big))
             Logic::get().toggle_recording();
         GUI::get().offer_rebind("toggle-record");
         ImGui::SameLine();
@@ -627,6 +627,8 @@ void GUI::main() {
         toggle("No Overwrite", logic.no_overwrite);
         GUI::get().offer_rebind("key-no-overwrite", "Saves as a new file instead of overwriting the current replay.");
         if (EchoUI::Gear("##overwrite-settings")) open_overwrite = true;
+        toggle("Auto Name Replay", logic.auto_name_replay);
+        tip("Names the replay after the level you are in.");
         EchoUI::Separator();
         ImGui::BeginDisabled(!logic.backstep && !logic.best_frame_running);
 #ifdef GEODE_IS_MOBILE
@@ -1113,7 +1115,7 @@ void GUI::clickbot() {
         }
         std::string cur = geode::utils::string::pathToString(ReplayIO::utf8_path(pack).filename());
         if (cur.empty()) cur = pack;
-        EchoUI::RowWith("Click pack", 5.f);
+        EchoUI::Row("Click pack");
         if (EchoUI::BeginCombo(player == 0 ? "##clickpack-p1" : "##clickpack-p2", cur.empty() ? "None" : cur.c_str())) {
             for (const auto& folder : folders) {
                 if (EchoUI::Selectable(folder.c_str(), folder == cur)) {
@@ -1122,11 +1124,6 @@ void GUI::clickbot() {
                 }
             }
             ImGui::EndCombo();
-        }
-        float browse_w = EchoUI::RowRight(5.f);
-        if (EchoUI::Button("Browse", ImVec2(browse_w, 0.f))) {
-            GUI::get().clickpacks().player = player;
-            GUI::get().open_clickpack_picker();
         }
     }
     EchoUI::EndCard();
@@ -1137,6 +1134,49 @@ void GUI::clickbot() {
         else
             draw_click_types(logic.p2_softs, logic.p2_soft_ms, logic.p2_hards, logic.p2_hard_seconds, logic.p2_micros, logic.p2_micro_ms);
         ImGui::PopID();
+    }
+    EchoUI::EndCard();
+    EchoUI::EndCardRow();
+    EchoUI::BeginCardRow("clickbot-1");
+    float packs_width = card_width() * 2.f + ImGui::GetStyle().ItemSpacing.x / ImGui::GetFontSize();
+    if (EchoUI::BeginCard("Click Packs", packs_width)) {
+        auto& picker = GUI::get().clickpacks();
+        picker.player = player;
+        auto& pack = player == 0 ? logic.clickpack : logic.clickpack_p2;
+        float wide = ImGui::GetContentRegionAvail().x;
+        GUI::get().draw_source_tabs(picker.browser, wide);
+        ImGui::SetNextItemWidth(wide);
+        if (EchoUI::InputTextWithHint("##clickpack-filter", picker.browser.online ? "Search clickpacks or uploaders" : "Type to filter clickpacks", &picker.filter))
+            GUI::get().note_filter_edit(picker.browser);
+        float list_height = EchoUI::CardFill(6.f);
+        if (picker.browser.online) {
+            GUI::get().draw_online_picker(picker.browser, (int)OnlineKind::Clickpacks, picker.filter, wide, list_height);
+        } else {
+            auto folders_root = Logic::get().save_root() / "clickpacks";
+            std::string cur = geode::utils::string::pathToString(ReplayIO::utf8_path(pack).filename());
+            std::string needle = GUI::get().lower_copy(picker.filter);
+            std::vector<std::string> folders;
+            std::error_code folder_error;
+            for (const auto& entry : fs::directory_iterator(folders_root, folder_error)) {
+                if (!entry.is_directory(folder_error)) continue;
+                folders.push_back(geode::utils::string::pathToString(entry.path().filename()));
+            }
+            std::sort(folders.begin(), folders.end(), [](const std::string& a, const std::string& b) {
+                return GUI::get().lower_copy(a) < GUI::get().lower_copy(b);
+            });
+            ImGui::BeginChild("##clickpack-list", ImVec2(wide, list_height), ImGuiChildFlags_Borders);
+            int shown = 0;
+            for (const auto& folder : folders) {
+                if (!needle.empty() && GUI::get().lower_copy(folder).find(needle) == std::string::npos) continue;
+                ++shown;
+                if (EchoUI::Selectable(folder.c_str(), folder == cur)) {
+                    pack = geode::utils::string::pathToString(folders_root / ReplayIO::utf8_path(folder));
+                    GUI::get().persist();
+                }
+            }
+            if (shown == 0) ImGui::TextDisabled(folders.empty() ? "No clickpacks installed" : "No clickpacks match");
+            ImGui::EndChild();
+        }
     }
     EchoUI::EndCard();
     EchoUI::EndCardRow();
@@ -1174,7 +1214,7 @@ void GUI::renderer() {
         bool recording = Logic::get().render_active();
         ImVec2 big(-FLT_MIN, EchoUI::em(2.3f));
         if (recording) {
-            if (EchoUI::ActionButton("Stop Rendering###render", EchoUI::Icon::Render, true, big, RECORD_RED))
+            if (EchoUI::ActionButton("Stop Rendering###render", EchoUI::Icon::Render, true, big))
                 Logic::get().stop_render();
         }
         else if (PlayLayer::get()) {
@@ -1280,6 +1320,10 @@ void GUI::renderer() {
         tip("Hides the pause button while rendering. Use the Echo icon to stop the render.");
 #endif
 #endif
+        EchoUI::Row("Fade in");
+        GUI::get().drag_float_setting("##render-video-fade-in", logic.render_video_fade_in, 0.01f, 0.f, 2.f, "%.2f s");
+        EchoUI::Row("Fade out");
+        GUI::get().drag_float_setting("##render-video-fade-out", logic.render_video_fade_out, 0.01f, 0.f, 2.f, "%.2f s");
     }
     EchoUI::EndCard();
     if (EchoUI::BeginCard("Audio", card_width())) {

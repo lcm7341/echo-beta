@@ -1659,7 +1659,7 @@ namespace EchoUI {
         return pressed;
     }
 
-    bool ActionButton(const char* label, Icon icon, bool active, const ImVec2& size_arg, ImVec4 tint) {
+    bool ActionButton(const char* label, Icon icon, bool active, const ImVec2& size_arg) {
         ImGuiWindow* window = ImGui::GetCurrentWindow();
         if (window->SkipItems) return false;
         ImGuiContext& g = *GImGui;
@@ -1677,26 +1677,22 @@ namespace EchoUI {
 
         float hot = ease(id, hovered ? 1.f : 0.f);
         float down = ease(sub(id, "down"), held && hovered ? 1.f : 0.f, 22.f);
-        float on = ease(sub(id, "on"), active ? 1.f : 0.f, 12.f);
-        ImVec4 accent = tint.w > 0.f ? tint : color(ImGuiCol_CheckMark);
+        ImVec4 accent = color(ImGuiCol_CheckMark);
         ImDrawList* draw = window->DrawList;
         ImRect body = bb;
         body.Expand(-down * std::max(1.f, size.y * .04f));
-        ImVec4 idle = mix(mix(color(ImGuiCol_Button), color(ImGuiCol_ButtonHovered), hot), color(ImGuiCol_ButtonActive), down);
-        ImVec4 running = mix(accent, ImVec4(1.f, 1.f, 1.f, accent.w), hot * .12f);
-        ImVec4 fill = mix(idle, running, on);
+        ImVec4 fill = mix(mix(color(ImGuiCol_Button), color(ImGuiCol_ButtonHovered), hot), color(ImGuiCol_ButtonActive), down);
         draw->AddRectFilled(body.Min, body.Max, ImGui::GetColorU32(fill), style.FrameRounding);
         gloss(draw, body, style.FrameRounding);
-        button_skin(draw, body, style.FrameRounding, id, hot, down, 1.f, &running, on);
-        draw->AddRect(body.Min, body.Max, ImGui::GetColorU32(faded(accent, std::max(hot * .55f, .35f * (1.f - on)))), style.FrameRounding, 0, 1.f);
-        ImVec4 ink = mix(color(ImGuiCol_Text), ink_on(running), on);
+        button_skin(draw, body, style.FrameRounding, id, hot, down);
+        draw->AddRect(body.Min, body.Max, ImGui::GetColorU32(faded(accent, std::max(hot * .55f, .35f))), style.FrameRounding, 0, 1.f);
+        ImVec4 ink = color(ImGuiCol_Text);
         float glyph = ImGui::GetFontSize() * .78f;
         float gap = style.ItemInnerSpacing.x * .8f;
         float group = glyph + gap + label_size.x;
         float left = bb.Min.x + std::max(style.FramePadding.x * .6f, (size.x - group) * .5f);
         ImVec2 center(left + glyph * .5f, (bb.Min.y + bb.Max.y) * .5f);
-        ImVec4 glyph_ink = mix(accent, ink, on);
-        stroke_icon(draw, center, glyph, active ? Icon::Stop : icon, ImGui::GetColorU32(glyph_ink));
+        stroke_icon(draw, center, glyph, active ? Icon::Stop : icon, ImGui::GetColorU32(accent));
         ImGui::PushStyleColor(ImGuiCol_Text, ink);
         ImRect text_box(ImVec2(left + glyph + gap, bb.Min.y), ImVec2(bb.Max.x - style.FramePadding.x * .5f, bb.Max.y));
         ImGui::RenderTextClipped(ImVec2(text_box.Min.x, bb.Min.y + style.FramePadding.y), ImVec2(text_box.Max.x, bb.Max.y - style.FramePadding.y), label, nullptr, &label_size, ImVec2(0.f, .5f), &text_box);

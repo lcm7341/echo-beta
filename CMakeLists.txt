@@ -67,6 +67,9 @@ if (IOS)
 endif()
 target_link_libraries(${PROJECT_NAME} imgui-cocos)
 
+CPMAddPackage("gh:GlobedGD/argon@1.5.1")
+target_link_libraries(${PROJECT_NAME} argon)
+
 if (WIN32)
     CPMAddPackage("gh:cursey/safetyhook#2f28386")
     target_link_libraries(${PROJECT_NAME} safetyhook)

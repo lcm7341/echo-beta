@@ -1785,6 +1785,9 @@ class $modify(EchoPlayerObject, PlayerObject) {
         if (auto& logic = Logic::get(); logic.defer_player_art && !Trajectory::get().isFake(this)) {
             phys::pos_without_art(this, position);
             logic.player_art_deferred = true;
+            if (!m_waveTrail) return;
+            if (m_fadeOutStreak && m_isDart) m_waveTrail->m_currentPoint = getPosition();
+            m_waveTrail->setPosition(getPosition());
             return;
         }
         if (!tilt_applies(this) || !g_tilt_fix.contains(this) || g_tilt_held.contains(this)) {

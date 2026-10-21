@@ -1,9 +1,11 @@
 # v2.2.1
 
+- echogd.com! browse and download macros, clickpacks and themes, or upload ur own right from echo
+- Online tab in the macro, clickpack and theme pickers so u can search echogd.com in game and play a macro without saving it
 - Macrobuff tint: in the editor the screen turns red if something u place or move would kill u on ur last playtest
-- Trajectory is way more accurate now and predicts moving objects (still a lil weird in some levels)
-- Trajectory keeps updating while frame advancing, including the clicks u queue up
-- Trajectory length is based on how much ram u have instead of cutting off early
+- Trajectory is way more accurate now
+- Trajectory keeps updating while frame advancing
+- Trajectory length is based on how much ram you have available
 - Fixed Frame Cadence: moving objects update at a steady rate so the trajectory can actually predict them
 - Skip Far Moving Objects: only checks moving objects that can reach u, way less lag
 - Lowest FPS in real time settings
@@ -12,7 +14,7 @@
 - Default Art for layout mode
 - Position decimals for labels
 - 8K 60 and 8K 120 render presets
-- typing a frame rate in the renderer actually uses that number now (120 isnt 360 anymore lol)
+- typing a frame rate in the renderer actually uses that number now
 - Real Time Rendering is pc only now, and it works with True Real Time on
 - fixed keybinds
 - fixed predicted dash orb spins going way too fast
@@ -22,15 +24,13 @@
 
 # v2.2.0
 
-## New
-
-- A new menu: Echo's own look, with pages reorganized into Replay, Assists, Visuals, Editor, Library, Clickbot, Render and Settings.
-- Themes: base color themes, custom colors, and a Randomize that keeps Echo's style. The logo takes the theme's color.
-- Undocked mode is now a mod menu: every section is a tile that packs across the screen, and tiles can be pinned or hidden.
-- A list of every keybind in Settings.
-- Merge In: add another replay's inputs to the current one.
-- Video presets, including your own, with common sizes and frame rates.
-- The docked and undocked menus each have their own size.
+- New menu with its own look, pages are now Replay, Assists, Visuals, Editor, Library, Clickbot, Render and Settings
+- Themes! pick a base color or make ur own, and Randomize gives u a random one that still looks like echo. the logo changes color with it
+- Undocked mode is a mod menu now, every section is a tile u can pin or hide
+- Settings has a list of every keybind
+- Merge In: add another macros inputs to the one ur working on
+- Video presets for common sizes and frame rates, and u can save ur own
+- Docked and undocked menus remember their own size
 
 # v2.1.0
 

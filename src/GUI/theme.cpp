@@ -1,6 +1,7 @@
 #include <imgui_internal.h>
 #include "GUI/gui.hpp"
 #include "Logic/conversions/codecs.hpp"
+#include "Online/replay_db.hpp"
 #include <imgui-cocos.hpp>
 #include <imgui.h>
 #include <misc/cpp/imgui_stdlib.h>
@@ -1091,13 +1092,24 @@ void GUI::draw_macro_picker() {
         return;
     drawn_frame = ImGui::GetFrameCount();
     state.want_open = false;
+    bool tabs = !state.sequence && !state.merge;
+    if (!tabs) state.browser.online = false;
+    const float online_wide = 660.f;
+    if (state.browser.online) picker_wide = online_wide * picker_scale;
     if (EchoUI::TitleBar(state.sequence ? "Add to the Sequence" : state.merge ? "Merge a Replay In"
                                                                            : "Load a Replay",
             EchoUI::Icon::Macro, true, picker_wide))
         ImGui::CloseCurrentPopup();
+    if (tabs) GUI::get().draw_source_tabs(state.browser, picker_wide);
     ImGui::SetNextItemWidth(picker_wide);
     focus_search_on_open();
-    EchoUI::InputTextWithHint("##macro-filter", "Type to filter macros", &state.filter);
+    if (EchoUI::InputTextWithHint("##macro-filter", state.browser.online ? "Level name, ID, creator or uploader" : "Type to filter macros", &state.filter))
+        GUI::get().note_filter_edit(state.browser);
+    if (state.browser.online) {
+        GUI::get().draw_online_picker(state.browser, (int)OnlineKind::Macros, state.filter, picker_wide, 240.f * picker_scale + ImGui::GetFrameHeight() + ImGui::GetStyle().ItemSpacing.y);
+        ImGui::EndPopup();
+        return;
+    }
     ImGui::BeginChild("##macro-list", ImVec2(picker_wide, 240.f * picker_scale), ImGuiChildFlags_Borders);
     std::string needle = GUI::get().lower_copy(state.filter);
     int shown = 0;
@@ -1128,6 +1140,409 @@ void GUI::draw_macro_picker() {
     ImGui::EndChild();
     if (EchoUI::Button("Refresh", ImVec2(picker_wide, 0.f))) GUI::get().refresh_files();
     ImGui::EndPopup();
+}
+
+static std::string replay_tags(const OnlineReplay& replay) {
+    std::string tags;
+    if (replay.verified) tags += " Verified";
+    else if (replay.claims_completion && ReplayDb::get().moderator()) tags += " Verify Replay";
+    if (replay.physics == "2.1") tags += " 2.1";
+    return tags;
+}
+
+static OnlineBrowser* g_browser = nullptr;
+static OnlineKind g_kind = OnlineKind::Macros;
+
+static OnlineKind online_kind() {
+    return g_kind;
+}
+
+static int shown_count() {
+    auto& db = ReplayDb::get();
+    if (online_kind() == OnlineKind::Clickpacks) return (int)db.clickpacks.size();
+    if (online_kind() == OnlineKind::Themes) return (int)db.themes.size();
+    return (int)db.results.size();
+}
+
+static bool chosen_ok() {
+    int chosen = g_browser->chosen;
+    return chosen >= 0 && chosen < shown_count();
+}
+
+static void draw_online_status(float wide) {
+    auto& db = ReplayDb::get();
+    if (db.status.empty()) return;
+    ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + wide);
+    if (db.status_bad) ImGui::TextColored(ImVec4(1.f, .36f, .48f, 1.f), "%s", db.status.c_str());
+    else ImGui::TextDisabled("%s", db.status.c_str());
+    ImGui::PopTextWrapPos();
+}
+
+static void draw_level_check_modal() {
+    const char* const title = "Check the Level";
+    const float modal_width = 20.f;
+    auto& state = *g_browser;
+    auto& db = ReplayDb::get();
+    if (std::exchange(state.confirm_level, false)) ImGui::OpenPopup(title);
+    if (!EchoUI::BeginModal(title, modal_width)) return;
+    std::string level_name;
+    int level_id = 0;
+    db.open_level(level_name, level_id);
+    float wide = ImGui::GetContentRegionAvail().x;
+    ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + wide);
+    ImGui::Text("The replay is called \"%s\" but the open level is \"%s\".", Logic::get().macro_name.c_str(), level_name.c_str());
+    if (level_id > 0) ImGui::Text("Is this replay for %s (ID %d)?", level_name.c_str(), level_id);
+    else ImGui::Text("Is this replay for %s?", level_name.c_str());
+    ImGui::TextDisabled("The upload is listed under whatever level is open right now.");
+    ImGui::PopTextWrapPos();
+    float half = (wide - ImGui::GetStyle().ItemSpacing.x) * .5f;
+    if (EchoUI::Button("Yes, upload", ImVec2(half, 0.f))) {
+        db.upload(state.upload_title, state.upload_notes, state.upload_claims);
+        ImGui::CloseCurrentPopup();
+    }
+    ImGui::SameLine();
+    if (EchoUI::Button("No", ImVec2(half, 0.f))) ImGui::CloseCurrentPopup();
+    EchoUI::EndModal();
+}
+
+static void draw_upload_buttons(float wide, const std::function<void()>& upload) {
+    auto& state = *g_browser;
+    auto& db = ReplayDb::get();
+    float half = (wide - ImGui::GetStyle().ItemSpacing.x) * .5f;
+    ImGui::BeginDisabled(db.uploading());
+    if (EchoUI::Button(db.uploading() ? "Uploading..." : "Upload", ImVec2(half, 0.f))) upload();
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    if (EchoUI::Button("Back", ImVec2(half, 0.f))) state.upload_open = false;
+    draw_online_status(wide);
+}
+
+static void draw_upload_page(float wide, float scale) {
+    auto& state = *g_browser;
+    auto& db = ReplayDb::get();
+    if (online_kind() == OnlineKind::Clickpacks) {
+        EchoUI::SectionLabel("Upload a clickpack");
+        auto installed = db.installed_clickpacks();
+        if (installed.empty()) {
+            ImGui::TextDisabled("You have no clickpacks installed");
+            draw_upload_buttons(wide, [] {});
+            return;
+        }
+        state.upload_pack = std::clamp(state.upload_pack, 0, (int)installed.size() - 1);
+        ImGui::SetNextItemWidth(wide);
+        if (EchoUI::BeginCombo("##upload-pack", installed[state.upload_pack].c_str())) {
+            for (int at = 0; at < (int)installed.size(); ++at) {
+                if (EchoUI::Selectable(installed[at].c_str(), at == state.upload_pack)) state.upload_pack = at;
+            }
+            ImGui::EndCombo();
+        }
+        ImGui::SetNextItemWidth(wide);
+        EchoUI::InputTextWithHint("##upload-pack-name", "Name (defaults to the folder name)", &state.upload_title);
+        EchoUI::InputTextMultiline("##upload-pack-notes", &state.upload_notes, ImVec2(wide, 54.f * scale));
+        draw_upload_buttons(wide, [&] { db.upload_clickpack(installed[state.upload_pack], state.upload_title, state.upload_notes); });
+        return;
+    }
+    if (online_kind() == OnlineKind::Themes) {
+        EchoUI::SectionLabel("Upload current theme");
+        ImGui::SetNextItemWidth(wide);
+        EchoUI::InputTextWithHint("##upload-theme-name", "Name (defaults to the theme name)", &state.upload_title);
+        EchoUI::InputTextMultiline("##upload-theme-notes", &state.upload_notes, ImVec2(wide, 70.f * scale));
+        draw_upload_buttons(wide, [&] { db.upload_theme(state.upload_title, state.upload_notes); });
+        return;
+    }
+    EchoUI::SectionLabel("Upload current replay");
+    ImGui::SetNextItemWidth(wide);
+    EchoUI::InputTextWithHint("##upload-title", "Title (defaults to the level name)", &state.upload_title);
+    EchoUI::InputTextMultiline("##upload-notes", &state.upload_notes, ImVec2(wide, 70.f * scale));
+    EchoUI::Checkbox("This replay beats the level", &state.upload_claims);
+    draw_upload_buttons(wide, [&] {
+        std::string level_name;
+        int level_id = 0;
+        bool level_open = db.open_level(level_name, level_id);
+        if (level_open && !ReplayDb::names_match(Logic::get().macro_name, level_name)) state.confirm_level = true;
+        else db.upload(state.upload_title, state.upload_notes, state.upload_claims);
+    });
+    draw_level_check_modal();
+}
+
+static void draw_swatches(ImDrawList* draw, ImVec2 from, float size, const std::vector<std::array<float, 4>>& swatches) {
+    float gap = size * .25f;
+    for (size_t at = 0; at < swatches.size(); ++at) {
+        const auto& color = swatches[at];
+        ImVec2 corner(from.x + (float)at * (size + gap), from.y);
+        draw->AddRectFilled(corner, ImVec2(corner.x + size, corner.y + size), ImGui::GetColorU32(ImVec4(color[0], color[1], color[2], 1.f)), size * .25f);
+        draw->AddRect(corner, ImVec2(corner.x + size, corner.y + size), ImGui::GetColorU32(ImGuiCol_Border), size * .25f);
+    }
+}
+
+static void draw_online_row(int at, float line) {
+    auto& state = *g_browser;
+    auto& db = ReplayDb::get();
+    ImVec2 row = ImGui::GetCursorScreenPos();
+    ImGui::PushID(at);
+    if (EchoUI::Selectable("##online-row", state.chosen == at, 0, ImVec2(0.f, line * 2.f + 2.f))) state.chosen = at;
+    ImGui::PopID();
+    auto* draw = ImGui::GetWindowDrawList();
+    float text_x = row.x + ImGui::GetStyle().FramePadding.x;
+    std::string title, detail;
+    if (online_kind() == OnlineKind::Macros) {
+        const auto& replay = db.results[at];
+        title = replay.title;
+        detail = fmt::format("{} · {} · {:g} TPS", replay.level_name, replay.uploader, replay.tps);
+        auto tags = replay_tags(replay);
+        if (!tags.empty()) {
+            float tag_x = text_x + ImGui::CalcTextSize(title.c_str()).x;
+            ImVec4 tint = replay.verified ? ImVec4(.24f, .81f, .56f, 1.f) : ImVec4(.95f, .70f, .28f, 1.f);
+            draw->AddText(ImVec2(tag_x, row.y), ImGui::GetColorU32(tint), tags.c_str());
+        }
+    } else if (online_kind() == OnlineKind::Clickpacks) {
+        const auto& pack = db.clickpacks[at];
+        title = pack.name;
+        detail = pack.uploader;
+    } else {
+        const auto& theme = db.themes[at];
+        title = theme.name;
+        detail = theme.uploader;
+        float size = line * .8f;
+        float right = ImGui::GetWindowPos().x + ImGui::GetWindowContentRegionMax().x - ImGui::GetStyle().FramePadding.x;
+        float width = (float)theme.swatches.size() * size * 1.25f - size * .25f;
+        draw_swatches(draw, ImVec2(right - width, row.y + line * .6f), size, theme.swatches);
+    }
+    draw->AddText(ImVec2(text_x, row.y), ImGui::GetColorU32(ImGuiCol_Text), title.c_str());
+    draw->AddText(ImVec2(text_x, row.y + line + 2.f), ImGui::GetColorU32(ImGuiCol_TextDisabled), detail.c_str());
+}
+
+static void draw_online_list(float wide, float height) {
+    auto& state = *g_browser;
+    auto& db = ReplayDb::get();
+    float top = 0.f;
+    if (online_kind() == OnlineKind::Macros) {
+        if (EchoUI::Checkbox("Verified only", &state.verified_only)) state.online_stale = true;
+        top = ImGui::GetFrameHeightWithSpacing();
+    }
+    float more = db.total > shown_count() ? ImGui::GetTextLineHeightWithSpacing() : 0.f;
+    float list_height = height - top - more;
+    ImGui::BeginChild("##online-list", ImVec2(wide, list_height), ImGuiChildFlags_Borders);
+    float line = ImGui::GetTextLineHeight();
+    for (int at = 0; at < shown_count(); ++at) draw_online_row(at, line);
+    const char* const nothing[] = { "No online replays match", "No clickpacks match", "No themes match" };
+    if (db.searching() && shown_count() == 0) ImGui::TextDisabled("Searching...");
+    else if (db.searched && shown_count() == 0) ImGui::TextDisabled("%s", nothing[(int)online_kind()]);
+    ImGui::EndChild();
+    if (more > 0.f) ImGui::TextDisabled("%d more, type more to narrow it down", db.total - shown_count());
+}
+
+static void draw_chosen_replay(float wide) {
+    auto& state = *g_browser;
+    auto& db = ReplayDb::get();
+    float half = (wide - ImGui::GetStyle().ItemSpacing.x) * .5f;
+    bool picked = chosen_ok();
+    if (!picked) {
+        ImGui::TextDisabled("Pick a replay from the list");
+        ImGui::TextDisabled(" ");
+        ImGui::TextDisabled(" ");
+    } else {
+        const auto& replay = db.results[state.chosen];
+        ImGui::TextUnformatted(replay.title.c_str());
+        if (!replay.notes.empty() && ImGui::IsItemHovered()) ImGui::SetTooltip("%s", replay.notes.c_str());
+        ImGui::TextDisabled("%s · by %s", replay.level_name.c_str(), replay.uploader.c_str());
+        ImGui::TextDisabled("%g TPS · %d inputs · %d downloads", replay.tps, replay.inputs, replay.downloads);
+    }
+    ImGui::BeginDisabled(!picked || db.downloading());
+    if (EchoUI::Button("Play Replay", ImVec2(half, 0.f))) {
+        db.play(db.results[state.chosen]);
+        ImGui::CloseCurrentPopup();
+    }
+    ImGui::SameLine();
+    if (EchoUI::Button("Save to library", ImVec2(half, 0.f))) db.save(db.results[state.chosen]);
+    float third = (wide - ImGui::GetStyle().ItemSpacing.x * 2.f) / 3.f;
+    ImGui::BeginDisabled(!picked || !db.can_go_to_level(db.results[state.chosen]));
+    if (EchoUI::Button("Go to level", ImVec2(third, 0.f))) {
+        db.go_to_level(db.results[state.chosen]);
+        ImGui::CloseCurrentPopup();
+        GUI::get().begin_close();
+    }
+    ImGui::EndDisabled();
+    if (picked && (PlayLayer::get() || LevelEditorLayer::get()) && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Leave the level first");
+    ImGui::SameLine();
+    ImGui::BeginDisabled(!picked || db.results[state.chosen].level_id <= 0);
+    if (EchoUI::Button("Copy ID", ImVec2(third, 0.f))) db.copy_level_id(db.results[state.chosen]);
+    ImGui::EndDisabled();
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    if (EchoUI::Button("Website", ImVec2(third, 0.f))) {
+        if (picked) db.open_on_website(db.results[state.chosen]);
+        else db.open_website();
+    }
+}
+
+static void draw_chosen_clickpack(float wide) {
+    auto& state = *g_browser;
+    auto& db = ReplayDb::get();
+    float half = (wide - ImGui::GetStyle().ItemSpacing.x) * .5f;
+    bool picked = chosen_ok();
+    if (!picked) {
+        ImGui::TextDisabled("Pick a clickpack from the list");
+        ImGui::TextDisabled(" ");
+        ImGui::TextDisabled(" ");
+    } else {
+        const auto& pack = db.clickpacks[state.chosen];
+        ImGui::TextUnformatted(pack.name.c_str());
+        if (!pack.notes.empty() && ImGui::IsItemHovered()) ImGui::SetTooltip("%s", pack.notes.c_str());
+        ImGui::TextDisabled("by %s · %d downloads", pack.uploader.c_str(), pack.downloads);
+        ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + wide);
+        ImGui::TextDisabled("%s", pack.types.c_str());
+        ImGui::PopTextWrapPos();
+    }
+    ImGui::BeginDisabled(!picked);
+    if (EchoUI::Button("Sample clickpack", ImVec2(half, 0.f))) db.sample_clickpack(db.clickpacks[state.chosen]);
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    if (EchoUI::Button("Website##pack", ImVec2(half, 0.f))) db.open_page(picked ? "/c/" + db.clickpacks[state.chosen].id : std::string("/clickpacks"));
+    const float most_volume = 2.f;
+    float volume = db.sample_volume();
+    const char* const volume_label = "Sample volume##sample-volume";
+    ImGui::SetNextItemWidth(wide - ImGui::CalcTextSize(volume_label, nullptr, true).x - ImGui::GetStyle().ItemInnerSpacing.x);
+    if (EchoUI::Slider(volume_label, &volume, 0.f, most_volume, "%.2fx")) db.set_sample_volume(volume);
+    int player = GUI::get().clickpacks().player + 1;
+    ImGui::BeginDisabled(!picked || db.downloading());
+    if (EchoUI::Button("Install", ImVec2(half, 0.f))) db.install_clickpack(db.clickpacks[state.chosen], 0);
+    ImGui::SameLine();
+    if (EchoUI::Button("Install & use", ImVec2(half, 0.f))) db.install_clickpack(db.clickpacks[state.chosen], player);
+    ImGui::EndDisabled();
+}
+
+static void draw_chosen_theme(float wide) {
+    auto& state = *g_browser;
+    auto& db = ReplayDb::get();
+    float half = (wide - ImGui::GetStyle().ItemSpacing.x) * .5f;
+    bool picked = chosen_ok();
+    float line = ImGui::GetTextLineHeight();
+    if (!picked) {
+        ImGui::TextDisabled("Pick a theme from the list");
+        ImGui::TextDisabled(" ");
+        ImGui::Dummy(ImVec2(wide, line * 1.4f));
+    } else {
+        const auto& theme = db.themes[state.chosen];
+        ImGui::TextUnformatted(theme.name.c_str());
+        if (!theme.notes.empty() && ImGui::IsItemHovered()) ImGui::SetTooltip("%s", theme.notes.c_str());
+        ImGui::TextDisabled("by %s · %d downloads", theme.uploader.c_str(), theme.downloads);
+        float size = line * 1.4f;
+        draw_swatches(ImGui::GetWindowDrawList(), ImGui::GetCursorScreenPos(), size, theme.swatches);
+        ImGui::Dummy(ImVec2(wide, size));
+    }
+    ImGui::BeginDisabled(!picked || db.downloading());
+    if (EchoUI::Button("Apply theme", ImVec2(half, 0.f))) db.apply_theme(db.themes[state.chosen]);
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    if (EchoUI::Button("Website##theme", ImVec2(half, 0.f))) db.open_page(picked ? "/t/" + db.themes[state.chosen].id : std::string("/themes"));
+}
+
+static void draw_web_code_modal() {
+    const char* const title = "Website Sign-In";
+    const float code_scale = 1.8f, modal_width = 18.f;
+    auto& db = ReplayDb::get();
+    if (std::exchange(db.web_code_ready, false)) ImGui::OpenPopup(title);
+    if (!EchoUI::BeginModal(title, modal_width)) return;
+    float wide = ImGui::GetContentRegionAvail().x;
+    ImGui::TextDisabled("Your code is copied to the clipboard");
+    ImGui::SetWindowFontScale(code_scale);
+    float code_width = ImGui::CalcTextSize(db.web_code.c_str()).x;
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + std::max(0.f, (wide - code_width) * .5f));
+    ImGui::TextUnformatted(db.web_code.c_str());
+    ImGui::SetWindowFontScale(1.f);
+    ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + wide);
+    ImGui::TextDisabled("Paste it on the website's sign-in page within 5 minutes.");
+    ImGui::PopTextWrapPos();
+    float half = (wide - ImGui::GetStyle().ItemSpacing.x) * .5f;
+    if (EchoUI::Button("Open sign-in page", ImVec2(half, 0.f))) db.open_sign_in_page();
+    ImGui::SameLine();
+    if (EchoUI::Button("Done", ImVec2(half, 0.f))) ImGui::CloseCurrentPopup();
+    EchoUI::EndModal();
+}
+
+static void draw_online_account(float wide) {
+    const char* const upload_labels[] = { "Upload current replay", "Upload a clickpack", "Upload current theme" };
+    auto& state = *g_browser;
+    auto& db = ReplayDb::get();
+    float half = (wide - ImGui::GetStyle().ItemSpacing.x) * .5f;
+    EchoUI::Separator();
+    if (!db.signed_in()) {
+        ImGui::BeginDisabled(db.signing_in());
+        if (EchoUI::Button(db.signing_in() ? "Checking your GD account..." : "Sign in with GD account", ImVec2(wide, 0.f))) db.sign_in();
+        ImGui::EndDisabled();
+    } else {
+        ImGui::TextDisabled("Signed in as %s", db.username().c_str());
+        if (EchoUI::Button(upload_labels[(int)online_kind()], ImVec2(wide, 0.f))) {
+            state.upload_open = true;
+            state.upload_title.clear();
+            state.upload_notes.clear();
+            if (online_kind() == OnlineKind::Macros) state.upload_title = Logic::get().macro_name;
+            if (online_kind() == OnlineKind::Themes) state.upload_title = Logic::get().theme_name;
+        }
+        if (EchoUI::Button("Website sign-in", ImVec2(half, 0.f))) db.request_web_code();
+        ImGui::SameLine();
+        if (EchoUI::Button("Sign out", ImVec2(half, 0.f))) {
+            db.sign_out();
+            state.upload_open = false;
+        }
+    }
+    draw_online_status(wide);
+    draw_web_code_modal();
+}
+
+void GUI::draw_source_tabs(OnlineBrowser& browser, float wide) {
+    float half = (wide - ImGui::GetStyle().ItemSpacing.x) * .5f;
+    float label_wide = half - EchoUI::nav_icon_width();
+    if (EchoUI::NavItem("Local", EchoUI::Icon::Macro, !browser.online, label_wide)) browser.online = false;
+    ImGui::SameLine();
+    if (EchoUI::NavItem("Online", EchoUI::Icon::Sequence, browser.online, label_wide)) {
+        if (!browser.online) browser.online_stale = true;
+        browser.online = true;
+    }
+}
+
+void GUI::note_filter_edit(OnlineBrowser& browser) {
+    browser.filter_changed_at = ImGui::GetTime();
+    browser.online_stale = true;
+}
+
+void GUI::draw_online_picker(OnlineBrowser& browser, int kind, std::string& filter, float wide, float height) {
+    const double search_delay = 0.35;
+    const float list_share = .46f;
+    if (g_browser != &browser || g_kind != (OnlineKind)kind) {
+        browser.online_stale = true;
+        browser.chosen = -1;
+    }
+    g_browser = &browser;
+    g_kind = (OnlineKind)kind;
+    auto& state = browser;
+    auto& db = ReplayDb::get();
+    if (std::exchange(db.uploaded, false)) {
+        state.upload_open = false;
+        state.online_stale = true;
+        filter.clear();
+    }
+    if (state.online_stale && !db.searching() && ImGui::GetTime() - state.filter_changed_at > search_delay) {
+        state.online_stale = false;
+        state.chosen = -1;
+        db.search(online_kind(), filter, state.verified_only);
+    }
+    float gap = ImGui::GetStyle().ItemSpacing.x * 2.f;
+    float left = (wide - gap) * list_share, right = wide - gap - left;
+    ImGui::BeginGroup();
+    draw_online_list(left, height);
+    ImGui::EndGroup();
+    ImGui::SameLine(0.f, gap);
+    ImGui::BeginChild("##online-side", ImVec2(right, height));
+    if (state.upload_open && db.signed_in()) draw_upload_page(right, ImGui::GetFontSize() / 18.f);
+    else {
+        if (online_kind() == OnlineKind::Clickpacks) draw_chosen_clickpack(right);
+        else if (online_kind() == OnlineKind::Themes) draw_chosen_theme(right);
+        else draw_chosen_replay(right);
+        draw_online_account(right);
+    }
+    ImGui::EndChild();
 }
 
 ThemePicker& GUI::themes() {
@@ -1165,16 +1580,24 @@ void GUI::draw_theme_picker() {
     static int drawn_frame = -1;
     if (drawn_frame == ImGui::GetFrameCount()) return;
     if (state.want_open) ImGui::OpenPopup("Echo Themes###echo-theme-picker");
-    float picker_scale = ImGui::GetFontSize() / 18.f, picker_wide = 400.f * picker_scale;
+    const float online_wide = 660.f;
+    float picker_scale = ImGui::GetFontSize() / 18.f, picker_wide = (state.browser.online ? online_wide : 400.f) * picker_scale;
     if (!ImGui::BeginPopup("Echo Themes###echo-theme-picker", ImGuiWindowFlags_AlwaysAutoResize))
         return;
     drawn_frame = ImGui::GetFrameCount();
     state.want_open = false;
     if (EchoUI::TitleBar("Load a Theme", EchoUI::Icon::Theme, true, picker_wide))
         ImGui::CloseCurrentPopup();
+    GUI::get().draw_source_tabs(state.browser, picker_wide);
     ImGui::SetNextItemWidth(picker_wide);
     focus_search_on_open();
-    EchoUI::InputTextWithHint("##theme-filter", "Type to filter themes", &state.filter);
+    if (EchoUI::InputTextWithHint("##theme-filter", state.browser.online ? "Search themes or uploaders" : "Type to filter themes", &state.filter))
+        GUI::get().note_filter_edit(state.browser);
+    if (state.browser.online) {
+        GUI::get().draw_online_picker(state.browser, (int)OnlineKind::Themes, state.filter, picker_wide, 240.f * picker_scale + ImGui::GetFrameHeight() + ImGui::GetStyle().ItemSpacing.y);
+        ImGui::EndPopup();
+        return;
+    }
     ImGui::BeginChild("##theme-list", ImVec2(picker_wide, 240.f * picker_scale), ImGuiChildFlags_Borders);
     std::string needle = GUI::get().lower_copy(state.filter);
     int shown = 0;
@@ -1198,65 +1621,6 @@ void GUI::draw_theme_picker() {
 
 ClickpackPicker& GUI::clickpacks() {
     return GUI::get().clickpack_picker;
-}
-
-void GUI::refresh_clickpacks() {
-    auto& state = GUI::get().clickpacks();
-    state.folders.clear();
-    auto dir = Logic::get().save_root() / "clickpacks";
-    std::error_code error;
-    if (!fs::exists(dir, error)) return;
-    for (const auto& entry : fs::directory_iterator(dir, error)) {
-        if (error || !entry.is_directory()) continue;
-        state.folders.push_back(entry.path());
-    }
-    std::sort(state.folders.begin(), state.folders.end(), [](const fs::path& a, const fs::path& b) {
-        return GUI::get().lower_copy(geode::utils::string::pathToString(a.filename())) < GUI::get().lower_copy(geode::utils::string::pathToString(b.filename()));
-    });
-}
-
-void GUI::open_clickpack_picker() {
-    GUI::get().reveal_menu();
-    auto& state = GUI::get().clickpacks();
-    state.filter.clear();
-    state.want_open = true;
-    GUI::get().refresh_clickpacks();
-}
-
-void GUI::draw_clickpack_picker() {
-    auto& state = GUI::get().clickpacks();
-    static int drawn_frame = -1;
-    if (drawn_frame == ImGui::GetFrameCount()) return;
-    if (state.want_open) ImGui::OpenPopup("Echo Clickpacks###echo-clickpack-picker");
-    float picker_scale = ImGui::GetFontSize() / 18.f, picker_wide = 400.f * picker_scale;
-    if (!ImGui::BeginPopup("Echo Clickpacks###echo-clickpack-picker", ImGuiWindowFlags_AlwaysAutoResize))
-        return;
-    drawn_frame = ImGui::GetFrameCount();
-    state.want_open = false;
-    if (EchoUI::TitleBar(state.player == 0 ? "Click Pack for Player 1" : "Click Pack for Player 2", EchoUI::Icon::Clickbot, true, picker_wide))
-        ImGui::CloseCurrentPopup();
-    ImGui::SetNextItemWidth(picker_wide);
-    focus_search_on_open();
-    EchoUI::InputTextWithHint("##clickpack-filter", "Type to filter clickpacks", &state.filter);
-    ImGui::BeginChild("##clickpack-list", ImVec2(picker_wide, 240.f * picker_scale), ImGuiChildFlags_Borders);
-    std::string needle = GUI::get().lower_copy(state.filter);
-    int shown = 0;
-    for (const auto& path : state.folders) {
-        std::string name = geode::utils::string::pathToString(path.filename());
-        if (!needle.empty() && GUI::get().lower_copy(name).find(needle) == std::string::npos)
-            continue;
-        ++shown;
-        if (EchoUI::Selectable(name.c_str(), false)) {
-            auto& pack = state.player == 0 ? Logic::get().clickpack : Logic::get().clickpack_p2;
-            pack = geode::utils::string::pathToString(path);
-            Logic::get().push_runtime_settings();
-            ImGui::CloseCurrentPopup();
-        }
-    }
-    if (shown == 0) ImGui::TextDisabled("No clickpacks match");
-    ImGui::EndChild();
-    if (EchoUI::Button("Refresh", ImVec2(picker_wide, 0.f))) GUI::get().refresh_clickpacks();
-    ImGui::EndPopup();
 }
 
 RenderPicker& GUI::renders() {
