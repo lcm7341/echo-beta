@@ -1,5 +1,6 @@
 #include "Logic/logic.hpp"
 #include "Logic/conversions/codecs.hpp"
+#include "Hack/predicted_world.hpp"
 #include <algorithm>
 #include <array>
 #include <bit>
@@ -860,6 +861,15 @@ static Decompressor open_range(const std::vector<unsigned char>& bytes) {
     return reader;
 }
 
+static bool fits_in_memory(unsigned long long count, bool history, bool samples) {
+    unsigned long long total = 0, available = 0;
+    if (!system_memory(total, available)) return true;
+    unsigned long long per_input = sizeof(Frame);
+    if (history) per_input += sizeof(unsigned long long);
+    if (samples) per_input += sizeof(FramePose);
+    return count * per_input <= available;
+}
+
 static bool take(const std::vector<unsigned char>& bytes, size_t& cursor, void* out, size_t size) {
     if (cursor + size > bytes.size()) return false;
     std::memcpy(out, bytes.data() + cursor, size);
@@ -925,7 +935,7 @@ static bool load_version2(std::istream& file, unsigned char flags, EchoFile& out
         return false;
     unsigned long long amt = 0;
     if (!read_varint(file, out.attempts) || !read_varint(file, amt)) return false;
-    if (amt > ReplayIO::max_inputs) return false;
+    if (amt > ReplayIO::max_inputs || !fits_in_memory(amt, false, flags & FLAG_SAMPLES)) return false;
     auto bytes = read_rest(file);
     Decompressor reader = open_range(bytes);
     out.inputs.reserve((size_t)(std::min<unsigned long long>(amt, RESERVE_LIMIT)));
@@ -943,6 +953,7 @@ static bool load_version3(std::istream& file, unsigned char flags, int version, 
     out.attempts = code_count(reader, 0);
     unsigned long long amt = code_count(reader, 0);
     if (reader.failed || amt > ReplayIO::max_inputs || out.attempts > INT_MAX) return false;
+    if (!fits_in_memory(amt, true, flags & FLAG_SAMPLES)) return false;
     out.inputs.reserve((size_t)(std::min<unsigned long long>(amt, RESERVE_LIMIT)));
     code_clicks(reader, *guesses, out.inputs, (size_t)amt);
     if (!reader.failed && (flags & FLAG_SAMPLES))

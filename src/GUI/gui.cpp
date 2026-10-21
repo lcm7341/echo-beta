@@ -506,7 +506,6 @@ void GUI::draw_window() {
         GUI::get().show_keybind_prompt();
         GUI::get().draw_macro_picker();
         GUI::get().draw_theme_picker();
-        GUI::get().draw_clickpack_picker();
         GUI::get().draw_render_picker();
         draw_moving_objects_prompt();
         return;
@@ -608,7 +607,6 @@ void GUI::draw_window() {
         GUI::get().show_keybind_prompt();
         GUI::get().draw_macro_picker();
         GUI::get().draw_theme_picker();
-        GUI::get().draw_clickpack_picker();
         GUI::get().draw_render_picker();
         draw_moving_objects_prompt();
         ImGui::End();

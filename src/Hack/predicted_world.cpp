@@ -602,7 +602,7 @@ void PredictedWorld::drop_records() {
 	step_records.clear();
 }
 
-static bool system_memory(unsigned long long& total, unsigned long long& available) {
+bool system_memory(unsigned long long& total, unsigned long long& available) {
 	const unsigned long long bytes_per_kilobyte = 1024;
 #ifdef GEODE_IS_WINDOWS
 	MEMORYSTATUSEX status{};

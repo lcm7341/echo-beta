@@ -4,6 +4,7 @@
 #include "GUI/logo_texture.hpp"
 #include "Hack/label_types.hpp"
 #include "Logic/conversions/codecs.hpp"
+#include "Online/replay_db.hpp"
 
 #include <imgui-cocos.hpp>
 #include <imgui.h>
@@ -1113,7 +1114,7 @@ void GUI::clickbot() {
         }
         std::string cur = geode::utils::string::pathToString(ReplayIO::utf8_path(pack).filename());
         if (cur.empty()) cur = pack;
-        EchoUI::RowWith("Click pack", 5.f);
+        EchoUI::Row("Click pack");
         if (EchoUI::BeginCombo(player == 0 ? "##clickpack-p1" : "##clickpack-p2", cur.empty() ? "None" : cur.c_str())) {
             for (const auto& folder : folders) {
                 if (EchoUI::Selectable(folder.c_str(), folder == cur)) {
@@ -1122,11 +1123,6 @@ void GUI::clickbot() {
                 }
             }
             ImGui::EndCombo();
-        }
-        float browse_w = EchoUI::RowRight(5.f);
-        if (EchoUI::Button("Browse", ImVec2(browse_w, 0.f))) {
-            GUI::get().clickpacks().player = player;
-            GUI::get().open_clickpack_picker();
         }
     }
     EchoUI::EndCard();
@@ -1137,6 +1133,49 @@ void GUI::clickbot() {
         else
             draw_click_types(logic.p2_softs, logic.p2_soft_ms, logic.p2_hards, logic.p2_hard_seconds, logic.p2_micros, logic.p2_micro_ms);
         ImGui::PopID();
+    }
+    EchoUI::EndCard();
+    EchoUI::EndCardRow();
+    EchoUI::BeginCardRow("clickbot-1");
+    float packs_width = card_width() * 2.f + ImGui::GetStyle().ItemSpacing.x / ImGui::GetFontSize();
+    if (EchoUI::BeginCard("Click Packs", packs_width)) {
+        auto& picker = GUI::get().clickpacks();
+        picker.player = player;
+        auto& pack = player == 0 ? logic.clickpack : logic.clickpack_p2;
+        float wide = ImGui::GetContentRegionAvail().x;
+        float list_height = EchoUI::em(15.f);
+        GUI::get().draw_source_tabs(picker.browser, wide);
+        ImGui::SetNextItemWidth(wide);
+        if (EchoUI::InputTextWithHint("##clickpack-filter", picker.browser.online ? "Search clickpacks or uploaders" : "Type to filter clickpacks", &picker.filter))
+            GUI::get().note_filter_edit(picker.browser);
+        if (picker.browser.online) {
+            GUI::get().draw_online_picker(picker.browser, (int)OnlineKind::Clickpacks, picker.filter, wide, list_height);
+        } else {
+            auto folders_root = Logic::get().save_root() / "clickpacks";
+            std::string cur = geode::utils::string::pathToString(ReplayIO::utf8_path(pack).filename());
+            std::string needle = GUI::get().lower_copy(picker.filter);
+            std::vector<std::string> folders;
+            std::error_code folder_error;
+            for (const auto& entry : fs::directory_iterator(folders_root, folder_error)) {
+                if (!entry.is_directory(folder_error)) continue;
+                folders.push_back(geode::utils::string::pathToString(entry.path().filename()));
+            }
+            std::sort(folders.begin(), folders.end(), [](const std::string& a, const std::string& b) {
+                return GUI::get().lower_copy(a) < GUI::get().lower_copy(b);
+            });
+            ImGui::BeginChild("##clickpack-list", ImVec2(wide, list_height), ImGuiChildFlags_Borders);
+            int shown = 0;
+            for (const auto& folder : folders) {
+                if (!needle.empty() && GUI::get().lower_copy(folder).find(needle) == std::string::npos) continue;
+                ++shown;
+                if (EchoUI::Selectable(folder.c_str(), folder == cur)) {
+                    pack = geode::utils::string::pathToString(folders_root / ReplayIO::utf8_path(folder));
+                    GUI::get().persist();
+                }
+            }
+            if (shown == 0) ImGui::TextDisabled(folders.empty() ? "No clickpacks installed" : "No clickpacks match");
+            ImGui::EndChild();
+        }
     }
     EchoUI::EndCard();
     EchoUI::EndCardRow();

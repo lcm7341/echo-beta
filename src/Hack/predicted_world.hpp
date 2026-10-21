@@ -266,3 +266,5 @@ private:
 	void rebuild_slots(PlayLayer* play);
 	void drop_shadow();
 };
+
+bool system_memory(unsigned long long& total, unsigned long long& available);
