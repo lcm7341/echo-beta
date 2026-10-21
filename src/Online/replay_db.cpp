@@ -22,6 +22,8 @@ namespace web = geode::utils::web;
 #define SERVER "https://echogd.com"
 #define SESSION_KEY "replay_db_session"
 #define USERNAME_KEY "replay_db_username"
+#define ROLE_KEY "replay_db_role"
+#define SAMPLE_VOLUME_KEY "replay_db_sample_volume"
 #define REQUEST_SECONDS 30
 #define TRANSFER_SECONDS 300
 #define PAGE_SIZE 50
@@ -37,6 +39,11 @@ bool ReplayDb::signed_in() {
 
 std::string ReplayDb::username() {
     return Mod::get()->getSavedValue<std::string>(USERNAME_KEY, "");
+}
+
+bool ReplayDb::moderator() {
+    auto role = Mod::get()->getSavedValue<std::string>(ROLE_KEY, "");
+    return signed_in() && (role == "mod" || role == "admin");
 }
 
 void ReplayDb::fail(const std::string& text) {
@@ -78,6 +85,14 @@ bool ReplayDb::session_ok(const web::WebResponse& response) {
     return false;
 }
 
+void ReplayDb::check_role() {
+    role_checked = true;
+    role_task.spawn(request(true).get(SERVER "/api/me"), [this](web::WebResponse response) {
+        if (!session_ok(response) || !response.ok()) return;
+        Mod::get()->setSavedValue<std::string>(ROLE_KEY, read_text(response.json().unwrapOrDefault()["user"]["role"]));
+    });
+}
+
 void ReplayDb::sign_in() {
     if (!argon::signedIn()) {
         fail("Log into your GD account first (Settings > Account)");
@@ -110,6 +125,8 @@ void ReplayDb::sign_in() {
             auto name = read_text(json["user"]["username"]);
             Mod::get()->setSavedValue<std::string>(SESSION_KEY, read_text(json["session"]));
             Mod::get()->setSavedValue<std::string>(USERNAME_KEY, name);
+            Mod::get()->setSavedValue<std::string>(ROLE_KEY, read_text(json["user"]["role"]));
+            role_checked = true;
             succeed(fmt::format("Signed in as {}", name));
         });
     });
@@ -121,6 +138,7 @@ void ReplayDb::sign_out() {
     signing = false;
     Mod::get()->setSavedValue<std::string>(SESSION_KEY, "");
     Mod::get()->setSavedValue<std::string>(USERNAME_KEY, "");
+    Mod::get()->setSavedValue<std::string>(ROLE_KEY, "");
     web_code.clear();
 }
 
@@ -188,6 +206,7 @@ static OnlineTheme read_theme(const matjson::Value& json) {
 void ReplayDb::search(OnlineKind kind, const std::string& query, bool verified_only) {
     const char* const paths[] = { "/api/replays", "/api/clickpacks", "/api/themes" };
     looking = true;
+    if (!role_checked && signed_in()) check_role();
     auto request = this->request(false);
     request.param("q", query);
     request.param("per_page", PAGE_SIZE);
@@ -421,6 +440,7 @@ void ReplayDb::send_file(const std::string& path, const char* meta_header, const
             fail(server_error(response));
             return;
         }
+        uploaded = true;
         auto json = response.json().unwrapOrDefault();
         if (json.contains("replay")) succeed(fmt::format("Uploaded {} (ID {})", read_text(json["replay"]["title"]), read_text(json["replay"]["id"])));
         for (const char* key : { "clickpack", "theme" }) {
@@ -430,34 +450,73 @@ void ReplayDb::send_file(const std::string& path, const char* meta_header, const
     });
 }
 
-static FMOD::Sound* g_preview_sound = nullptr;
+static std::vector<FMOD::Sound*> g_sample_sounds;
 
-static void play_from_memory(const ByteVector& bytes) {
-    auto* system = FMODAudioEngine::get()->m_system;
-    if (g_preview_sound) g_preview_sound->release();
-    g_preview_sound = nullptr;
-    FMOD_CREATESOUNDEXINFO info{};
-    info.cbsize = sizeof(info);
-    info.length = (unsigned)bytes.size();
-    FMOD_MODE mode = FMOD_OPENMEMORY | FMOD_LOOP_OFF | FMOD_2D;
-    if (system->createSound(reinterpret_cast<const char*>(bytes.data()), mode, &info, &g_preview_sound) != FMOD_OK) {
-        g_preview_sound = nullptr;
-        return;
+static std::vector<FMOD::Sound*> sounds_from_memory(const std::vector<ByteVector>& files) {
+    std::vector<FMOD::Sound*> sounds;
+    for (const auto& bytes : files) {
+        FMOD_CREATESOUNDEXINFO info{};
+        info.cbsize = sizeof(info);
+        info.length = (unsigned)bytes.size();
+        FMOD_MODE mode = FMOD_OPENMEMORY | FMOD_LOOP_OFF | FMOD_2D;
+        FMOD::Sound* sound = nullptr;
+        if (FMODAudioEngine::get()->m_system->createSound(reinterpret_cast<const char*>(bytes.data()), mode, &info, &sound) != FMOD_OK) continue;
+        sounds.push_back(sound);
+        g_sample_sounds.push_back(sound);
     }
-    FMOD::ChannelGroup* group = nullptr;
-    system->getMasterChannelGroup(&group);
-    system->playSound(g_preview_sound, group, false, nullptr);
+    return sounds;
 }
 
-void ReplayDb::preview_sound(const OnlineClickpack& pack, const char* type) {
-    auto url = fmt::format("{}/api/clickpacks/{}/preview/{}", SERVER, pack.id, type);
-    preview_task.spawn(request(false).get(url), [this](web::WebResponse response) {
-        if (!response.ok()) {
-            fail(server_error(response));
-            return;
-        }
-        play_from_memory(response.data());
-    });
+static void play_rhythm(const std::vector<ByteVector>& click_files, const std::vector<ByteVector>& release_files, float volume) {
+    const float presses[] = { 0.f, .22f, .44f, .58f, .72f, 1.f, 1.12f, 1.24f, 1.36f, 1.7f };
+    const float hold = .09f, lead = .05f;
+    for (auto* sound : g_sample_sounds) sound->release();
+    g_sample_sounds.clear();
+    auto clicks = sounds_from_memory(click_files);
+    auto releases = sounds_from_memory(release_files);
+    if (clicks.empty()) return;
+    auto* system = FMODAudioEngine::get()->m_system;
+    FMOD::ChannelGroup* group = nullptr;
+    system->getMasterChannelGroup(&group);
+    unsigned long long clock = 0;
+    group->getDSPClock(&clock, nullptr);
+    int rate = 0;
+    system->getSoftwareFormat(&rate, nullptr, nullptr);
+    auto play_at = [&](FMOD::Sound* sound, float seconds) {
+        FMOD::Channel* channel = nullptr;
+        if (system->playSound(sound, group, true, &channel) != FMOD_OK) return;
+        channel->setVolume(volume);
+        channel->setDelay(clock + (unsigned long long)(seconds * (float)rate), 0, false);
+        channel->setPaused(false);
+    };
+    for (size_t at = 0; at < std::size(presses); ++at) {
+        play_at(clicks[at % clicks.size()], presses[at] + lead);
+        if (!releases.empty()) play_at(releases[at % releases.size()], presses[at] + hold + lead);
+    }
+}
+
+float ReplayDb::sample_volume() {
+    return (float)Mod::get()->getSavedValue<double>(SAMPLE_VOLUME_KEY, 1.0);
+}
+
+void ReplayDb::set_sample_volume(float volume) {
+    Mod::get()->setSavedValue<double>(SAMPLE_VOLUME_KEY, volume);
+}
+
+void ReplayDb::sample_clickpack(const OnlineClickpack& pack) {
+    const int each_type = (int)sample_tasks.size() / 2;
+    sample_clicks.clear();
+    sample_releases.clear();
+    sample_waiting = pack.has_releases ? each_type * 2 : each_type;
+    for (int at = 0; at < sample_waiting; ++at) {
+        bool release = at >= each_type;
+        auto url = fmt::format("{}/api/clickpacks/{}/preview/{}", SERVER, pack.id, release ? "releases" : "clicks");
+        sample_tasks[at].spawn(request(false).get(url), [this, release](web::WebResponse response) {
+            if (response.ok()) (release ? sample_releases : sample_clicks).push_back(std::move(response).data());
+            else fail(server_error(response));
+            if (--sample_waiting == 0) play_rhythm(sample_clicks, sample_releases, sample_volume());
+        });
+    }
 }
 
 std::vector<std::string> ReplayDb::installed_clickpacks() {
@@ -550,16 +609,47 @@ void ReplayDb::install_clickpack(const OnlineClickpack& pack, int use_for_player
     });
 }
 
+static std::string zip_clickpack(const fs::path& root, const std::string& folder, const fs::path& zip_path) {
+    const std::string audio_types[] = { ".wav", ".ogg", ".mp3", ".flac" };
+    auto zip = geode::utils::file::Zip::create(zip_path);
+    if (!zip) return zip.unwrapErr();
+    std::error_code error;
+    int added = 0;
+    for (const auto& entry : fs::recursive_directory_iterator(root, error)) {
+        if (!entry.is_regular_file(error)) continue;
+        auto type = GUI::get().lower_copy(geode::utils::string::pathToString(entry.path().extension()));
+        if (std::find(std::begin(audio_types), std::end(audio_types), type) == std::end(audio_types)) continue;
+        auto name = folder + "/" + geode::utils::string::pathToString(fs::relative(entry.path(), root, error));
+        std::replace(name.begin(), name.end(), '\\', '/');
+        auto bytes = ReplayIO::read_all(entry.path());
+        auto result = zip.unwrap().add(ReplayIO::utf8_path(name), ByteSpan(bytes.data(), bytes.size()));
+        if (!result) return result.unwrapErr();
+        ++added;
+    }
+    if (added == 0) return "it has no .wav, .ogg, .mp3 or .flac files";
+    return "";
+}
+
 void ReplayDb::upload_clickpack(const std::string& folder, const std::string& name, const std::string& notes) {
-    auto path = Logic::get().save_root() / "clickpacks" / ReplayIO::utf8_path(folder);
-    auto zip = geode::utils::file::Zip::create();
-    if (!zip || !zip.unwrap().addAllFrom(path)) {
-        fail("Could not pack that clickpack");
+    auto& logic = Logic::get();
+    auto zip_path = logic.save_root() / "online-temp" / "upload.zip";
+    std::error_code error;
+    fs::create_directories(zip_path.parent_path(), error);
+    std::string problem;
+    try {
+        problem = zip_clickpack(logic.save_root() / "clickpacks" / ReplayIO::utf8_path(folder), folder, zip_path);
+    }
+    catch (const std::exception& exception) {
+        problem = exception.what();
+    }
+    auto bytes = ReplayIO::read_all(zip_path);
+    fs::remove(zip_path, error);
+    if (!problem.empty()) {
+        fail(fmt::format("Could not pack that clickpack: {}", problem));
         return;
     }
-    auto data = zip.unwrap().getData();
     auto meta = matjson::makeObject({ { "name", name.empty() ? folder : name }, { "notes", notes } });
-    send_file("/api/clickpacks", "X-Clickpack-Meta", meta.dump(matjson::NO_INDENTATION), std::vector<unsigned char>(data.begin(), data.end()));
+    send_file("/api/clickpacks", "X-Clickpack-Meta", meta.dump(matjson::NO_INDENTATION), std::move(bytes));
 }
 
 void ReplayDb::apply_theme(const OnlineTheme& theme) {

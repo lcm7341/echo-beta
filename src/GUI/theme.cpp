@@ -1145,7 +1145,7 @@ void GUI::draw_macro_picker() {
 static std::string replay_tags(const OnlineReplay& replay) {
     std::string tags;
     if (replay.verified) tags += " Verified";
-    else if (replay.claims_completion) tags += " Claims 100%";
+    else if (replay.claims_completion && ReplayDb::get().moderator()) tags += " Verify Replay";
     if (replay.physics == "2.1") tags += " 2.1";
     return tags;
 }
@@ -1298,7 +1298,7 @@ static void draw_online_row(int at, float line) {
     } else if (online_kind() == OnlineKind::Clickpacks) {
         const auto& pack = db.clickpacks[at];
         title = pack.name;
-        detail = fmt::format("{} · {}", pack.types, pack.uploader);
+        detail = pack.uploader;
     } else {
         const auto& theme = db.themes[at];
         title = theme.name;
@@ -1379,7 +1379,7 @@ static void draw_chosen_replay(float wide) {
 static void draw_chosen_clickpack(float wide) {
     auto& state = *g_browser;
     auto& db = ReplayDb::get();
-    float third = (wide - ImGui::GetStyle().ItemSpacing.x * 2.f) / 3.f;
+    float half = (wide - ImGui::GetStyle().ItemSpacing.x) * .5f;
     bool picked = chosen_ok();
     if (!picked) {
         ImGui::TextDisabled("Pick a clickpack from the list");
@@ -1390,18 +1390,20 @@ static void draw_chosen_clickpack(float wide) {
         ImGui::TextUnformatted(pack.name.c_str());
         if (!pack.notes.empty() && ImGui::IsItemHovered()) ImGui::SetTooltip("%s", pack.notes.c_str());
         ImGui::TextDisabled("by %s · %d downloads", pack.uploader.c_str(), pack.downloads);
+        ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + wide);
         ImGui::TextDisabled("%s", pack.types.c_str());
+        ImGui::PopTextWrapPos();
     }
     ImGui::BeginDisabled(!picked);
-    if (EchoUI::Button("Hear click", ImVec2(third, 0.f))) db.preview_sound(db.clickpacks[state.chosen], "clicks");
-    ImGui::SameLine();
-    ImGui::BeginDisabled(!picked || !db.clickpacks[state.chosen].has_releases);
-    if (EchoUI::Button("Hear release", ImVec2(third, 0.f))) db.preview_sound(db.clickpacks[state.chosen], "releases");
-    ImGui::EndDisabled();
+    if (EchoUI::Button("Sample clickpack", ImVec2(half, 0.f))) db.sample_clickpack(db.clickpacks[state.chosen]);
     ImGui::EndDisabled();
     ImGui::SameLine();
-    if (EchoUI::Button("Website##pack", ImVec2(third, 0.f))) db.open_page(picked ? "/c/" + db.clickpacks[state.chosen].id : std::string("/clickpacks"));
-    float half = (wide - ImGui::GetStyle().ItemSpacing.x) * .5f;
+    if (EchoUI::Button("Website##pack", ImVec2(half, 0.f))) db.open_page(picked ? "/c/" + db.clickpacks[state.chosen].id : std::string("/clickpacks"));
+    const float most_volume = 2.f;
+    float volume = db.sample_volume();
+    const char* const volume_label = "Sample volume##sample-volume";
+    ImGui::SetNextItemWidth(wide - ImGui::CalcTextSize(volume_label, nullptr, true).x - ImGui::GetStyle().ItemInnerSpacing.x);
+    if (EchoUI::Slider(volume_label, &volume, 0.f, most_volume, "%.2fx")) db.set_sample_volume(volume);
     int player = GUI::get().clickpacks().player + 1;
     ImGui::BeginDisabled(!picked || db.downloading());
     if (EchoUI::Button("Install", ImVec2(half, 0.f))) db.install_clickpack(db.clickpacks[state.chosen], 0);
@@ -1505,7 +1507,7 @@ void GUI::note_filter_edit(OnlineBrowser& browser) {
     browser.online_stale = true;
 }
 
-void GUI::draw_online_picker(OnlineBrowser& browser, int kind, const std::string& filter, float wide, float height) {
+void GUI::draw_online_picker(OnlineBrowser& browser, int kind, std::string& filter, float wide, float height) {
     const double search_delay = 0.35;
     const float list_share = .46f;
     if (g_browser != &browser || g_kind != (OnlineKind)kind) {
@@ -1516,6 +1518,11 @@ void GUI::draw_online_picker(OnlineBrowser& browser, int kind, const std::string
     g_kind = (OnlineKind)kind;
     auto& state = browser;
     auto& db = ReplayDb::get();
+    if (std::exchange(db.uploaded, false)) {
+        state.upload_open = false;
+        state.online_stale = true;
+        filter.clear();
+    }
     if (state.online_stale && !db.searching() && ImGui::GetTime() - state.filter_changed_at > search_delay) {
         state.online_stale = false;
         state.chosen = -1;
@@ -1527,7 +1534,7 @@ void GUI::draw_online_picker(OnlineBrowser& browser, int kind, const std::string
     draw_online_list(left, height);
     ImGui::EndGroup();
     ImGui::SameLine(0.f, gap);
-    ImGui::BeginGroup();
+    ImGui::BeginChild("##online-side", ImVec2(right, height));
     if (state.upload_open && db.signed_in()) draw_upload_page(right, ImGui::GetFontSize() / 18.f);
     else {
         if (online_kind() == OnlineKind::Clickpacks) draw_chosen_clickpack(right);
@@ -1535,7 +1542,7 @@ void GUI::draw_online_picker(OnlineBrowser& browser, int kind, const std::string
         else draw_chosen_replay(right);
         draw_online_account(right);
     }
-    ImGui::EndGroup();
+    ImGui::EndChild();
 }
 
 ThemePicker& GUI::themes() {

@@ -52,6 +52,7 @@ public:
 
 	bool signed_in();
 	std::string username();
+	bool moderator();
 	bool signing_in() const { return signing; }
 	void sign_in();
 	void sign_out();
@@ -68,7 +69,9 @@ public:
 	void request_web_code();
 	void open_on_website(const OnlineReplay& replay);
 	void open_page(const std::string& path);
-	void preview_sound(const OnlineClickpack& pack, const char* type);
+	void sample_clickpack(const OnlineClickpack& pack);
+	float sample_volume();
+	void set_sample_volume(float volume);
 	void install_clickpack(const OnlineClickpack& pack, int use_for_player);
 	void upload_clickpack(const std::string& folder, const std::string& name, const std::string& notes);
 	std::vector<std::string> installed_clickpacks();
@@ -89,6 +92,7 @@ public:
 	bool status_bad = false;
 	std::string web_code;
 	bool web_code_ready = false;
+	bool uploaded = false;
 
 private:
 	void fail(const std::string& text);
@@ -96,10 +100,16 @@ private:
 	bool session_ok(const geode::utils::web::WebResponse& response);
 	geode::utils::web::WebRequest request(bool authorized);
 	void download(const OnlineReplay& replay, bool keep);
+	void check_role();
+
+	bool role_checked = false;
 
 	bool signing = false, looking = false, fetching = false, sending = false;
 	geode::async::TaskHolder<geode::Result<std::string>> auth_task;
 	void send_file(const std::string& path, const char* meta_header, const std::string& meta, std::vector<unsigned char> bytes);
 
-	geode::async::TaskHolder<geode::utils::web::WebResponse> login_task, search_task, download_task, upload_task, code_task, preview_task;
+	geode::async::TaskHolder<geode::utils::web::WebResponse> login_task, search_task, download_task, upload_task, code_task, role_task;
+	std::array<geode::async::TaskHolder<geode::utils::web::WebResponse>, 8> sample_tasks;
+	std::vector<geode::ByteVector> sample_clicks, sample_releases;
+	int sample_waiting = 0;
 };

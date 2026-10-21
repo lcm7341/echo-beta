@@ -391,6 +391,7 @@ public:
 	std::vector<std::string> tab_order{ "Play", "Macro", "Editor", "Macro Tools", "Visuals", "Sequence", "Render", "Theme", "Clickbot" };
 	bool ignore_inputs = true;
 	bool no_overwrite = false;
+	bool auto_name_replay = true;
 	bool record_p1 = true, record_p2 = true, play_p1 = true, play_p2 = true;
 	bool click_both = false;
 	int follow_mode = 0;

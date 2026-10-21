@@ -570,11 +570,13 @@ void GUI::draw_window() {
     static float page_width = 0.f;
     static float measured_at = 0.f;
     static bool settings_measured = false;
+    static int measured_frames = 0, steady_measures = 0;
     if (measured_at != ImGui::GetFontSize() && !ImGui::IsAnyItemActive()) {
         measured_at = ImGui::GetFontSize();
         page_height = 0.f;
         page_width = 0.f;
         settings_measured = false;
+        measured_frames = steady_measures = 0;
     }
     float nav_top = ImGui::GetCursorScreenPos().y - ImGui::GetWindowPos().y;
     float view_cap = FLT_MAX;
@@ -639,11 +641,14 @@ void GUI::draw_window() {
     bool measuring = false;
     ImVec2 page_start = ImGui::GetCursorScreenPos();
     if (!settings_measured) {
-        settings_measured = true;
+        const int most_measures = 10, steady_needed = 2;
         measuring = true;
         ImVec2 start = ImGui::GetCursorPos();
+        float last_height = page_height, last_width = page_width;
+        page_height = page_width = 0.f;
         std::vector<std::pair<ImGuiID, float>> rows;
-        ImGui::PushStyleVar(ImGuiStyleVar_Alpha, 0.f);
+        const float unseen_alpha = .001f;
+        ImGui::PushStyleVar(ImGuiStyleVar_Alpha, unseen_alpha);
         for (const auto& page : pages) {
             ImGui::SetCursorPos(start);
             ImGui::BeginGroup();
@@ -662,6 +667,9 @@ void GUI::draw_window() {
             float spare = std::min(page_height, view_cap) - natural;
             EchoUI::card_row_extra(row) = spare > 1.f ? spare : 0.f;
         }
+        bool same = std::abs(page_height - last_height) < 1.f && std::abs(page_width - last_width) < 1.f;
+        steady_measures = same ? steady_measures + 1 : 0;
+        settings_measured = steady_measures >= steady_needed || ++measured_frames >= most_measures;
     }
     if (!measuring) {
         if (auto* page = GUI::get().active_page(pages)) {

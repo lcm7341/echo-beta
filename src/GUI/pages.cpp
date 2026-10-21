@@ -28,7 +28,6 @@ static float card_width() {
 
 static const char* const PLAYERS[] = { "Both", "Player 1", "Player 2" };
 static const char* const PLAYER_CHOICES[] = { "Off", "Player 1", "Player 2", "Both" };
-static const ImVec4 RECORD_RED(1.f, .36f, .44f, 1.f);
 
 static void tip(const char* text) {
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("%s", text);
@@ -511,7 +510,7 @@ void GUI::main() {
     if (EchoUI::BeginCard("Session", card_width())) {
         float half = EchoUI::RowButton(2);
         ImVec2 big(half, EchoUI::em(2.3f));
-        if (EchoUI::ActionButton(logic.is_recording() ? "Stop Recording###record" : "Record###record", EchoUI::Icon::Record, logic.is_recording(), big, RECORD_RED))
+        if (EchoUI::ActionButton(logic.is_recording() ? "Stop Recording###record" : "Record###record", EchoUI::Icon::Record, logic.is_recording(), big))
             Logic::get().toggle_recording();
         GUI::get().offer_rebind("toggle-record");
         ImGui::SameLine();
@@ -628,6 +627,8 @@ void GUI::main() {
         toggle("No Overwrite", logic.no_overwrite);
         GUI::get().offer_rebind("key-no-overwrite", "Saves as a new file instead of overwriting the current replay.");
         if (EchoUI::Gear("##overwrite-settings")) open_overwrite = true;
+        toggle("Auto Name Replay", logic.auto_name_replay);
+        tip("Names the replay after the level you are in.");
         EchoUI::Separator();
         ImGui::BeginDisabled(!logic.backstep && !logic.best_frame_running);
 #ifdef GEODE_IS_MOBILE
@@ -1143,11 +1144,11 @@ void GUI::clickbot() {
         picker.player = player;
         auto& pack = player == 0 ? logic.clickpack : logic.clickpack_p2;
         float wide = ImGui::GetContentRegionAvail().x;
-        float list_height = EchoUI::em(15.f);
         GUI::get().draw_source_tabs(picker.browser, wide);
         ImGui::SetNextItemWidth(wide);
         if (EchoUI::InputTextWithHint("##clickpack-filter", picker.browser.online ? "Search clickpacks or uploaders" : "Type to filter clickpacks", &picker.filter))
             GUI::get().note_filter_edit(picker.browser);
+        float list_height = EchoUI::CardFill(6.f);
         if (picker.browser.online) {
             GUI::get().draw_online_picker(picker.browser, (int)OnlineKind::Clickpacks, picker.filter, wide, list_height);
         } else {
@@ -1213,7 +1214,7 @@ void GUI::renderer() {
         bool recording = Logic::get().render_active();
         ImVec2 big(-FLT_MIN, EchoUI::em(2.3f));
         if (recording) {
-            if (EchoUI::ActionButton("Stop Rendering###render", EchoUI::Icon::Render, true, big, RECORD_RED))
+            if (EchoUI::ActionButton("Stop Rendering###render", EchoUI::Icon::Render, true, big))
                 Logic::get().stop_render();
         }
         else if (PlayLayer::get()) {

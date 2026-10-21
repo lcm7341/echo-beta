@@ -61,7 +61,7 @@ void Logic::toggle_recording() {
             macro_ldm = play->m_level->m_lowDetailModeToggled;
             macro_ldm_known = true;
         }
-        if (inputs.empty() && !macro_name_typed && play && play->m_level && !std::string(play->m_level->m_levelName).empty()) {
+        if (auto_name_replay && inputs.empty() && !macro_name_typed && play && play->m_level && !std::string(play->m_level->m_levelName).empty()) {
             macro_name = play->m_level->m_levelName;
             macro_path.clear();
         }
@@ -928,7 +928,7 @@ void Logic::on_play_init(PlayLayer* play) {
     hidden_decorations.clear();
     last_click_p1 = 0.0;
     last_click_p2 = 0.0;
-    if (play->m_level) {
+    if (auto_name_replay && play->m_level) {
         macro_name = play->m_level->m_levelName;
         if (macro_name.empty()) macro_name = "Replay";
         macro_name_typed = false;

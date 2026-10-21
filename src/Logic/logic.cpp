@@ -171,6 +171,7 @@ void Logic::pull_settings() {
                 playback_fps = std::clamp((float)number.unwrap(), 0.f, 100000.f);
             if (auto flag = json["ignore_inputs"].asBool()) ignore_inputs = flag.unwrap();
             if (auto flag = json["no_overwrite"].asBool()) no_overwrite = flag.unwrap();
+            if (auto flag = json["auto_name_replay"].asBool()) auto_name_replay = flag.unwrap();
             if (auto flag = json["playback_tps_changes"].asBool())
                 playback_tps_changes = flag.unwrap();
             if (auto flag = json["trace_logging"].asBool()) trace_logging = flag.unwrap();
@@ -589,6 +590,7 @@ void Logic::pull_settings() {
     save_debug = Logic::read_bool("save-debug", save_debug);
     ignore_inputs = Logic::read_bool("ignore-inputs", ignore_inputs);
     no_overwrite = Logic::read_bool("no-overwrite", no_overwrite);
+    auto_name_replay = Logic::read_bool("auto-name-replay", auto_name_replay);
     playback_tps_changes = Logic::read_bool("playback-tps-changes", playback_tps_changes);
     trace_logging = Logic::read_bool("trace-logging", trace_logging);
     no_editor_keybinds = Logic::read_bool("no-editor-keybinds", no_editor_keybinds);
@@ -651,6 +653,7 @@ void Logic::push_runtime_settings() {
     Logic::write_bool("save-debug", save_debug);
     Logic::write_bool("ignore-inputs", ignore_inputs);
     Logic::write_bool("no-overwrite", no_overwrite);
+    Logic::write_bool("auto-name-replay", auto_name_replay);
     Logic::write_bool("playback-tps-changes", playback_tps_changes);
     Logic::write_bool("trace-logging", trace_logging);
     Logic::write_bool("no-editor-keybinds", no_editor_keybinds);
@@ -708,6 +711,7 @@ void Logic::save_settings_file() {
     json["playback_fps"] = playback_fps;
     json["ignore_inputs"] = ignore_inputs;
     json["no_overwrite"] = no_overwrite;
+    json["auto_name_replay"] = auto_name_replay;
     json["playback_tps_changes"] = playback_tps_changes;
     json["trace_logging"] = trace_logging;
     json["no_editor_keybinds"] = no_editor_keybinds;

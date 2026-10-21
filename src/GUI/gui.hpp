@@ -146,7 +146,7 @@ public:
 	void open_macro_picker(bool sequence, int amount);
 	void open_merge_picker();
 	void draw_macro_picker();
-	void draw_online_picker(OnlineBrowser& browser, int kind, const std::string& filter, float wide, float height);
+	void draw_online_picker(OnlineBrowser& browser, int kind, std::string& filter, float wide, float height);
 	void draw_source_tabs(OnlineBrowser& browser, float wide);
 	void note_filter_edit(OnlineBrowser& browser);
 	void open_theme_picker();

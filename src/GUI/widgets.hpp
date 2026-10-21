@@ -28,7 +28,7 @@ namespace EchoUI {
 		Render,
 		Theme
 	};
-	bool ActionButton(const char* label, Icon icon, bool active, const ImVec2& size, ImVec4 tint = ImVec4(0.f, 0.f, 0.f, 0.f));
+	bool ActionButton(const char* label, Icon icon, bool active, const ImVec2& size);
 	bool NavItem(const char* label, Icon icon, bool selected, float width, float height = 0.f);
 	float nav_icon_width();
 	void NavMarker(ImVec2 min, ImVec2 max);
